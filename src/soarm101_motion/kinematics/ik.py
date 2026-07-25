@@ -32,6 +32,36 @@ class IKOptions:
     multi_start: bool = True
 
 
+def _axis_angle_residual(actual_axis: FloatArray, desired_axis: FloatArray) -> FloatArray:
+    """Return the shortest rotation vector aligning one direction with another.
+
+    Unlike a bare cross product, this remains pi radians for anti-parallel vectors
+    rather than incorrectly reporting zero error.
+    """
+    actual = np.asarray(actual_axis, dtype=float).reshape(3)
+    desired = np.asarray(desired_axis, dtype=float).reshape(3)
+    actual_norm = float(np.linalg.norm(actual))
+    desired_norm = float(np.linalg.norm(desired))
+    if actual_norm < 1e-12 or desired_norm < 1e-12:
+        return np.zeros(3)
+    actual /= actual_norm
+    desired /= desired_norm
+    cross = np.cross(actual, desired)
+    cross_norm = float(np.linalg.norm(cross))
+    dot = float(np.clip(np.dot(actual, desired), -1.0, 1.0))
+    angle = float(np.arctan2(cross_norm, dot))
+    if cross_norm > 1e-12:
+        axis = cross / cross_norm
+    elif dot >= 0.0:
+        return np.zeros(3)
+    else:
+        basis = np.zeros(3)
+        basis[int(np.argmin(np.abs(actual)))] = 1.0
+        axis = np.cross(actual, basis)
+        axis /= np.linalg.norm(axis)
+    return axis * angle
+
+
 class IKSolver:
     def __init__(self, model: SO101KinematicModel | None = None) -> None:
         self.model = model or SO101KinematicModel()
@@ -50,14 +80,11 @@ class IKSolver:
             if options.look_at is None:
                 raise ValueError("look_at mode requires a target point")
             direction = np.asarray(options.look_at, dtype=float).reshape(3) - actual.position
-            norm = np.linalg.norm(direction)
-            if norm < 1e-9:
+            if np.linalg.norm(direction) < 1e-9:
                 return np.zeros(3)
-            desired_axis = direction / norm
-            actual_axis = actual.rotation[:, 2]
-            return np.cross(actual_axis, desired_axis)
-        approach = np.cross(actual.rotation[:, 2], target.rotation[:, 2])
-        lateral = 0.15 * np.cross(actual.rotation[:, 0], target.rotation[:, 0])
+            return _axis_angle_residual(actual.rotation[:, 2], direction)
+        approach = _axis_angle_residual(actual.rotation[:, 2], target.rotation[:, 2])
+        lateral = 0.15 * _axis_angle_residual(actual.rotation[:, 0], target.rotation[:, 0])
         return approach + lateral
 
     def solve(
