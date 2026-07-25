@@ -30,7 +30,6 @@ dependencies = [
 
 [project.optional-dependencies]
 simulation = ["pybullet>=3.2.7"]
-reference = ["lerobot>=0.6,<0.7"]
 dev = [
   "build>=1.2",
   "hatchling>=1.25",
