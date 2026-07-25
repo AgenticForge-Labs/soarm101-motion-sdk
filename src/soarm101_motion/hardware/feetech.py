@@ -29,6 +29,7 @@ from soarm101_motion.constants import (
 from soarm101_motion.exceptions import (
     CalibrationError,
     CommunicationError,
+    InvalidCommandError,
     MissingDependencyError,
     RobotConnectionError,
 )
@@ -85,6 +86,14 @@ class FeetechBackend(SO101HardwareBackend):
             ) from exc
         return PortHandler, sms_sts, int(COMM_SUCCESS)
 
+    def _require_transport(self) -> None:
+        if self._port_handler is None or self._packet_handler is None:
+            raise RobotConnectionError("Feetech serial transport is not open")
+
+    def _require_connected(self) -> None:
+        if not self._connected:
+            raise RobotConnectionError("SO-ARM101 is not connected")
+
     def connect(self) -> None:
         if self._connected:
             return
@@ -105,10 +114,12 @@ class FeetechBackend(SO101HardwareBackend):
                 self.calibration.validate()
                 if self.config.verify_calibration_on_connect:
                     self._verify_calibration_matches_motors(self.calibration, motor_calibration)
-            if self.calibration.is_factory_range and not self.config.allow_uncalibrated:
+            uncalibrated = self.calibration.uncalibrated_motors
+            if uncalibrated and not self.config.allow_uncalibrated:
                 raise CalibrationError(
-                    "motors appear uncalibrated (all ranges are 0..4095); run "
-                    "'soarm101 calibrate --port PORT'"
+                    "motors appear uncalibrated: "
+                    + ", ".join(uncalibrated)
+                    + "; run 'soarm101 calibrate --port PORT'"
                 )
             if self.config.configure_motors_on_connect:
                 self.configure_motors()
@@ -162,6 +173,7 @@ class FeetechBackend(SO101HardwareBackend):
             raise CommunicationError(f"{operation}: {self._packet_handler.getRxPacketError(error)}")
 
     def read_register(self, motor: str, register: str) -> int:
+        self._require_transport()
         if motor not in MOTOR_IDS:
             raise KeyError(motor)
         if register not in STS3215_REGISTERS:
@@ -182,6 +194,7 @@ class FeetechBackend(SO101HardwareBackend):
         return int(value)
 
     def write_register(self, motor: str, register: str, value: int) -> None:
+        self._require_transport()
         if motor not in MOTOR_IDS:
             raise KeyError(motor)
         if register not in STS3215_REGISTERS:
@@ -247,14 +260,16 @@ class FeetechBackend(SO101HardwareBackend):
         was_enabled = self._torque_enabled
         if was_enabled:
             self.disable_torque()
-        for name, value in calibration.motors.items():
-            with self.eprom_unlocked(name):
-                self.write_register(name, "Homing_Offset", value.homing_offset)
-                self.write_register(name, "Min_Position_Limit", value.range_min)
-                self.write_register(name, "Max_Position_Limit", value.range_max)
-        self.calibration = calibration
-        if was_enabled:
-            self.enable_torque()
+        try:
+            for name, value in calibration.motors.items():
+                with self.eprom_unlocked(name):
+                    self.write_register(name, "Homing_Offset", value.homing_offset)
+                    self.write_register(name, "Min_Position_Limit", value.range_min)
+                    self.write_register(name, "Max_Position_Limit", value.range_max)
+            self.calibration = calibration
+        finally:
+            if was_enabled:
+                self.enable_torque()
 
     def reset_calibration(self) -> None:
         motors: dict[str, MotorCalibration] = {}
@@ -289,6 +304,7 @@ class FeetechBackend(SO101HardwareBackend):
         return self.calibration
 
     def read_raw_position(self, motor: str) -> int:
+        self._require_transport()
         raw, comm, error = self._packet_handler.ReadPos(MOTOR_IDS[motor])
         self._check_result(comm, error, f"read position from {motor}")
         return int(raw)
@@ -297,11 +313,35 @@ class FeetechBackend(SO101HardwareBackend):
         return {name: self.read_raw_position(name) for name in ALL_MOTORS}
 
     def read_joint_positions(self) -> dict[str, float]:
+        self._require_connected()
         calibration = self._require_calibration()
         return {
             name: calibration.motors[name].raw_to_radians(self.read_raw_position(name))
             for name in ARM_JOINTS
         }
+
+    def _write_raw_positions(
+        self,
+        positions: Mapping[str, int],
+        *,
+        speed_raw: int,
+        acceleration_raw: int,
+    ) -> None:
+        self._require_transport()
+        if not positions:
+            return
+        for name, raw in positions.items():
+            if name not in MOTOR_IDS:
+                raise KeyError(name)
+            if not self._packet_handler.SyncWritePosEx(
+                MOTOR_IDS[name], int(raw), int(speed_raw), int(acceleration_raw)
+            ):
+                self._packet_handler.groupSyncWrite.clearParam()
+                raise CommunicationError(f"could not add {name} to synchronous write")
+        comm = self._packet_handler.groupSyncWrite.txPacket()
+        self._packet_handler.groupSyncWrite.clearParam()
+        if comm != self._comm_success:
+            raise CommunicationError(self._packet_handler.getTxRxResult(comm))
 
     def write_joint_positions(
         self,
@@ -310,28 +350,27 @@ class FeetechBackend(SO101HardwareBackend):
         speed_raw: int | None = None,
         acceleration_raw: int | None = None,
     ) -> None:
+        self._require_connected()
+        if not self._torque_enabled:
+            raise InvalidCommandError("torque is disabled; call enable_torque() before motion")
         calibration = self._require_calibration()
-        speed = speed_raw if speed_raw is not None else self.config.hardware_speed_raw
-        acceleration = (
-            acceleration_raw
-            if acceleration_raw is not None
-            else self.config.hardware_acceleration_raw
-        )
-        if not positions:
-            return
+        raw_positions: dict[str, int] = {}
         for name, position in positions.items():
             if name not in ARM_JOINTS:
                 raise KeyError(name)
-            raw = calibration.motors[name].radians_to_raw(position)
-            if not self._packet_handler.SyncWritePosEx(MOTOR_IDS[name], raw, speed, acceleration):
-                self._packet_handler.groupSyncWrite.clearParam()
-                raise CommunicationError(f"could not add {name} to synchronous write")
-        comm = self._packet_handler.groupSyncWrite.txPacket()
-        self._packet_handler.groupSyncWrite.clearParam()
-        if comm != self._comm_success:
-            raise CommunicationError(self._packet_handler.getTxRxResult(comm))
+            raw_positions[name] = calibration.motors[name].radians_to_raw(position)
+        self._write_raw_positions(
+            raw_positions,
+            speed_raw=speed_raw if speed_raw is not None else self.config.hardware_speed_raw,
+            acceleration_raw=(
+                acceleration_raw
+                if acceleration_raw is not None
+                else self.config.hardware_acceleration_raw
+            ),
+        )
 
     def read_tool_position(self, actuator: str) -> float:
+        self._require_connected()
         calibration = self._require_calibration()
         return calibration.motors[actuator].raw_to_normalized(self.read_raw_position(actuator))
 
@@ -343,6 +382,9 @@ class FeetechBackend(SO101HardwareBackend):
         speed_raw: int | None = None,
         acceleration_raw: int | None = None,
     ) -> None:
+        self._require_connected()
+        if not self._torque_enabled:
+            raise InvalidCommandError("torque is disabled; call enable_torque() before tool motion")
         calibration = self._require_calibration()
         raw = calibration.motors[actuator].normalized_to_raw(position)
         comm, error = self._packet_handler.WritePosEx(
@@ -356,14 +398,18 @@ class FeetechBackend(SO101HardwareBackend):
         self._check_result(comm, error, f"move tool actuator {actuator}")
 
     def enable_torque(self, motors: Sequence[str] | None = None) -> None:
+        self._require_connected()
         selected = tuple(motors) if motors is not None else ALL_MOTORS
+        raw_positions = {name: self.read_raw_position(name) for name in selected}
+        self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
         for name in selected:
-            self.write_register(name, "Lock", 1)
             self.write_register(name, "Torque_Enable", 1)
+            self.write_register(name, "Lock", 1)
         if motors is None or set(selected) == set(ALL_MOTORS):
             self._torque_enabled = True
 
     def disable_torque(self, motors: Sequence[str] | None = None) -> None:
+        self._require_connected()
         selected = tuple(motors) if motors is not None else ALL_MOTORS
         for name in selected:
             self.write_register(name, "Torque_Enable", 0)
@@ -374,7 +420,8 @@ class FeetechBackend(SO101HardwareBackend):
     def stop(self) -> None:
         if not self._torque_enabled or not self._connected:
             return
-        self.write_joint_positions(self.read_joint_positions(), speed_raw=1, acceleration_raw=1)
+        raw_positions = {name: self.read_raw_position(name) for name in ARM_JOINTS}
+        self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
 
     def get_hardware_state(self) -> HardwareState:
         moving = False
@@ -436,45 +483,61 @@ class FeetechBackend(SO101HardwareBackend):
         record_seconds: float = 20.0,
         poll_interval: float = 0.02,
     ) -> SO101Calibration:
-        """Calibrate after the operator has manually placed the arm at its center.
-
-        This method performs no prompts. The CLI handles operator confirmation and
-        calls this method immediately after the arm is centered.
-        """
+        """Record calibration transactionally, restoring EEPROM on any failure."""
+        self._require_connected()
+        previous_calibration = self.calibration
+        eeprom_snapshot = self.read_calibration_from_motors()
         self.disable_torque()
-        self.reset_calibration()
-        center_before_offset = self.read_all_raw_positions()
-        offsets = {name: raw - HALF_TURN for name, raw in center_before_offset.items()}
-        for name, offset in offsets.items():
-            with self.eprom_unlocked(name):
-                self.write_register(name, "Homing_Offset", offset)
-        start = self.read_all_raw_positions()
-        mins = dict(start)
-        maxes = dict(start)
-        deadline = time.monotonic() + record_seconds
-        while time.monotonic() < deadline:
-            values = self.read_all_raw_positions()
-            mins = {name: min(mins[name], values[name]) for name in ALL_MOTORS}
-            maxes = {name: max(maxes[name], values[name]) for name in ALL_MOTORS}
-            time.sleep(poll_interval)
-        mins["wrist_roll"] = 0
-        maxes["wrist_roll"] = ENCODER_MAX
-        unmoved = [name for name in ALL_MOTORS if name != "wrist_roll" and mins[name] == maxes[name]]
-        if unmoved:
-            raise CalibrationError("no range was recorded for: " + ", ".join(unmoved))
-        motors = {
-            name: MotorCalibration(
-                motor_id=MOTOR_IDS[name],
-                drive_mode=0,
-                homing_offset=offsets[name],
-                range_min=mins[name],
-                range_max=maxes[name],
-            )
-            for name in ALL_MOTORS
-        }
-        calibration = SO101Calibration(motors=motors, source="interactive-calibration")
-        self.apply_calibration(calibration)
-        return calibration
+        try:
+            self.reset_calibration()
+            center_before_offset = self.read_all_raw_positions()
+            offsets = {name: raw - HALF_TURN for name, raw in center_before_offset.items()}
+            for name, offset in offsets.items():
+                with self.eprom_unlocked(name):
+                    self.write_register(name, "Homing_Offset", offset)
+            start = self.read_all_raw_positions()
+            mins = dict(start)
+            maxes = dict(start)
+            deadline = time.monotonic() + record_seconds
+            while time.monotonic() < deadline:
+                values = self.read_all_raw_positions()
+                mins = {name: min(mins[name], values[name]) for name in ALL_MOTORS}
+                maxes = {name: max(maxes[name], values[name]) for name in ALL_MOTORS}
+                time.sleep(poll_interval)
+            mins["wrist_roll"] = 0
+            maxes["wrist_roll"] = ENCODER_MAX
+            unmoved = [
+                name
+                for name in ALL_MOTORS
+                if name != "wrist_roll" and mins[name] == maxes[name]
+            ]
+            if unmoved:
+                raise CalibrationError("no range was recorded for: " + ", ".join(unmoved))
+            motors = {
+                name: MotorCalibration(
+                    motor_id=MOTOR_IDS[name],
+                    drive_mode=0,
+                    homing_offset=offsets[name],
+                    range_min=mins[name],
+                    range_max=maxes[name],
+                )
+                for name in ALL_MOTORS
+            }
+            calibration = SO101Calibration(motors=motors, source="interactive-calibration")
+            calibration.validate()
+            self.apply_calibration(calibration)
+            verified = self.read_calibration_from_motors()
+            self._verify_calibration_matches_motors(calibration, verified)
+            return calibration
+        except BaseException:
+            try:
+                self.apply_calibration(eeprom_snapshot)
+                self.calibration = previous_calibration or eeprom_snapshot
+            except Exception as rollback_exc:
+                raise CalibrationError(
+                    "calibration failed and EEPROM rollback also failed; do not enable torque"
+                ) from rollback_exc
+            raise
 
     def save_calibration(
         self,
