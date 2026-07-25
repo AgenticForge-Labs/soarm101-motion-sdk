@@ -10,7 +10,11 @@
 - [x] Bounded numerical IK with five-axis task modes
 - [x] Smooth minimum-jerk joint movement
 - [x] Preplanned Cartesian linear movement
-- [x] Blocking and nonblocking motion handles with cancellation
+- [x] Blocking and nonblocking motion handles with unified cancellation
+- [x] Torque-safe enable with present-position goal latching
+- [x] Command-rate trajectory speed, acceleration, step, and limit validation
+- [x] Feedback-based motion completion and timeout reporting
+- [x] Transactional calibration with EEPROM rollback
 - [x] Deterministic simulator and optional PyBullet visualization
 - [x] Diagnostics, guarded CLI movement, and interactive calibration
 - [x] Unit, integration, kinematics, simulation, and fake-Feetech tests
@@ -20,6 +24,7 @@
 - [ ] Run port discovery and six-motor model check on the user's arm
 - [ ] Import or perform calibration and verify all directions
 - [ ] Run ±5° joint smoke test with no payload
+- [ ] Validate stop, completion timeout, and torque-safe enable on hardware
 - [ ] Validate FK against measured TCP positions
 - [ ] Validate low-speed linear paths and tune tolerances
 - [ ] Tag first hardware-validated alpha release

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from soarm101_motion.constants import ALL_MOTORS, ENCODER_MAX, STOCK_GRIPPER
-from soarm101_motion.exceptions import CalibrationError
+from soarm101_motion.exceptions import CalibrationError, SafetyViolationError
 
 _LEROBOT_TO_SDK = {"gripper": STOCK_GRIPPER}
 _SDK_TO_LEROBOT = {STOCK_GRIPPER: "gripper"}
@@ -42,6 +42,12 @@ class MotorCalibration:
         if self.drive_mode not in (0, 1):
             raise CalibrationError(f"motor {self.motor_id} has invalid drive_mode={self.drive_mode}")
 
+    @property
+    def radians_limits(self) -> tuple[float, float]:
+        mid = (self.range_min + self.range_max) / 2.0
+        scale = 2.0 * pi / ENCODER_MAX
+        return (self.range_min - mid) * scale, (self.range_max - mid) * scale
+
     def raw_to_radians(self, raw: int) -> float:
         mid = (self.range_min + self.range_max) / 2.0
         degrees = (float(raw) - mid) * 360.0 / ENCODER_MAX
@@ -50,7 +56,12 @@ class MotorCalibration:
     def radians_to_raw(self, radians: float) -> int:
         mid = (self.range_min + self.range_max) / 2.0
         raw = int(round((float(radians) * 180.0 / pi) * ENCODER_MAX / 360.0 + mid))
-        return min(self.range_max, max(self.range_min, raw))
+        if not self.range_min <= raw <= self.range_max:
+            raise SafetyViolationError(
+                f"joint target maps to raw position {raw}, outside calibrated range "
+                f"[{self.range_min}, {self.range_max}] for motor {self.motor_id}"
+            )
+        return raw
 
     def raw_to_normalized(self, raw: int) -> float:
         bounded = min(self.range_max, max(self.range_min, int(raw)))
@@ -58,7 +69,9 @@ class MotorCalibration:
         return 1.0 - value if self.drive_mode else value
 
     def normalized_to_raw(self, normalized: float) -> int:
-        value = min(1.0, max(0.0, float(normalized)))
+        value = float(normalized)
+        if not 0.0 <= value <= 1.0:
+            raise SafetyViolationError(f"normalized tool position {value} is outside [0, 1]")
         value = 1.0 - value if self.drive_mode else value
         return int(round(self.range_min + value * (self.range_max - self.range_min)))
 
@@ -84,6 +97,21 @@ class SO101Calibration:
         return all(
             calibration.range_min == 0 and calibration.range_max == ENCODER_MAX
             for calibration in self.motors.values()
+        )
+
+    @property
+    def uncalibrated_motors(self) -> tuple[str, ...]:
+        """Return motors whose EEPROM still has a factory range.
+
+        Wrist roll intentionally uses the full encoder range after calibration, so it is
+        exempt from range-only detection.
+        """
+        return tuple(
+            name
+            for name, calibration in self.motors.items()
+            if name != "wrist_roll"
+            and calibration.range_min == 0
+            and calibration.range_max == ENCODER_MAX
         )
 
     @classmethod

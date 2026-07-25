@@ -51,3 +51,7 @@ class IKError(SOARM101Error):
 
 class MotionCancelledError(SOARM101Error):
     """A motion was cancelled before completion."""
+
+
+class MotionTimeoutError(SOARM101Error):
+    """A motion did not settle at its target before the configured timeout."""

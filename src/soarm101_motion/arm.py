@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import replace
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from math import pi
 from pathlib import Path
 
@@ -13,7 +13,7 @@ from scipy.spatial.transform import Rotation
 
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS
-from soarm101_motion.exceptions import ConfigurationError, HardwareFaultError, RobotConnectionError
+from soarm101_motion.exceptions import ConfigurationError, RobotConnectionError
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.motion import MotionController, MotionHandle
@@ -128,25 +128,31 @@ class SOARM101:
             raise RobotConnectionError("failed to connect to SO-ARM101") from exc
 
     def disconnect(self) -> None:
-        self.motion.stop()
+        self.motion.stop(wait=True)
         self.backend.disconnect()
 
     def enable(self) -> None:
+        """Latch present positions and enable torque without executing stale goals."""
         self.backend.enable_torque()
 
     def disable(self) -> None:
+        self.motion.stop(wait=True)
         self.backend.disable_torque()
 
     def hold(self) -> None:
-        present = self.backend.read_joint_positions()
-        self.backend.enable_torque()
-        self.backend.write_joint_positions(present, speed_raw=1, acceleration_raw=1)
+        state = self.backend.get_hardware_state()
+        if not state.connected:
+            raise RobotConnectionError("robot is not connected")
+        if state.torque_enabled:
+            self.motion.stop(wait=True)
+        else:
+            self.enable()
 
     def relax(self) -> None:
-        self.backend.disable_torque()
+        self.disable()
 
     def stop(self) -> None:
-        self.motion.stop()
+        self.motion.stop(wait=True)
 
     emergency_stop = stop
 
@@ -168,9 +174,6 @@ class SOARM101:
         relative: bool = False,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        state = self.get_state()
-        if state.faulted:
-            raise HardwareFaultError(state.fault_message or "robot is faulted")
         return self.motion.move_joints(
             positions,
             speed=speed,
@@ -310,30 +313,38 @@ class SOARM101:
         cx, cy, cz, cr, cp, cyaw = current.xyz_rpy()
         distance_scale = 0.001
         angle_scale = 1.0 if is_radian else pi / 180.0
-        supplied_position = np.array([
-            0.0 if x is None else x * distance_scale,
-            0.0 if y is None else y * distance_scale,
-            0.0 if z is None else z * distance_scale,
-        ])
-        supplied_angles = np.array([
-            0.0 if roll is None else roll * angle_scale,
-            0.0 if pitch is None else pitch * angle_scale,
-            0.0 if yaw is None else yaw * angle_scale,
-        ])
+        supplied_position = np.array(
+            [
+                0.0 if x is None else x * distance_scale,
+                0.0 if y is None else y * distance_scale,
+                0.0 if z is None else z * distance_scale,
+            ]
+        )
+        supplied_angles = np.array(
+            [
+                0.0 if roll is None else roll * angle_scale,
+                0.0 if pitch is None else pitch * angle_scale,
+                0.0 if yaw is None else yaw * angle_scale,
+            ]
+        )
         if relative:
             position = current.position + supplied_position
             rotation = current.rotation @ Rotation.from_euler("xyz", supplied_angles).as_matrix()
         else:
-            position = np.array([
-                cx if x is None else supplied_position[0],
-                cy if y is None else supplied_position[1],
-                cz if z is None else supplied_position[2],
-            ])
-            angles = np.array([
-                cr if roll is None else supplied_angles[0],
-                cp if pitch is None else supplied_angles[1],
-                cyaw if yaw is None else supplied_angles[2],
-            ])
+            position = np.array(
+                [
+                    cx if x is None else supplied_position[0],
+                    cy if y is None else supplied_position[1],
+                    cz if z is None else supplied_position[2],
+                ]
+            )
+            angles = np.array(
+                [
+                    cr if roll is None else supplied_angles[0],
+                    cp if pitch is None else supplied_angles[1],
+                    cyaw if yaw is None else supplied_angles[2],
+                ]
+            )
             rotation = Rotation.from_euler("xyz", angles).as_matrix()
         target = Pose(position, rotation)
         speed_m = None if speed is None else speed * 0.001

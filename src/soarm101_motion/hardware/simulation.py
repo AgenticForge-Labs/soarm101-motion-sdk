@@ -43,6 +43,7 @@ class SimulationBackend(SO101HardwareBackend):
     def disconnect(self) -> None:
         self._connected = False
         self._torque_enabled = False
+        self._moving = False
 
     def _require_connected(self) -> None:
         if not self._connected:
@@ -95,6 +96,7 @@ class SimulationBackend(SO101HardwareBackend):
         del motors
         self._require_connected()
         self._torque_enabled = False
+        self._moving = False
 
     def stop(self) -> None:
         self._moving = False

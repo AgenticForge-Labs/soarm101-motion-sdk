@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from soarm101_motion.constants import STOCK_GRIPPER
+from soarm101_motion.exceptions import HardwareFaultError, MotionTimeoutError
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.kinematics import DEFAULT_GRIPPER_TCP
 from soarm101_motion.tools.base import RobotTool
@@ -52,7 +53,7 @@ class SO101Gripper(RobotTool):
         timeout: float | None = None,
         tolerance: float = 0.03,
     ) -> MotionResult:
-        target = min(1.0, max(0.0, float(position)))
+        target = float(position)
         backend = self._backend()
         backend.write_tool_position(
             STOCK_GRIPPER,
@@ -60,15 +61,24 @@ class SO101Gripper(RobotTool):
             speed_raw=speed_raw,
             acceleration_raw=acceleration_raw,
         )
-        if wait:
-            deadline = time.monotonic() + (timeout or self.default_timeout_s)
-            while time.monotonic() < deadline:
-                if abs(backend.read_tool_position(STOCK_GRIPPER) - target) <= tolerance:
-                    return MotionResult(True, True, final_positions={STOCK_GRIPPER: target})
-                if not getattr(backend, "realtime", True):
-                    break
-                time.sleep(0.02)
-        return MotionResult(True, not wait or abs(self.get_position() - target) <= tolerance)
+        if not wait:
+            return MotionResult(True, False, final_positions={STOCK_GRIPPER: target})
+        deadline = time.monotonic() + (timeout or self.default_timeout_s)
+        while time.monotonic() < deadline:
+            state = backend.get_hardware_state()
+            if state.faulted:
+                raise HardwareFaultError(state.fault_message or "robot faulted during gripper move")
+            actual = backend.read_tool_position(STOCK_GRIPPER)
+            if abs(actual - target) <= tolerance:
+                return MotionResult(True, True, final_positions={STOCK_GRIPPER: actual})
+            if not getattr(backend, "realtime", True):
+                break
+            time.sleep(0.02)
+        actual = backend.read_tool_position(STOCK_GRIPPER)
+        raise MotionTimeoutError(
+            f"gripper did not reach {target:.3f} within {timeout or self.default_timeout_s:.2f}s; "
+            f"actual position is {actual:.3f}"
+        )
 
     def open(self, **kwargs: object) -> MotionResult:
         return self.move(self.open_position, **kwargs)

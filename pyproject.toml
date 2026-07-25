@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soarm101-motion-sdk"
-version = "0.1.0.dev1"
+version = "0.1.0.dev2"
 description = "High-level Python motion SDK for the SO-ARM101 robot arm."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,7 +30,6 @@ dependencies = [
 
 [project.optional-dependencies]
 simulation = ["pybullet>=3.2.7"]
-reference = ["lerobot>=0.6,<0.7"]
 dev = [
   "build>=1.2",
   "hatchling>=1.25",
