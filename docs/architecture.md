@@ -1,21 +1,16 @@
 # Architecture
 
-Dependency direction is strictly downward:
+Dependency direction is strict:
 
 ```text
-Applications
-    -> SOARM101 public API
-    -> validation and motion services
-    -> RobotBackend protocol
-    -> Mock or LeRobot backend
-    -> LeRobot / Feetech hardware
+applications -> SOARM101 -> motion/kinematics/tools -> backend -> Feetech transport
 ```
 
 Rules:
 
-- Applications never import LeRobot through this SDK.
-- Core modules never import a concrete backend.
-- Only the LeRobot adapter imports LeRobot.
-- Camera and video behavior remain outside this repository.
-- Kinematics and trajectory systems must remain backend-independent.
-- xArm-inspired compatibility is layered above the core API rather than embedded in it.
+- Camera capture, tracking, OBS, and show orchestration remain outside this repository.
+- The arm has five pose joints. The stock motor-6 gripper is an `SO101Gripper` tool.
+- Tools define motion-relevant TCP transforms; camera operation belongs in Robo Cam.
+- No LeRobot import exists in the runtime package.
+- Hardware and simulation implement the same backend contract.
+- Cartesian paths are validated before execution.

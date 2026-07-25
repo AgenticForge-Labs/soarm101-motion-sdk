@@ -2,5 +2,5 @@
 
 ## Unreleased
 
-- Initialized the backend-independent SO-ARM101 SDK foundation.
-- Added the mock backend, public facade, command validation, CLI, tests, and documentation.
+- Replaced the LeRobot runtime plan with direct official Feetech SDK control.
+- Added calibration compatibility, stock-gripper tooling, FK, bounded IK, smooth joint and linear motion, diagnostics, CLI workflows, and simulation.

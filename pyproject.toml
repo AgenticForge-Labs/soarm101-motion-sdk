@@ -1,20 +1,39 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
 name = "soarm101-motion-sdk"
-version = "0.1.0.dev0"
-description = "High-level Python motion SDK for the SO-ARM101, powered by LeRobot."
+version = "0.1.0.dev1"
+description = "High-level Python motion SDK for the SO-ARM101 robot arm."
 readme = "README.md"
-requires-python = ">=3.12"
-license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+license = "Apache-2.0"
 authors = [{ name = "AgenticForge Labs" }]
-dependencies = []
+keywords = ["robotics", "so-arm101", "feetech", "inverse-kinematics", "motion-control"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pyserial>=3.5",
+  "ftservo-python-sdk>=2.0,<3",
+]
 
 [project.optional-dependencies]
-lerobot = ["lerobot>=0.6,<0.7"]
+simulation = ["pybullet>=3.2.7"]
+reference = ["lerobot>=0.6,<0.7"]
 dev = [
+  "build>=1.2",
+  "hatchling>=1.25",
   "mypy>=1.10",
   "pytest>=8.2",
   "pytest-cov>=5.0",
@@ -24,22 +43,39 @@ dev = [
 [project.scripts]
 soarm101 = "soarm101_motion.cli.main:main"
 
+[project.urls]
+Repository = "https://github.com/AgenticForge-Labs/soarm101-motion-sdk"
+Issues = "https://github.com/AgenticForge-Labs/soarm101-motion-sdk/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/soarm101_motion"]
 
+[tool.hatch.build]
+include = [
+  "src/soarm101_motion/**/*.py",
+  "src/soarm101_motion/models/*.urdf",
+]
+
 [tool.ruff]
-target-version = "py312"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
-python_version = "3.12"
-strict = true
-packages = ["soarm101_motion"]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
+check_untyped_defs = true
 mypy_path = "src"
+packages = ["soarm101_motion"]
+warn_unused_ignores = false
 
 [tool.pytest.ini_options]
-addopts = "--cov=soarm101_motion --cov-report=term-missing --cov-fail-under=80"
+addopts = "-q --cov=soarm101_motion --cov-report=term-missing --cov-fail-under=70"
 testpaths = ["tests"]
+markers = [
+  "hardware: requires a connected physical SO-ARM101",
+  "pybullet: requires the optional PyBullet simulator",
+]

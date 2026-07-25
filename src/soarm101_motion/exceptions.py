@@ -1,45 +1,53 @@
-"""Typed SDK exceptions."""
+"""Exception hierarchy for the SO-ARM101 SDK."""
 
 
 class SOARM101Error(Exception):
-    """Base exception for the SDK."""
+    """Base exception for all SDK errors."""
 
 
 class ConfigurationError(SOARM101Error):
-    pass
+    """The supplied configuration is invalid."""
 
 
 class RobotConnectionError(SOARM101Error):
-    pass
+    """The SDK could not establish or maintain the robot connection."""
 
 
 class CalibrationError(SOARM101Error):
-    pass
+    """Calibration is missing, invalid, or unsafe to use."""
 
 
 class CommunicationError(SOARM101Error):
-    pass
+    """A Feetech packet or serial communication operation failed."""
 
 
 class SafetyViolationError(SOARM101Error):
-    pass
+    """A motion command violated configured limits."""
 
 
-class InvalidJointError(SOARM101Error):
-    pass
+class InvalidJointError(SafetyViolationError):
+    """A command referenced an unknown joint."""
 
 
 class InvalidCommandError(SOARM101Error):
-    pass
+    """A command is malformed or cannot be executed in the current state."""
 
 
 class UnsupportedCapabilityError(SOARM101Error):
-    pass
+    """The active backend or tool does not implement the requested capability."""
 
 
 class MissingDependencyError(SOARM101Error):
-    pass
+    """An optional runtime dependency is unavailable."""
 
 
 class HardwareFaultError(SOARM101Error):
-    pass
+    """One or more motors reported a hardware fault."""
+
+
+class IKError(SOARM101Error):
+    """Inverse kinematics failed to find an acceptable solution."""
+
+
+class MotionCancelledError(SOARM101Error):
+    """A motion was cancelled before completion."""
