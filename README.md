@@ -135,11 +135,15 @@ arm.set_position(
 ## Safety model
 
 - No movement occurs during construction or connection.
-- Torque is enabled only through `enable()` or `auto_enable_torque=True`.
-- Every joint target is checked against official URDF limits.
+- Direct hardware motion writes are rejected while torque is disabled.
+- Torque enable first latches every servo's measured position as its goal to prevent stale-goal jumps.
+- Every joint target is checked against both official URDF limits and the calibrated motor range.
 - Point-to-point moves use a host-side minimum-jerk profile.
-- Linear moves are fully waypointed, solved, and validated before the first motor command.
-- Every low-level command is step-limited.
+- Linear moves are fully waypointed, solved, sampled, and validated before the first motor command.
+- Command-rate samples are checked for joint speed, acceleration, and maximum step size.
+- Blocking and nonblocking moves use the same tracked cancellation token, so `stop()` terminates either form.
+- `wait=True` verifies measured positions and motor state instead of only waiting for command transmission.
+- Calibration snapshots and restores motor EEPROM if calibration fails or is interrupted.
 - Software stop is not a certified emergency stop; keep physical power accessible.
 
-See [docs/hardware.md](docs/hardware.md), [docs/kinematics.md](docs/kinematics.md), and [docs/simulation.md](docs/simulation.md).
+See [docs/hardware.md](docs/hardware.md), [docs/kinematics.md](docs/kinematics.md), [docs/simulation.md](docs/simulation.md), and [docs/safety.md](docs/safety.md).
