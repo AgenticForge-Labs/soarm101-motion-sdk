@@ -7,7 +7,7 @@ from soarm101_motion.kinematics import IKOptions, IKSolver, SO101KinematicModel
 from soarm101_motion.tools import CameraTool, SO101Gripper, ToolAssembly
 from soarm101_motion.types import HardwareState, IKResult, JointState, MotionResult, Pose
 
-__version__ = "0.1.0.dev1"
+__version__ = "0.1.0.dev2"
 
 __all__ = [
     "CameraTool",
