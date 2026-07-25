@@ -29,10 +29,17 @@ class SOARM101Config:
     default_joint_acceleration: float = DEFAULT_JOINT_ACCEL_RAD_S2
     default_linear_speed: float = DEFAULT_LINEAR_SPEED_M_S
     default_linear_acceleration: float = DEFAULT_LINEAR_ACCEL_M_S2
+    default_angular_speed: float = 0.8
+    default_angular_acceleration: float = 2.0
     max_command_step_radians: float = DEFAULT_MAX_COMMAND_STEP_RAD
     max_ik_waypoint_jump_radians: float = 0.50
     cartesian_waypoint_spacing_m: float = 0.005
     cartesian_waypoint_spacing_rad: float = 0.08
+    joint_position_tolerance_rad: float = 0.025
+    feedback_poll_interval_s: float = 0.02
+    settle_time_s: float = 0.08
+    motion_completion_timeout_s: float = 5.0
+    stop_timeout_s: float = 2.0
     auto_enable_torque: bool = False
     disable_torque_on_disconnect: bool = True
     allow_uncalibrated: bool = False
@@ -51,10 +58,17 @@ class SOARM101Config:
             "default_joint_acceleration": self.default_joint_acceleration,
             "default_linear_speed": self.default_linear_speed,
             "default_linear_acceleration": self.default_linear_acceleration,
+            "default_angular_speed": self.default_angular_speed,
+            "default_angular_acceleration": self.default_angular_acceleration,
             "max_command_step_radians": self.max_command_step_radians,
             "max_ik_waypoint_jump_radians": self.max_ik_waypoint_jump_radians,
             "cartesian_waypoint_spacing_m": self.cartesian_waypoint_spacing_m,
             "cartesian_waypoint_spacing_rad": self.cartesian_waypoint_spacing_rad,
+            "joint_position_tolerance_rad": self.joint_position_tolerance_rad,
+            "feedback_poll_interval_s": self.feedback_poll_interval_s,
+            "settle_time_s": self.settle_time_s,
+            "motion_completion_timeout_s": self.motion_completion_timeout_s,
+            "stop_timeout_s": self.stop_timeout_s,
         }
         for name, value in positive.items():
             if value <= 0:
