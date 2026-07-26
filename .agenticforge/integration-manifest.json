@@ -1,0 +1,34 @@
+{
+  "kind": "library-integration",
+  "name": "soarm101-motion-sdk",
+  "version": "0.1.0.dev3",
+  "contract_family": "agenticforge.robotics",
+  "contract_version": "0.2.0",
+  "consumers": ["robo-studio", "robo-puppeteer"],
+  "units": {
+    "position": "meters",
+    "joint_angle": "radians",
+    "duration": "seconds",
+    "sdk_orientation": "3x3 rotation matrix"
+  },
+  "frames": {
+    "default_base": "soarm101/base",
+    "pose_embeds_frame_name": false
+  },
+  "motion": {
+    "blocking": true,
+    "nonblocking_handle": true,
+    "handle_wait": true,
+    "handle_cancel": true,
+    "software_stop": true,
+    "certified_emergency_stop": false
+  },
+  "resource": {
+    "default_id": "motion-platform:soarm101",
+    "mode": "exclusive"
+  },
+  "tcp_ownership": {
+    "sdk": "flange-to-active-tcp used by kinematics",
+    "studio": "active-tcp-to-camera-optical frame and stage extrinsics"
+  }
+}
