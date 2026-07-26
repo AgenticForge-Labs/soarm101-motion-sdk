@@ -22,11 +22,7 @@ from soarm101_motion.types import HardwareState, IKResult, JointState, MotionRes
 
 
 class SOARM101:
-    """High-level SO-ARM101 motion API.
-
-    Hardware mode uses a direct Feetech backend. Use :meth:`simulated` for the
-    in-memory simulator or ``SOARM101.simulated(gui=True)`` for optional PyBullet.
-    """
+    """High-level SO-ARM101 motion API."""
 
     def __init__(
         self,
@@ -103,7 +99,8 @@ class SOARM101:
 
     @property
     def is_moving(self) -> bool:
-        return self.motion.is_moving or self.backend.get_hardware_state().moving
+        tool_moving = bool(getattr(self.tool, "is_moving", False))
+        return self.motion.is_moving or tool_moving or self.backend.get_hardware_state().moving
 
     @property
     def active_tcp(self) -> Pose:
@@ -117,18 +114,31 @@ class SOARM101:
             raise KeyError(f"tool does not define TCP frame {name!r}")
         self._active_tcp = name
 
+    def _stop_tool(self, *, wait: bool = True) -> None:
+        stop = getattr(self.tool, "stop", None)
+        if callable(stop):
+            stop(wait=wait)
+
     def connect(self) -> None:
+        connected = False
         try:
             self.backend.connect()
+            connected = True
             if self.config.auto_enable_torque:
                 self.enable()
         except Exception as exc:
+            if connected:
+                try:
+                    self.backend.disconnect()
+                except Exception:
+                    pass
             if isinstance(exc, RobotConnectionError):
                 raise
             raise RobotConnectionError("failed to connect to SO-ARM101") from exc
 
     def disconnect(self) -> None:
         self.motion.stop(wait=True)
+        self._stop_tool(wait=True)
         self.backend.disconnect()
 
     def enable(self) -> None:
@@ -137,6 +147,7 @@ class SOARM101:
 
     def disable(self) -> None:
         self.motion.stop(wait=True)
+        self._stop_tool(wait=True)
         self.backend.disable_torque()
 
     def hold(self) -> None:
@@ -144,7 +155,7 @@ class SOARM101:
         if not state.connected:
             raise RobotConnectionError("robot is not connected")
         if state.torque_enabled:
-            self.motion.stop(wait=True)
+            self.stop()
         else:
             self.enable()
 
@@ -153,6 +164,7 @@ class SOARM101:
 
     def stop(self) -> None:
         self.motion.stop(wait=True)
+        self._stop_tool(wait=True)
 
     emergency_stop = stop
 
