@@ -19,14 +19,7 @@ jobs:
       - run: uv sync --extra dev
       - run: uv run ruff check .
       - run: uv run python -m compileall -q src
-      - name: Run pytest
-        run: uv run pytest > pytest.log 2>&1
-      - name: Upload pytest log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-${{ matrix.python-version }}
-          path: pytest.log
+      - run: uv run pytest
       - run: uv build
       - run: uv run soarm101 info
       - run: uv run soarm101 sim-demo
