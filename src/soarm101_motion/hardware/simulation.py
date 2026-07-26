@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from soarm101_motion.calibration import SO101Calibration
 from soarm101_motion.constants import ALL_MOTORS, HOME_JOINTS, MOTOR_IDS, STOCK_GRIPPER
-from soarm101_motion.exceptions import InvalidCommandError, RobotConnectionError
+from soarm101_motion.exceptions import InvalidCommandError, RobotConnectionError, SafetyViolationError
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.types import HardwareState, MotorDiagnostic
 
@@ -32,6 +32,7 @@ class SimulationBackend(SO101HardwareBackend):
             self._positions.update({name: float(value) for name, value in initial_positions.items()})
         self._tool_positions = {STOCK_GRIPPER: 1.0}
         self.command_history: list[dict[str, float]] = []
+        self.stop_count = 0
 
     @property
     def is_connected(self) -> bool:
@@ -85,7 +86,10 @@ class SimulationBackend(SO101HardwareBackend):
         self._require_connected()
         if not self._torque_enabled:
             raise InvalidCommandError("torque is disabled")
-        self._tool_positions[actuator] = min(1.0, max(0.0, float(position)))
+        value = float(position)
+        if not 0.0 <= value <= 1.0:
+            raise SafetyViolationError(f"normalized tool position {value} is outside [0, 1]")
+        self._tool_positions[actuator] = value
 
     def enable_torque(self, motors: Sequence[str] | None = None) -> None:
         del motors
@@ -99,6 +103,7 @@ class SimulationBackend(SO101HardwareBackend):
         self._moving = False
 
     def stop(self) -> None:
+        self.stop_count += 1
         self._moving = False
 
     def get_hardware_state(self) -> HardwareState:
