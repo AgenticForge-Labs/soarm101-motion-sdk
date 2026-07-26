@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added Agentic Forge Director 0.2 integration metadata, library manifest, resource identity, frame convention, stop classification, and TCP ownership rules.
+- Documented the Studio and Puppeteer adapter responsibilities while keeping the SDK independent of Director.
 - Replaced the LeRobot runtime plan with direct official Feetech SDK control.
 - Added calibration compatibility, stock-gripper tooling, FK, bounded IK, smooth joint and linear motion, diagnostics, CLI workflows, and simulation.
 - Hardened torque enable by latching measured positions before energizing the servos.
