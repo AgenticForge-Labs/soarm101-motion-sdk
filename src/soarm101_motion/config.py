@@ -34,8 +34,8 @@ class SOARM101Config:
 
     # Absolute host-side safety ceilings. Per-command overrides may be lower,
     # but may never exceed these values.
-    max_joint_speed: float = 0.9
-    max_joint_acceleration: float = 2.5
+    max_joint_speed: float = 1.0
+    max_joint_acceleration: float = 5.0
     max_linear_speed: float = 0.06
     max_linear_acceleration: float = 0.20
     max_angular_speed: float = 1.0
