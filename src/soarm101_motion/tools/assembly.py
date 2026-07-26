@@ -23,6 +23,19 @@ class ToolAssembly(RobotTool):
                 bind(backend)
 
     @property
+    def is_moving(self) -> bool:
+        return any(
+            bool(getattr(tool, "is_moving", False))
+            for tool in (self.primary, *self.attachments.values())
+        )
+
+    def stop(self, *, wait: bool = True) -> None:
+        for tool in (self.primary, *self.attachments.values()):
+            stop = getattr(tool, "stop", None)
+            if callable(stop):
+                stop(wait=wait)
+
+    @property
     def tcp_frames(self) -> Mapping[str, Pose]:
         frames: dict[str, Pose] = dict(self.primary.tcp_frames)
         for key, tool in self.attachments.items():
