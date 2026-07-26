@@ -33,11 +33,7 @@ class IKOptions:
 
 
 def _axis_angle_residual(actual_axis: FloatArray, desired_axis: FloatArray) -> FloatArray:
-    """Return the shortest rotation vector aligning one direction with another.
-
-    Unlike a bare cross product, this remains pi radians for anti-parallel vectors
-    rather than incorrectly reporting zero error.
-    """
+    """Return the shortest rotation vector aligning one direction with another."""
     actual = np.asarray(actual_axis, dtype=float).reshape(3)
     desired = np.asarray(desired_axis, dtype=float).reshape(3)
     actual_norm = float(np.linalg.norm(actual))
@@ -83,9 +79,12 @@ class IKSolver:
             if np.linalg.norm(direction) < 1e-9:
                 return np.zeros(3)
             return _axis_angle_residual(actual.rotation[:, 2], direction)
+
+        # Keep approach and lateral residuals independent. Adding them permits
+        # opposing errors to cancel and can incorrectly accept a bad approach axis.
         approach = _axis_angle_residual(actual.rotation[:, 2], target.rotation[:, 2])
         lateral = 0.15 * _axis_angle_residual(actual.rotation[:, 0], target.rotation[:, 0])
-        return approach + lateral
+        return np.concatenate([approach, lateral])
 
     def solve(
         self,
@@ -162,9 +161,8 @@ class IKSolver:
         assert best is not None
         actual = self.model.forward(best.x, tcp=tcp)
         position_error = float(np.linalg.norm(actual.position - target.position))
-        orientation_error = float(
-            np.linalg.norm(self._orientation_residual(actual, target, options))
-        )
+        orientation_residual = self._orientation_residual(actual, target, options)
+        orientation_error = float(np.linalg.norm(orientation_residual))
         orientation_ok = (
             options.orientation_mode == "position_only"
             or orientation_error <= options.orientation_tolerance_rad
