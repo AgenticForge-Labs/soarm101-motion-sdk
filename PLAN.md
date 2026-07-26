@@ -1,38 +1,42 @@
 # Development plan
 
-## Implemented foundation
+Robo Director is the primary source of cross-repository integration requirements. The motion SDK remains authoritative for hardware, calibration, kinematics, planning, and safety; Studio and Puppeteer own the adapters that expose those abilities to Director.
 
-- [x] Direct official Feetech SDK hardware backend
-- [x] STS3215 IDs, register table, model verification, synchronous commands
-- [x] Native and LeRobot-compatible calibration storage/discovery
-- [x] Five-joint arm and `SO101Gripper` tool separation
-- [x] Official-URDF FK model and joint limits
-- [x] Bounded numerical IK with five-axis task modes
-- [x] Smooth minimum-jerk joint movement
-- [x] Preplanned Cartesian linear movement
-- [x] Blocking and nonblocking motion handles with unified cancellation
-- [x] Torque-safe enable with present-position goal latching
-- [x] Command-rate trajectory speed, acceleration, step, and limit validation
-- [x] Feedback-based motion completion and timeout reporting
-- [x] Transactional calibration with EEPROM rollback
-- [x] Deterministic simulator and optional PyBullet visualization
-- [x] Diagnostics, guarded CLI movement, and interactive calibration
-- [x] Unit, integration, kinematics, simulation, and fake-Feetech tests
+## Implemented motion foundation
+
+- [x] Direct official Feetech SDK hardware backend.
+- [x] STS3215 IDs, register table, model verification, and synchronized commands.
+- [x] Native and LeRobot-compatible calibration storage and discovery.
+- [x] Five-joint arm and `SO101Gripper` tool separation.
+- [x] FK, bounded IK, minimum-jerk joint movement, and preplanned linear movement.
+- [x] Blocking and nonblocking motion handles with unified cancellation.
+- [x] Torque-safe enable, trajectory validation, feedback completion, timeouts, diagnostics, CLI, and simulation.
+
+## Director ecosystem integration 0.2
+
+- [x] Add `.agenticforge/integration-manifest.json` and `INTEGRATION.md`.
+- [x] Publish stable units, base-frame, resource, stop-classification, and TCP-ownership metadata.
+- [x] Define this SDK as a library consumed by Studio and Puppeteer rather than a Director service.
+- [x] Expose a shared `motion-platform:<id>` resource convention.
+- [x] Document nonblocking handle and cancellation requirements for consumer adapters.
+- [x] Add integration metadata tests.
+- [ ] Validate the Studio SO-ARM motion-platform plugin in simulation.
+- [ ] Validate the Puppeteer named-gesture embodiment in simulation.
+- [ ] Pass the Director cross-repository simulated-show suite.
 
 ## Physical validation gate
 
-- [ ] Run port discovery and six-motor model check on the user's arm
-- [ ] Import or perform calibration and verify all directions
-- [ ] Run ±5° joint smoke test with no payload
-- [ ] Validate stop, completion timeout, and torque-safe enable on hardware
-- [ ] Validate FK against measured TCP positions
-- [ ] Validate low-speed linear paths and tune tolerances
-- [ ] Tag first hardware-validated alpha release
+- [ ] Run port discovery and six-motor model check on the user's arm.
+- [ ] Import or perform calibration and verify all directions.
+- [ ] Run ±5° joint smoke tests with no payload.
+- [ ] Validate stop, completion timeout, and torque-safe enable on hardware.
+- [ ] Validate FK against measured TCP positions.
+- [ ] Validate low-speed linear paths and tune tolerances.
+- [ ] Tag the first hardware-validated alpha release.
 
 ## Later
 
-- [ ] Trajectory recording/editing/playback formats
-- [ ] Parallel gripper implementation
-- [ ] Tool assemblies with camera and gripper TCPs
-- [ ] Optional collision geometry and self-collision checks
-- [ ] Robo Cam integration examples
+- [ ] Trajectory recording, editing, and playback formats.
+- [ ] Parallel gripper implementation.
+- [ ] Tool assemblies with camera and gripper TCPs.
+- [ ] Optional collision geometry and self-collision checks.
