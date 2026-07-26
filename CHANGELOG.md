@@ -9,3 +9,7 @@
 - Added complete command-rate trajectory prevalidation, joint speed/acceleration checks, and feedback-based completion timeouts.
 - Fixed anti-parallel camera and approach-axis IK constraints.
 - Made calibration transactional with EEPROM rollback on failure or interruption.
+- Serialized Feetech transport access and made torque transitions transactional.
+- Added in-motion fault, following-error, direction, and command-deadline monitoring.
+- Added absolute motion safety ceilings and independent compatible-orientation residuals.
+- Made stock-gripper operations cancellable through the arm-level stop lifecycle.
