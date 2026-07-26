@@ -31,7 +31,7 @@ T = TypeVar("T")
 
 
 class MotionHandle(Generic[T]):
-    """Cancelable result handle returned by all motion commands internally."""
+    """Cancelable result handle returned by all asynchronous operations."""
 
     def __init__(
         self,
@@ -174,12 +174,21 @@ class MotionController:
             raise InvalidCommandError(f"{name} must be a positive finite value")
         return value
 
-    def _sleep_until(self, deadline: float) -> None:
+    def _bounded(self, value: float | None, default: float, maximum: float, name: str) -> float:
+        resolved = self._positive(default if value is None else value, name)
+        if resolved > maximum:
+            raise SafetyViolationError(
+                f"{name} {resolved:.4f} exceeds configured safety maximum {maximum:.4f}"
+            )
+        return resolved
+
+    def _sleep_until(self, deadline: float) -> float:
         if not getattr(self.backend, "realtime", True):
-            return
+            return 0.0
         remaining = deadline - time.perf_counter()
         if remaining > 0:
             time.sleep(remaining)
+        return max(0.0, time.perf_counter() - deadline)
 
     def _trajectory_metrics(
         self,
@@ -263,16 +272,15 @@ class MotionController:
 
         def builder(duration: float) -> tuple[dict[str, float], ...]:
             steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
-            samples: list[dict[str, float]] = []
-            for index in range(steps):
-                fraction = self._minimum_jerk(index / (steps - 1))
-                samples.append(
-                    {
-                        name: start[name] + (target[name] - start[name]) * fraction
-                        for name in ARM_JOINTS
-                    }
-                )
-            return tuple(samples)
+            return tuple(
+                {
+                    name: start[name]
+                    + (target[name] - start[name])
+                    * self._minimum_jerk(index / (steps - 1))
+                    for name in ARM_JOINTS
+                }
+                for index in range(steps)
+            )
 
         samples, duration = self._retime(
             builder,
@@ -309,12 +317,16 @@ class MotionController:
         acceleration: float | None = None,
     ) -> PlannedPath:
         self._require_ready()
-        linear_speed = self._positive(
-            speed if speed is not None else self.config.default_linear_speed,
+        linear_speed = self._bounded(
+            speed,
+            self.config.default_linear_speed,
+            self.config.max_linear_speed,
             "linear speed",
         )
-        linear_acceleration = self._positive(
-            acceleration if acceleration is not None else self.config.default_linear_acceleration,
+        linear_acceleration = self._bounded(
+            acceleration,
+            self.config.default_linear_acceleration,
+            self.config.max_linear_acceleration,
             "linear acceleration",
         )
         start_joints = self.backend.read_joint_positions()
@@ -408,8 +420,36 @@ class MotionController:
 
     def _check_cancelled(self, cancel_event: threading.Event, message: str) -> None:
         if cancel_event.is_set():
-            self.backend.stop()
             raise MotionCancelledError(message)
+
+    def _monitor_motion(
+        self,
+        command: Mapping[str, float],
+        previous_command: Mapping[str, float],
+        previous_actual: Mapping[str, float],
+    ) -> dict[str, float]:
+        state = self.backend.get_hardware_state()
+        if state.faulted:
+            raise HardwareFaultError(state.fault_message or "robot faulted during motion")
+        actual = self.backend.read_joint_positions()
+        following_error = max(abs(actual[name] - command[name]) for name in ARM_JOINTS)
+        if following_error > self.config.following_error_limit_rad:
+            raise SafetyViolationError(
+                f"following error {following_error:.3f} rad exceeds "
+                f"{self.config.following_error_limit_rad:.3f} rad"
+            )
+        for name in ARM_JOINTS:
+            command_delta = command[name] - previous_command[name]
+            actual_delta = actual[name] - previous_actual[name]
+            if (
+                abs(command_delta) >= self.config.joint_position_tolerance_rad
+                and abs(actual_delta) >= self.config.unexpected_direction_threshold_rad
+                and command_delta * actual_delta < 0.0
+            ):
+                raise SafetyViolationError(
+                    f"{name} moved {actual_delta:+.3f} rad opposite the commanded direction"
+                )
+        return actual
 
     def _wait_for_settle(
         self,
@@ -449,15 +489,40 @@ class MotionController:
         cancellation_message: str,
     ) -> MotionResult:
         samples = plan.command_samples
-        if len(samples) <= 1:
+        try:
+            if len(samples) <= 1:
+                return self._wait_for_settle(samples[-1], cancel_event)
+            frequency = self.config.command_frequency_hz
+            started = time.perf_counter()
+            monitor_every = max(
+                1,
+                int(math.ceil(self.config.trajectory_feedback_interval_s * frequency)),
+            )
+            previous_command = samples[0]
+            previous_actual = self.backend.read_joint_positions()
+            for index, command in enumerate(samples[1:], start=1):
+                self._check_cancelled(cancel_event, cancellation_message)
+                lateness = self._sleep_until(started + index / frequency)
+                if lateness > self.config.max_command_lateness_s:
+                    raise MotionTimeoutError(
+                        f"motion command deadline missed by {lateness:.3f}s"
+                    )
+                self._check_cancelled(cancel_event, cancellation_message)
+                self.backend.write_joint_positions(command)
+                if index % monitor_every == 0 or index == len(samples) - 1:
+                    previous_actual = self._monitor_motion(
+                        command,
+                        previous_command,
+                        previous_actual,
+                    )
+                    previous_command = command
             return self._wait_for_settle(samples[-1], cancel_event)
-        frequency = self.config.command_frequency_hz
-        started = time.perf_counter()
-        for index, command in enumerate(samples[1:], start=1):
-            self._check_cancelled(cancel_event, cancellation_message)
-            self.backend.write_joint_positions(command)
-            self._sleep_until(started + index / frequency)
-        return self._wait_for_settle(samples[-1], cancel_event)
+        except BaseException:
+            try:
+                self.backend.stop()
+            except Exception:
+                pass
+            raise
 
     def _start_locked(
         self,
@@ -496,14 +561,16 @@ class MotionController:
             for name, value in provided.items():
                 target[name] = present[name] + value if relative else value
             target = validate_joint_targets(target, limits=limits)
-            joint_speed = self._positive(
-                speed if speed is not None else self.config.default_joint_speed,
+            joint_speed = self._bounded(
+                speed,
+                self.config.default_joint_speed,
+                self.config.max_joint_speed,
                 "joint speed",
             )
-            joint_acceleration = self._positive(
-                acceleration
-                if acceleration is not None
-                else self.config.default_joint_acceleration,
+            joint_acceleration = self._bounded(
+                acceleration,
+                self.config.default_joint_acceleration,
+                self.config.max_joint_acceleration,
                 "joint acceleration",
             )
             plan = self._plan_joint_motion(
