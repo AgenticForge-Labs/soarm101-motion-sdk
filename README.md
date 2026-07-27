@@ -4,12 +4,12 @@ A self-contained, high-level Python motion-control SDK for the SO-ARM101.
 
 It uses the official Feetech Python SDK directly for the six STS3215 motors and provides smooth joint motion, native forward and inverse kinematics, Cartesian linear movement, calibration compatibility, tool/TCP handling, diagnostics, and simulation. **ROS and LeRobot are not runtime dependencies.**
 
-> **Status:** Alpha hardware software. The protocol, motor IDs, calibration behavior, joint geometry, and limits are based on the official SO-ARM101, Feetech, and LeRobot implementations. Automated tests cover simulation and the hardware adapter with a fake Feetech transport. A physical-arm smoke test is still required before claiming a release is hardware-validated. Start with no payload, low speed, a clear workspace, and accessible power.
+> **Status:** Alpha hardware software. Automated tests cover simulation and the hardware adapter with a fake Feetech transport. A physical-arm smoke test is still required before claiming a hardware-validated release. Start with no payload, low speed, a clear workspace, and accessible power.
 
 ## Architecture
 
 ```text
-Robo Cam / applications
+Robo Studio / Robo Puppeteer / applications
         |
         v
 SOARM101 public API
@@ -26,6 +26,14 @@ ftservo-python-sdk
 ```
 
 LeRobot remains useful as a calibration-format and behavioral reference. Existing LeRobot SO-101 calibration JSON files are discovered and loaded automatically.
+
+## Agentic Forge integration
+
+Robo Director is the primary source of cross-repository integration requirements. This SDK is a library, not a Director service. Robo Studio and Robo Puppeteer wrap it and expose Director actions, health, terminal events, and resource claims.
+
+The SDK publishes stable integration metadata for its units, default base frame, nonblocking motion handles, physical resource identity, software-stop classification, and TCP ownership. See [INTEGRATION.md](INTEGRATION.md).
+
+Both consumer adapters must use the same resource identifier, such as `motion-platform:soarm101`, so Director prevents a camera move and a character gesture from commanding one arm concurrently.
 
 ## Install
 
@@ -47,7 +55,7 @@ uv sync --extra dev --extra simulation
 
 ## Hardware quick start
 
-First find the serial port:
+First find the serial port and diagnose the arm:
 
 ```bash
 soarm101 ports
@@ -67,20 +75,17 @@ from soarm101_motion import Pose, SOARM101
 
 with SOARM101(port="/dev/ttyACM0", robot_id="forge-arm") as arm:
     arm.enable()
-
     arm.move_joints(
         [0.0, -0.4, 0.7, 0.0, 0.2],
         speed=0.35,
         acceleration=0.9,
     )
-
     arm.tool.open()
     arm.tool.close()
 
     pose = arm.get_position()
     target = Pose(pose.position + [0.02, 0.0, 0.0], pose.rotation)
     arm.move_linear(target, orientation_mode="position_only", speed=0.02)
-
     arm.relax()
 ```
 
@@ -106,44 +111,15 @@ soarm101 sim-demo
 soarm101 sim-demo --gui --realtime
 ```
 
-The GUI command requires the `simulation` extra.
-
-## xArm-inspired convenience API
-
-```python
-arm.set_servo_angle(
-    angle=[0, -25, 40, 0, 15],
-    is_radian=False,
-    speed=25,
-    mvacc=50,
-    wait=True,
-)
-
-arm.set_position(
-    x=200,
-    y=0,
-    z=150,
-    pitch=40,
-    speed=30,
-    mvacc=100,
-    wait=True,
-)
-```
-
-`set_position` follows xArm units: millimeters for position/speed/acceleration; `is_radian` controls orientation angles only. These are convenience aliases, not UFACTORY controller return-code compatibility.
-
 ## Safety model
 
 - No movement occurs during construction or connection.
 - Direct hardware motion writes are rejected while torque is disabled.
-- Torque enable first latches every servo's measured position as its goal to prevent stale-goal jumps.
-- Every joint target is checked against both official URDF limits and the calibrated motor range.
-- Point-to-point moves use a host-side minimum-jerk profile.
-- Linear moves are fully waypointed, solved, sampled, and validated before the first motor command.
-- Command-rate samples are checked for joint speed, acceleration, and maximum step size.
-- Blocking and nonblocking moves use the same tracked cancellation token, so `stop()` terminates either form.
-- `wait=True` verifies measured positions and motor state instead of only waiting for command transmission.
-- Calibration snapshots and restores motor EEPROM if calibration fails or is interrupted.
+- Torque enable latches each measured position as its goal to prevent stale-goal jumps.
+- Every target is checked against model and calibrated limits.
+- Joint and linear moves are fully planned and validated before hardware commands begin.
+- Blocking and nonblocking moves share cancellation behavior.
+- Completion uses measured feedback rather than transmission timing alone.
 - Software stop is not a certified emergency stop; keep physical power accessible.
 
-See [docs/hardware.md](docs/hardware.md), [docs/kinematics.md](docs/kinematics.md), [docs/simulation.md](docs/simulation.md), and [docs/safety.md](docs/safety.md).
+See [INTEGRATION.md](INTEGRATION.md), [docs/hardware.md](docs/hardware.md), [docs/kinematics.md](docs/kinematics.md), [docs/simulation.md](docs/simulation.md), and [docs/safety.md](docs/safety.md).
