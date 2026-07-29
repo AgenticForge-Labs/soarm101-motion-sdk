@@ -16,11 +16,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --extra dev
+      - run: uv sync --extra dev --extra gui
       - run: uv run ruff check .
       - run: uv run python -m compileall -q src
       - run: uv run pytest
       - run: uv build
       - run: uv run soarm101 info
       - run: uv run soarm101-setup --help
+      - run: uv run soarm101 gui --help
+      - run: QT_QPA_PLATFORM=offscreen uv run soarm101-gui --simulation --smoke-test
       - run: uv run soarm101 sim-demo
