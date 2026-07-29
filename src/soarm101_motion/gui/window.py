@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSlider,
-    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -65,6 +64,7 @@ class MainWindow(QMainWindow):
         self._worker = RobotWorker()
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.start)
+        self._thread.finished.connect(self._worker.deleteLater)
 
         self.connect_requested.connect(self._worker.connect_robot)
         self.disconnect_requested.connect(self._worker.disconnect_robot)
@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
 
         self.simulation_check = QCheckBox("Simulation")
         self.simulation_check.setChecked(simulation)
-        self.simulation_check.toggled.connect(self._update_enabled_state)
+        self.simulation_check.toggled.connect(lambda _checked: self._update_enabled_state())
         layout.addWidget(self.simulation_check, 0, 0)
 
         layout.addWidget(QLabel("Port"), 0, 1)
@@ -149,18 +149,18 @@ class MainWindow(QMainWindow):
 
         self.enable_button = QPushButton("Enable")
         self.enable_button.setToolTip("Latch current positions, then enable torque.")
-        self.enable_button.clicked.connect(self.enable_requested)
+        self.enable_button.clicked.connect(lambda _checked=False: self.enable_requested.emit())
         layout.addWidget(self.enable_button, 1, 0)
 
         self.stop_button = QPushButton("STOP / HOLD")
         self.stop_button.setStyleSheet("font-weight: 700; padding: 7px;")
         self.stop_button.setToolTip("Software stop only. Keep physical power accessible.")
-        self.stop_button.clicked.connect(self.stop_requested)
+        self.stop_button.clicked.connect(lambda _checked=False: self.stop_requested.emit())
         layout.addWidget(self.stop_button, 1, 1, 1, 3)
 
         self.relax_button = QPushButton("Relax")
         self.relax_button.setToolTip("Disable servo torque.")
-        self.relax_button.clicked.connect(self.relax_requested)
+        self.relax_button.clicked.connect(lambda _checked=False: self.relax_requested.emit())
         layout.addWidget(self.relax_button, 1, 4)
 
         self.read_targets_button = QPushButton("Load current into controls")
@@ -452,6 +452,9 @@ class MainWindow(QMainWindow):
         )
 
     def _jog(self, axis: int, sign: float) -> None:
+        if axis >= 3 and self.orientation_combo.currentData() == "position_only":
+            self.orientation_combo.setCurrentIndex(0)
+            self._log("Rotation jog switched orientation mode to 5-axis compatible.")
         translation = [0.0, 0.0, 0.0]
         rotation = [0.0, 0.0, 0.0]
         if axis < 3:
