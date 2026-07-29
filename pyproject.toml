@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soarm101-motion-sdk"
-version = "0.1.0.dev3"
+version = "0.1.0.dev4"
 description = "High-level Python motion SDK for the SO-ARM101 robot arm."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,7 +25,7 @@ dependencies = [
   "numpy>=1.26",
   "scipy>=1.11",
   "pyserial>=3.5",
-  "ftservo-python-sdk>=2.0,<3",
+  "ftservo-python-sdk==2.0.0",
 ]
 
 [project.optional-dependencies]

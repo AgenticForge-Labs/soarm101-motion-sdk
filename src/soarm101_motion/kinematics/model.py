@@ -92,22 +92,41 @@ class SO101KinematicModel:
     def upper_bounds(self) -> FloatArray:
         return np.array([self.joint_limits[name][1] for name in self.joint_names], dtype=float)
 
+    def _chain_transform(
+        self,
+        joints: Mapping[str, float] | FloatArray,
+    ) -> tuple[FloatArray, dict[str, FloatArray]]:
+        q = self.vector(joints)
+        transform = np.eye(4)
+        points: dict[str, FloatArray] = {"base": transform[:3, 3].copy()}
+        for definition, angle in zip(SO101_JOINT_DEFINITIONS, q, strict=True):
+            transform = transform @ definition.origin_transform
+            points[definition.name] = transform[:3, 3].copy()
+            transform = transform @ rotation_about_axis(
+                np.asarray(definition.axis, dtype=float), float(angle)
+            )
+        return transform, points
+
+    def link_points(
+        self,
+        joints: Mapping[str, float] | FloatArray,
+        *,
+        tcp: Pose | None = None,
+    ) -> dict[str, FloatArray]:
+        """Return ordered joint/TCP centerline points for coarse safety checks."""
+        transform, points = self._chain_transform(joints)
+        tool_transform = transform @ (tcp or self.tcp).as_matrix()
+        points["tcp"] = tool_transform[:3, 3].copy()
+        return points
+
     def forward_matrix(
         self,
         joints: Mapping[str, float] | FloatArray,
         *,
         tcp: Pose | None = None,
     ) -> FloatArray:
-        q = self.vector(joints)
-        transform = np.eye(4)
-        for definition, angle in zip(SO101_JOINT_DEFINITIONS, q, strict=True):
-            transform = (
-                transform
-                @ definition.origin_transform
-                @ rotation_about_axis(np.asarray(definition.axis, dtype=float), float(angle))
-            )
-        transform = transform @ (tcp or self.tcp).as_matrix()
-        return transform
+        transform, _ = self._chain_transform(joints)
+        return transform @ (tcp or self.tcp).as_matrix()
 
     def forward(
         self,

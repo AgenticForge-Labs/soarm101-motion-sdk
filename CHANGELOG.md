@@ -15,3 +15,9 @@
 - Added in-motion fault, following-error, direction, and command-deadline monitoring.
 - Added absolute motion safety ceilings and independent compatible-orientation residuals.
 - Made stock-gripper operations cancellable through the arm-level stop lifecycle.
+- Added one-time direct motor ID/baud setup and explicit motor configuration commands.
+- Made ordinary connections and diagnostics configuration-neutral by default.
+- Pinned the reviewed Feetech transport package to version 2.0.0.
+- Added conservative floor/base/reach/self-clearance checks and a physical FK validation recorder.
+- Replaced the misleading `emergency_stop` alias with `software_stop`.
+- Added a guided one-joint hardware smoke-test command.
