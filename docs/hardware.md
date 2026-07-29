@@ -1,6 +1,6 @@
 # Hardware backend
 
-The default backend talks directly to six Feetech STS3215 servos through the pinned `ftservo-python-sdk==2.0.0` package at 1 Mbps.
+The hardware backend controls six Feetech STS3215 servos at 1 Mbps through the pinned `ftservo-python-sdk==2.0.0` package.
 
 | Function | Motor IDs |
 |---|---|
@@ -9,28 +9,42 @@ The default backend talks directly to six Feetech STS3215 servos through the pin
 
 ## Before power
 
-Confirm the motor voltage variant, controller-board voltage, and power-supply voltage match. Secure the base, remove payloads, clear the workspace, inspect the daisy-chain cables, and keep physical power accessible.
+Confirm the motor, controller-board, and power-supply voltage variants match. Secure the base, remove payloads, clear the workspace, inspect every daisy-chain cable, and keep physical power accessible.
+
+## Simplest assembled-arm setup
+
+When motor IDs 1–6 are already assigned:
+
+```bash
+soarm101-setup --robot-id forge-arm
+```
+
+The port is auto-selected when exactly one serial adapter is connected. The wizard:
+
+1. Connects without enabling torque or rewriting configuration.
+2. Verifies all six IDs, models, diagnostics, and status values.
+3. Applies the recommended position/PID and gripper-protection settings.
+4. Keeps a usable EEPROM calibration or guides a new center-and-sweep calibration.
+5. Saves `~/.config/soarm101/calibration/forge-arm.json`.
+6. Disconnects with torque off and prints the next smoke-test command.
+
+Use `--recalibrate` to deliberately replace an existing EEPROM calibration.
 
 ## New loose motors
 
-Assign IDs and baud rate with only one motor connected at a time:
+Fresh servos normally share a factory ID. Assign them one at a time before assembling the full daisy chain:
 
 ```bash
 soarm101 setup-motors --port PORT
 ```
 
-The command follows the same essential sequence as LeRobot's setup helper: find the isolated motor, disable torque, unlock EEPROM, assign the target ID, set 1 Mbps, verify the motor, and relock EEPROM.
+Connect exactly one motor at every prompt. The command first tries ID 1 at the common factory baud rates, so normal setup completes quickly instead of scanning thousands of combinations. For unusual settings, pass `--initial-id` and `--initial-baudrate`.
 
-## Read-only diagnosis and explicit configuration
+The setup operation disables torque, unlocks EEPROM, writes the target ID and 1 Mbps baud rate, verifies the result, and relocks EEPROM. It also attempts to relock EEPROM if a later verification step fails.
 
-```bash
-soarm101 diagnose --port PORT --robot-id ID --allow-uncalibrated
-soarm101 configure --port PORT --robot-id ID
-```
+## Normal operation
 
-`diagnose` does not enable torque or write configuration. `configure` is the explicit one-time operation that writes position mode, return delay, acceleration/PID values, phase behavior, and stock-gripper protection settings. Normal connections default to `configure_motors_on_connect=False`.
-
-Connection still pings all six IDs, verifies model numbers, reads EEPROM calibration, and optionally compares it with a stored calibration file.
+Normal SDK connections, `diagnose`, and `read` do not enable torque or rewrite motor configuration.
 
 Calibration search order:
 
@@ -38,15 +52,10 @@ Calibration search order:
 2. `~/.config/soarm101/calibration/<robot_id>.json`
 3. LeRobot calibration directories under `HF_LEROBOT_CALIBRATION` or `HF_LEROBOT_HOME`
 
-## First physical smoke test
+## First powered test
 
 ```bash
-soarm101 ports
-soarm101 diagnose --port PORT --robot-id ID --allow-uncalibrated
-soarm101 configure --port PORT --robot-id ID
-soarm101 calibrate --port PORT --robot-id ID --seconds 30
-soarm101 read --port PORT --robot-id ID
-soarm101 smoke-test --port PORT --robot-id ID --joint shoulder_pan
+soarm101 smoke-test --port PORT --robot-id forge-arm --joint shoulder_pan
 ```
 
-Use no payload and test one joint at a time. Confirm direction and a clean return before testing the next joint.
+Use no payload and test one joint at a time. Confirm the expected direction and a clean return before moving to the next joint.
