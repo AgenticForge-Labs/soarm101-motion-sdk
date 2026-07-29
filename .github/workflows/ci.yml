@@ -22,4 +22,5 @@ jobs:
       - run: uv run pytest
       - run: uv build
       - run: uv run soarm101 info
+      - run: uv run soarm101-setup --help
       - run: uv run soarm101 sim-demo
