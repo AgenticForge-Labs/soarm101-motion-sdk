@@ -24,3 +24,5 @@
 - Added `soarm101-setup`, a single guided diagnose/configure/calibrate workflow for assembled arms.
 - Made isolated-motor setup fast by default and added best-effort EEPROM relocking after failures.
 - Separated ordinary torque control from EEPROM locking so relax, disconnect, and rollback never leave persistent motor settings unlocked.
+- Added an optional PySide6 controller with joint sliders, world/tool Cartesian linear jogs, absolute world poses, responsive stop, simulation, and gripper controls.
+- Added matching `soarm101 jog` and `soarm101 gripper` CLI actions using shared frame-transform semantics.
