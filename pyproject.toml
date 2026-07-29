@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soarm101-motion-sdk"
-version = "0.1.0.dev4"
+version = "0.1.0.dev5"
 description = "High-level Python motion SDK for the SO-ARM101 robot arm."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 simulation = ["pybullet>=3.2.7"]
+gui = ["PySide6>=6.8,<7"]
 dev = [
   "build>=1.2",
   "hatchling>=1.25",
@@ -41,6 +42,8 @@ dev = [
 
 [project.scripts]
 soarm101 = "soarm101_motion.cli.main:main"
+soarm101-setup = "soarm101_motion.setup_wizard:main"
+soarm101-gui = "soarm101_motion.gui.app:main"
 
 [project.urls]
 Repository = "https://github.com/AgenticForge-Labs/soarm101-motion-sdk"
@@ -77,4 +80,9 @@ testpaths = ["tests"]
 markers = [
   "hardware: requires a connected physical SO-ARM101",
   "pybullet: requires the optional PyBullet simulator",
+]
+
+[tool.coverage.run]
+omit = [
+  "src/soarm101_motion/gui/*",
 ]

@@ -6,10 +6,12 @@ import pytest
 
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import HOME_JOINTS
-from soarm101_motion.exceptions import SafetyViolationError
+from soarm101_motion.exceptions import CommunicationError, SafetyViolationError
+from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.hardware.setup import FeetechMotorSetup
 from soarm101_motion.kinematics.model import SO101KinematicModel
 from soarm101_motion.safety import validate_workspace_configuration
+from soarm101_motion.setup_wizard import _resolve_port, build_parser
 
 
 def test_normal_connections_do_not_configure_motors() -> None:
@@ -77,8 +79,10 @@ class FakePacket:
         self.model = 777
         self.locked = True
         self.torque_enabled = False
+        self.ping_calls = 0
 
     def ping(self, motor_id: int):
+        self.ping_calls += 1
         if self.port.baudrate == self.motor_baudrate and motor_id == self.motor_id:
             return self.model, 0, 0
         return 0, -1, 0
@@ -105,11 +109,24 @@ class FakePacket:
         return f"error={error}"
 
 
-def test_one_motor_setup_changes_id_and_baud(monkeypatch: pytest.MonkeyPatch) -> None:
+class VerifyFailPacket(FakePacket):
+    def ping(self, motor_id: int):
+        self.ping_calls += 1
+        if self.motor_id == 6 and self.motor_baudrate == 1_000_000:
+            return 0, -1, 0
+        if self.port.baudrate == self.motor_baudrate and motor_id == self.motor_id:
+            return self.model, 0, 0
+        return 0, -1, 0
+
+
+def _patch_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    packet_type: type[FakePacket] = FakePacket,
+) -> list[FakePacket]:
     created: list[FakePacket] = []
 
     def packet_factory(port: FakePort) -> FakePacket:
-        packet = FakePacket(port)
+        packet = packet_type(port)
         created.append(packet)
         return packet
 
@@ -118,6 +135,11 @@ def test_one_motor_setup_changes_id_and_baud(monkeypatch: pytest.MonkeyPatch) ->
         "_load_sdk",
         staticmethod(lambda: (FakePort, packet_factory, 0)),
     )
+    return created
+
+
+def test_one_motor_setup_changes_id_and_baud(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_sdk(monkeypatch)
     result = FeetechMotorSetup("FAKE").setup(
         target_id=6,
         initial_id=1,
@@ -130,3 +152,38 @@ def test_one_motor_setup_changes_id_and_baud(monkeypatch: pytest.MonkeyPatch) ->
     assert created[0].motor_id == 6
     assert created[0].motor_baudrate == 1_000_000
     assert created[0].locked is True
+
+
+def test_default_motor_setup_uses_fast_common_factory_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = _patch_sdk(monkeypatch)
+    result = FeetechMotorSetup("FAKE").setup(target_id=6)
+    assert result.original_baudrate == 57_600
+    assert created[0].ping_calls == 3  # 1 Mbps, 57,600 discovery, then final verification.
+
+
+def test_motor_setup_relocks_eeprom_when_verification_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = _patch_sdk(monkeypatch, VerifyFailPacket)
+    with pytest.raises(CommunicationError, match="verify configured motor"):
+        FeetechMotorSetup("FAKE").setup(target_id=6)
+    assert created[0].locked is True
+
+
+def test_setup_wizard_auto_selects_one_serial_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        FeetechBackend,
+        "candidate_ports",
+        staticmethod(lambda: ["COM7"]),
+    )
+    assert _resolve_port(None) == "COM7"
+
+
+def test_setup_wizard_parser_is_small_and_has_safe_defaults() -> None:
+    args = build_parser().parse_args(["--robot-id", "forge-arm"])
+    assert args.port is None
+    assert args.robot_id == "forge-arm"
+    assert args.seconds == 30.0
+    assert args.recalibrate is False

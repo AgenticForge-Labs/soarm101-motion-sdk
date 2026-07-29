@@ -1,100 +1,67 @@
 # SO-ARM101 Motion SDK
 
-A self-contained, high-level Python motion-control SDK for the SO-ARM101.
+A focused Python motion SDK for the five-axis SO-ARM101 follower arm and its stock gripper.
 
-It uses the Feetech Python SDK directly for the six STS3215 motors and provides smooth joint motion, native forward and inverse kinematics, Cartesian linear movement, calibration compatibility, tool/TCP handling, diagnostics, conservative workspace checks, guided hardware validation, and simulation. **ROS and LeRobot are not runtime dependencies.**
+It talks directly to the six Feetech STS3215 servos and provides joint motion, FK/IK, Cartesian linear movement, tools/TCPs, diagnostics, calibration compatibility, conservative workspace checks, simulation, and an optional PySide6 controller. **ROS and LeRobot are not runtime dependencies.**
 
-> **Status:** Alpha hobby-arm software. Automated tests cover simulation and a fake Feetech transport. Physical-arm validation is still required on each printed assembly. Start with no payload, low speed, a clear workspace, and accessible physical power.
+> **Status:** Alpha hobby-arm software. Simulation and fake-transport tests are automated; each printed arm still needs a supervised no-payload smoke test with physical power accessible.
 
-## Architecture
+## Install from this repository
 
-```text
-Robo Studio / Robo Puppeteer / applications
-        |
-        v
-SOARM101 public API
-  joint + linear moves, FK/IK, tools, safety envelope
-        |
-        v
-SO101HardwareBackend
-   |                    |
-   v                    v
-FeetechBackend       SimulationBackend
-   |                    |-- deterministic in-memory
-   v                    `-- optional PyBullet GUI
-ftservo-python-sdk 2.0.0
-```
-
-LeRobot remains useful as a calibration-format and behavioral reference. Existing LeRobot SO-101 calibration JSON files are discovered and loaded automatically.
-
-## Agentic Forge integration
-
-Robo Director is the primary source of cross-repository integration requirements. This SDK is a library, not a Director service. Robo Studio and Robo Puppeteer wrap it and expose Director actions, health, terminal events, and resource claims.
-
-The SDK publishes stable integration metadata for its units, default base frame, nonblocking motion handles, physical resource identity, software-stop classification, and TCP ownership. See [INTEGRATION.md](INTEGRATION.md).
-
-Both consumer adapters must use the same resource identifier, such as `motion-platform:soarm101`, so Director prevents a camera move and a character gesture from commanding one arm concurrently.
-
-## Install
+The package is not yet published as a release on PyPI. Install the checked-out repository:
 
 ```bash
-pip install soarm101-motion-sdk
+git clone https://github.com/AgenticForge-Labs/soarm101-motion-sdk.git
+cd soarm101-motion-sdk
+
+python3 -m venv .venv
+source .venv/bin/activate       # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -e .
 ```
 
-For visual simulation:
+Optional interfaces:
 
 ```bash
-pip install "soarm101-motion-sdk[simulation]"
+pip install -e ".[simulation]"   # PyBullet visual simulation
+pip install -e ".[gui]"          # PySide6 desktop controller
 ```
 
-For development:
-
-```bash
-uv sync --extra dev --extra simulation
-```
-
-## Simulation first
+## Try simulation
 
 ```bash
 soarm101 sim-demo
 soarm101 sim-demo --gui --realtime
 ```
 
-The simulator runs the same planner, IK, tool, cancellation, and workspace-envelope code used by hardware.
+The simulator uses the same planner, IK, tool, cancellation, and workspace-envelope code as hardware.
 
-## One-time hardware setup
+## Set up an assembled arm
 
-New loose motors must be configured one at a time. Only one servo may be connected during each step:
+For an arm whose six motor IDs are already assigned, one guided command performs read-only diagnostics, applies the recommended motor configuration, keeps a usable EEPROM calibration or guides a new calibration, and saves the calibration file:
+
+```bash
+soarm101-setup --robot-id forge-arm
+```
+
+The serial port is selected automatically when exactly one adapter is connected. Pass `--port /dev/ttyACM0` or `--port COM7` when more than one is present.
+
+The setup command never enables torque. It ends by printing the exact first smoke-test command.
+
+### New loose motors
+
+Fresh motors normally share a factory ID and must be assigned one at a time before the arm is fully daisy-chained:
 
 ```bash
 soarm101 setup-motors --port /dev/ttyACM0
+soarm101-setup --port /dev/ttyACM0 --robot-id forge-arm
 ```
 
-Then reconnect the complete six-motor daisy chain and run a truly read-only diagnostic:
+Connect exactly one motor whenever `setup-motors` asks. Common factory settings are detected quickly; unusual settings can be supplied with `--initial-id` and `--initial-baudrate`.
 
-```bash
-soarm101 diagnose --port /dev/ttyACM0 --robot-id forge-arm --allow-uncalibrated
-```
+## First powered test
 
-Normal connections do **not** rewrite EEPROM or PID settings. Apply the recommended settings explicitly once:
-
-```bash
-soarm101 configure --port /dev/ttyACM0 --robot-id forge-arm
-```
-
-Calibrate after setup/configuration:
-
-```bash
-soarm101 calibrate \
-  --port /dev/ttyACM0 \
-  --robot-id forge-arm \
-  --seconds 30 \
-  --export-lerobot
-```
-
-## Supervised first powered test
-
-Run one joint at a time with no payload and physical power accessible:
+Remove payloads, clear the workspace, and keep the physical power switch or plug within reach:
 
 ```bash
 soarm101 smoke-test \
@@ -103,7 +70,59 @@ soarm101 smoke-test \
   --joint shoulder_pan
 ```
 
-Repeat for `shoulder_lift`, `elbow_flex`, `wrist_flex`, and `wrist_roll` only after confirming each direction.
+Repeat for `shoulder_lift`, `elbow_flex`, `wrist_flex`, and `wrist_roll` only after confirming each previous joint moves in the expected direction and returns cleanly.
+
+## PySide6 controller
+
+Install the optional GUI and launch it:
+
+```bash
+pip install -e ".[gui]"
+soarm101-gui --robot-id forge-arm
+```
+
+Or test the complete interface without hardware:
+
+```bash
+soarm101-gui --simulation
+```
+
+The GUI provides:
+
+- measured and target values for all five joints, with degree sliders;
+- guarded absolute joint moves;
+- measured world/base XYZ, roll, pitch, and yaw;
+- absolute world-pose linear moves;
+- direct ±XYZ and ±roll/pitch/yaw jog buttons;
+- world-frame or current-tool-frame jog semantics;
+- tool-space translations along the current gripper axes;
+- compatible, position-only, or exact orientation modes;
+- gripper open, close, and normalized positioning;
+- connect, torque-enable, software stop/hold, relax, and live status;
+- a persistent worker-thread session so the window remains responsive while SDK motion runs.
+
+Every Cartesian GUI jog uses the normal `move_linear()` planner. The GUI does not bypass joint, calibration, workspace, following-error, timing, or fault checks.
+
+Matching CLI controls are available for scripting and troubleshooting:
+
+```bash
+# Absolute five-joint target in degrees
+soarm101 move-joints --port /dev/ttyACM0 --robot-id forge-arm \
+  --degrees 0 -20 35 0 10 --yes
+
+# Move 5 mm along the current tool X axis with a linear Cartesian path
+soarm101 jog --port /dev/ttyACM0 --robot-id forge-arm \
+  --frame tool --x-mm 5 --yes
+
+# Rotate 2 degrees around world yaw
+soarm101 jog --port /dev/ttyACM0 --robot-id forge-arm \
+  --frame world --yaw-deg 2 --yes
+
+soarm101 gripper --port /dev/ttyACM0 --robot-id forge-arm open --yes
+soarm101 gripper --port /dev/ttyACM0 --robot-id forge-arm close --yes
+```
+
+The same GUI can also be launched through `soarm101 gui`.
 
 ## Python control
 
@@ -112,25 +131,40 @@ from soarm101_motion import Pose, SOARM101
 
 with SOARM101(port="/dev/ttyACM0", robot_id="forge-arm") as arm:
     arm.enable()
+
     arm.move_joints(
         [0.0, -0.4, 0.7, 0.0, 0.2],
         speed=0.35,
         acceleration=0.9,
     )
+
     arm.tool.open()
     arm.tool.close()
 
     pose = arm.get_position()
-    target = Pose(pose.position + [0.02, 0.0, 0.0], pose.rotation)
-    arm.move_linear(target, orientation_mode="position_only", speed=0.02)
+    target = Pose(pose.position + [0.01, 0.0, 0.0], pose.rotation)
+    arm.move_linear(target, orientation_mode="position_only", speed=0.01)
+
     arm.relax()
 ```
 
-The stock gripper is an `SO101Gripper` tool, not a sixth pose joint. A camera or later parallel gripper can define another TCP without changing the five-joint arm model.
+The stock gripper is a tool actuator, not a sixth pose joint. Camera and future parallel-gripper tools can define their own TCPs without changing the five-joint arm model.
+
+## Useful commands
+
+```bash
+soarm101 ports
+soarm101 diagnose --port /dev/ttyACM0 --robot-id forge-arm
+soarm101 read --port /dev/ttyACM0 --robot-id forge-arm
+soarm101 configure --port /dev/ttyACM0 --robot-id forge-arm
+soarm101 calibrate --port /dev/ttyACM0 --robot-id forge-arm
+```
+
+`diagnose`, `read`, and normal SDK connections do not rewrite motor configuration or enable torque.
 
 ## Kinematics validation
 
-Position the unpowered arm at a measured checkpoint, measure the TCP in millimeters, and record the comparison:
+Record physically measured TCP checkpoints before trusting larger Cartesian moves:
 
 ```bash
 soarm101 kinematics-check \
@@ -141,44 +175,20 @@ soarm101 kinematics-check \
   --output kinematics-validation.jsonl
 ```
 
-Use several diverse poses before trusting larger Cartesian moves. See [docs/validation.md](docs/validation.md).
-
-## xArm-inspired convenience API
-
-```python
-arm.set_servo_angle(
-    angle=[0, -25, 40, 0, 15],
-    is_radian=False,
-    speed=25,
-    mvacc=50,
-    wait=True,
-)
-
-arm.set_position(
-    x=200,
-    y=0,
-    z=150,
-    pitch=40,
-    speed=30,
-    mvacc=100,
-    wait=True,
-)
-```
-
-`set_position` follows xArm units: millimeters for position/speed/acceleration; `is_radian` controls orientation angles only. These are convenience aliases, not UFACTORY controller or return-code compatibility.
+See [docs/validation.md](docs/validation.md).
 
 ## Safety model
 
-- Construction and ordinary connection never enable torque.
-- Ordinary connection and diagnostics do not rewrite motor configuration.
-- Direct hardware motion writes are rejected while torque is disabled.
-- Torque enable first latches every servo's measured position as its goal.
-- Joint targets are checked against model and calibrated limits.
-- Joint and Cartesian paths are preplanned and checked for speed, acceleration, step size, gross floor/base collisions, reach, and coarse self-clearance.
-- Active motion monitors following error, unexpected direction, motor status, and command timing.
-- Blocking and nonblocking moves share cancellation; `stop()`/`software_stop()` hold the arm and tool.
+- Torque enable first latches every measured servo position as its goal.
+- Targets are checked against model and calibrated limits.
+- Paths are checked for speed, acceleration, command step, gross floor/base hazards, reach, and coarse self-clearance.
+- Active motion monitors following error, unexpected direction, motor status, and timing.
+- Blocking and nonblocking moves share cancellation behavior.
 - `wait=True` verifies measured completion.
-- Calibration restores EEPROM after failure when possible.
-- There is deliberately no `emergency_stop()` method: software stop is not a physical E-stop.
+- `stop()` and `software_stop()` are software holds, not a physical emergency stop.
 
-See [INTEGRATION.md](INTEGRATION.md), [hardware setup](docs/hardware.md), [kinematics](docs/kinematics.md), [validation](docs/validation.md), [simulation](docs/simulation.md), and [safety](docs/safety.md).
+## Agentic Forge integration
+
+Robo Studio and Robo Puppeteer wrap this library and use the shared `motion-platform:soarm101` resource identity so Robo Director can prevent conflicting commands. See [INTEGRATION.md](INTEGRATION.md).
+
+More detail: [hardware](docs/hardware.md), [kinematics](docs/kinematics.md), [simulation](docs/simulation.md), [validation](docs/validation.md), and [safety](docs/safety.md).
