@@ -23,3 +23,4 @@
 - Added a guided one-joint hardware smoke-test command.
 - Added `soarm101-setup`, a single guided diagnose/configure/calibrate workflow for assembled arms.
 - Made isolated-motor setup fast by default and added best-effort EEPROM relocking after failures.
+- Separated ordinary torque control from EEPROM locking so relax, disconnect, and rollback never leave persistent motor settings unlocked.
