@@ -30,6 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 simulation = ["pybullet>=3.2.7"]
+gui = ["PySide6>=6.8,<7"]
 dev = [
   "build>=1.2",
   "hatchling>=1.25",
@@ -42,6 +43,7 @@ dev = [
 [project.scripts]
 soarm101 = "soarm101_motion.cli.main:main"
 soarm101-setup = "soarm101_motion.setup_wizard:main"
+soarm101-gui = "soarm101_motion.gui.app:main"
 
 [project.urls]
 Repository = "https://github.com/AgenticForge-Labs/soarm101-motion-sdk"
