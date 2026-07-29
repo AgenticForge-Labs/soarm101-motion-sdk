@@ -18,7 +18,7 @@ from soarm101_motion.exceptions import (
     MotionCancelledError,
     MotionTimeoutError,
 )
-from soarm101_motion.hardware.feetech import FeetechBackend
+from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.hardware.simulation import SimulationBackend
 from soarm101_motion.kinematics.ik import _axis_angle_residual
 
