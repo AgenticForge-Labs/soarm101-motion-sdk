@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,11 +55,26 @@ class SOARM101Config:
     motion_completion_timeout_s: float = 5.0
     stop_timeout_s: float = 2.0
     max_command_lateness_s: float = 0.05
+
+    # Coarse hobby-arm geometry envelope. This is intentionally conservative
+    # and is not a substitute for measured collision geometry.
+    enable_workspace_checks: bool = True
+    workspace_check_step_rad: float = 0.05
+    minimum_workspace_z_m: float = 0.0
+    maximum_tcp_reach_m: float = 0.50
+    minimum_self_clearance_m: float = 0.025
+    base_keepout_radius_m: float = 0.055
+    base_keepout_height_m: float = 0.11
+
     auto_enable_torque: bool = False
     disable_torque_on_disconnect: bool = True
     allow_uncalibrated: bool = False
     verify_model_numbers: bool = True
-    configure_motors_on_connect: bool = True
+
+    # Normal connections are read/configuration neutral. Use the explicit
+    # ``soarm101 configure`` command for one-time recommended motor settings.
+    configure_motors_on_connect: bool = False
+
     hardware_speed_raw: int = 250
     hardware_acceleration_raw: int = 20
     position_p_coefficient: int = 16
@@ -93,10 +109,17 @@ class SOARM101Config:
             "motion_completion_timeout_s": self.motion_completion_timeout_s,
             "stop_timeout_s": self.stop_timeout_s,
             "max_command_lateness_s": self.max_command_lateness_s,
+            "workspace_check_step_rad": self.workspace_check_step_rad,
+            "maximum_tcp_reach_m": self.maximum_tcp_reach_m,
+            "minimum_self_clearance_m": self.minimum_self_clearance_m,
+            "base_keepout_radius_m": self.base_keepout_radius_m,
+            "base_keepout_height_m": self.base_keepout_height_m,
         }
         for name, value in positive.items():
-            if value <= 0:
-                raise ConfigurationError(f"{name} must be positive")
+            if not math.isfinite(value) or value <= 0:
+                raise ConfigurationError(f"{name} must be a positive finite value")
+        if not math.isfinite(self.minimum_workspace_z_m):
+            raise ConfigurationError("minimum_workspace_z_m must be finite")
 
         ceilings = {
             "default_joint_speed": (self.default_joint_speed, self.max_joint_speed),
