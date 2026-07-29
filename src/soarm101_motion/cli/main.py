@@ -1,4 +1,4 @@
-"""Command-line interface for hardware setup, diagnostics, validation, and simulation."""
+"""Command-line interface for setup, motion, diagnostics, GUI, and simulation."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import numpy as np
 from soarm101_motion import SOARM101, SOARM101Config, __version__
 from soarm101_motion.calibration import default_calibration_path
 from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, MOTOR_IDS
+from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
 
 
@@ -76,6 +77,7 @@ def _cmd_setup_motors(args: argparse.Namespace) -> int:
             args.port,
             target_baudrate=args.target_baudrate,
             verify_model_number=not args.skip_model_check,
+            exhaustive_scan=args.exhaustive_scan,
         )
         result = setup.setup(
             target_id=target_id,
@@ -86,7 +88,7 @@ def _cmd_setup_motors(args: argparse.Namespace) -> int:
             f"{name}: ID {result.original_id} @ {result.original_baudrate} -> "
             f"ID {result.target_id} @ {result.target_baudrate}; model {result.model_number}"
         )
-    print("Motor setup complete. Reconnect the six-motor daisy chain and run 'soarm101 diagnose'.")
+    print("Motor setup complete. Reconnect the six-motor daisy chain and run 'soarm101-setup'.")
     return 0
 
 
@@ -215,6 +217,44 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_jog(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        return 2
+    with SOARM101(_hardware_config(args)) as arm:
+        arm.enable()
+        result = jog_linear_cli_units(
+            arm,
+            frame=args.frame,
+            translation_mm=(args.x_mm, args.y_mm, args.z_mm),
+            rotation_rpy_deg=(args.roll_deg, args.pitch_deg, args.yaw_deg),
+            orientation_mode=args.orientation_mode,
+            speed_mm_s=args.speed_mm_s,
+            acceleration_mm_s2=args.acceleration_mm_s2,
+        )
+        print(result)
+    return 0
+
+
+def _cmd_gripper(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        return 2
+    if args.target == "open":
+        position = 1.0
+    elif args.target == "close":
+        position = 0.0
+    else:
+        position = float(args.target)
+    if not 0.0 <= position <= 1.0:
+        raise ValueError("gripper target must be 'open', 'close', or a value in [0, 1]")
+    with SOARM101(_hardware_config(args)) as arm:
+        arm.enable()
+        result = arm.tool.move(position)
+        print(result)
+    return 0
+
+
 def _cmd_smoke_test(args: argparse.Namespace) -> int:
     if not _confirm(
         args,
@@ -295,6 +335,19 @@ def _cmd_sim_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gui(args: argparse.Namespace) -> int:
+    try:
+        from soarm101_motion.gui.app import run_gui
+    except ImportError as exc:
+        raise RuntimeError("GUI support requires: pip install -e '.[gui]'") from exc
+    argv: list[str] = ["--robot-id", args.robot_id]
+    if args.port:
+        argv.extend(("--port", args.port))
+    if args.simulation:
+        argv.append("--simulation")
+    return run_gui(argv)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soarm101", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -315,6 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--initial-baudrate", type=int)
     setup.add_argument("--target-baudrate", type=int, default=1_000_000)
     setup.add_argument("--skip-model-check", action="store_true")
+    setup.add_argument("--exhaustive-scan", action="store_true")
     setup.add_argument("--yes", action="store_true")
     setup.set_defaults(func=_cmd_setup_motors)
 
@@ -326,6 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     read = sub.add_parser("read", help="read calibrated joints and TCP pose without configuration writes")
     add_hardware_options(read)
     read.set_defaults(func=_cmd_read)
+
     diagnose = sub.add_parser(
         "diagnose", help="read motor model, voltage, temperature, and status without configuration writes"
     )
@@ -333,6 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--json", action="store_true")
     diagnose.add_argument("--allow-uncalibrated", action="store_true")
     diagnose.set_defaults(func=_cmd_diagnose)
+
     calibrate = sub.add_parser("calibrate", help="interactively calibrate all six STS3215 motors")
     add_hardware_options(calibrate)
     calibrate.add_argument("--seconds", type=float, default=20.0)
@@ -340,6 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--export-lerobot", action="store_true")
     calibrate.add_argument("--yes", action="store_true")
     calibrate.set_defaults(func=_cmd_calibrate)
+
     move = sub.add_parser("move-joints", help="perform one guarded five-joint absolute move")
     add_hardware_options(move)
     move.add_argument("joints", nargs=5, type=float)
@@ -348,6 +405,31 @@ def build_parser() -> argparse.ArgumentParser:
     move.add_argument("--acceleration", type=float)
     move.add_argument("--yes", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
+
+    jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
+    add_hardware_options(jog)
+    jog.add_argument("--frame", choices=("world", "tool"), default="world")
+    jog.add_argument("--x-mm", type=float, default=0.0)
+    jog.add_argument("--y-mm", type=float, default=0.0)
+    jog.add_argument("--z-mm", type=float, default=0.0)
+    jog.add_argument("--roll-deg", type=float, default=0.0)
+    jog.add_argument("--pitch-deg", type=float, default=0.0)
+    jog.add_argument("--yaw-deg", type=float, default=0.0)
+    jog.add_argument(
+        "--orientation-mode",
+        choices=("compatible", "position_only", "exact"),
+        default="compatible",
+    )
+    jog.add_argument("--speed-mm-s", type=float, default=10.0)
+    jog.add_argument("--acceleration-mm-s2", type=float, default=40.0)
+    jog.add_argument("--yes", action="store_true")
+    jog.set_defaults(func=_cmd_jog)
+
+    gripper = sub.add_parser("gripper", help="open, close, or position the stock gripper")
+    add_hardware_options(gripper)
+    gripper.add_argument("target", help="open, close, or normalized position 0..1")
+    gripper.add_argument("--yes", action="store_true")
+    gripper.set_defaults(func=_cmd_gripper)
 
     smoke = sub.add_parser("smoke-test", help="perform a tiny supervised relative one-joint test")
     add_hardware_options(smoke)
@@ -374,6 +456,12 @@ def build_parser() -> argparse.ArgumentParser:
     simulation.add_argument("--gui", action="store_true", help="use optional PyBullet GUI")
     simulation.add_argument("--realtime", action="store_true")
     simulation.set_defaults(func=_cmd_sim_demo)
+
+    gui = sub.add_parser("gui", help="open the optional PySide6 robot controller")
+    gui.add_argument("--port")
+    gui.add_argument("--robot-id", default="so101")
+    gui.add_argument("--simulation", action="store_true")
+    gui.set_defaults(func=_cmd_gui)
     return parser
 
 
