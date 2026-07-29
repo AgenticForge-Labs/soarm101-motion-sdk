@@ -21,3 +21,5 @@
 - Added conservative floor/base/reach/self-clearance checks and a physical FK validation recorder.
 - Replaced the misleading `emergency_stop` alias with `software_stop`.
 - Added a guided one-joint hardware smoke-test command.
+- Added `soarm101-setup`, a single guided diagnose/configure/calibrate workflow for assembled arms.
+- Made isolated-motor setup fast by default and added best-effort EEPROM relocking after failures.
