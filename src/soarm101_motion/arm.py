@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -13,10 +14,21 @@ from scipy.spatial.transform import Rotation
 
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS
-from soarm101_motion.exceptions import ConfigurationError, RobotConnectionError
+from soarm101_motion.exceptions import (
+    ConfigurationError,
+    InvalidCommandError,
+    InvalidJointError,
+    RobotConnectionError,
+    SafetyViolationError,
+)
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.motion import MotionController, MotionHandle
+from soarm101_motion.safety import (
+    validate_joint_targets,
+    validate_workspace_configuration,
+    validate_workspace_path,
+)
 from soarm101_motion.tools import RobotTool, SO101Gripper
 from soarm101_motion.types import HardwareState, IKResult, JointState, MotionResult, Pose
 
@@ -119,6 +131,69 @@ class SOARM101:
         if callable(stop):
             stop(wait=wait)
 
+    def _workspace_kwargs(self) -> dict[str, float]:
+        return {
+            "minimum_z_m": self.config.minimum_workspace_z_m,
+            "maximum_tcp_reach_m": self.config.maximum_tcp_reach_m,
+            "minimum_self_clearance_m": self.config.minimum_self_clearance_m,
+            "base_keepout_radius_m": self.config.base_keepout_radius_m,
+            "base_keepout_height_m": self.config.base_keepout_height_m,
+        }
+
+    def _resolve_joint_target(
+        self,
+        positions: Mapping[str, float] | Sequence[float],
+        *,
+        relative: bool,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        current = self.backend.read_joint_positions()
+        target = dict(current)
+        if isinstance(positions, Mapping):
+            for name, value in positions.items():
+                if name not in ARM_JOINTS:
+                    raise InvalidJointError(f"unknown arm joint: {name}")
+                value = float(value)
+                if not math.isfinite(value):
+                    raise InvalidCommandError(f"joint {name} target must be finite")
+                target[name] = current[name] + value if relative else value
+        else:
+            values = [float(value) for value in positions]
+            if len(values) != len(ARM_JOINTS):
+                raise InvalidCommandError(f"expected {len(ARM_JOINTS)} joint values")
+            if not all(math.isfinite(value) for value in values):
+                raise InvalidCommandError("all joint targets must be finite")
+            target = {
+                name: current[name] + value if relative else value
+                for name, value in zip(ARM_JOINTS, values, strict=True)
+            }
+        validate_joint_targets(target)
+        return current, target
+
+    def _validate_joint_workspace_path(
+        self,
+        positions: Mapping[str, float] | Sequence[float],
+        *,
+        relative: bool,
+    ) -> None:
+        if not self.config.enable_workspace_checks:
+            return
+        current, target = self._resolve_joint_target(positions, relative=relative)
+        max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
+        steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
+        samples = tuple(
+            {
+                name: current[name] + (target[name] - current[name]) * fraction
+                for name in ARM_JOINTS
+            }
+            for fraction in np.linspace(0.0, 1.0, steps)
+        )
+        validate_workspace_path(
+            self.model,
+            samples,
+            tcp=self.active_tcp,
+            **self._workspace_kwargs(),
+        )
+
     def connect(self) -> None:
         connected = False
         try:
@@ -163,10 +238,11 @@ class SOARM101:
         self.disable()
 
     def stop(self) -> None:
+        """Cancel active host motion and hold the current arm/tool positions."""
         self.motion.stop(wait=True)
         self._stop_tool(wait=True)
 
-    emergency_stop = stop
+    software_stop = stop
 
     def get_state(self) -> HardwareState:
         return self.backend.get_hardware_state()
@@ -186,6 +262,7 @@ class SOARM101:
         relative: bool = False,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
+        self._validate_joint_workspace_path(positions, relative=relative)
         return self.motion.move_joints(
             positions,
             speed=speed,
@@ -219,15 +296,34 @@ class SOARM101:
         look_at: Sequence[float] | None = None,
         tcp: Pose | None = None,
     ) -> IKResult:
-        return self.ik.solve(
+        active_tcp = tcp or self.active_tcp
+        result = self.ik.solve(
             target,
             seed=seed or self.backend.read_joint_positions(),
-            tcp=tcp or self.active_tcp,
+            tcp=active_tcp,
             options=IKOptions(
                 orientation_mode=orientation_mode,
                 look_at=np.asarray(look_at, dtype=float) if look_at is not None else None,
             ),
         )
+        if result.success and self.config.enable_workspace_checks:
+            try:
+                validate_workspace_configuration(
+                    self.model,
+                    result.joints,
+                    tcp=active_tcp,
+                    **self._workspace_kwargs(),
+                )
+            except SafetyViolationError as exc:
+                return IKResult(
+                    success=False,
+                    joints=result.joints,
+                    position_error_m=result.position_error_m,
+                    orientation_error_rad=result.orientation_error_rad,
+                    iterations=result.iterations,
+                    message=f"IK solution violates workspace envelope: {exc}",
+                )
+        return result
 
     def move_pose(
         self,
@@ -265,11 +361,27 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
+        look_at_array = np.asarray(look_at, dtype=float) if look_at is not None else None
+        if self.config.enable_workspace_checks:
+            planned = self.motion.plan_linear(
+                target,
+                tcp=self.active_tcp,
+                orientation_mode=orientation_mode,
+                look_at=look_at_array,
+                speed=speed,
+                acceleration=acceleration,
+            )
+            validate_workspace_path(
+                self.model,
+                planned.command_samples,
+                tcp=self.active_tcp,
+                **self._workspace_kwargs(),
+            )
         return self.motion.move_linear(
             target,
             tcp=self.active_tcp,
             orientation_mode=orientation_mode,
-            look_at=np.asarray(look_at, dtype=float) if look_at is not None else None,
+            look_at=look_at_array,
             speed=speed,
             acceleration=acceleration,
             wait=wait,
