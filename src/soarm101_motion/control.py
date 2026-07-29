@@ -10,6 +10,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion.arm import SOARM101
+from soarm101_motion.exceptions import InvalidCommandError
 from soarm101_motion.kinematics import OrientationMode
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.types import MotionResult, Pose
@@ -32,9 +33,10 @@ def relative_target_pose(
     """
 
     translation = np.asarray(tuple(translation_m), dtype=float).reshape(3)
-    rotation_delta = Rotation.from_euler(
-        "xyz", np.asarray(tuple(rotation_rpy_rad), dtype=float).reshape(3)
-    ).as_matrix()
+    rotation_rpy = np.asarray(tuple(rotation_rpy_rad), dtype=float).reshape(3)
+    if not np.all(np.isfinite(translation)) or not np.all(np.isfinite(rotation_rpy)):
+        raise InvalidCommandError("Cartesian jog values must be finite")
+    rotation_delta = Rotation.from_euler("xyz", rotation_rpy).as_matrix()
 
     if frame == "world":
         return Pose(
@@ -46,7 +48,7 @@ def relative_target_pose(
             current.position + current.rotation @ translation,
             current.rotation @ rotation_delta,
         )
-    raise ValueError("frame must be 'world' or 'tool'")
+    raise InvalidCommandError("frame must be 'world' or 'tool'")
 
 
 def jog_linear(
@@ -60,11 +62,22 @@ def jog_linear(
     acceleration_m_s2: float | None = None,
     wait: bool = True,
 ) -> MotionResult | MotionHandle[MotionResult]:
+    translation = np.asarray(tuple(translation_m), dtype=float).reshape(3)
+    rotation = np.asarray(tuple(rotation_rpy_rad), dtype=float).reshape(3)
+    if not np.all(np.isfinite(translation)) or not np.all(np.isfinite(rotation)):
+        raise InvalidCommandError("Cartesian jog values must be finite")
+    if np.linalg.norm(translation) <= 1e-12 and np.linalg.norm(rotation) <= 1e-12:
+        raise InvalidCommandError("Cartesian jog must include a translation or rotation")
+    if orientation_mode == "position_only" and np.linalg.norm(rotation) > 1e-12:
+        raise InvalidCommandError(
+            "position_only ignores orientation; use compatible or exact for a rotation jog"
+        )
+
     current = arm.get_position()
     target = relative_target_pose(
         current,
-        translation_m=translation_m,
-        rotation_rpy_rad=rotation_rpy_rad,
+        translation_m=translation,
+        rotation_rpy_rad=rotation,
         frame=frame,
     )
     return arm.move_linear(

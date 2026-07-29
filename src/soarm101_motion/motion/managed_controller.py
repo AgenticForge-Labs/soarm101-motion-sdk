@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from math import pi
 from typing import Any
 
 import numpy as np
 
+from soarm101_motion.exceptions import InvalidCommandError
 from soarm101_motion.kinematics import OrientationMode
 from soarm101_motion.motion.controller import (
     MotionController as _BaseMotionController,
@@ -14,6 +16,9 @@ from soarm101_motion.motion.controller import (
     PlannedPath,
 )
 from soarm101_motion.types import MotionResult, Pose
+
+_ENCODER_STEP_RAD = 2.0 * pi / 4095.0
+_MAX_VALIDATED_START_TOLERANCE_RAD = 0.005
 
 
 class MotionController(_BaseMotionController):
@@ -23,7 +28,7 @@ class MotionController(_BaseMotionController):
     validates every command sample, and then requests execution. The original base
     controller planned the same target again. This class retains exactly one inspected
     plan and reuses it only when all request parameters and measured starting joints
-    still match.
+    still match within an encoder-realistic tolerance.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -87,12 +92,19 @@ class MotionController(_BaseMotionController):
             self._cached_linear = (key, plan)
             return plan
 
+    def _validated_start_tolerance(self) -> float:
+        configured = min(
+            float(self.config.joint_position_tolerance_rad),
+            _MAX_VALIDATED_START_TOLERANCE_RAD,
+        )
+        return max(2.0 * _ENCODER_STEP_RAD, configured)
+
     @staticmethod
     def _starts_at(
         plan: PlannedPath,
         present: Mapping[str, float],
         *,
-        tolerance: float = 1e-6,
+        tolerance: float,
     ) -> bool:
         if not plan.joint_waypoints:
             return False
@@ -126,8 +138,12 @@ class MotionController(_BaseMotionController):
             plan: PlannedPath | None = None
             if cached is not None and cached[0] == key:
                 present = self.backend.read_joint_positions()
-                if self._starts_at(cached[1], present):
-                    plan = cached[1]
+                tolerance = self._validated_start_tolerance()
+                if not self._starts_at(cached[1], present, tolerance=tolerance):
+                    raise InvalidCommandError(
+                        "robot joints changed after Cartesian path validation; retry the move"
+                    )
+                plan = cached[1]
             if plan is None:
                 plan = super().plan_linear(
                     target,
