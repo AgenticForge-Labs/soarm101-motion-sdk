@@ -16,6 +16,6 @@ def test_guarded_linear_move_plans_only_once() -> None:
 
         arm.motion.plan_linear = counted  # type: ignore[method-assign]
         current = arm.get_position()
-        target = Pose(current.position + [0.005, 0.0, 0.005], current.rotation)
+        target = Pose(current.position + [-0.005, 0.0, 0.005], current.rotation)
         arm.move_linear(target, orientation_mode="position_only", speed=0.01)
         assert calls == 1
