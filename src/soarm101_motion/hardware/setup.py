@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from soarm101_motion.constants import EXPECTED_MODEL_NUMBER
 from soarm101_motion.exceptions import CommunicationError, MissingDependencyError, RobotConnectionError
@@ -25,6 +25,7 @@ _BAUD_RATE_ADDRESS = 6
 _TORQUE_ENABLE_ADDRESS = 40
 _LOCK_ADDRESS = 55
 _MAX_MOTOR_ID = 253
+_COMMON_FACTORY_BAUDRATES = (1_000_000, 57_600, 115_200)
 
 
 @dataclass(frozen=True)
@@ -39,8 +40,10 @@ class MotorSetupResult:
 class FeetechMotorSetup:
     """Configure one physically isolated STS3215 motor.
 
-    Only one motor may be attached during this operation. That constraint prevents
-    duplicate factory IDs from being changed together.
+    Only one motor may be attached during this operation. By default the setup
+    probes the common factory combinations instead of waiting through thousands
+    of serial timeouts. Pass known initial settings whenever possible, or set
+    ``exhaustive_scan=True`` for an unusual motor configuration.
     """
 
     def __init__(
@@ -49,6 +52,7 @@ class FeetechMotorSetup:
         *,
         target_baudrate: int = 1_000_000,
         verify_model_number: bool = True,
+        exhaustive_scan: bool = False,
     ) -> None:
         if target_baudrate not in STS3215_BAUDRATE_VALUES:
             supported = ", ".join(str(value) for value in STS3215_BAUDRATE_VALUES)
@@ -56,6 +60,7 @@ class FeetechMotorSetup:
         self.port = port
         self.target_baudrate = int(target_baudrate)
         self.verify_model_number = verify_model_number
+        self.exhaustive_scan = bool(exhaustive_scan)
 
     @staticmethod
     def _load_sdk() -> tuple[Any, Any, int]:
@@ -67,17 +72,16 @@ class FeetechMotorSetup:
             ) from exc
         return PortHandler, sms_sts, int(COMM_SUCCESS)
 
-    @staticmethod
-    def _candidate_ids(initial_id: int | None) -> tuple[int, ...]:
+    def _candidate_ids(self, initial_id: int | None) -> tuple[int, ...]:
         if initial_id is not None:
             if not 0 <= initial_id <= _MAX_MOTOR_ID:
                 raise ValueError(f"initial motor ID must be in [0, {_MAX_MOTOR_ID}]")
             return (int(initial_id),)
-        # Factory ID 1 is checked first, followed by the remaining legal IDs.
-        return (1, 0, *range(2, _MAX_MOTOR_ID + 1))
+        if self.exhaustive_scan:
+            return (1, 0, *range(2, _MAX_MOTOR_ID + 1))
+        return (1,)
 
-    @staticmethod
-    def _candidate_baudrates(initial_baudrate: int | None) -> tuple[int, ...]:
+    def _candidate_baudrates(self, initial_baudrate: int | None) -> tuple[int, ...]:
         if initial_baudrate is not None:
             if initial_baudrate not in STS3215_BAUDRATE_VALUES:
                 supported = ", ".join(str(value) for value in STS3215_BAUDRATE_VALUES)
@@ -85,9 +89,12 @@ class FeetechMotorSetup:
                     f"unsupported initial baud rate {initial_baudrate}; choose one of {supported}"
                 )
             return (int(initial_baudrate),)
-        # Factory/common values first, then the rest of the official table.
-        preferred = (1_000_000, 57_600, 115_200)
-        return (*preferred, *(value for value in STS3215_BAUDRATE_VALUES if value not in preferred))
+        if self.exhaustive_scan:
+            return (
+                *_COMMON_FACTORY_BAUDRATES,
+                *(value for value in STS3215_BAUDRATE_VALUES if value not in _COMMON_FACTORY_BAUDRATES),
+            )
+        return _COMMON_FACTORY_BAUDRATES
 
     @staticmethod
     def _check_result(packet: Any, comm_success: int, comm: int, error: int, operation: str) -> None:
@@ -112,17 +119,24 @@ class FeetechMotorSetup:
             for motor_id in self._candidate_ids(initial_id):
                 model, comm, error = packet.ping(motor_id)
                 if comm == comm_success and not error:
-                    found.append((baudrate, motor_id, int(model)))
-                    if initial_id is not None and initial_baudrate is not None:
-                        break
-            if found and (initial_id is not None or initial_baudrate is not None):
-                break
+                    match = (baudrate, motor_id, int(model))
+                    if not self.exhaustive_scan:
+                        return match
+                    found.append(match)
 
         unique = list(dict.fromkeys(found))
         if not unique:
+            if self.exhaustive_scan:
+                detail = "no motor responded at any supported ID or baud rate"
+            else:
+                detail = (
+                    "no motor responded at the common factory settings (ID 1 at 1 Mbps, "
+                    "57,600, or 115,200 baud)"
+                )
             raise RobotConnectionError(
-                "no motor found; connect exactly one powered STS3215 and provide its current "
-                "--initial-id/--initial-baudrate if scanning is too slow"
+                detail
+                + "; connect exactly one powered STS3215 and pass its current "
+                "initial_id/initial_baudrate, or use exhaustive_scan=True"
             )
         if len(unique) > 1:
             detail = ", ".join(f"ID {mid} at {baud}" for baud, mid, _ in unique)
@@ -130,6 +144,31 @@ class FeetechMotorSetup:
                 "multiple motor responses were detected; disconnect all but one motor: " + detail
             )
         return unique[0]
+
+    @staticmethod
+    def _unique(values: Iterable[int]) -> tuple[int, ...]:
+        return tuple(dict.fromkeys(int(value) for value in values))
+
+    def _best_effort_relock(
+        self,
+        port_handler: Any,
+        packet: Any,
+        comm_success: int,
+        *,
+        possible_ids: Iterable[int],
+        possible_baudrates: Iterable[int],
+    ) -> str | None:
+        errors: list[str] = []
+        for baudrate in self._unique(possible_baudrates):
+            if not port_handler.setBaudRate(baudrate):
+                errors.append(f"could not set host baud rate {baudrate}")
+                continue
+            for motor_id in self._unique(possible_ids):
+                comm, error = packet.write1ByteTxRx(motor_id, _LOCK_ADDRESS, 1)
+                if comm == comm_success and not error:
+                    return None
+                errors.append(f"ID {motor_id} at {baudrate}: comm={comm}, error={error}")
+        return "; ".join(errors) or "no relock attempt succeeded"
 
     def setup(
         self,
@@ -146,6 +185,9 @@ class FeetechMotorSetup:
         if not port_handler.openPort():
             raise RobotConnectionError(f"could not open serial port {self.port}")
         packet = sms_sts(port_handler)
+        original_id: int | None = None
+        original_baudrate: int | None = None
+        eeprom_unlocked = False
         try:
             baudrate, motor_id, model = self._find_single_motor(
                 port_handler,
@@ -154,6 +196,8 @@ class FeetechMotorSetup:
                 initial_id=initial_id,
                 initial_baudrate=initial_baudrate,
             )
+            original_id = motor_id
+            original_baudrate = baudrate
             if self.verify_model_number and model != EXPECTED_MODEL_NUMBER:
                 raise RobotConnectionError(
                     f"expected STS3215 model {EXPECTED_MODEL_NUMBER}, found {model}"
@@ -165,6 +209,7 @@ class FeetechMotorSetup:
             self._check_result(packet, comm_success, comm, error, "disable torque")
             comm, error = packet.write1ByteTxRx(motor_id, _LOCK_ADDRESS, 0)
             self._check_result(packet, comm_success, comm, error, "unlock EEPROM")
+            eeprom_unlocked = True
 
             active_id = motor_id
             if active_id != target_id:
@@ -188,6 +233,7 @@ class FeetechMotorSetup:
                 )
             comm, error = packet.write1ByteTxRx(active_id, _LOCK_ADDRESS, 1)
             self._check_result(packet, comm_success, comm, error, "lock EEPROM")
+            eeprom_unlocked = False
             return MotorSetupResult(
                 original_id=motor_id,
                 original_baudrate=baudrate,
@@ -195,5 +241,20 @@ class FeetechMotorSetup:
                 target_baudrate=self.target_baudrate,
                 model_number=int(verified_model),
             )
+        except BaseException as exc:
+            if eeprom_unlocked and original_id is not None and original_baudrate is not None:
+                relock_error = self._best_effort_relock(
+                    port_handler,
+                    packet,
+                    comm_success,
+                    possible_ids=(target_id, original_id),
+                    possible_baudrates=(self.target_baudrate, original_baudrate),
+                )
+                if relock_error is not None:
+                    raise CommunicationError(
+                        "motor setup failed and EEPROM could not be relocked; the motor may be "
+                        f"partially configured ({relock_error})"
+                    ) from exc
+            raise
         finally:
             port_handler.closePort()
