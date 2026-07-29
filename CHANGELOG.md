@@ -26,3 +26,4 @@
 - Separated ordinary torque control from EEPROM locking so relax, disconnect, and rollback never leave persistent motor settings unlocked.
 - Added an optional PySide6 controller with joint sliders, world/tool Cartesian linear jogs, absolute world poses, responsive stop, simulation, and gripper controls.
 - Added matching `soarm101 jog` and `soarm101 gripper` CLI actions using shared frame-transform semantics.
+- Reused the workspace-validated Cartesian plan for execution so GUI and CLI linear moves run IK and time-parameterization only once.
