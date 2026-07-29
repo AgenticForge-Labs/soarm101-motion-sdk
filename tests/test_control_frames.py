@@ -5,6 +5,7 @@ from math import pi
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from soarm101_motion.cli.main import build_parser
 from soarm101_motion.control import relative_target_pose
 from soarm101_motion.types import Pose
 
@@ -46,9 +47,7 @@ def test_world_rotation_pre_multiplies_current_orientation() -> None:
         rotation_rpy_rad=(0.0, 0.0, pi / 2),
         frame="world",
     )
-    expected = (
-        Rotation.from_euler("z", 90, degrees=True).as_matrix() @ current.rotation
-    )
+    expected = Rotation.from_euler("z", 90, degrees=True).as_matrix() @ current.rotation
     assert np.allclose(target.rotation, expected)
 
 
@@ -62,7 +61,51 @@ def test_tool_rotation_post_multiplies_current_orientation() -> None:
         rotation_rpy_rad=(0.0, 0.0, pi / 2),
         frame="tool",
     )
-    expected = (
-        current.rotation @ Rotation.from_euler("z", 90, degrees=True).as_matrix()
-    )
+    expected = current.rotation @ Rotation.from_euler("z", 90, degrees=True).as_matrix()
     assert np.allclose(target.rotation, expected)
+
+
+def test_cli_exposes_every_gui_motion_action() -> None:
+    parser = build_parser()
+    joints = parser.parse_args(
+        [
+            "move-joints",
+            "--port",
+            "FAKE",
+            "--degrees",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "--yes",
+        ]
+    )
+    assert joints.command == "move-joints"
+
+    jog = parser.parse_args(
+        [
+            "jog",
+            "--port",
+            "FAKE",
+            "--frame",
+            "tool",
+            "--x-mm",
+            "5",
+            "--pitch-deg",
+            "2",
+            "--yes",
+        ]
+    )
+    assert jog.command == "jog"
+    assert jog.frame == "tool"
+    assert jog.x_mm == 5.0
+    assert jog.pitch_deg == 2.0
+
+    gripper = parser.parse_args(["gripper", "--port", "FAKE", "open", "--yes"])
+    assert gripper.command == "gripper"
+    assert gripper.target == "open"
+
+    gui = parser.parse_args(["gui", "--simulation"])
+    assert gui.command == "gui"
+    assert gui.simulation is True
