@@ -1,24 +1,28 @@
-"""Command-line interface for hardware setup, diagnostics, and simulation."""
+"""Command-line interface for hardware setup, diagnostics, validation, and simulation."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict
 from math import pi
 from pathlib import Path
 
+import numpy as np
+
 from soarm101_motion import SOARM101, SOARM101Config, __version__
 from soarm101_motion.calibration import default_calibration_path
-from soarm101_motion.constants import ARM_JOINTS
-from soarm101_motion.hardware import FeetechBackend
+from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, MOTOR_IDS
+from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
 
 
 def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101Config:
     values: dict[str, object] = {
         "port": args.port,
         "robot_id": getattr(args, "robot_id", "so101"),
+        "configure_motors_on_connect": False,
     }
     calibration = getattr(args, "calibration", None)
     if calibration:
@@ -27,10 +31,18 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
     return SOARM101Config(**values)
 
 
+def _confirm(args: argparse.Namespace, word: str, message: str) -> bool:
+    if getattr(args, "yes", False):
+        return True
+    answer = input(f"{message}\nType {word} to continue: ").strip()
+    return answer == word
+
+
 def _cmd_info(_: argparse.Namespace) -> int:
     print(f"soarm101-motion-sdk {__version__}")
-    print("runtime: direct Feetech STS3215 control; LeRobot is not required")
+    print("runtime: direct Feetech STS3215 control; LeRobot and ROS are not required")
     print("arm: 5 pose joints + SO101Gripper tool actuator")
+    print("normal connections do not rewrite motor configuration")
     return 0
 
 
@@ -41,6 +53,65 @@ def _cmd_ports(_: argparse.Namespace) -> int:
         return 1
     for port in ports:
         print(port)
+    return 0
+
+
+def _cmd_setup_motors(args: argparse.Namespace) -> int:
+    if not _confirm(
+        args,
+        "SETUP",
+        "MOTOR SETUP WRITES ID AND BAUD RATE. Connect exactly one motor at a time and keep torque unloaded.",
+    ):
+        print("Motor setup cancelled.")
+        return 1
+
+    motors = (args.motor,) if args.motor else tuple(reversed(ALL_MOTORS))
+    for name in motors:
+        target_id = MOTOR_IDS[name]
+        input(
+            f"Disconnect all servos, connect only '{name}' to the controller, power it, "
+            "then press ENTER."
+        )
+        setup = FeetechMotorSetup(
+            args.port,
+            target_baudrate=args.target_baudrate,
+            verify_model_number=not args.skip_model_check,
+        )
+        result = setup.setup(
+            target_id=target_id,
+            initial_id=args.initial_id,
+            initial_baudrate=args.initial_baudrate,
+        )
+        print(
+            f"{name}: ID {result.original_id} @ {result.original_baudrate} -> "
+            f"ID {result.target_id} @ {result.target_baudrate}; model {result.model_number}"
+        )
+    print("Motor setup complete. Reconnect the six-motor daisy chain and run 'soarm101 diagnose'.")
+    return 0
+
+
+def _cmd_configure(args: argparse.Namespace) -> int:
+    if not _confirm(
+        args,
+        "CONFIGURE",
+        "This one-time command writes recommended position/PID, phase, and gripper protection settings.",
+    ):
+        print("Configuration cancelled.")
+        return 1
+    config = _hardware_config(
+        args,
+        allow_uncalibrated=True,
+        use_stored_calibration=False,
+        verify_calibration_on_connect=False,
+    )
+    backend = FeetechBackend(config)
+    backend.connect()
+    try:
+        backend.disable_torque()
+        backend.configure_motors()
+        print("Recommended motor settings written successfully.")
+    finally:
+        backend.disconnect()
     return 0
 
 
@@ -56,7 +127,12 @@ def _cmd_read(args: argparse.Namespace) -> int:
 
 
 def _cmd_diagnose(args: argparse.Namespace) -> int:
-    with SOARM101(_hardware_config(args, allow_uncalibrated=args.allow_uncalibrated)) as arm:
+    config = _hardware_config(
+        args,
+        allow_uncalibrated=args.allow_uncalibrated,
+        configure_motors_on_connect=False,
+    )
+    with SOARM101(config) as arm:
         diagnostics = [asdict(item) for item in arm.diagnostics()]
     if args.json:
         print(json.dumps(diagnostics, indent=2))
@@ -76,7 +152,16 @@ def _cmd_diagnose(args: argparse.Namespace) -> int:
 
 
 def _lerobot_export_path(robot_id: str) -> Path:
-    return Path.home() / ".cache" / "huggingface" / "lerobot" / "calibration" / "robots" / "so101_follower" / f"{robot_id}.json"
+    return (
+        Path.home()
+        / ".cache"
+        / "huggingface"
+        / "lerobot"
+        / "calibration"
+        / "robots"
+        / "so101_follower"
+        / f"{robot_id}.json"
+    )
 
 
 def _cmd_calibrate(args: argparse.Namespace) -> int:
@@ -84,22 +169,20 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     print("- Remove payloads and clear the workspace.")
     print("- Keep power accessible. Torque will be disabled.")
     print("- Do not force a joint past its mechanical stop.")
-    if not args.yes:
-        answer = input("Type CALIBRATE to continue: ").strip()
-        if answer != "CALIBRATE":
-            print("Calibration cancelled.")
-            return 1
+    if not _confirm(args, "CALIBRATE", "Calibration writes motor homing and range EEPROM values."):
+        print("Calibration cancelled.")
+        return 1
     config = _hardware_config(
         args,
         allow_uncalibrated=True,
         use_stored_calibration=False,
         verify_calibration_on_connect=False,
-        configure_motors_on_connect=True,
     )
     backend = FeetechBackend(config)
     backend.connect()
     try:
         backend.disable_torque()
+        backend.configure_motors()
         input(
             "Place every joint near the middle of its usable range, including the gripper, "
             "then press ENTER."
@@ -129,6 +212,69 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
         arm.enable()
         result = arm.move_joints(values, speed=args.speed, acceleration=args.acceleration)
         print(result)
+    return 0
+
+
+def _cmd_smoke_test(args: argparse.Namespace) -> int:
+    if not _confirm(
+        args,
+        "MOVE",
+        "The arm will enable torque, move one joint a small relative amount, then return. "
+        "Remove payloads and keep physical power accessible.",
+    ):
+        print("Smoke test cancelled.")
+        return 1
+    delta = args.degrees * pi / 180.0
+    with SOARM101(_hardware_config(args)) as arm:
+        diagnostics = arm.diagnostics()
+        bad = [item for item in diagnostics if item.error or item.status]
+        if bad:
+            raise RuntimeError("diagnostics are not clean; refusing powered smoke test")
+        print("Starting joints:", dict(arm.get_joint_positions().positions))
+        arm.enable()
+        try:
+            time.sleep(args.latch_seconds)
+            arm.move_joints(
+                {args.joint: delta},
+                relative=True,
+                speed=args.speed,
+                acceleration=args.acceleration,
+            )
+            arm.move_joints(
+                {args.joint: -delta},
+                relative=True,
+                speed=args.speed,
+                acceleration=args.acceleration,
+            )
+            print("Smoke test completed and returned to the starting position.")
+        finally:
+            arm.relax()
+    return 0
+
+
+def _cmd_kinematics_check(args: argparse.Namespace) -> int:
+    measured = np.array([args.x_mm, args.y_mm, args.z_mm], dtype=float) / 1000.0
+    with SOARM101(_hardware_config(args)) as arm:
+        joints = dict(arm.get_joint_positions().positions)
+        predicted_pose = arm.get_position()
+    error = measured - predicted_pose.position
+    magnitude = float(np.linalg.norm(error))
+    record = {
+        "sample": args.sample,
+        "timestamp": time.time(),
+        "joint_positions_rad": joints,
+        "predicted_tcp_m": predicted_pose.position.tolist(),
+        "measured_tcp_m": measured.tolist(),
+        "error_m": error.tolist(),
+        "error_norm_m": magnitude,
+    }
+    print(json.dumps(record, indent=2))
+    if args.output:
+        output = Path(args.output).expanduser()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record) + "\n")
+        print(f"Appended sample to {output}")
     return 0
 
 
@@ -162,10 +308,27 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--robot-id", default="so101")
         command.add_argument("--calibration")
 
-    read = sub.add_parser("read", help="read calibrated joints and TCP pose")
+    setup = sub.add_parser("setup-motors", help="assign IDs and baud rate one isolated motor at a time")
+    setup.add_argument("--port", required=True)
+    setup.add_argument("--motor", choices=ALL_MOTORS)
+    setup.add_argument("--initial-id", type=int)
+    setup.add_argument("--initial-baudrate", type=int)
+    setup.add_argument("--target-baudrate", type=int, default=1_000_000)
+    setup.add_argument("--skip-model-check", action="store_true")
+    setup.add_argument("--yes", action="store_true")
+    setup.set_defaults(func=_cmd_setup_motors)
+
+    configure = sub.add_parser("configure", help="write recommended motor settings explicitly")
+    add_hardware_options(configure)
+    configure.add_argument("--yes", action="store_true")
+    configure.set_defaults(func=_cmd_configure)
+
+    read = sub.add_parser("read", help="read calibrated joints and TCP pose without configuration writes")
     add_hardware_options(read)
     read.set_defaults(func=_cmd_read)
-    diagnose = sub.add_parser("diagnose", help="read motor model, voltage, temperature, and status")
+    diagnose = sub.add_parser(
+        "diagnose", help="read motor model, voltage, temperature, and status without configuration writes"
+    )
     add_hardware_options(diagnose)
     diagnose.add_argument("--json", action="store_true")
     diagnose.add_argument("--allow-uncalibrated", action="store_true")
@@ -177,7 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--export-lerobot", action="store_true")
     calibrate.add_argument("--yes", action="store_true")
     calibrate.set_defaults(func=_cmd_calibrate)
-    move = sub.add_parser("move-joints", help="perform one guarded five-joint move")
+    move = sub.add_parser("move-joints", help="perform one guarded five-joint absolute move")
     add_hardware_options(move)
     move.add_argument("joints", nargs=5, type=float)
     move.add_argument("--degrees", action="store_true")
@@ -185,6 +348,28 @@ def build_parser() -> argparse.ArgumentParser:
     move.add_argument("--acceleration", type=float)
     move.add_argument("--yes", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
+
+    smoke = sub.add_parser("smoke-test", help="perform a tiny supervised relative one-joint test")
+    add_hardware_options(smoke)
+    smoke.add_argument("--joint", choices=ARM_JOINTS, required=True)
+    smoke.add_argument("--degrees", type=float, default=2.0)
+    smoke.add_argument("--speed", type=float, default=0.05)
+    smoke.add_argument("--acceleration", type=float, default=0.20)
+    smoke.add_argument("--latch-seconds", type=float, default=1.0)
+    smoke.add_argument("--yes", action="store_true")
+    smoke.set_defaults(func=_cmd_smoke_test)
+
+    check = sub.add_parser(
+        "kinematics-check", help="compare predicted TCP against one manually measured TCP sample"
+    )
+    add_hardware_options(check)
+    check.add_argument("--sample", default="sample")
+    check.add_argument("--x-mm", type=float, required=True)
+    check.add_argument("--y-mm", type=float, required=True)
+    check.add_argument("--z-mm", type=float, required=True)
+    check.add_argument("--output", help="optional JSON Lines output file")
+    check.set_defaults(func=_cmd_kinematics_check)
+
     simulation = sub.add_parser("sim-demo", help="run joint, gripper, IK, and linear motion in simulation")
     simulation.add_argument("--gui", action="store_true", help="use optional PyBullet GUI")
     simulation.add_argument("--realtime", action="store_true")
