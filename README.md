@@ -2,7 +2,7 @@
 
 A focused Python motion SDK for the five-axis SO-ARM101 follower arm and its stock gripper.
 
-It talks directly to the six Feetech STS3215 servos and provides joint motion, FK/IK, Cartesian linear movement, tools/TCPs, diagnostics, calibration compatibility, conservative workspace checks, and simulation. **ROS and LeRobot are not runtime dependencies.**
+It talks directly to the six Feetech STS3215 servos and provides joint motion, FK/IK, Cartesian linear movement, tools/TCPs, diagnostics, calibration compatibility, conservative workspace checks, simulation, and an optional PySide6 controller. **ROS and LeRobot are not runtime dependencies.**
 
 > **Status:** Alpha hobby-arm software. Simulation and fake-transport tests are automated; each printed arm still needs a supervised no-payload smoke test with physical power accessible.
 
@@ -20,10 +20,11 @@ python -m pip install --upgrade pip
 pip install -e .
 ```
 
-For the optional PyBullet GUI:
+Optional interfaces:
 
 ```bash
-pip install -e ".[simulation]"
+pip install -e ".[simulation]"   # PyBullet visual simulation
+pip install -e ".[gui]"          # PySide6 desktop controller
 ```
 
 ## Try simulation
@@ -70,6 +71,58 @@ soarm101 smoke-test \
 ```
 
 Repeat for `shoulder_lift`, `elbow_flex`, `wrist_flex`, and `wrist_roll` only after confirming each previous joint moves in the expected direction and returns cleanly.
+
+## PySide6 controller
+
+Install the optional GUI and launch it:
+
+```bash
+pip install -e ".[gui]"
+soarm101-gui --robot-id forge-arm
+```
+
+Or test the complete interface without hardware:
+
+```bash
+soarm101-gui --simulation
+```
+
+The GUI provides:
+
+- measured and target values for all five joints, with degree sliders;
+- guarded absolute joint moves;
+- measured world/base XYZ, roll, pitch, and yaw;
+- absolute world-pose linear moves;
+- direct ±XYZ and ±roll/pitch/yaw jog buttons;
+- world-frame or current-tool-frame jog semantics;
+- tool-space translations along the current gripper axes;
+- compatible, position-only, or exact orientation modes;
+- gripper open, close, and normalized positioning;
+- connect, torque-enable, software stop/hold, relax, and live status;
+- a persistent worker-thread session so the window remains responsive while SDK motion runs.
+
+Every Cartesian GUI jog uses the normal `move_linear()` planner. The GUI does not bypass joint, calibration, workspace, following-error, timing, or fault checks.
+
+Matching CLI controls are available for scripting and troubleshooting:
+
+```bash
+# Absolute five-joint target in degrees
+soarm101 move-joints --port /dev/ttyACM0 --robot-id forge-arm \
+  --degrees 0 -20 35 0 10 --yes
+
+# Move 5 mm along the current tool X axis with a linear Cartesian path
+soarm101 jog --port /dev/ttyACM0 --robot-id forge-arm \
+  --frame tool --x-mm 5 --yes
+
+# Rotate 2 degrees around world yaw
+soarm101 jog --port /dev/ttyACM0 --robot-id forge-arm \
+  --frame world --yaw-deg 2 --yes
+
+soarm101 gripper --port /dev/ttyACM0 --robot-id forge-arm open --yes
+soarm101 gripper --port /dev/ttyACM0 --robot-id forge-arm close --yes
+```
+
+The same GUI can also be launched through `soarm101 gui`.
 
 ## Python control
 
