@@ -63,7 +63,8 @@ def test_encoder_scale_noise_keeps_validated_plan(monkeypatch: pytest.MonkeyPatc
             orientation_mode="position_only",
             speed=0.01,
         )
-        assert executed == [plan]
+        assert len(executed) == 1
+        assert executed[0] is plan
 
 
 def test_meaningful_drift_rejects_stale_validated_plan(
