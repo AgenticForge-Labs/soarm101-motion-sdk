@@ -1,7 +1,7 @@
 """xArm-inspired convenience API for direct SO-ARM101 control.
 
 This is intentionally a thin facade over :class:`SOARM101`; it does not emulate
-xArm controller features the SO-ARM101 hardware does not possess.  The goal is
+xArm controller features the SO-ARM101 hardware does not possess. The goal is
 to make common direct-control scripts familiar while preserving the SDK's
 existing safety, planning, and feedback checks.
 """
@@ -36,22 +36,21 @@ class SOArmAPI(SOARM101):
         position: float,
         *,
         wait: bool = True,
-    ) -> object:
+    ) -> MotionResult | MotionHandle[MotionResult]:
         """Move the stock gripper using normalized position ``0.0 .. 1.0``."""
 
-        return self.tool.move(float(position), wait=wait)
+        move = getattr(self.tool, "move", None)
+        if not callable(move):
+            raise RuntimeError("active tool does not provide position control")
+        return move(float(position), wait=wait)
 
     def get_gripper_position(self) -> float:
         """Return the stock gripper's normalized position ``0.0 .. 1.0``."""
 
         getter = getattr(self.tool, "get_position", None)
-        if callable(getter):
-            return float(getter())
-        backend = getattr(self.tool, "_backend", None)
-        actuator = getattr(self.tool, "actuator_name", "so101_gripper")
-        if backend is None:
-            raise RuntimeError("gripper is not bound to a hardware backend")
-        return float(backend.read_tool_position(actuator))
+        if not callable(getter):
+            raise RuntimeError("active tool does not provide position feedback")
+        return float(getter())
 
     def set_tool_position(
         self,
@@ -70,7 +69,7 @@ class SOArmAPI(SOARM101):
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Apply a relative Cartesian move in the current TCP/tool frame.
 
-        Translation arguments use millimetres, matching ``set_position``.  Angular
+        Translation arguments use millimetres, matching ``set_position``. Angular
         arguments use degrees unless ``is_radian=True``.
         """
 
