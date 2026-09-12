@@ -69,6 +69,17 @@ def _print_diagnostics(items: list[object]) -> None:
             )
 
 
+def _print_calibration(calibration: object) -> None:
+    motors = getattr(calibration, "motors")
+    print("Calibration result:")
+    for name, motor in motors.items():
+        travel = motor.range_max - motor.range_min
+        print(
+            f"  {name:16s} limits={motor.range_min:4d}..{motor.range_max:4d} "
+            f"travel={travel:4d} offset={motor.homing_offset:+5d}"
+        )
+
+
 def _run(args: argparse.Namespace) -> int:
     if not _confirm(args.yes):
         print("Setup cancelled.")
@@ -105,15 +116,17 @@ def _run(args: argparse.Namespace) -> int:
             or bool(calibration.uncalibrated_motors)
         )
         if needs_calibration:
-            input(
-                "Place every joint and the gripper near the middle of its usable range, "
-                "then press ENTER."
-            )
-            print(
-                f"For {args.seconds:.1f} seconds, move every joint and the gripper smoothly "
-                "through the full safe range. Do not force mechanical stops."
-            )
+            print("\nLIVE MECHANICAL-STOP CALIBRATION")
+            print("Torque is off. During the live sweep:")
+            print("- Move every joint and the gripper repeatedly through its full safe travel.")
+            print("- Gently reach both printed mechanical stops several times.")
+            print("- Do not hold or force a joint against a stop.")
+            print("- The SDK calculates zero as halfway between the observed extrema.")
+            print("- Crossing the encoder 4095/0 seam is handled automatically.")
+            input("Press ENTER when you are ready to begin the live sweep. ")
+            print(f"Recording extrema for {args.seconds:.1f} seconds...")
             calibration = backend.interactive_calibration(record_seconds=args.seconds)
+            _print_calibration(calibration)
         else:
             print("Existing motor EEPROM calibration looks usable; keeping it.")
 
