@@ -9,7 +9,7 @@ from math import pi
 from pathlib import Path
 from typing import Any, Mapping
 
-from soarm101_motion.constants import ALL_MOTORS, ENCODER_MAX, STOCK_GRIPPER
+from soarm101_motion.constants import ALL_MOTORS, ENCODER_MAX, HALF_TURN, STOCK_GRIPPER
 from soarm101_motion.exceptions import CalibrationError, SafetyViolationError
 
 _LEROBOT_TO_SDK = {"gripper": STOCK_GRIPPER}
@@ -41,21 +41,25 @@ class MotorCalibration:
             )
         if self.drive_mode not in (0, 1):
             raise CalibrationError(f"motor {self.motor_id} has invalid drive_mode={self.drive_mode}")
+        if not self.range_min <= HALF_TURN <= self.range_max:
+            raise CalibrationError(
+                f"motor {self.motor_id} calibrated range {self.range_min}..{self.range_max} "
+                f"does not include the zero reference {HALF_TURN}"
+            )
 
     @property
     def radians_limits(self) -> tuple[float, float]:
-        mid = (self.range_min + self.range_max) / 2.0
         scale = 2.0 * pi / ENCODER_MAX
-        return (self.range_min - mid) * scale, (self.range_max - mid) * scale
+        return (self.range_min - HALF_TURN) * scale, (self.range_max - HALF_TURN) * scale
 
     def raw_to_radians(self, raw: int) -> float:
-        mid = (self.range_min + self.range_max) / 2.0
-        degrees = (float(raw) - mid) * 360.0 / ENCODER_MAX
+        degrees = (float(raw) - HALF_TURN) * 360.0 / ENCODER_MAX
         return degrees * pi / 180.0
 
     def radians_to_raw(self, radians: float) -> int:
-        mid = (self.range_min + self.range_max) / 2.0
-        raw = int(round((float(radians) * 180.0 / pi) * ENCODER_MAX / 360.0 + mid))
+        raw = int(
+            round((float(radians) * 180.0 / pi) * ENCODER_MAX / 360.0 + HALF_TURN)
+        )
         if not self.range_min <= raw <= self.range_max:
             raise SafetyViolationError(
                 f"joint target maps to raw position {raw}, outside calibrated range "
@@ -101,17 +105,12 @@ class SO101Calibration:
 
     @property
     def uncalibrated_motors(self) -> tuple[str, ...]:
-        """Return motors whose EEPROM still has a factory range.
+        """Return motors whose EEPROM still has an unrestricted factory range."""
 
-        Wrist roll intentionally uses the full encoder range after calibration, so it is
-        exempt from range-only detection.
-        """
         return tuple(
             name
             for name, calibration in self.motors.items()
-            if name != "wrist_roll"
-            and calibration.range_min == 0
-            and calibration.range_max == ENCODER_MAX
+            if calibration.range_min == 0 and calibration.range_max == ENCODER_MAX
         )
 
     @classmethod
