@@ -166,11 +166,22 @@ def _lerobot_export_path(robot_id: str) -> Path:
     )
 
 
+def _print_calibration(calibration: object) -> None:
+    motors = getattr(calibration, "motors")
+    print("Calibration result:")
+    for name, motor in motors.items():
+        travel = motor.range_max - motor.range_min
+        print(
+            f"  {name:16s} limits={motor.range_min:4d}..{motor.range_max:4d} "
+            f"travel={travel:4d} offset={motor.homing_offset:+5d}"
+        )
+
+
 def _cmd_calibrate(args: argparse.Namespace) -> int:
     print("CALIBRATION SAFETY")
     print("- Remove payloads and clear the workspace.")
     print("- Keep power accessible. Torque will be disabled.")
-    print("- Do not force a joint past its mechanical stop.")
+    print("- Gently reach the printed stops; never force a joint against a stop.")
     if not _confirm(args, "CALIBRATE", "Calibration writes motor homing and range EEPROM values."):
         print("Calibration cancelled.")
         return 1
@@ -185,15 +196,16 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     try:
         backend.disable_torque()
         backend.configure_motors()
-        input(
-            "Place every joint near the middle of its usable range, including the gripper, "
-            "then press ENTER."
-        )
-        print(
-            f"For the next {args.seconds:.1f} seconds, move every joint and the gripper "
-            "smoothly through its full safe range."
-        )
+        print("\nLIVE MECHANICAL-STOP CALIBRATION")
+        print("During the live sweep:")
+        print("- Move every joint and the gripper repeatedly through its full safe travel.")
+        print("- Reach both printed mechanical stops several times.")
+        print("- The SDK calculates zero halfway between the observed extrema.")
+        print("- Crossing the encoder 4095/0 seam is handled automatically.")
+        input("Press ENTER when you are ready to begin the live sweep. ")
+        print(f"Recording extrema for {args.seconds:.1f} seconds...")
         calibration = backend.interactive_calibration(record_seconds=args.seconds)
+        _print_calibration(calibration)
         output = Path(args.output) if args.output else default_calibration_path(args.robot_id)
         lerobot_path = _lerobot_export_path(args.robot_id) if args.export_lerobot else None
         saved = backend.save_calibration(calibration, path=output, lerobot_path=lerobot_path)
@@ -339,7 +351,7 @@ def _cmd_gui(args: argparse.Namespace) -> int:
     try:
         from soarm101_motion.gui.app import run_gui
     except ImportError as exc:
-        raise RuntimeError("GUI support requires: pip install -e '.[gui]'") from exc
+        raise RuntimeError("GUI support requires: pip install -e '.[gui]'" ) from exc
     argv: list[str] = ["--robot-id", args.robot_id]
     if args.port:
         argv.extend(("--port", args.port))
@@ -389,7 +401,10 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--allow-uncalibrated", action="store_true")
     diagnose.set_defaults(func=_cmd_diagnose)
 
-    calibrate = sub.add_parser("calibrate", help="interactively calibrate all six STS3215 motors")
+    calibrate = sub.add_parser(
+        "calibrate",
+        help="calibrate all six motors from one live sweep between printed mechanical stops",
+    )
     add_hardware_options(calibrate)
     calibrate.add_argument("--seconds", type=float, default=20.0)
     calibrate.add_argument("--output")

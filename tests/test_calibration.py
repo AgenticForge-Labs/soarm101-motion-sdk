@@ -1,8 +1,10 @@
 import json
+
 import pytest
 
 from soarm101_motion.calibration import MotorCalibration, SO101Calibration
-from soarm101_motion.constants import ALL_MOTORS, MOTOR_IDS, STOCK_GRIPPER
+from soarm101_motion.constants import ALL_MOTORS, HALF_TURN, MOTOR_IDS, STOCK_GRIPPER
+from soarm101_motion.exceptions import CalibrationError
 
 
 def sample_calibration() -> SO101Calibration:
@@ -19,6 +21,36 @@ def test_joint_calibration_round_trip() -> None:
     for radians in (-1.0, 0.0, 1.0):
         recovered = calibration.raw_to_radians(calibration.radians_to_raw(radians))
         assert recovered == pytest.approx(radians, abs=0.002)
+
+
+def test_joint_zero_is_half_turn_even_for_asymmetric_range() -> None:
+    calibration = MotorCalibration(1, 0, 123, 400, 3600)
+    assert calibration.raw_to_radians(HALF_TURN) == pytest.approx(0.0)
+    assert calibration.radians_to_raw(0.0) == HALF_TURN
+
+
+def test_arm_joint_range_must_include_half_turn_zero() -> None:
+    calibration = SO101Calibration(
+        motors={
+            "shoulder_pan": MotorCalibration(MOTOR_IDS["shoulder_pan"], 0, 0, 100, 1000)
+        }
+    )
+    with pytest.raises(CalibrationError, match="does not include the zero reference"):
+        calibration.validate(require_all=False)
+
+
+def test_gripper_range_need_not_include_half_turn() -> None:
+    calibration = SO101Calibration(
+        motors={STOCK_GRIPPER: MotorCalibration(MOTOR_IDS[STOCK_GRIPPER], 0, 0, 100, 1100)}
+    )
+    calibration.validate(require_all=False)
+
+
+def test_factory_range_is_reported_uncalibrated_for_every_motor() -> None:
+    calibration = SO101Calibration(
+        motors={name: MotorCalibration(MOTOR_IDS[name], 0, 0, 0, 4095) for name in ALL_MOTORS}
+    )
+    assert set(calibration.uncalibrated_motors) == set(ALL_MOTORS)
 
 
 def test_gripper_calibration_round_trip_and_inversion() -> None:
