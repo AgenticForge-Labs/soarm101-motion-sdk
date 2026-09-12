@@ -9,7 +9,13 @@ from math import pi
 from pathlib import Path
 from typing import Any, Mapping
 
-from soarm101_motion.constants import ALL_MOTORS, ENCODER_MAX, HALF_TURN, STOCK_GRIPPER
+from soarm101_motion.constants import (
+    ALL_MOTORS,
+    ARM_JOINTS,
+    ENCODER_MAX,
+    HALF_TURN,
+    STOCK_GRIPPER,
+)
 from soarm101_motion.exceptions import CalibrationError, SafetyViolationError
 
 _LEROBOT_TO_SDK = {"gripper": STOCK_GRIPPER}
@@ -41,11 +47,6 @@ class MotorCalibration:
             )
         if self.drive_mode not in (0, 1):
             raise CalibrationError(f"motor {self.motor_id} has invalid drive_mode={self.drive_mode}")
-        if not self.range_min <= HALF_TURN <= self.range_max:
-            raise CalibrationError(
-                f"motor {self.motor_id} calibrated range {self.range_min}..{self.range_max} "
-                f"does not include the zero reference {HALF_TURN}"
-            )
 
     @property
     def radians_limits(self) -> tuple[float, float]:
@@ -95,6 +96,14 @@ class SO101Calibration:
             if name not in ALL_MOTORS:
                 raise CalibrationError(f"unknown calibrated motor: {name}")
             calibration.validate()
+            # Arm joint angles use the Feetech half-turn reference as zero.
+            # The gripper is normalized only by its endpoints, so old LeRobot
+            # gripper calibrations remain valid even if their range excludes 2047.
+            if name in ARM_JOINTS and not calibration.range_min <= HALF_TURN <= calibration.range_max:
+                raise CalibrationError(
+                    f"joint {name} calibrated range {calibration.range_min}..{calibration.range_max} "
+                    f"does not include the zero reference {HALF_TURN}"
+                )
 
     @property
     def is_factory_range(self) -> bool:
