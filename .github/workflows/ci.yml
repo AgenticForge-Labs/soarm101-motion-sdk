@@ -16,6 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - run: sudo apt-get update && sudo apt-get install -y libegl1
       - run: uv sync --extra dev --extra gui
       - run: uv run ruff check .
       - run: uv run python -m compileall -q src
