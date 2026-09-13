@@ -35,6 +35,18 @@ class FeetechBackend(_ProtocolFeetechBackend):
         self._effort_trip_message: str | None = None
         self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
 
+    def _ensure_effort_state(self) -> None:
+        """Initialize safety-latch state for normal and lightweight backend instances."""
+
+        # Some transport-only tests deliberately construct this class with
+        # object.__new__ so they can exercise torque ordering without opening a
+        # serial port. Lazy initialization keeps those instances compatible and
+        # also makes older deserialized/backend wrappers safe to use.
+        if not hasattr(self, "_effort_trip_message"):
+            self._effort_trip_message = None
+        if not hasattr(self, "_effort_violation_counts"):
+            self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
+
     @staticmethod
     def _decode_present_load(raw: int) -> int:
         """Decode STS3215 Present_Load sign-magnitude encoding (sign bit 10)."""
@@ -67,6 +79,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
             return {"current_raw": current, "load_raw": load}
 
     def _sample_effort_trip(self) -> str | None:
+        self._ensure_effort_state()
         if not self.config.effort_safety_enabled:
             return None
 
@@ -101,18 +114,21 @@ class FeetechBackend(_ProtocolFeetechBackend):
 
     @property
     def effort_trip_message(self) -> str | None:
+        self._ensure_effort_state()
         return self._effort_trip_message
 
     def clear_effort_trip(self) -> None:
         """Clear the latched software effort trip after the obstruction is removed."""
 
         with self._io_lock:
+            self._ensure_effort_state()
             self._effort_trip_message = None
             self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
 
     def enable_torque(self, motors: Sequence[str] | None = None) -> None:
         with self._io_lock:
             self._require_connected()
+            self._ensure_effort_state()
             if self._effort_trip_message is not None:
                 raise SafetyViolationError(
                     self._effort_trip_message
@@ -174,6 +190,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
 
         base = super().get_hardware_state()
         with self._io_lock:
+            self._ensure_effort_state()
             effort_message = self._effort_trip_message
             if (
                 effort_message is None
