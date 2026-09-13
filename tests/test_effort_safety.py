@@ -1,5 +1,8 @@
+import pytest
+
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ALL_MOTORS
+from soarm101_motion.exceptions import SafetyViolationError
 from soarm101_motion.hardware.managed_feetech import FeetechBackend
 
 
@@ -65,7 +68,11 @@ def test_effort_threshold_holds_and_latches_after_required_samples() -> None:
     assert latched.faulted
     assert backend.hold_count == 1
 
+    with pytest.raises(SafetyViolationError, match="clear_effort_trip"):
+        backend._require_effort_clear()
+
     backend.clear_effort_trip()
+    backend._require_effort_clear()
     cleared = backend.get_hardware_state()
     assert not cleared.faulted
 
