@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from soarm101_motion.constants import (
+    ALL_MOTORS,
     DEFAULT_COMMAND_FREQUENCY_HZ,
     DEFAULT_JOINT_ACCEL_RAD_S2,
     DEFAULT_JOINT_SPEED_RAD_S,
@@ -55,6 +57,17 @@ class SOARM101Config:
     motion_completion_timeout_s: float = 5.0
     stop_timeout_s: float = 2.0
     max_command_lateness_s: float = 0.05
+
+    # Current/load based contact and collision guard. Present_Load is a signed
+    # magnitude value with a maximum magnitude of 1023. Present_Current is kept
+    # in the STS3215 raw register units because that is what the servo reports.
+    # These defaults are deliberately soft-stop guardrails, not calibrated force.
+    effort_safety_enabled: bool = True
+    effort_current_trip_raw: int | None = 250
+    effort_load_trip_raw: int | None = 850
+    effort_trip_consecutive_samples: int = 2
+    motor_current_trip_raw: Mapping[str, int] = field(default_factory=dict)
+    motor_load_trip_raw: Mapping[str, int] = field(default_factory=dict)
 
     # Coarse hobby-arm geometry envelope. This is intentionally conservative
     # and is not a substitute for measured collision geometry.
@@ -146,5 +159,33 @@ class SOARM101Config:
             raise ConfigurationError("hardware_speed_raw must be in [1, 4095]")
         if not 1 <= self.hardware_acceleration_raw <= 254:
             raise ConfigurationError("hardware_acceleration_raw must be in [1, 254]")
+
+        if self.effort_current_trip_raw is not None and self.effort_current_trip_raw <= 0:
+            raise ConfigurationError("effort_current_trip_raw must be positive or None")
+        if self.effort_load_trip_raw is not None and not 1 <= self.effort_load_trip_raw <= 1023:
+            raise ConfigurationError("effort_load_trip_raw must be in [1, 1023] or None")
+        if self.effort_trip_consecutive_samples < 1:
+            raise ConfigurationError("effort_trip_consecutive_samples must be at least 1")
+
+        current_overrides = dict(self.motor_current_trip_raw)
+        load_overrides = dict(self.motor_load_trip_raw)
+        for mapping_name, overrides, maximum in (
+            ("motor_current_trip_raw", current_overrides, None),
+            ("motor_load_trip_raw", load_overrides, 1023),
+        ):
+            unknown = set(overrides) - set(ALL_MOTORS)
+            if unknown:
+                raise ConfigurationError(
+                    f"{mapping_name} contains unknown motors: {', '.join(sorted(unknown))}"
+                )
+            for motor, value in overrides.items():
+                if value <= 0 or (maximum is not None and value > maximum):
+                    suffix = "" if maximum is None else f" and <= {maximum}"
+                    raise ConfigurationError(
+                        f"{mapping_name}[{motor!r}] must be positive{suffix}"
+                    )
+        object.__setattr__(self, "motor_current_trip_raw", current_overrides)
+        object.__setattr__(self, "motor_load_trip_raw", load_overrides)
+
         if self.calibration_path is not None:
             object.__setattr__(self, "calibration_path", Path(self.calibration_path).expanduser())
