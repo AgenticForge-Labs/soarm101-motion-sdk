@@ -31,18 +31,47 @@ class SOArmAPI(SOARM101):
         else:
             self.disable()
 
+    def set_gripper_speed(self, speed: int) -> None:
+        """Set the default gripper speed in raw STS3215 controller units."""
+
+        resolved = int(speed)
+        if not 1 <= resolved <= 4095:
+            raise ValueError("gripper speed must be in [1, 4095]")
+        self._gripper_speed_raw = resolved
+
+    def get_gripper_speed(self) -> int:
+        """Return the configured default gripper speed in raw controller units."""
+
+        return int(getattr(self, "_gripper_speed_raw", self.config.hardware_speed_raw))
+
     def set_gripper_position(
         self,
         position: float,
         *,
+        speed: int | None = None,
+        acceleration: int | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move the stock gripper using normalized position ``0.0 .. 1.0``."""
+        """Move the gripper to normalized position ``0.0 .. 1.0``.
+
+        ``speed`` and ``acceleration`` are raw STS3215 controller units. If speed
+        is omitted, the value set by :meth:`set_gripper_speed` is used.
+        """
 
         move = getattr(self.tool, "move", None)
         if not callable(move):
             raise RuntimeError("active tool does not provide position control")
-        return move(float(position), wait=wait)
+        speed_raw = self.get_gripper_speed() if speed is None else int(speed)
+        if not 1 <= speed_raw <= 4095:
+            raise ValueError("gripper speed must be in [1, 4095]")
+        if acceleration is not None and not 1 <= int(acceleration) <= 254:
+            raise ValueError("gripper acceleration must be in [1, 254]")
+        return move(
+            float(position),
+            speed_raw=speed_raw,
+            acceleration_raw=None if acceleration is None else int(acceleration),
+            wait=wait,
+        )
 
     def get_gripper_position(self) -> float:
         """Return the stock gripper's normalized position ``0.0 .. 1.0``."""
@@ -51,6 +80,28 @@ class SOArmAPI(SOARM101):
         if not callable(getter):
             raise RuntimeError("active tool does not provide position feedback")
         return float(getter())
+
+    def get_motor_effort(self, motor: str) -> dict[str, int]:
+        """Return raw current and signed load feedback for one hardware motor."""
+
+        reader = getattr(self.backend, "read_motor_effort", None)
+        if not callable(reader):
+            raise RuntimeError("active backend does not provide motor effort feedback")
+        return dict(reader(motor))
+
+    @property
+    def effort_trip_message(self) -> str | None:
+        """Return the latched motor-effort safety trip message, if any."""
+
+        return getattr(self.backend, "effort_trip_message", None)
+
+    def clear_effort_trip(self) -> None:
+        """Clear a latched motor-effort interlock after removing the obstruction."""
+
+        clear = getattr(self.backend, "clear_effort_trip", None)
+        if not callable(clear):
+            raise RuntimeError("active backend does not provide an effort safety interlock")
+        clear()
 
     def set_tool_position(
         self,

@@ -8,10 +8,20 @@ def test_direct_api_motion_enable_and_gripper() -> None:
     with arm:
         arm.motion_enable(True)
         assert arm.get_state().torque_enabled
-        arm.set_gripper_position(0.25)
+        arm.set_gripper_speed(180)
+        assert arm.get_gripper_speed() == 180
+        arm.set_gripper_position(0.25, speed=160, acceleration=20)
         assert arm.get_gripper_position() == pytest.approx(0.25, abs=0.03)
         arm.motion_enable(False)
         assert not arm.get_state().torque_enabled
+
+
+def test_direct_api_gripper_speed_validation() -> None:
+    arm = SOArmAPI.simulated()
+    with pytest.raises(ValueError, match="gripper speed"):
+        arm.set_gripper_speed(0)
+    with pytest.raises(ValueError, match="gripper acceleration"):
+        arm.set_gripper_position(0.5, acceleration=0)
 
 
 def test_direct_api_pose_values_use_mm_and_degrees() -> None:

@@ -1,6 +1,6 @@
 # Direct control API
 
-The SDK is designed for direct programmatic control of SO-ARM101 without ROS or LeRobot. `SOArmAPI` provides an xArm-inspired convenience layer while still using the native SO-ARM101 motion planner, IK, calibration, workspace checks, following-error monitoring, and cancellation behavior.
+The SDK is designed for direct programmatic control of SO-ARM101 without ROS or LeRobot. `SOArmAPI` provides an xArm-inspired convenience layer while still using the native SO-ARM101 motion planner, IK, calibration, workspace checks, following-error monitoring, motor-effort interlocks, and cancellation behavior.
 
 ```python
 from soarm101_motion import SOArmAPI
@@ -36,13 +36,26 @@ with SOArmAPI(port="/dev/ttyACM0", robot_id="forge-arm") as arm:
         orientation_mode="compatible",
     )
 
-    arm.set_gripper_position(0.5)
+    # The gripper is a separate actuator: normalized position plus speed.
+    arm.set_gripper_speed(180)
+    arm.set_gripper_position(0.5, speed=160, acceleration=20)
+
     print(arm.get_servo_angle(is_radian=False))
     print(arm.get_position_values())
+    print(arm.get_motor_effort("elbow_flex"))
 
     arm.move_gohome()
 ```
 
-`SOArmAPI` intentionally does **not** claim xArm compatibility for controller features the hardware does not provide. There is no fabricated force/torque sensing, collision-sensitivity controller, industrial emergency stop, or hardware trajectory blending layer.
+If the current/load safety interlock trips, the SDK holds the measured motor positions and aborts the active motion. After inspecting the arm and removing the obstruction, clear the latch explicitly:
 
-The next hardware-validation milestone is continuous/streaming control (`servo_j`-style joint streaming and Cartesian velocity/servo modes). Those should only be added after the stop-derived calibration, joint directions, kinematic zero, and guarded Cartesian paths have been verified on a physical arm.
+```python
+print(arm.effort_trip_message)
+arm.clear_effort_trip()
+```
+
+See [effort-safety.md](effort-safety.md) for configuration and threshold semantics.
+
+`SOArmAPI` intentionally does **not** claim xArm compatibility for controller features the hardware does not provide. The STS3215 current/load signals support useful contact and collision detection, but they are not a calibrated six-axis force/torque sensor. The software hold is not a certified emergency stop.
+
+The next hardware-validation milestone is continuous/streaming control (`servo_j`-style joint streaming and Cartesian velocity/servo modes). Those should only be added after the stop-derived calibration, joint directions, kinematic zero, guarded Cartesian paths, and effort thresholds have been verified on a physical arm.
