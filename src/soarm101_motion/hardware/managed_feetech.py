@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from soarm101_motion.calibration import SO101Calibration
 from soarm101_motion.calibration_live import EncoderSweep, calibration_from_sweeps
@@ -46,6 +46,14 @@ class FeetechBackend(_ProtocolFeetechBackend):
             self._effort_trip_message = None
         if not hasattr(self, "_effort_violation_counts"):
             self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
+
+    def _require_effort_clear(self) -> None:
+        self._ensure_effort_state()
+        if self._effort_trip_message is not None:
+            raise SafetyViolationError(
+                self._effort_trip_message
+                + "; remove the obstruction and call clear_effort_trip() before motion"
+            )
 
     @staticmethod
     def _decode_present_load(raw: int) -> int:
@@ -125,15 +133,46 @@ class FeetechBackend(_ProtocolFeetechBackend):
             self._effort_trip_message = None
             self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
 
+    def write_joint_positions(
+        self,
+        positions: Mapping[str, float],
+        *,
+        speed_raw: int | None = None,
+        acceleration_raw: int | None = None,
+    ) -> None:
+        """Reject direct joint writes while an effort safety trip is latched."""
+
+        with self._io_lock:
+            self._require_effort_clear()
+            super().write_joint_positions(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+    def write_tool_position(
+        self,
+        actuator: str,
+        position: float,
+        *,
+        speed_raw: int | None = None,
+        acceleration_raw: int | None = None,
+    ) -> None:
+        """Reject direct tool writes while an effort safety trip is latched."""
+
+        with self._io_lock:
+            self._require_effort_clear()
+            super().write_tool_position(
+                actuator,
+                position,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
     def enable_torque(self, motors: Sequence[str] | None = None) -> None:
         with self._io_lock:
             self._require_connected()
-            self._ensure_effort_state()
-            if self._effort_trip_message is not None:
-                raise SafetyViolationError(
-                    self._effort_trip_message
-                    + "; remove the obstruction and call clear_effort_trip() before re-enabling"
-                )
+            self._require_effort_clear()
             selected = tuple(motors) if motors is not None else ALL_MOTORS
             unknown = set(selected) - set(ALL_MOTORS)
             if unknown:
