@@ -46,6 +46,12 @@ class MainWindow(QMainWindow):
     calibration_requested = Signal(float)
     leader_connect_requested = Signal(object)
     leader_disconnect_requested = Signal()
+    move_saved_pose_requested = Signal(object)
+    trajectory_play_requested = Signal(object)
+    recording_start_requested = Signal(object)
+    recording_stop_requested = Signal()
+    leader_recording_start_requested = Signal(object)
+    leader_recording_stop_requested = Signal()
 
     def __init__(
         self,
@@ -67,6 +73,10 @@ class MainWindow(QMainWindow):
         self._leader_connected = False
         self._latest_leader_state: dict[str, Any] | None = None
         self._pose_library_cache: tuple[str, PoseLibrary] | None = None
+        self._trajectory_library_cache: tuple[str, TrajectoryLibrary] | None = None
+        self._active_trajectory: Trajectory | None = None
+        self._recording_source: str | None = None
+        self._pending_recording_name: str | None = None
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -84,6 +94,10 @@ class MainWindow(QMainWindow):
         self.absolute_pose_requested.connect(self._worker.move_absolute_pose)
         self.gripper_requested.connect(self._worker.move_gripper)
         self.calibration_requested.connect(self._worker.run_calibration)
+        self.move_saved_pose_requested.connect(self._worker.move_saved_pose)
+        self.trajectory_play_requested.connect(self._worker.play_trajectory)
+        self.recording_start_requested.connect(self._worker.start_recording)
+        self.recording_stop_requested.connect(self._worker.stop_recording)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
@@ -91,6 +105,10 @@ class MainWindow(QMainWindow):
         self._worker.log_message.connect(self._log)
         self._worker.error_message.connect(self._on_error)
         self._worker.calibration_completed.connect(self._on_calibration_completed)
+        self._worker.recording_completed.connect(self._on_recording_completed)
+        self._worker.recording_changed.connect(
+            lambda active: self._on_recording_changed("follower", active)
+        )
 
         self._leader_thread = QThread(self)
         self._leader_worker = RobotWorker()
@@ -99,11 +117,17 @@ class MainWindow(QMainWindow):
         self._leader_thread.finished.connect(self._leader_worker.deleteLater)
         self.leader_connect_requested.connect(self._leader_worker.connect_robot)
         self.leader_disconnect_requested.connect(self._leader_worker.disconnect_robot)
+        self.leader_recording_start_requested.connect(self._leader_worker.start_recording)
+        self.leader_recording_stop_requested.connect(self._leader_worker.stop_recording)
         self._leader_worker.state_changed.connect(self._on_leader_state)
         self._leader_worker.connected_changed.connect(self._on_leader_connected)
         self._leader_worker.log_message.connect(lambda message: self._log(f"Leader: {message}"))
         self._leader_worker.error_message.connect(
             lambda message: self._on_error(f"Leader: {message}")
+        )
+        self._leader_worker.recording_completed.connect(self._on_recording_completed)
+        self._leader_worker.recording_changed.connect(
+            lambda active: self._on_recording_changed("leader", active)
         )
 
         self._build_ui(port=port, robot_id=robot_id, simulation=simulation)
@@ -112,6 +136,8 @@ class MainWindow(QMainWindow):
         self._refresh_ports()
         self._refresh_leader_ports()
         self._refresh_named_pose_status()
+        self._refresh_point_list()
+        self._refresh_trajectory_list()
         self._update_enabled_state()
 
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
@@ -123,6 +149,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_setup_tab(), "Setup")
         self.tabs.addTab(self._build_control_tab(), "Control")
         self.tabs.addTab(self._build_teach_tab(), "Teach")
+        self.tabs.addTab(self._build_trajectory_tab(), "Trajectories")
         layout.addWidget(self.tabs, 1)
 
         status_row = QHBoxLayout()
@@ -362,7 +389,130 @@ class MainWindow(QMainWindow):
         self.teach_pose_label.setWordWrap(True)
         source_grid.addWidget(self.teach_pose_label, 2, 3, 2, 3)
         layout.addWidget(source)
+
+        points = QGroupBox("Taught points")
+        point_grid = QGridLayout(points)
+        point_grid.addWidget(QLabel("New point name"), 0, 0)
+        self.point_name_edit = QLineEdit()
+        self.point_name_edit.setPlaceholderText("pick, above_drop, camera_pose...")
+        point_grid.addWidget(self.point_name_edit, 0, 1, 1, 2)
+        self.save_point_button = QPushButton("Save current point")
+        self.save_point_button.clicked.connect(self._save_taught_point)
+        point_grid.addWidget(self.save_point_button, 0, 3)
+        point_grid.addWidget(QLabel("Saved point"), 1, 0)
+        self.point_combo = QComboBox()
+        point_grid.addWidget(self.point_combo, 1, 1)
+        self.point_mode_combo = QComboBox()
+        self.point_mode_combo.addItem("Joint / angular", "joint")
+        self.point_mode_combo.addItem("Cartesian linear", "linear")
+        point_grid.addWidget(self.point_mode_combo, 1, 2)
+        self.move_point_button = QPushButton("Move follower to point")
+        self.move_point_button.clicked.connect(self._move_taught_point)
+        point_grid.addWidget(self.move_point_button, 1, 3)
+        self.delete_point_button = QPushButton("Delete point")
+        self.delete_point_button.clicked.connect(self._delete_taught_point)
+        point_grid.addWidget(self.delete_point_button, 2, 3)
+        layout.addWidget(points)
+
+        recording = QGroupBox("Exact trajectory recording")
+        record_grid = QGridLayout(recording)
+        record_grid.addWidget(QLabel("Name"), 0, 0)
+        self.recording_name_edit = QLineEdit()
+        self.recording_name_edit.setPlaceholderText("wave_raw_01")
+        record_grid.addWidget(self.recording_name_edit, 0, 1, 1, 2)
+        self.record_effort_check = QCheckBox("Record effort/current diagnostics")
+        record_grid.addWidget(self.record_effort_check, 1, 0, 1, 2)
+        self.recording_rate_label = QLabel("50 Hz")
+        record_grid.addWidget(self.recording_rate_label, 1, 2)
+        self.record_button = QPushButton("Start recording selected source")
+        self.record_button.clicked.connect(self._toggle_recording)
+        record_grid.addWidget(self.record_button, 0, 3, 2, 1)
+        self.recording_status = QLabel(
+            "Raw recordings are immutable. Editing always creates a derived trajectory."
+        )
+        self.recording_status.setWordWrap(True)
+        record_grid.addWidget(self.recording_status, 2, 0, 1, 4)
+        layout.addWidget(recording)
+
         layout.addStretch(1)
+        return page
+
+    def _build_trajectory_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        library_box = QGroupBox("Trajectory library")
+        library_grid = QGridLayout(library_box)
+        library_grid.addWidget(QLabel("Trajectory"), 0, 0)
+        self.trajectory_combo = QComboBox()
+        library_grid.addWidget(self.trajectory_combo, 0, 1)
+        self.refresh_trajectory_button = QPushButton("Refresh")
+        self.refresh_trajectory_button.clicked.connect(self._refresh_trajectory_list)
+        library_grid.addWidget(self.refresh_trajectory_button, 0, 2)
+        self.load_trajectory_button = QPushButton("Load")
+        self.load_trajectory_button.clicked.connect(self._load_selected_trajectory)
+        library_grid.addWidget(self.load_trajectory_button, 0, 3)
+        self.trajectory_stats = QLabel("No trajectory loaded")
+        library_grid.addWidget(self.trajectory_stats, 1, 0, 1, 4)
+        layout.addWidget(library_box)
+
+        self.trajectory_timeline = TrajectoryTimeline()
+        layout.addWidget(self.trajectory_timeline, 1)
+
+        edit_box = QGroupBox("Selection and playback")
+        edit_grid = QGridLayout(edit_box)
+        edit_grid.addWidget(QLabel("Scrub"), 0, 0)
+        self.trajectory_scrub = QSlider(Qt.Orientation.Horizontal)
+        self.trajectory_scrub.setRange(0, 10000)
+        self.trajectory_scrub.valueChanged.connect(self._trajectory_scrub_changed)
+        edit_grid.addWidget(self.trajectory_scrub, 0, 1, 1, 5)
+        self.trajectory_cursor_label = QLabel("0.000 s")
+        edit_grid.addWidget(self.trajectory_cursor_label, 0, 6)
+
+        edit_grid.addWidget(QLabel("Selection start"), 1, 0)
+        self.selection_start = self._spin(0.0, 0.0, 0.0, decimals=3, step=0.02, suffix=" s")
+        self.selection_start.valueChanged.connect(lambda _value: self._selection_changed())
+        edit_grid.addWidget(self.selection_start, 1, 1)
+        self.cursor_to_start_button = QPushButton("Start = cursor")
+        self.cursor_to_start_button.clicked.connect(
+            lambda _checked=False: self._set_selection_from_cursor("start")
+        )
+        edit_grid.addWidget(self.cursor_to_start_button, 1, 2)
+
+        edit_grid.addWidget(QLabel("Selection end"), 1, 3)
+        self.selection_end = self._spin(0.0, 0.0, 0.0, decimals=3, step=0.02, suffix=" s")
+        self.selection_end.valueChanged.connect(lambda _value: self._selection_changed())
+        edit_grid.addWidget(self.selection_end, 1, 4)
+        self.cursor_to_end_button = QPushButton("End = cursor")
+        self.cursor_to_end_button.clicked.connect(
+            lambda _checked=False: self._set_selection_from_cursor("end")
+        )
+        edit_grid.addWidget(self.cursor_to_end_button, 1, 5)
+
+        edit_grid.addWidget(QLabel("Speed scale"), 2, 0)
+        self.trajectory_speed_scale = self._spin(
+            0.1, 3.0, 1.0, decimals=2, step=0.1, suffix="×"
+        )
+        edit_grid.addWidget(self.trajectory_speed_scale, 2, 1)
+        self.replay_full_button = QPushButton("Replay full")
+        self.replay_full_button.clicked.connect(
+            lambda _checked=False: self._replay_trajectory(selection=False)
+        )
+        edit_grid.addWidget(self.replay_full_button, 2, 2)
+        self.replay_selection_button = QPushButton("Replay selection")
+        self.replay_selection_button.clicked.connect(
+            lambda _checked=False: self._replay_trajectory(selection=True)
+        )
+        edit_grid.addWidget(self.replay_selection_button, 2, 3)
+
+        edit_grid.addWidget(QLabel("Save selection as"), 3, 0)
+        self.edited_trajectory_name = QLineEdit()
+        self.edited_trajectory_name.setPlaceholderText("wave_trimmed_v1")
+        edit_grid.addWidget(self.edited_trajectory_name, 3, 1, 1, 3)
+        self.save_edited_trajectory_button = QPushButton("Save derived clip")
+        self.save_edited_trajectory_button.clicked.connect(self._save_edited_trajectory)
+        edit_grid.addWidget(self.save_edited_trajectory_button, 3, 4, 1, 2)
+        layout.addWidget(edit_box)
         return page
 
     def _build_joint_tab(self) -> QWidget:
@@ -623,7 +773,11 @@ class MainWindow(QMainWindow):
 
     def _on_robot_id_changed(self) -> None:
         self._pose_library_cache = None
+        self._trajectory_library_cache = None
+        self._active_trajectory = None
         self._refresh_named_pose_status()
+        self._refresh_point_list()
+        self._refresh_trajectory_list()
         if hasattr(self, "save_home_button"):
             self._update_enabled_state()
 
@@ -695,6 +849,15 @@ class MainWindow(QMainWindow):
             self._apply_joint_limits(dict(limits))
         self._log("Mechanical-stop midpoint calibration completed.")
 
+    def _get_trajectory_library(self) -> TrajectoryLibrary:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        if (
+            self._trajectory_library_cache is None
+            or self._trajectory_library_cache[0] != robot_id
+        ):
+            self._trajectory_library_cache = (robot_id, TrajectoryLibrary(robot_id))
+        return self._trajectory_library_cache[1]
+
     def _get_pose_library(self) -> PoseLibrary:
         robot_id = self.robot_id_edit.text().strip() or "so101"
         if self._pose_library_cache is None or self._pose_library_cache[0] != robot_id:
@@ -762,6 +925,304 @@ class MainWindow(QMainWindow):
             return
         self.home_status.setText("Home: saved" if home else "Home: not saved")
         self.rest_status.setText("Rest: saved" if rest else "Rest: not saved")
+
+    def _current_teaching_state(self) -> tuple[str, dict[str, Any] | None]:
+        source = str(self.teaching_source_combo.currentData())
+        state = self._latest_state if source == "follower" else self._latest_leader_state
+        return source, state
+
+    def _refresh_point_list(self) -> None:
+        if not hasattr(self, "point_combo"):
+            return
+        current = self.point_combo.currentText()
+        try:
+            names = [
+                name
+                for name in self._get_pose_library().names()
+                if name not in {HOME_POSE_NAME, REST_POSE_NAME}
+            ]
+        except Exception as exc:
+            self._on_error(f"Refresh taught points: {exc}")
+            names = []
+        self.point_combo.blockSignals(True)
+        self.point_combo.clear()
+        self.point_combo.addItems(names)
+        if current and current in names:
+            self.point_combo.setCurrentText(current)
+        self.point_combo.blockSignals(False)
+        self._update_enabled_state()
+
+    def _save_taught_point(self) -> None:
+        name = self.point_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Point name required", "Enter a name for the point.")
+            return
+        if name in {HOME_POSE_NAME, REST_POSE_NAME}:
+            QMessageBox.warning(
+                self,
+                "Reserved point name",
+                "Use the dedicated Home/Rest controls for those standard poses.",
+            )
+            return
+        source, state = self._current_teaching_state()
+        if state is None:
+            self._on_error(f"Cannot save point: {source} state is unavailable.")
+            return
+        try:
+            pose = self._saved_pose_from_state(state, source=source)
+            path = self._get_pose_library().save(name, pose)
+            self._log(f"Saved taught point {name!r} from {source} to {path}.")
+            self.point_name_edit.clear()
+            self._refresh_point_list()
+            self.point_combo.setCurrentText(name)
+        except Exception as exc:
+            self._on_error(f"Save taught point: {exc}")
+
+    def _delete_taught_point(self) -> None:
+        name = self.point_combo.currentText().strip()
+        if not name:
+            return
+        try:
+            self._get_pose_library().delete(name)
+            self._log(f"Deleted taught point {name!r}.")
+            self._refresh_point_list()
+        except Exception as exc:
+            self._on_error(f"Delete taught point: {exc}")
+
+    def _move_taught_point(self) -> None:
+        name = self.point_combo.currentText().strip()
+        if not name:
+            return
+        try:
+            pose = self._get_pose_library().require(name)
+        except Exception as exc:
+            self._on_error(f"Load taught point: {exc}")
+            return
+        self.move_saved_pose_requested.emit(
+            {
+                "pose": pose,
+                "mode": self.point_mode_combo.currentData(),
+                "speed_deg_s": self.joint_speed.value(),
+                "acceleration_deg_s2": self.joint_acceleration.value(),
+                "speed_mm_s": self.linear_speed.value(),
+                "acceleration_mm_s2": self.linear_acceleration.value(),
+                "orientation_mode": self.orientation_combo.currentData(),
+            }
+        )
+
+    def _toggle_recording(self) -> None:
+        if self._recording_source is not None:
+            if self._recording_source == "leader":
+                self.leader_recording_stop_requested.emit()
+            else:
+                self.recording_stop_requested.emit()
+            return
+
+        name = self.recording_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(
+                self, "Trajectory name required", "Enter a raw trajectory name first."
+            )
+            return
+        try:
+            self._get_trajectory_library()._validate_name(name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid trajectory name", str(exc))
+            return
+
+        source, state = self._current_teaching_state()
+        if state is None:
+            self._on_error(f"Cannot record: {source} state is unavailable.")
+            return
+        options = {
+            "frequency_hz": 50.0,
+            "record_effort": self.record_effort_check.isChecked(),
+            "source": source,
+        }
+        self._recording_source = source
+        self._pending_recording_name = name
+        if source == "leader":
+            self.leader_recording_start_requested.emit(options)
+        else:
+            self.recording_start_requested.emit(options)
+        self.record_button.setText("Stop recording")
+        self.recording_status.setText(
+            f"Recording {source} at 50 Hz. Move the selected arm through the motion."
+        )
+        self._update_enabled_state()
+
+    def _on_recording_changed(self, source: str, active: bool) -> None:
+        if active:
+            return
+        if self._recording_source == source:
+            self._recording_source = None
+            self.record_button.setText("Start recording selected source")
+            self._update_enabled_state()
+
+    def _on_recording_completed(self, trajectory: object) -> None:
+        if not isinstance(trajectory, Trajectory):
+            self._on_error("Recording returned an invalid trajectory object.")
+            return
+        name = self._pending_recording_name
+        self._pending_recording_name = None
+        if not name:
+            self._on_error("Recording completed without a pending trajectory name.")
+            return
+        try:
+            library = self._get_trajectory_library()
+            entry = library.save(name, trajectory, kind="raw")
+            loaded = library.load(entry.name, kind=entry.kind)
+            self.recording_status.setText(
+                f"Saved raw trajectory {name!r}: {loaded.sample_count} samples, "
+                f"{loaded.duration_s:.2f} s."
+            )
+            self._log(f"Saved immutable raw trajectory to {entry.data_path}.")
+            self.recording_name_edit.clear()
+            self._refresh_trajectory_list()
+            self._set_active_trajectory(loaded)
+            self.tabs.setCurrentWidget(self.trajectory_timeline.parentWidget())
+        except Exception as exc:
+            self._on_error(f"Save raw trajectory: {exc}")
+
+    def _refresh_trajectory_list(self) -> None:
+        if not hasattr(self, "trajectory_combo"):
+            return
+        current = self.trajectory_combo.currentData()
+        try:
+            entries = self._get_trajectory_library().entries()
+        except Exception as exc:
+            self._on_error(f"Refresh trajectory library: {exc}")
+            entries = ()
+        self.trajectory_combo.blockSignals(True)
+        self.trajectory_combo.clear()
+        for entry in entries:
+            self.trajectory_combo.addItem(
+                f"{entry.kind}: {entry.name}", (entry.kind, entry.name)
+            )
+        if current is not None:
+            index = self.trajectory_combo.findData(current)
+            if index >= 0:
+                self.trajectory_combo.setCurrentIndex(index)
+        self.trajectory_combo.blockSignals(False)
+        self._update_enabled_state()
+
+    def _load_selected_trajectory(self) -> None:
+        data = self.trajectory_combo.currentData()
+        if not data:
+            return
+        kind, name = data
+        try:
+            trajectory = self._get_trajectory_library().load(name, kind=kind)
+            self._set_active_trajectory(trajectory)
+        except Exception as exc:
+            self._on_error(f"Load trajectory: {exc}")
+
+    def _set_active_trajectory(self, trajectory: Trajectory) -> None:
+        self._active_trajectory = trajectory
+        duration = trajectory.duration_s
+        self.trajectory_timeline.set_trajectory(trajectory)
+        self.selection_start.blockSignals(True)
+        self.selection_end.blockSignals(True)
+        self.selection_start.setRange(0.0, duration)
+        self.selection_end.setRange(0.0, duration)
+        self.selection_start.setValue(0.0)
+        self.selection_end.setValue(duration)
+        self.selection_start.blockSignals(False)
+        self.selection_end.blockSignals(False)
+        self.trajectory_scrub.setValue(0)
+        diagnostics = " + effort" if trajectory.effort_current_raw is not None else ""
+        self.trajectory_stats.setText(
+            f"{trajectory.metadata.get('kind', 'unsaved')} / "
+            f"{trajectory.metadata.get('name', 'recording')} — "
+            f"{trajectory.sample_count} samples, {duration:.3f} s, "
+            f"median {trajectory.sample_rate_hz:.1f} Hz{diagnostics}"
+        )
+        self._selection_changed()
+        self._update_enabled_state()
+
+    def _trajectory_scrub_changed(self, value: int) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        cursor = trajectory.duration_s * float(value) / 10000.0
+        self.trajectory_timeline.set_cursor(cursor)
+        self.trajectory_cursor_label.setText(f"{cursor:.3f} s")
+
+    def _cursor_seconds(self) -> float:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return 0.0
+        return trajectory.duration_s * self.trajectory_scrub.value() / 10000.0
+
+    def _set_selection_from_cursor(self, which: str) -> None:
+        cursor = self._cursor_seconds()
+        if which == "start":
+            self.selection_start.setValue(cursor)
+        else:
+            self.selection_end.setValue(cursor)
+        self._selection_changed()
+
+    def _selection_changed(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        start = self.selection_start.value()
+        end = self.selection_end.value()
+        if end <= start:
+            epsilon = min(0.02, max(0.001, trajectory.duration_s / 100.0))
+            if start + epsilon <= trajectory.duration_s:
+                self.selection_end.blockSignals(True)
+                self.selection_end.setValue(start + epsilon)
+                self.selection_end.blockSignals(False)
+            else:
+                self.selection_start.blockSignals(True)
+                self.selection_start.setValue(max(0.0, end - epsilon))
+                self.selection_start.blockSignals(False)
+            start = self.selection_start.value()
+            end = self.selection_end.value()
+        self.trajectory_timeline.set_selection(start, end)
+
+    def _selection_clip(self) -> Trajectory:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            raise RuntimeError("no trajectory is loaded")
+        return trajectory.crop(self.selection_start.value(), self.selection_end.value())
+
+    def _replay_trajectory(self, *, selection: bool) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        try:
+            clip = self._selection_clip() if selection else trajectory
+            self.trajectory_play_requested.emit(
+                {
+                    "trajectory": clip,
+                    "speed_scale": self.trajectory_speed_scale.value(),
+                    "move_to_start": True,
+                }
+            )
+        except Exception as exc:
+            self._on_error(f"Replay trajectory: {exc}")
+
+    def _save_edited_trajectory(self) -> None:
+        name = self.edited_trajectory_name.text().strip()
+        if not name:
+            QMessageBox.warning(
+                self, "Edited trajectory name required", "Enter a Save As name."
+            )
+            return
+        try:
+            clip = self._selection_clip().retime(self.trajectory_speed_scale.value())
+            entry = self._get_trajectory_library().save(name, clip, kind="edited")
+            loaded = self._get_trajectory_library().load(entry.name, kind=entry.kind)
+            self._log(
+                f"Saved derived trajectory {name!r}; raw source was not modified."
+            )
+            self.edited_trajectory_name.clear()
+            self._refresh_trajectory_list()
+            self._set_active_trajectory(loaded)
+        except Exception as exc:
+            self._on_error(f"Save edited trajectory: {exc}")
 
     def _apply_joint_limits(self, limits: dict[str, object]) -> None:
         normalized: dict[str, tuple[float, float]] = {}
@@ -885,6 +1346,7 @@ class MainWindow(QMainWindow):
             self._joint_targets_initialized = False
         self.connect_button.setText("Disconnect" if connected else "Connect")
         self._refresh_named_pose_status()
+        self._refresh_point_list()
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
@@ -989,6 +1451,35 @@ class MainWindow(QMainWindow):
             leader_editable and not self.leader_simulation_check.isChecked()
         )
         self.leader_robot_id_edit.setEnabled(leader_editable)
+
+        source, source_state = self._current_teaching_state()
+        self.save_point_button.setEnabled(
+            source_state is not None and self._recording_source is None
+        )
+        has_point = bool(self.point_combo.currentText())
+        self.move_point_button.setEnabled(can_move and has_point)
+        self.delete_point_button.setEnabled(has_point and self._recording_source is None)
+
+        source_available = source_state is not None
+        self.record_button.setEnabled(
+            source_available or self._recording_source is not None
+        )
+        follower_recording = self._recording_source == "follower"
+        if follower_recording:
+            self.move_joints_button.setEnabled(False)
+            self.absolute_move_button.setEnabled(False)
+            for button in self.jog_buttons:
+                button.setEnabled(False)
+            self.close_gripper_button.setEnabled(False)
+            self.move_gripper_button.setEnabled(False)
+            self.open_gripper_button.setEnabled(False)
+            self.move_point_button.setEnabled(False)
+
+        has_trajectory = self._active_trajectory is not None
+        self.replay_full_button.setEnabled(can_move and has_trajectory)
+        self.replay_selection_button.setEnabled(can_move and has_trajectory)
+        self.save_edited_trajectory_button.setEnabled(has_trajectory)
+        self.load_trajectory_button.setEnabled(self.trajectory_combo.count() > 0)
 
     def _on_error(self, message: str) -> None:
         self._log(message)
