@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import degrees
+from math import degrees, radians
 from typing import Any
 
 from PySide6.QtCore import QMetaObject, Qt, QThread, Signal
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.hardware import FeetechBackend
+from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
 
 
 class MainWindow(QMainWindow):
@@ -42,6 +43,9 @@ class MainWindow(QMainWindow):
     jog_requested = Signal(object)
     absolute_pose_requested = Signal(object)
     gripper_requested = Signal(float)
+    calibration_requested = Signal(float)
+    leader_connect_requested = Signal(object)
+    leader_disconnect_requested = Signal()
 
     def __init__(
         self,
@@ -59,6 +63,10 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._latest_state: dict[str, Any] | None = None
         self._joint_targets_initialized = False
+        self._last_joint_limits: dict[str, tuple[float, float]] | None = None
+        self._leader_connected = False
+        self._latest_leader_state: dict[str, Any] | None = None
+        self._pose_library_cache: tuple[str, PoseLibrary] | None = None
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -75,16 +83,35 @@ class MainWindow(QMainWindow):
         self.jog_requested.connect(self._worker.jog_cartesian)
         self.absolute_pose_requested.connect(self._worker.move_absolute_pose)
         self.gripper_requested.connect(self._worker.move_gripper)
+        self.calibration_requested.connect(self._worker.run_calibration)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
         self._worker.busy_changed.connect(self._on_busy)
         self._worker.log_message.connect(self._log)
         self._worker.error_message.connect(self._on_error)
+        self._worker.calibration_completed.connect(self._on_calibration_completed)
+
+        self._leader_thread = QThread(self)
+        self._leader_worker = RobotWorker()
+        self._leader_worker.moveToThread(self._leader_thread)
+        self._leader_thread.started.connect(self._leader_worker.start)
+        self._leader_thread.finished.connect(self._leader_worker.deleteLater)
+        self.leader_connect_requested.connect(self._leader_worker.connect_robot)
+        self.leader_disconnect_requested.connect(self._leader_worker.disconnect_robot)
+        self._leader_worker.state_changed.connect(self._on_leader_state)
+        self._leader_worker.connected_changed.connect(self._on_leader_connected)
+        self._leader_worker.log_message.connect(lambda message: self._log(f"Leader: {message}"))
+        self._leader_worker.error_message.connect(
+            lambda message: self._on_error(f"Leader: {message}")
+        )
 
         self._build_ui(port=port, robot_id=robot_id, simulation=simulation)
         self._thread.start()
+        self._leader_thread.start()
         self._refresh_ports()
+        self._refresh_leader_ports()
+        self._refresh_named_pose_status()
         self._update_enabled_state()
 
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
@@ -93,9 +120,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_connection_bar(port, robot_id, simulation))
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_joint_tab(), "Joints")
-        self.tabs.addTab(self._build_cartesian_tab(), "Cartesian")
-        self.tabs.addTab(self._build_gripper_tab(), "Gripper")
+        self.tabs.addTab(self._build_setup_tab(), "Setup")
+        self.tabs.addTab(self._build_control_tab(), "Control")
+        self.tabs.addTab(self._build_teach_tab(), "Teach")
         layout.addWidget(self.tabs, 1)
 
         status_row = QHBoxLayout()
@@ -166,6 +193,12 @@ class MainWindow(QMainWindow):
         self.read_targets_button = QPushButton("Load current into controls")
         self.read_targets_button.clicked.connect(self._load_current_targets)
         layout.addWidget(self.read_targets_button, 1, 5, 1, 2)
+
+        self.allow_uncalibrated_check = QCheckBox("Setup: allow uncalibrated connection")
+        self.allow_uncalibrated_check.setToolTip(
+            "For calibration/setup only. Keep torque off until calibration is complete."
+        )
+        layout.addWidget(self.allow_uncalibrated_check, 2, 0, 1, 7)
         return box
 
     @staticmethod
@@ -186,6 +219,145 @@ class MainWindow(QMainWindow):
         spin.setSuffix(suffix)
         spin.setKeyboardTracking(False)
         return spin
+
+    def _build_setup_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        calibration = QGroupBox("Mechanical-stop calibration")
+        grid = QGridLayout(calibration)
+        explanation = QLabel(
+            "Calibration keeps torque off while you sweep every joint and the gripper "
+            "between both mechanical stops. Zero is computed from the midpoint of the "
+            "observed extrema; no visual midpoint placement is required."
+        )
+        explanation.setWordWrap(True)
+        grid.addWidget(explanation, 0, 0, 1, 3)
+        grid.addWidget(QLabel("Sweep duration"), 1, 0)
+        self.calibration_duration = self._spin(
+            5.0, 120.0, 30.0, decimals=1, step=5.0, suffix=" s"
+        )
+        grid.addWidget(self.calibration_duration, 1, 1)
+        self.run_calibration_button = QPushButton("Start live calibration")
+        self.run_calibration_button.clicked.connect(self._start_calibration)
+        grid.addWidget(self.run_calibration_button, 1, 2)
+        self.calibration_status = QLabel(
+            "Not run in this session. Simulation cannot perform encoder calibration."
+        )
+        self.calibration_status.setWordWrap(True)
+        grid.addWidget(self.calibration_status, 2, 0, 1, 3)
+        layout.addWidget(calibration)
+
+        later = QLabel(
+            "Physical validation is intentionally deferred. Follow TESTING.md when you are "
+            "ready to use the real arm."
+        )
+        later.setWordWrap(True)
+        layout.addWidget(later)
+        layout.addStretch(1)
+        return page
+
+    def _build_control_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(self._build_named_pose_controls())
+        subtabs = QTabWidget()
+        subtabs.addTab(self._build_joint_tab(), "Joints")
+        subtabs.addTab(self._build_cartesian_tab(), "Cartesian")
+        subtabs.addTab(self._build_gripper_tab(), "Gripper")
+        layout.addWidget(subtabs, 1)
+        return page
+
+    def _build_named_pose_controls(self) -> QGroupBox:
+        box = QGroupBox("Standard poses")
+        grid = QGridLayout(box)
+        self.home_status = QLabel("Home: not saved")
+        self.rest_status = QLabel("Rest: not saved")
+        self.save_home_button = QPushButton("Save current as Home")
+        self.go_home_button = QPushButton("Go Home")
+        self.save_rest_button = QPushButton("Save current as Rest")
+        self.go_rest_button = QPushButton("Go Rest")
+        self.save_home_button.clicked.connect(
+            lambda _checked=False: self._save_named_pose(HOME_POSE_NAME)
+        )
+        self.go_home_button.clicked.connect(
+            lambda _checked=False: self._go_named_pose(HOME_POSE_NAME)
+        )
+        self.save_rest_button.clicked.connect(
+            lambda _checked=False: self._save_named_pose(REST_POSE_NAME)
+        )
+        self.go_rest_button.clicked.connect(
+            lambda _checked=False: self._go_named_pose(REST_POSE_NAME)
+        )
+        grid.addWidget(self.home_status, 0, 0)
+        grid.addWidget(self.save_home_button, 0, 1)
+        grid.addWidget(self.go_home_button, 0, 2)
+        grid.addWidget(self.rest_status, 1, 0)
+        grid.addWidget(self.save_rest_button, 1, 1)
+        grid.addWidget(self.go_rest_button, 1, 2)
+        return box
+
+    def _build_teach_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        leader = QGroupBox("Leader / controller arm")
+        grid = QGridLayout(leader)
+        self.leader_simulation_check = QCheckBox("Simulation")
+        self.leader_simulation_check.setChecked(self.simulation_check.isChecked())
+        grid.addWidget(self.leader_simulation_check, 0, 0)
+        grid.addWidget(QLabel("Port"), 0, 1)
+        self.leader_port_combo = QComboBox()
+        self.leader_port_combo.setEditable(True)
+        grid.addWidget(self.leader_port_combo, 0, 2)
+        self.leader_refresh_button = QPushButton("Refresh")
+        self.leader_refresh_button.clicked.connect(self._refresh_leader_ports)
+        grid.addWidget(self.leader_refresh_button, 0, 3)
+        grid.addWidget(QLabel("Robot ID"), 0, 4)
+        self.leader_robot_id_edit = QLineEdit(
+            (self.robot_id_edit.text().strip() or "so101") + "-leader"
+        )
+        grid.addWidget(self.leader_robot_id_edit, 0, 5)
+        self.leader_connect_button = QPushButton("Connect leader")
+        self.leader_connect_button.clicked.connect(self._toggle_leader_connection)
+        grid.addWidget(self.leader_connect_button, 0, 6)
+        note = QLabel(
+            "The leader is read-only here: leave its torque off and move it by hand. "
+            "Live leader→follower teleoperation is a later stage."
+        )
+        note.setWordWrap(True)
+        grid.addWidget(note, 1, 0, 1, 7)
+        layout.addWidget(leader)
+
+        source = QGroupBox("Teaching source")
+        source_grid = QGridLayout(source)
+        source_grid.addWidget(QLabel("Capture/read from"), 0, 0)
+        self.teaching_source_combo = QComboBox()
+        self.teaching_source_combo.addItem("Follower", "follower")
+        self.teaching_source_combo.addItem("Leader", "leader")
+        self.teaching_source_combo.currentIndexChanged.connect(
+            lambda _index: self._update_teach_readout()
+        )
+        source_grid.addWidget(self.teaching_source_combo, 0, 1)
+        self.teach_source_status = QLabel("Follower state unavailable")
+        source_grid.addWidget(self.teach_source_status, 0, 2, 1, 4)
+
+        self.teach_joint_labels: dict[str, QLabel] = {}
+        for row, name in enumerate(ARM_JOINTS, start=1):
+            source_grid.addWidget(QLabel(name.replace("_", " ").title()), row, 0)
+            label = QLabel("—")
+            self.teach_joint_labels[name] = label
+            source_grid.addWidget(label, row, 1)
+
+        source_grid.addWidget(QLabel("Gripper"), 1, 3)
+        self.teach_gripper_label = QLabel("—")
+        source_grid.addWidget(self.teach_gripper_label, 1, 4)
+        self.teach_pose_label = QLabel("TCP: —")
+        self.teach_pose_label.setWordWrap(True)
+        source_grid.addWidget(self.teach_pose_label, 2, 3, 2, 3)
+        layout.addWidget(source)
+        layout.addStretch(1)
+        return page
 
     def _build_joint_tab(self) -> QWidget:
         page = QWidget()
@@ -439,7 +611,199 @@ class MainWindow(QMainWindow):
                 "simulation": simulation,
                 "port": port,
                 "robot_id": self.robot_id_edit.text().strip() or "so101",
+                "allow_uncalibrated": self.allow_uncalibrated_check.isChecked(),
             }
+        )
+
+    def _refresh_leader_ports(self) -> None:
+        if not hasattr(self, "leader_port_combo"):
+            return
+        current = self.leader_port_combo.currentText().strip()
+        try:
+            ports = FeetechBackend.candidate_ports()
+        except Exception as exc:
+            self._log(f"Leader port discovery failed: {exc}")
+            ports = []
+        self.leader_port_combo.blockSignals(True)
+        self.leader_port_combo.clear()
+        self.leader_port_combo.addItems(ports)
+        if current:
+            if self.leader_port_combo.findText(current) < 0:
+                self.leader_port_combo.addItem(current)
+            self.leader_port_combo.setCurrentText(current)
+        self.leader_port_combo.blockSignals(False)
+
+    def _toggle_leader_connection(self) -> None:
+        if self._leader_connected:
+            self.leader_disconnect_requested.emit()
+            return
+        simulation = self.leader_simulation_check.isChecked()
+        port = self.leader_port_combo.currentText().strip()
+        if not simulation and not port:
+            QMessageBox.warning(self, "Leader serial port required", "Choose a leader port first.")
+            return
+        self.leader_connect_requested.emit(
+            {
+                "simulation": simulation,
+                "port": port,
+                "robot_id": self.leader_robot_id_edit.text().strip() or "so101-leader",
+            }
+        )
+
+    def _start_calibration(self) -> None:
+        if not self._connected:
+            QMessageBox.warning(self, "Follower not connected", "Connect the follower first.")
+            return
+        if self.simulation_check.isChecked():
+            QMessageBox.information(
+                self,
+                "Hardware calibration only",
+                "Simulation has no raw encoders or mechanical stops to calibrate.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Start calibration",
+            "Torque will be disabled. Sweep every joint and the gripper repeatedly "
+            "between both mechanical stops for the full recording period. Continue?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.calibration_status.setText("Calibration recording in progress…")
+        self.calibration_requested.emit(self.calibration_duration.value())
+
+    def _on_calibration_completed(self, result: object) -> None:
+        values = dict(result)  # type: ignore[arg-type]
+        self.calibration_status.setText(
+            f"Calibration complete ({values.get('source', 'unknown')}); "
+            f"saved to {values.get('path', 'unknown path')}."
+        )
+        limits = values.get("joint_limits_deg")
+        if limits:
+            self._apply_joint_limits(dict(limits))
+        self._log("Mechanical-stop midpoint calibration completed.")
+
+    def _get_pose_library(self) -> PoseLibrary:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        if self._pose_library_cache is None or self._pose_library_cache[0] != robot_id:
+            self._pose_library_cache = (robot_id, PoseLibrary(robot_id))
+        return self._pose_library_cache[1]
+
+    @staticmethod
+    def _saved_pose_from_state(state: dict[str, Any], *, source: str) -> SavedPose:
+        joints = {
+            name: radians(float(state["joints_deg"][name]))
+            for name in ARM_JOINTS
+        }
+        pose_values = [float(value) for value in state["pose_mm_deg"]]
+        tcp = (
+            pose_values[0] / 1000.0,
+            pose_values[1] / 1000.0,
+            pose_values[2] / 1000.0,
+            radians(pose_values[3]),
+            radians(pose_values[4]),
+            radians(pose_values[5]),
+        )
+        return SavedPose(
+            joints=joints,
+            gripper=float(state["gripper"]),
+            tcp_xyz_rpy=tcp,
+            source=source,
+        )
+
+    def _save_named_pose(self, name: str) -> None:
+        if not self._latest_state:
+            self._on_error("Cannot save pose: follower state is unavailable.")
+            return
+        try:
+            pose = self._saved_pose_from_state(self._latest_state, source="follower")
+            path = self._get_pose_library().save(name, pose)
+            self._log(f"Saved {name} pose to {path}.")
+            self._refresh_named_pose_status()
+            self._update_enabled_state()
+        except Exception as exc:
+            self._on_error(f"Save {name}: {exc}")
+
+    def _go_named_pose(self, name: str) -> None:
+        try:
+            pose = self._get_pose_library().require(name)
+        except Exception as exc:
+            self._on_error(f"Load {name}: {exc}")
+            return
+        for joint, value in pose.joints.items():
+            self.joint_spins[joint].setValue(degrees(value))
+        self.gripper_spin.setValue(pose.gripper)
+        self._move_joints()
+        self.gripper_requested.emit(pose.gripper)
+        self._log(f"Moving to saved {name} pose.")
+
+    def _refresh_named_pose_status(self) -> None:
+        if not hasattr(self, "home_status"):
+            return
+        try:
+            library = self._get_pose_library()
+            home = library.get(HOME_POSE_NAME)
+            rest = library.get(REST_POSE_NAME)
+        except Exception as exc:
+            self.home_status.setText(f"Home: error ({exc})")
+            self.rest_status.setText(f"Rest: error ({exc})")
+            return
+        self.home_status.setText("Home: saved" if home else "Home: not saved")
+        self.rest_status.setText("Rest: saved" if rest else "Rest: not saved")
+
+    def _apply_joint_limits(self, limits: dict[str, object]) -> None:
+        normalized: dict[str, tuple[float, float]] = {}
+        for name in ARM_JOINTS:
+            bounds = limits.get(name)
+            if bounds is None:
+                continue
+            lower, upper = bounds  # type: ignore[misc]
+            lower_f, upper_f = float(lower), float(upper)
+            normalized[name] = (lower_f, upper_f)
+            slider = self.joint_sliders[name]
+            spin = self.joint_spins[name]
+            slider.setRange(round(lower_f * 10), round(upper_f * 10))
+            spin.setRange(lower_f, upper_f)
+        if normalized:
+            self._last_joint_limits = normalized
+
+    def _on_leader_connected(self, connected: bool) -> None:
+        self._leader_connected = connected
+        if not connected:
+            self._latest_leader_state = None
+        self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
+        self._update_teach_readout()
+        self._update_enabled_state()
+
+    def _on_leader_state(self, state: object) -> None:
+        self._latest_leader_state = dict(state)  # type: ignore[arg-type]
+        self._update_teach_readout()
+
+    def _update_teach_readout(self) -> None:
+        if not hasattr(self, "teaching_source_combo"):
+            return
+        source = str(self.teaching_source_combo.currentData())
+        state = self._latest_state if source == "follower" else self._latest_leader_state
+        if not state:
+            self.teach_source_status.setText(f"{source.title()} state unavailable")
+            for label in self.teach_joint_labels.values():
+                label.setText("—")
+            self.teach_gripper_label.setText("—")
+            self.teach_pose_label.setText("TCP: —")
+            return
+        self.teach_source_status.setText(
+            f"{source.title()} connected"
+            + (" — simulation" if state.get("simulation") else "")
+        )
+        for name in ARM_JOINTS:
+            self.teach_joint_labels[name].setText(
+                f"{float(state['joints_deg'][name]):.1f}°"
+            )
+        self.teach_gripper_label.setText(f"{float(state['gripper']):.3f}")
+        pose = [float(value) for value in state["pose_mm_deg"]]
+        self.teach_pose_label.setText(
+            f"TCP: X {pose[0]:.1f}, Y {pose[1]:.1f}, Z {pose[2]:.1f} mm\n"
+            f"RPY: {pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°"
         )
 
     def _move_joints(self) -> None:
@@ -519,6 +883,8 @@ class MainWindow(QMainWindow):
         self._latest_state = values
         self._connected = bool(values["connected"])
         self._torque_enabled = bool(values["torque_enabled"])
+        if values.get("joint_limits_deg"):
+            self._apply_joint_limits(dict(values["joint_limits_deg"]))
         moving = bool(values["moving"]) or self._busy
         faulted = bool(values["faulted"])
 
@@ -558,6 +924,7 @@ class MainWindow(QMainWindow):
         if values.get("simulation"):
             status += " — simulation"
         self.status_label.setText(status)
+        self._update_teach_readout()
         self._update_enabled_state()
 
     def _update_enabled_state(self) -> None:
@@ -567,6 +934,7 @@ class MainWindow(QMainWindow):
         self.port_combo.setEnabled(session_editable and not simulation)
         self.refresh_ports_button.setEnabled(session_editable and not simulation)
         self.robot_id_edit.setEnabled(session_editable)
+        self.allow_uncalibrated_check.setEnabled(session_editable and not simulation)
 
         self.enable_button.setEnabled(self._connected and not self._torque_enabled and not self._busy)
         self.relax_button.setEnabled(self._connected and self._torque_enabled)
@@ -583,6 +951,32 @@ class MainWindow(QMainWindow):
         self.move_gripper_button.setEnabled(can_move)
         self.open_gripper_button.setEnabled(can_move)
 
+        self.run_calibration_button.setEnabled(
+            self._connected and not simulation and not self._busy
+        )
+
+        can_save_pose = self._connected and self._latest_state is not None and not self._busy
+        self.save_home_button.setEnabled(can_save_pose)
+        self.save_rest_button.setEnabled(can_save_pose)
+        try:
+            library = self._get_pose_library()
+            has_home = library.get(HOME_POSE_NAME) is not None
+            has_rest = library.get(REST_POSE_NAME) is not None
+        except Exception:
+            has_home = has_rest = False
+        self.go_home_button.setEnabled(can_move and has_home)
+        self.go_rest_button.setEnabled(can_move and has_rest)
+
+        leader_editable = not self._leader_connected
+        self.leader_simulation_check.setEnabled(leader_editable)
+        self.leader_port_combo.setEnabled(
+            leader_editable and not self.leader_simulation_check.isChecked()
+        )
+        self.leader_refresh_button.setEnabled(
+            leader_editable and not self.leader_simulation_check.isChecked()
+        )
+        self.leader_robot_id_edit.setEnabled(leader_editable)
+
     def _on_error(self, message: str) -> None:
         self._log(message)
         self.statusBar().showMessage(message, 8000)
@@ -592,6 +986,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
+            if self._leader_thread.isRunning():
+                QMetaObject.invokeMethod(
+                    self._leader_worker,
+                    "shutdown",
+                    Qt.ConnectionType.BlockingQueuedConnection,
+                )
+                self._leader_thread.quit()
+                self._leader_thread.wait(3000)
             if self._thread.isRunning():
                 QMetaObject.invokeMethod(
                     self._worker,
