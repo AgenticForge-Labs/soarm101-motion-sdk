@@ -103,6 +103,39 @@ class SOArmAPI(SOARM101):
             raise RuntimeError("active backend does not provide an effort safety interlock")
         clear()
 
+    def servo_j_start(self) -> None:
+        """Begin guarded servo-joint style streaming."""
+        self.start_joint_stream()
+
+    def servo_j(
+        self,
+        angles: Sequence[float],
+        *,
+        gripper: float | None = None,
+        is_radian: bool = True,
+    ) -> MotionResult:
+        """Send one five-joint streaming sample.
+
+        Unlike a normal point-to-point move this does not wait for settling.
+        """
+        values = [float(value) for value in angles]
+        if len(values) != len(self.get_servo_angle()):
+            raise ValueError("servo_j expects five joint values")
+        scale = 1.0 if is_radian else pi / 180.0
+        targets = {
+            name: value * scale
+            for name, value in zip(
+                ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"),
+                values,
+                strict=True,
+            )
+        }
+        return self.stream_joint_target(targets, gripper=gripper)
+
+    def servo_j_stop(self, *, hold: bool = True) -> None:
+        """End guarded servo-joint streaming."""
+        self.stop_joint_stream(hold=hold)
+
     def set_tool_position(
         self,
         *,
