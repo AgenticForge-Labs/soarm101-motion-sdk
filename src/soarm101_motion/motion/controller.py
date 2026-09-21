@@ -24,7 +24,11 @@ from soarm101_motion.exceptions import (
 )
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
-from soarm101_motion.safety import (\n    validate_command_step,\n    validate_joint_targets,\n    validate_workspace_path,\n)
+from soarm101_motion.safety import (
+    validate_command_step,
+    validate_joint_targets,
+    validate_workspace_path,
+)
 from soarm101_motion.types import MotionResult, Pose
 
 T = TypeVar("T")
