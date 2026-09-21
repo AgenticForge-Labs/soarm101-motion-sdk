@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import time
 from math import degrees, radians
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.motion import MotionHandle
+from soarm101_motion.poses import SavedPose
+from soarm101_motion.trajectories import Trajectory
 
 
 class RobotWorker(QObject):
@@ -251,7 +254,7 @@ class RobotWorker(QObject):
     @Slot(object)
     def start_recording(self, options: object) -> None:
         try:
-            arm = self._require_arm()
+            self._require_arm()
             if self._recording is not None:
                 raise RuntimeError("a trajectory recording is already active")
             if self._handles:
