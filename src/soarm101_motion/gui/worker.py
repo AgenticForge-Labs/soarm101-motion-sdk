@@ -12,8 +12,10 @@ from soarm101_motion import Pose, SOARM101, SOARM101Config
 from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.motion import MotionHandle
-from soarm101_motion.poses import SavedPose
-from soarm101_motion.trajectories import Trajectory
+from soarm101_motion.poses import PoseLibrary, SavedPose
+from soarm101_motion.primitives import MotionPrimitiveLibrary
+from soarm101_motion.sequences import MotionSequence, SequenceRunner
+from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 
 
 class RobotWorker(QObject):
@@ -25,6 +27,10 @@ class RobotWorker(QObject):
     calibration_completed = Signal(object)
     recording_completed = Signal(object)
     recording_changed = Signal(bool)
+    stream_sample = Signal(object)
+    stream_readout_changed = Signal(bool)
+    teleop_changed = Signal(bool)
+    sequence_progress = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -36,6 +42,9 @@ class RobotWorker(QObject):
         self._record_timer: QTimer | None = None
         self._recording: dict[str, Any] | None = None
         self._record_started = 0.0
+        self._stream_timer: QTimer | None = None
+        self._stream_readout_active = False
+        self._teleop: dict[str, Any] | None = None
 
     @Slot()
     def start(self) -> None:
@@ -45,6 +54,8 @@ class RobotWorker(QObject):
         self._timer.start()
         self._record_timer = QTimer(self)
         self._record_timer.timeout.connect(self._capture_recording_sample)
+        self._stream_timer = QTimer(self)
+        self._stream_timer.timeout.connect(self._emit_stream_sample)
 
     def _report_error(self, operation: str, exc: BaseException) -> None:
         self.error_message.emit(f"{operation}: {exc}")
@@ -58,7 +69,10 @@ class RobotWorker(QObject):
     def _require_motion_available(self) -> SOARM101:
         if self._recording is not None:
             raise RuntimeError("stop trajectory recording before commanding this arm")
-        return self._require_arm()
+        arm = self._require_arm()
+        if arm.motion.is_streaming:
+            raise RuntimeError("stop live teleoperation before commanding this arm")
+        return arm
 
     def _track(self, label: str, result: Any) -> None:
         if isinstance(result, MotionHandle):
@@ -131,8 +145,13 @@ class RobotWorker(QObject):
     def disconnect_robot(self) -> None:
         arm = self.arm
         self.arm = None
+        for _label, handle in self._handles:
+            handle.cancel()
         self._handles.clear()
         self._cancel_recording("recording cancelled by disconnect")
+        self._stop_stream_readout()
+        self._teleop = None
+        self.teleop_changed.emit(False)
         if arm is not None:
             try:
                 arm.stop()
@@ -151,6 +170,10 @@ class RobotWorker(QObject):
         self.disconnect_robot()
         if self._timer is not None:
             self._timer.stop()
+        if self._record_timer is not None:
+            self._record_timer.stop()
+        if self._stream_timer is not None:
+            self._stream_timer.stop()
 
     @Slot()
     def enable(self) -> None:
@@ -164,7 +187,14 @@ class RobotWorker(QObject):
     @Slot()
     def relax(self) -> None:
         try:
-            self._require_arm().relax()
+            for _label, handle in self._handles:
+                handle.cancel()
+            arm = self._require_arm()
+            if arm.motion.is_streaming:
+                arm.stop_joint_stream(hold=True)
+            self._teleop = None
+            self.teleop_changed.emit(False)
+            arm.relax()
             self._handles.clear()
             self.log_message.emit("Torque disabled; arm relaxed.")
             self.poll()
@@ -174,13 +204,207 @@ class RobotWorker(QObject):
     @Slot()
     def stop(self) -> None:
         try:
-            self._require_arm().stop()
+            for _label, handle in self._handles:
+                handle.cancel()
+            arm = self._require_arm()
+            self._teleop = None
+            self.teleop_changed.emit(False)
+            arm.stop()
             self._handles.clear()
             self.busy_changed.emit(False)
             self.log_message.emit("Software stop: current arm and gripper positions held.")
             self.poll()
         except BaseException as exc:
             self._report_error("stop", exc)
+
+    @Slot(float)
+    def start_stream_readout(self, frequency_hz: float = 50.0) -> None:
+        try:
+            self._require_arm()
+            frequency = float(frequency_hz)
+            if frequency <= 0:
+                raise ValueError("stream readout frequency must be positive")
+            assert self._stream_timer is not None
+            self._stream_timer.setInterval(max(1, round(1000.0 / frequency)))
+            self._stream_readout_active = True
+            self._emit_stream_sample()
+            self._stream_timer.start()
+            self.stream_readout_changed.emit(True)
+            self.log_message.emit(f"High-rate readout started at {frequency:.1f} Hz.")
+        except BaseException as exc:
+            self._stop_stream_readout()
+            self._report_error("start high-rate readout", exc)
+
+    @Slot()
+    def stop_stream_readout(self) -> None:
+        self._stop_stream_readout()
+
+    def _stop_stream_readout(self) -> None:
+        if self._stream_timer is not None:
+            self._stream_timer.stop()
+        was_active = self._stream_readout_active
+        self._stream_readout_active = False
+        if was_active:
+            self.stream_readout_changed.emit(False)
+            self.log_message.emit("High-rate readout stopped.")
+
+    def _emit_stream_sample(self) -> None:
+        if not self._stream_readout_active:
+            return
+        try:
+            arm = self._require_arm()
+            joints = arm.get_joint_positions().positions
+            self.stream_sample.emit(
+                {
+                    "timestamp": time.perf_counter(),
+                    "joints_rad": {name: float(joints[name]) for name in ARM_JOINTS},
+                    "gripper": float(arm.tool.get_position()),
+                }
+            )
+        except BaseException as exc:
+            self._stop_stream_readout()
+            self._report_error("high-rate readout", exc)
+
+    @Slot(object)
+    def start_teleop(self, options: object) -> None:
+        try:
+            arm = self._require_motion_available()
+            if self._handles:
+                raise RuntimeError("wait for active motion to finish before teleoperation")
+            values = dict(options)  # type: ignore[arg-type]
+            mode = str(values.get("mode") or "relative")
+            if mode not in {"relative", "absolute"}:
+                raise ValueError("teleoperation mode must be relative or absolute")
+            leader_origin = {
+                name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
+            }
+            follower_origin = dict(arm.get_joint_positions().positions)
+            self._teleop = {
+                "mode": mode,
+                "leader_origin": leader_origin,
+                "follower_origin": follower_origin,
+                "mirror_gripper": bool(values.get("mirror_gripper", True)),
+                "samples": 0,
+            }
+            arm.start_joint_stream()
+            if mode == "absolute":
+                arm.stream_joint_target(
+                    leader_origin,
+                    gripper=(
+                        float(values["leader_gripper"])
+                        if self._teleop["mirror_gripper"]
+                        else None
+                    ),
+                )
+            self.teleop_changed.emit(True)
+            self.busy_changed.emit(True)
+            self.log_message.emit(
+                f"Live teleoperation started in {mode} mapping mode."
+            )
+        except BaseException as exc:
+            self._teleop = None
+            try:
+                arm = self.arm
+                if arm is not None and arm.motion.is_streaming:
+                    arm.stop_joint_stream(hold=True)
+            except Exception:
+                pass
+            self.teleop_changed.emit(False)
+            self.busy_changed.emit(False)
+            self._report_error("start teleoperation", exc)
+
+    @Slot(object)
+    def apply_teleop_sample(self, sample: object) -> None:
+        teleop = self._teleop
+        if teleop is None:
+            return
+        try:
+            values = dict(sample)  # type: ignore[arg-type]
+            leader = {
+                name: float(values["joints_rad"][name]) for name in ARM_JOINTS
+            }
+            if teleop["mode"] == "relative":
+                target = {
+                    name: teleop["follower_origin"][name]
+                    + leader[name]
+                    - teleop["leader_origin"][name]
+                    for name in ARM_JOINTS
+                }
+            else:
+                target = leader
+            gripper = (
+                float(values["gripper"]) if teleop["mirror_gripper"] else None
+            )
+            result = self._require_arm().stream_joint_target(target, gripper=gripper)
+            teleop["samples"] += 1
+            if teleop["samples"] % 10 == 0:
+                self.sequence_progress.emit(
+                    {
+                        "type": "teleop",
+                        "samples": teleop["samples"],
+                        "message": result.message,
+                    }
+                )
+        except BaseException as exc:
+            self._stop_teleop_internal(hold=True)
+            self._report_error("live teleoperation", exc)
+
+    @Slot()
+    def stop_teleop(self) -> None:
+        self._stop_teleop_internal(hold=True)
+
+    def _stop_teleop_internal(self, *, hold: bool) -> None:
+        arm = self.arm
+        was_active = self._teleop is not None
+        self._teleop = None
+        if arm is not None and arm.is_connected and arm.motion.is_streaming:
+            try:
+                arm.stop_joint_stream(hold=hold)
+            except BaseException as exc:
+                self._report_error("stop teleoperation", exc)
+        if was_active:
+            self.teleop_changed.emit(False)
+            self.busy_changed.emit(bool(self._handles))
+            self.log_message.emit("Live teleoperation stopped.")
+
+    @Slot(object)
+    def run_sequence(self, command: object) -> None:
+        try:
+            values = dict(command)  # type: ignore[arg-type]
+            sequence = values["sequence"]
+            if not isinstance(sequence, MotionSequence):
+                raise TypeError("sequence command must contain a MotionSequence")
+            arm = self._require_motion_available()
+            runner = SequenceRunner(
+                arm,
+                pose_library=PoseLibrary(self._robot_id),
+                trajectory_library=TrajectoryLibrary(self._robot_id),
+                primitive_library=MotionPrimitiveLibrary(self._robot_id),
+            )
+
+            def progress(index: int, total: int, step: object, status: str) -> None:
+                self.sequence_progress.emit(
+                    {
+                        "type": "sequence",
+                        "index": index,
+                        "total": total,
+                        "status": status,
+                        "kind": getattr(step, "kind", "unknown"),
+                    }
+                )
+
+            result = runner.run(
+                sequence,
+                repeat=int(values.get("repeat", 1)),
+                speed_scale=float(values.get("speed_scale", 1.0)),
+                start_index=int(values.get("start_index", 0)),
+                stop_index=values.get("stop_index"),
+                on_progress=progress,
+                wait=False,
+            )
+            self._track(f"sequence {sequence.name}", result)
+        except BaseException as exc:
+            self._report_error("run sequence", exc)
 
     @Slot(object)
     def move_saved_pose(self, command: object) -> None:
@@ -472,6 +696,8 @@ class RobotWorker(QObject):
 
     @Slot()
     def poll(self) -> None:
+        if self.arm is not None and self.arm.is_connected and self.arm.motion.is_streaming:
+            return
         if self._process_handles():
             # The SDK's motion thread already owns feedback polling. Avoid competing
             # serial traffic that could cause host-side command deadline misses.
