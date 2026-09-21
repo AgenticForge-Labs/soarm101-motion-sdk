@@ -147,6 +147,9 @@ class MainWindow(QMainWindow):
         self.leader_stream_start_requested.connect(self._leader_worker.start_stream_readout)
         self.leader_stream_stop_requested.connect(self._leader_worker.stop_stream_readout)
         self._leader_worker.stream_sample.connect(self._worker.apply_teleop_sample)
+        self._leader_worker.stream_readout_changed.connect(
+            self._on_leader_stream_readout_changed
+        )
         self._leader_worker.state_changed.connect(self._on_leader_state)
         self._leader_worker.connected_changed.connect(self._on_leader_connected)
         self._leader_worker.log_message.connect(lambda message: self._log(f"Leader: {message}"))
@@ -1872,13 +1875,18 @@ class MainWindow(QMainWindow):
     def _on_sequence_progress(self, payload: object) -> None:
         values = dict(payload)  # type: ignore[arg-type]
         if values.get("type") == "sequence_control":
-            self._sequence_paused = values.get("status") == "paused"
+            status = str(values.get("status", ""))
+            self._sequence_paused = status == "paused"
             self.pause_sequence_button.setText(
                 "Resume sequence" if self._sequence_paused else "Pause after current step"
             )
-            self.sequence_status.setText(
-                "Sequence paused" if self._sequence_paused else "Sequence running"
-            )
+            labels = {
+                "paused": "Sequence paused",
+                "running": "Sequence running",
+                "completed": "Sequence complete",
+                "failed": "Sequence stopped with an error",
+            }
+            self.sequence_status.setText(labels.get(status, f"Sequence {status}"))
             return
         if values.get("type") == "teleop":
             if self._teleop_active:
@@ -1957,6 +1965,10 @@ class MainWindow(QMainWindow):
             self.leader_stream_stop_requested.emit()
             self.teleop_status.setText("Live teleoperation stopped / follower holding.")
         self._update_enabled_state()
+
+    def _on_leader_stream_readout_changed(self, active: bool) -> None:
+        if not active and self._teleop_active:
+            self.teleop_stop_requested.emit()
 
     def _on_leader_connected(self, connected: bool) -> None:
         self._leader_connected = connected
@@ -2071,6 +2083,10 @@ class MainWindow(QMainWindow):
 
     def _on_busy(self, busy: bool) -> None:
         self._busy = busy
+        if not busy:
+            self._sequence_paused = False
+            if hasattr(self, "pause_sequence_button"):
+                self.pause_sequence_button.setText("Pause after current step")
         self._update_enabled_state()
 
     def _on_state(self, state: object) -> None:
