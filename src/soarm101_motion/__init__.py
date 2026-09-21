@@ -17,6 +17,7 @@ from soarm101_motion.integration import (
 from soarm101_motion.kinematics import IKOptions, IKSolver, SO101KinematicModel
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
 from soarm101_motion.tools import CameraTool, SO101Gripper, ToolAssembly
+from soarm101_motion.trajectories import Trajectory, TrajectoryEntry, TrajectoryLibrary
 from soarm101_motion.types import HardwareState, IKResult, JointState, MotionResult, Pose
 
 __version__ = "0.1.0.dev8"
@@ -50,6 +51,9 @@ __all__ = [
     "SOFTWARE_STOP_IS_CERTIFIED_EMERGENCY_STOP",
     "SavedPose",
     "ToolAssembly",
+    "Trajectory",
+    "TrajectoryEntry",
+    "TrajectoryLibrary",
     "__version__",
     "integration_metadata",
 ]
