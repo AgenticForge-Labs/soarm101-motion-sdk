@@ -89,6 +89,11 @@ soarm101-gui --simulation
 
 The GUI provides:
 
+- Setup, Control, and Teach workspaces while the trajectory/run workspaces are developed;
+- live mechanical-stop midpoint calibration using the same backend as the CLI;
+- persistent user-recorded Home and Rest poses;
+- a second read-only leader/controller-arm session and selectable teaching source;
+- calibrated slider limits after calibration;
 - measured and target values for all five joints, with degree sliders;
 - guarded absolute joint moves;
 - measured world/base XYZ, roll, pitch, and yaw;
