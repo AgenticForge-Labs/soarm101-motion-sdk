@@ -13,7 +13,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from soarm101_motion.config import SOARM101Config
-from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS, STOCK_GRIPPER
 from soarm101_motion.exceptions import (
     HardwareFaultError,
     InvalidCommandError,
@@ -24,7 +24,12 @@ from soarm101_motion.exceptions import (
 )
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
-from soarm101_motion.safety import validate_command_step, validate_joint_targets
+from soarm101_motion.safety import (
+    validate_command_step,
+    validate_joint_targets,
+    validate_workspace_path,
+)
+from soarm101_motion.trajectories import Trajectory
 from soarm101_motion.types import MotionResult, Pose
 
 T = TypeVar("T")
@@ -97,6 +102,14 @@ class PlannedPath:
     cartesian_waypoints: tuple[Pose, ...]
     command_samples: tuple[dict[str, float], ...]
     duration_s: float
+
+
+@dataclass(frozen=True)
+class RecordedPlan:
+    command_samples: tuple[dict[str, float], ...]
+    gripper_samples: tuple[float, ...]
+    duration_s: float
+    pre_roll: PlannedPath | None = None
 
 
 class MotionController:
@@ -418,6 +431,79 @@ class MotionController:
         )
         return PlannedPath(tuple(joints), tuple(cartesian), samples, duration)
 
+    def _workspace_kwargs(self) -> dict[str, float]:
+        return {
+            "minimum_z_m": self.config.minimum_workspace_z_m,
+            "maximum_tcp_reach_m": self.config.maximum_tcp_reach_m,
+            "minimum_self_clearance_m": self.config.minimum_self_clearance_m,
+            "base_keepout_radius_m": self.config.base_keepout_radius_m,
+            "base_keepout_height_m": self.config.base_keepout_height_m,
+        }
+
+    def plan_recorded_trajectory(
+        self,
+        trajectory: Trajectory,
+        *,
+        speed_scale: float = 1.0,
+        move_to_start: bool = True,
+        tcp: Pose | None = None,
+    ) -> RecordedPlan:
+        """Validate, retime, and resample a recorded demonstration for execution."""
+        self._require_ready()
+        scale = self._positive(speed_scale, "trajectory speed scale")
+        prepared = trajectory.retime(scale).resample(self.config.command_frequency_hz)
+        samples = prepared.joint_mappings()
+        gripper = tuple(float(value) for value in prepared.gripper)
+        if any(value < 0.0 or value > 1.0 for value in gripper):
+            raise InvalidCommandError("recorded gripper values must stay within [0, 1]")
+
+        self._validate_samples(
+            samples,
+            speed_limit=self.config.max_joint_speed,
+            acceleration_limit=self.config.max_joint_acceleration,
+        )
+        if self.config.enable_workspace_checks:
+            validate_workspace_path(
+                self.model,
+                samples,
+                tcp=tcp,
+                **self._workspace_kwargs(),
+            )
+
+        present = self.backend.read_joint_positions()
+        pre_roll: PlannedPath | None = None
+        if move_to_start:
+            pre_roll = self._plan_joint_motion(
+                present,
+                samples[0],
+                speed=self.config.default_joint_speed,
+                acceleration=self.config.default_joint_acceleration,
+            )
+            if self.config.enable_workspace_checks:
+                validate_workspace_path(
+                    self.model,
+                    pre_roll.command_samples,
+                    tcp=tcp,
+                    **self._workspace_kwargs(),
+                )
+        else:
+            start_error = max(
+                abs(float(present[name]) - float(samples[0][name]))
+                for name in ARM_JOINTS
+            )
+            if start_error > self.config.joint_position_tolerance_rad:
+                raise InvalidCommandError(
+                    "robot is not at the recorded start pose; enable move_to_start "
+                    "or move to the first pose before replay"
+                )
+
+        return RecordedPlan(
+            command_samples=samples,
+            gripper_samples=gripper,
+            duration_s=prepared.duration_s,
+            pre_roll=pre_roll,
+        )
+
     def _check_cancelled(self, cancel_event: threading.Event, message: str) -> None:
         if cancel_event.is_set():
             raise MotionCancelledError(message)
@@ -524,6 +610,69 @@ class MotionController:
                 pass
             raise
 
+    def _execute_recorded(
+        self,
+        plan: RecordedPlan,
+        cancel_event: threading.Event,
+    ) -> MotionResult:
+        samples = plan.command_samples
+        gripper_samples = plan.gripper_samples
+        try:
+            self._check_cancelled(cancel_event, "recorded trajectory cancelled")
+            self.backend.write_tool_position(STOCK_GRIPPER, gripper_samples[0])
+            if plan.pre_roll is not None:
+                self._execute_plan(
+                    plan.pre_roll,
+                    cancel_event,
+                    cancellation_message="recorded trajectory pre-roll cancelled",
+                )
+
+            frequency = self.config.command_frequency_hz
+            started = time.perf_counter()
+            monitor_every = max(
+                1,
+                int(math.ceil(self.config.trajectory_feedback_interval_s * frequency)),
+            )
+            previous_command = samples[0]
+            previous_actual = self.backend.read_joint_positions()
+            for index, command in enumerate(samples[1:], start=1):
+                self._check_cancelled(cancel_event, "recorded trajectory cancelled")
+                lateness = self._sleep_until(started + index / frequency)
+                if lateness > self.config.max_command_lateness_s:
+                    raise MotionTimeoutError(
+                        f"recorded trajectory command deadline missed by {lateness:.3f}s"
+                    )
+                self._check_cancelled(cancel_event, "recorded trajectory cancelled")
+                self.backend.write_joint_positions(command)
+                self.backend.write_tool_position(STOCK_GRIPPER, gripper_samples[index])
+                if index % monitor_every == 0 or index == len(samples) - 1:
+                    previous_actual = self._monitor_motion(
+                        command,
+                        previous_command,
+                        previous_actual,
+                    )
+                    previous_command = command
+
+            settled = self._wait_for_settle(samples[-1], cancel_event)
+            actual_gripper = self.backend.read_tool_position(STOCK_GRIPPER)
+            if abs(actual_gripper - gripper_samples[-1]) > 0.05:
+                raise MotionTimeoutError(
+                    "recorded trajectory joints settled but gripper did not reach "
+                    f"{gripper_samples[-1]:.3f}; actual is {actual_gripper:.3f}"
+                )
+            return MotionResult(
+                settled.accepted,
+                settled.completed,
+                settled.message,
+                {**settled.final_positions, STOCK_GRIPPER: actual_gripper},
+            )
+        except BaseException:
+            try:
+                self.backend.stop()
+            except Exception:
+                pass
+            raise
+
     def _start_locked(
         self,
         operation: Callable[[threading.Event], MotionResult],
@@ -615,6 +764,28 @@ class MotionController:
                     event,
                     cancellation_message="linear motion cancelled",
                 )
+            )
+        return handle.wait() if wait else handle
+
+    def play_trajectory(
+        self,
+        trajectory: Trajectory,
+        *,
+        speed_scale: float = 1.0,
+        move_to_start: bool = True,
+        tcp: Pose | None = None,
+        wait: bool = True,
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        with self._state_lock:
+            self._ensure_idle_locked()
+            plan = self.plan_recorded_trajectory(
+                trajectory,
+                speed_scale=speed_scale,
+                move_to_start=move_to_start,
+                tcp=tcp,
+            )
+            handle = self._start_locked(
+                lambda event: self._execute_recorded(plan, event)
             )
         return handle.wait() if wait else handle
 

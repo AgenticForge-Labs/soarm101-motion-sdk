@@ -89,6 +89,15 @@ soarm101-gui --simulation
 
 The GUI provides:
 
+- Setup, Control, and Teach workspaces while the trajectory/run workspaces are developed;
+- live mechanical-stop midpoint calibration using the same backend as the CLI;
+- persistent user-recorded Home and Rest poses;
+- a second read-only leader/controller-arm session and selectable teaching source;
+- named taught points replayable as joint or Cartesian linear moves;
+- 50 Hz exact trajectory recording with gripper and optional effort/current diagnostics;
+- non-destructive raw/edited trajectory storage and a lightweight timeline editor;
+- validated replay with crop selection, speed scaling, and safe movement to the clip start;
+- calibrated slider limits after calibration;
 - measured and target values for all five joints, with degree sliders;
 - guarded absolute joint moves;
 - measured world/base XYZ, roll, pitch, and yaw;

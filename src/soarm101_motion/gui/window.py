@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import degrees
+from math import degrees, radians
 from typing import Any
 
 from PySide6.QtCore import QMetaObject, Qt, QThread, Signal
@@ -28,8 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.hardware import FeetechBackend
+from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
+from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 
 
 class MainWindow(QMainWindow):
@@ -42,6 +45,15 @@ class MainWindow(QMainWindow):
     jog_requested = Signal(object)
     absolute_pose_requested = Signal(object)
     gripper_requested = Signal(float)
+    calibration_requested = Signal(float)
+    leader_connect_requested = Signal(object)
+    leader_disconnect_requested = Signal()
+    move_saved_pose_requested = Signal(object)
+    trajectory_play_requested = Signal(object)
+    recording_start_requested = Signal(object)
+    recording_stop_requested = Signal()
+    leader_recording_start_requested = Signal(object)
+    leader_recording_stop_requested = Signal()
 
     def __init__(
         self,
@@ -59,6 +71,14 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._latest_state: dict[str, Any] | None = None
         self._joint_targets_initialized = False
+        self._last_joint_limits: dict[str, tuple[float, float]] | None = None
+        self._leader_connected = False
+        self._latest_leader_state: dict[str, Any] | None = None
+        self._pose_library_cache: tuple[str, PoseLibrary] | None = None
+        self._trajectory_library_cache: tuple[str, TrajectoryLibrary] | None = None
+        self._active_trajectory: Trajectory | None = None
+        self._recording_source: str | None = None
+        self._pending_recording_name: str | None = None
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -75,16 +95,51 @@ class MainWindow(QMainWindow):
         self.jog_requested.connect(self._worker.jog_cartesian)
         self.absolute_pose_requested.connect(self._worker.move_absolute_pose)
         self.gripper_requested.connect(self._worker.move_gripper)
+        self.calibration_requested.connect(self._worker.run_calibration)
+        self.move_saved_pose_requested.connect(self._worker.move_saved_pose)
+        self.trajectory_play_requested.connect(self._worker.play_trajectory)
+        self.recording_start_requested.connect(self._worker.start_recording)
+        self.recording_stop_requested.connect(self._worker.stop_recording)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
         self._worker.busy_changed.connect(self._on_busy)
         self._worker.log_message.connect(self._log)
         self._worker.error_message.connect(self._on_error)
+        self._worker.calibration_completed.connect(self._on_calibration_completed)
+        self._worker.recording_completed.connect(self._on_recording_completed)
+        self._worker.recording_changed.connect(
+            lambda active: self._on_recording_changed("follower", active)
+        )
+
+        self._leader_thread = QThread(self)
+        self._leader_worker = RobotWorker()
+        self._leader_worker.moveToThread(self._leader_thread)
+        self._leader_thread.started.connect(self._leader_worker.start)
+        self._leader_thread.finished.connect(self._leader_worker.deleteLater)
+        self.leader_connect_requested.connect(self._leader_worker.connect_robot)
+        self.leader_disconnect_requested.connect(self._leader_worker.disconnect_robot)
+        self.leader_recording_start_requested.connect(self._leader_worker.start_recording)
+        self.leader_recording_stop_requested.connect(self._leader_worker.stop_recording)
+        self._leader_worker.state_changed.connect(self._on_leader_state)
+        self._leader_worker.connected_changed.connect(self._on_leader_connected)
+        self._leader_worker.log_message.connect(lambda message: self._log(f"Leader: {message}"))
+        self._leader_worker.error_message.connect(
+            lambda message: self._on_error(f"Leader: {message}")
+        )
+        self._leader_worker.recording_completed.connect(self._on_recording_completed)
+        self._leader_worker.recording_changed.connect(
+            lambda active: self._on_recording_changed("leader", active)
+        )
 
         self._build_ui(port=port, robot_id=robot_id, simulation=simulation)
         self._thread.start()
+        self._leader_thread.start()
         self._refresh_ports()
+        self._refresh_leader_ports()
+        self._refresh_named_pose_status()
+        self._refresh_point_list()
+        self._refresh_trajectory_list()
         self._update_enabled_state()
 
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
@@ -93,9 +148,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_connection_bar(port, robot_id, simulation))
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_joint_tab(), "Joints")
-        self.tabs.addTab(self._build_cartesian_tab(), "Cartesian")
-        self.tabs.addTab(self._build_gripper_tab(), "Gripper")
+        self.tabs.addTab(self._build_setup_tab(), "Setup")
+        self.tabs.addTab(self._build_control_tab(), "Control")
+        self.tabs.addTab(self._build_teach_tab(), "Teach")
+        self.tabs.addTab(self._build_trajectory_tab(), "Trajectories")
         layout.addWidget(self.tabs, 1)
 
         status_row = QHBoxLayout()
@@ -141,6 +197,9 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel("Robot ID"), 0, 4)
         self.robot_id_edit = QLineEdit(robot_id)
+        self.robot_id_edit.textChanged.connect(
+            lambda _text: self._on_robot_id_changed()
+        )
         layout.addWidget(self.robot_id_edit, 0, 5)
 
         self.connect_button = QPushButton("Connect")
@@ -166,6 +225,12 @@ class MainWindow(QMainWindow):
         self.read_targets_button = QPushButton("Load current into controls")
         self.read_targets_button.clicked.connect(self._load_current_targets)
         layout.addWidget(self.read_targets_button, 1, 5, 1, 2)
+
+        self.allow_uncalibrated_check = QCheckBox("Setup: allow uncalibrated connection")
+        self.allow_uncalibrated_check.setToolTip(
+            "For calibration/setup only. Keep torque off until calibration is complete."
+        )
+        layout.addWidget(self.allow_uncalibrated_check, 2, 0, 1, 7)
         return box
 
     @staticmethod
@@ -186,6 +251,271 @@ class MainWindow(QMainWindow):
         spin.setSuffix(suffix)
         spin.setKeyboardTracking(False)
         return spin
+
+    def _build_setup_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        calibration = QGroupBox("Mechanical-stop calibration")
+        grid = QGridLayout(calibration)
+        explanation = QLabel(
+            "Calibration keeps torque off while you sweep every joint and the gripper "
+            "between both mechanical stops. Zero is computed from the midpoint of the "
+            "observed extrema; no visual midpoint placement is required."
+        )
+        explanation.setWordWrap(True)
+        grid.addWidget(explanation, 0, 0, 1, 3)
+        grid.addWidget(QLabel("Sweep duration"), 1, 0)
+        self.calibration_duration = self._spin(
+            5.0, 120.0, 30.0, decimals=1, step=5.0, suffix=" s"
+        )
+        grid.addWidget(self.calibration_duration, 1, 1)
+        self.run_calibration_button = QPushButton("Start live calibration")
+        self.run_calibration_button.clicked.connect(self._start_calibration)
+        grid.addWidget(self.run_calibration_button, 1, 2)
+        self.calibration_status = QLabel(
+            "Not run in this session. Simulation cannot perform encoder calibration."
+        )
+        self.calibration_status.setWordWrap(True)
+        grid.addWidget(self.calibration_status, 2, 0, 1, 3)
+        layout.addWidget(calibration)
+
+        later = QLabel(
+            "Physical validation is intentionally deferred. Follow TESTING.md when you are "
+            "ready to use the real arm."
+        )
+        later.setWordWrap(True)
+        layout.addWidget(later)
+        layout.addStretch(1)
+        return page
+
+    def _build_control_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(self._build_named_pose_controls())
+        subtabs = QTabWidget()
+        subtabs.addTab(self._build_joint_tab(), "Joints")
+        subtabs.addTab(self._build_cartesian_tab(), "Cartesian")
+        subtabs.addTab(self._build_gripper_tab(), "Gripper")
+        layout.addWidget(subtabs, 1)
+        return page
+
+    def _build_named_pose_controls(self) -> QGroupBox:
+        box = QGroupBox("Standard poses")
+        grid = QGridLayout(box)
+        self.home_status = QLabel("Home: not saved")
+        self.rest_status = QLabel("Rest: not saved")
+        self.save_home_button = QPushButton("Save current as Home")
+        self.go_home_button = QPushButton("Go Home")
+        self.save_rest_button = QPushButton("Save current as Rest")
+        self.go_rest_button = QPushButton("Go Rest")
+        self.save_home_button.clicked.connect(
+            lambda _checked=False: self._save_named_pose(HOME_POSE_NAME)
+        )
+        self.go_home_button.clicked.connect(
+            lambda _checked=False: self._go_named_pose(HOME_POSE_NAME)
+        )
+        self.save_rest_button.clicked.connect(
+            lambda _checked=False: self._save_named_pose(REST_POSE_NAME)
+        )
+        self.go_rest_button.clicked.connect(
+            lambda _checked=False: self._go_named_pose(REST_POSE_NAME)
+        )
+        grid.addWidget(self.home_status, 0, 0)
+        grid.addWidget(self.save_home_button, 0, 1)
+        grid.addWidget(self.go_home_button, 0, 2)
+        grid.addWidget(self.rest_status, 1, 0)
+        grid.addWidget(self.save_rest_button, 1, 1)
+        grid.addWidget(self.go_rest_button, 1, 2)
+        return box
+
+    def _build_teach_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        leader = QGroupBox("Leader / controller arm")
+        grid = QGridLayout(leader)
+        self.leader_simulation_check = QCheckBox("Simulation")
+        self.leader_simulation_check.setChecked(self.simulation_check.isChecked())
+        self.leader_simulation_check.toggled.connect(
+            lambda _checked: self._update_enabled_state()
+        )
+        grid.addWidget(self.leader_simulation_check, 0, 0)
+        grid.addWidget(QLabel("Port"), 0, 1)
+        self.leader_port_combo = QComboBox()
+        self.leader_port_combo.setEditable(True)
+        grid.addWidget(self.leader_port_combo, 0, 2)
+        self.leader_refresh_button = QPushButton("Refresh")
+        self.leader_refresh_button.clicked.connect(self._refresh_leader_ports)
+        grid.addWidget(self.leader_refresh_button, 0, 3)
+        grid.addWidget(QLabel("Robot ID"), 0, 4)
+        self.leader_robot_id_edit = QLineEdit(
+            (self.robot_id_edit.text().strip() or "so101") + "-leader"
+        )
+        grid.addWidget(self.leader_robot_id_edit, 0, 5)
+        self.leader_connect_button = QPushButton("Connect leader")
+        self.leader_connect_button.clicked.connect(self._toggle_leader_connection)
+        grid.addWidget(self.leader_connect_button, 0, 6)
+        note = QLabel(
+            "The leader is read-only here: leave its torque off and move it by hand. "
+            "Live leader→follower teleoperation is a later stage."
+        )
+        note.setWordWrap(True)
+        grid.addWidget(note, 1, 0, 1, 7)
+        layout.addWidget(leader)
+
+        source = QGroupBox("Teaching source")
+        source_grid = QGridLayout(source)
+        source_grid.addWidget(QLabel("Capture/read from"), 0, 0)
+        self.teaching_source_combo = QComboBox()
+        self.teaching_source_combo.addItem("Follower", "follower")
+        self.teaching_source_combo.addItem("Leader", "leader")
+        self.teaching_source_combo.currentIndexChanged.connect(
+            lambda _index: self._update_teach_readout()
+        )
+        source_grid.addWidget(self.teaching_source_combo, 0, 1)
+        self.teach_source_status = QLabel("Follower state unavailable")
+        source_grid.addWidget(self.teach_source_status, 0, 2, 1, 4)
+
+        self.teach_joint_labels: dict[str, QLabel] = {}
+        for row, name in enumerate(ARM_JOINTS, start=1):
+            source_grid.addWidget(QLabel(name.replace("_", " ").title()), row, 0)
+            label = QLabel("—")
+            self.teach_joint_labels[name] = label
+            source_grid.addWidget(label, row, 1)
+
+        source_grid.addWidget(QLabel("Gripper"), 1, 3)
+        self.teach_gripper_label = QLabel("—")
+        source_grid.addWidget(self.teach_gripper_label, 1, 4)
+        self.teach_pose_label = QLabel("TCP: —")
+        self.teach_pose_label.setWordWrap(True)
+        source_grid.addWidget(self.teach_pose_label, 2, 3, 2, 3)
+        layout.addWidget(source)
+
+        points = QGroupBox("Taught points")
+        point_grid = QGridLayout(points)
+        point_grid.addWidget(QLabel("New point name"), 0, 0)
+        self.point_name_edit = QLineEdit()
+        self.point_name_edit.setPlaceholderText("pick, above_drop, camera_pose...")
+        point_grid.addWidget(self.point_name_edit, 0, 1, 1, 2)
+        self.save_point_button = QPushButton("Save current point")
+        self.save_point_button.clicked.connect(self._save_taught_point)
+        point_grid.addWidget(self.save_point_button, 0, 3)
+        point_grid.addWidget(QLabel("Saved point"), 1, 0)
+        self.point_combo = QComboBox()
+        point_grid.addWidget(self.point_combo, 1, 1)
+        self.point_mode_combo = QComboBox()
+        self.point_mode_combo.addItem("Joint / angular", "joint")
+        self.point_mode_combo.addItem("Cartesian linear", "linear")
+        point_grid.addWidget(self.point_mode_combo, 1, 2)
+        self.move_point_button = QPushButton("Move follower to point")
+        self.move_point_button.clicked.connect(self._move_taught_point)
+        point_grid.addWidget(self.move_point_button, 1, 3)
+        self.delete_point_button = QPushButton("Delete point")
+        self.delete_point_button.clicked.connect(self._delete_taught_point)
+        point_grid.addWidget(self.delete_point_button, 2, 3)
+        layout.addWidget(points)
+
+        recording = QGroupBox("Exact trajectory recording")
+        record_grid = QGridLayout(recording)
+        record_grid.addWidget(QLabel("Name"), 0, 0)
+        self.recording_name_edit = QLineEdit()
+        self.recording_name_edit.setPlaceholderText("wave_raw_01")
+        record_grid.addWidget(self.recording_name_edit, 0, 1, 1, 2)
+        self.record_effort_check = QCheckBox("Record effort/current diagnostics")
+        record_grid.addWidget(self.record_effort_check, 1, 0, 1, 2)
+        self.recording_rate_label = QLabel("50 Hz")
+        record_grid.addWidget(self.recording_rate_label, 1, 2)
+        self.record_button = QPushButton("Start recording selected source")
+        self.record_button.clicked.connect(self._toggle_recording)
+        record_grid.addWidget(self.record_button, 0, 3, 2, 1)
+        self.recording_status = QLabel(
+            "Raw recordings are immutable. Editing always creates a derived trajectory."
+        )
+        self.recording_status.setWordWrap(True)
+        record_grid.addWidget(self.recording_status, 2, 0, 1, 4)
+        layout.addWidget(recording)
+
+        layout.addStretch(1)
+        return page
+
+    def _build_trajectory_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        library_box = QGroupBox("Trajectory library")
+        library_grid = QGridLayout(library_box)
+        library_grid.addWidget(QLabel("Trajectory"), 0, 0)
+        self.trajectory_combo = QComboBox()
+        library_grid.addWidget(self.trajectory_combo, 0, 1)
+        self.refresh_trajectory_button = QPushButton("Refresh")
+        self.refresh_trajectory_button.clicked.connect(self._refresh_trajectory_list)
+        library_grid.addWidget(self.refresh_trajectory_button, 0, 2)
+        self.load_trajectory_button = QPushButton("Load")
+        self.load_trajectory_button.clicked.connect(self._load_selected_trajectory)
+        library_grid.addWidget(self.load_trajectory_button, 0, 3)
+        self.trajectory_stats = QLabel("No trajectory loaded")
+        library_grid.addWidget(self.trajectory_stats, 1, 0, 1, 4)
+        layout.addWidget(library_box)
+
+        self.trajectory_timeline = TrajectoryTimeline()
+        layout.addWidget(self.trajectory_timeline, 1)
+
+        edit_box = QGroupBox("Selection and playback")
+        edit_grid = QGridLayout(edit_box)
+        edit_grid.addWidget(QLabel("Scrub"), 0, 0)
+        self.trajectory_scrub = QSlider(Qt.Orientation.Horizontal)
+        self.trajectory_scrub.setRange(0, 10000)
+        self.trajectory_scrub.valueChanged.connect(self._trajectory_scrub_changed)
+        edit_grid.addWidget(self.trajectory_scrub, 0, 1, 1, 5)
+        self.trajectory_cursor_label = QLabel("0.000 s")
+        edit_grid.addWidget(self.trajectory_cursor_label, 0, 6)
+
+        edit_grid.addWidget(QLabel("Selection start"), 1, 0)
+        self.selection_start = self._spin(0.0, 0.0, 0.0, decimals=3, step=0.02, suffix=" s")
+        self.selection_start.valueChanged.connect(lambda _value: self._selection_changed())
+        edit_grid.addWidget(self.selection_start, 1, 1)
+        self.cursor_to_start_button = QPushButton("Start = cursor")
+        self.cursor_to_start_button.clicked.connect(
+            lambda _checked=False: self._set_selection_from_cursor("start")
+        )
+        edit_grid.addWidget(self.cursor_to_start_button, 1, 2)
+
+        edit_grid.addWidget(QLabel("Selection end"), 1, 3)
+        self.selection_end = self._spin(0.0, 0.0, 0.0, decimals=3, step=0.02, suffix=" s")
+        self.selection_end.valueChanged.connect(lambda _value: self._selection_changed())
+        edit_grid.addWidget(self.selection_end, 1, 4)
+        self.cursor_to_end_button = QPushButton("End = cursor")
+        self.cursor_to_end_button.clicked.connect(
+            lambda _checked=False: self._set_selection_from_cursor("end")
+        )
+        edit_grid.addWidget(self.cursor_to_end_button, 1, 5)
+
+        edit_grid.addWidget(QLabel("Speed scale"), 2, 0)
+        self.trajectory_speed_scale = self._spin(
+            0.1, 3.0, 1.0, decimals=2, step=0.1, suffix="×"
+        )
+        edit_grid.addWidget(self.trajectory_speed_scale, 2, 1)
+        self.replay_full_button = QPushButton("Replay full")
+        self.replay_full_button.clicked.connect(
+            lambda _checked=False: self._replay_trajectory(selection=False)
+        )
+        edit_grid.addWidget(self.replay_full_button, 2, 2)
+        self.replay_selection_button = QPushButton("Replay selection")
+        self.replay_selection_button.clicked.connect(
+            lambda _checked=False: self._replay_trajectory(selection=True)
+        )
+        edit_grid.addWidget(self.replay_selection_button, 2, 3)
+
+        edit_grid.addWidget(QLabel("Save selection as"), 3, 0)
+        self.edited_trajectory_name = QLineEdit()
+        self.edited_trajectory_name.setPlaceholderText("wave_trimmed_v1")
+        edit_grid.addWidget(self.edited_trajectory_name, 3, 1, 1, 3)
+        self.save_edited_trajectory_button = QPushButton("Save derived clip")
+        self.save_edited_trajectory_button.clicked.connect(self._save_edited_trajectory)
+        edit_grid.addWidget(self.save_edited_trajectory_button, 3, 4, 1, 2)
+        layout.addWidget(edit_box)
+        return page
 
     def _build_joint_tab(self) -> QWidget:
         page = QWidget()
@@ -439,7 +769,521 @@ class MainWindow(QMainWindow):
                 "simulation": simulation,
                 "port": port,
                 "robot_id": self.robot_id_edit.text().strip() or "so101",
+                "allow_uncalibrated": self.allow_uncalibrated_check.isChecked(),
             }
+        )
+
+    def _on_robot_id_changed(self) -> None:
+        self._pose_library_cache = None
+        self._trajectory_library_cache = None
+        self._active_trajectory = None
+        self._refresh_named_pose_status()
+        self._refresh_point_list()
+        self._refresh_trajectory_list()
+        if hasattr(self, "save_home_button"):
+            self._update_enabled_state()
+
+    def _refresh_leader_ports(self) -> None:
+        if not hasattr(self, "leader_port_combo"):
+            return
+        current = self.leader_port_combo.currentText().strip()
+        try:
+            ports = FeetechBackend.candidate_ports()
+        except Exception as exc:
+            self._log(f"Leader port discovery failed: {exc}")
+            ports = []
+        self.leader_port_combo.blockSignals(True)
+        self.leader_port_combo.clear()
+        self.leader_port_combo.addItems(ports)
+        if current:
+            if self.leader_port_combo.findText(current) < 0:
+                self.leader_port_combo.addItem(current)
+            self.leader_port_combo.setCurrentText(current)
+        self.leader_port_combo.blockSignals(False)
+
+    def _toggle_leader_connection(self) -> None:
+        if self._leader_connected:
+            self.leader_disconnect_requested.emit()
+            return
+        simulation = self.leader_simulation_check.isChecked()
+        port = self.leader_port_combo.currentText().strip()
+        if not simulation and not port:
+            QMessageBox.warning(self, "Leader serial port required", "Choose a leader port first.")
+            return
+        self.leader_connect_requested.emit(
+            {
+                "simulation": simulation,
+                "port": port,
+                "robot_id": self.leader_robot_id_edit.text().strip() or "so101-leader",
+            }
+        )
+
+    def _start_calibration(self) -> None:
+        if not self._connected:
+            QMessageBox.warning(self, "Follower not connected", "Connect the follower first.")
+            return
+        if self.simulation_check.isChecked():
+            QMessageBox.information(
+                self,
+                "Hardware calibration only",
+                "Simulation has no raw encoders or mechanical stops to calibrate.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Start calibration",
+            "Torque will be disabled. Sweep every joint and the gripper repeatedly "
+            "between both mechanical stops for the full recording period. Continue?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.calibration_status.setText("Calibration recording in progress…")
+        self.calibration_requested.emit(self.calibration_duration.value())
+
+    def _on_calibration_completed(self, result: object) -> None:
+        values = dict(result)  # type: ignore[arg-type]
+        self.calibration_status.setText(
+            f"Calibration complete ({values.get('source', 'unknown')}); "
+            f"saved to {values.get('path', 'unknown path')}."
+        )
+        limits = values.get("joint_limits_deg")
+        if limits:
+            self._apply_joint_limits(dict(limits))
+        self._log("Mechanical-stop midpoint calibration completed.")
+
+    def _get_trajectory_library(self) -> TrajectoryLibrary:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        if (
+            self._trajectory_library_cache is None
+            or self._trajectory_library_cache[0] != robot_id
+        ):
+            self._trajectory_library_cache = (robot_id, TrajectoryLibrary(robot_id))
+        return self._trajectory_library_cache[1]
+
+    def _get_pose_library(self) -> PoseLibrary:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        if self._pose_library_cache is None or self._pose_library_cache[0] != robot_id:
+            self._pose_library_cache = (robot_id, PoseLibrary(robot_id))
+        return self._pose_library_cache[1]
+
+    @staticmethod
+    def _saved_pose_from_state(state: dict[str, Any], *, source: str) -> SavedPose:
+        joints = {
+            name: radians(float(state["joints_deg"][name]))
+            for name in ARM_JOINTS
+        }
+        pose_values = [float(value) for value in state["pose_mm_deg"]]
+        tcp = (
+            pose_values[0] / 1000.0,
+            pose_values[1] / 1000.0,
+            pose_values[2] / 1000.0,
+            radians(pose_values[3]),
+            radians(pose_values[4]),
+            radians(pose_values[5]),
+        )
+        return SavedPose(
+            joints=joints,
+            gripper=float(state["gripper"]),
+            tcp_xyz_rpy=tcp,
+            source=source,
+        )
+
+    def _save_named_pose(self, name: str) -> None:
+        if not self._latest_state:
+            self._on_error("Cannot save pose: follower state is unavailable.")
+            return
+        try:
+            pose = self._saved_pose_from_state(self._latest_state, source="follower")
+            path = self._get_pose_library().save(name, pose)
+            self._log(f"Saved {name} pose to {path}.")
+            self._refresh_named_pose_status()
+            self._update_enabled_state()
+        except Exception as exc:
+            self._on_error(f"Save {name}: {exc}")
+
+    def _go_named_pose(self, name: str) -> None:
+        try:
+            pose = self._get_pose_library().require(name)
+        except Exception as exc:
+            self._on_error(f"Load {name}: {exc}")
+            return
+        for joint, value in pose.joints.items():
+            self.joint_spins[joint].setValue(degrees(value))
+        self.gripper_spin.setValue(pose.gripper)
+        self._move_joints()
+        self.gripper_requested.emit(pose.gripper)
+        self._log(f"Moving to saved {name} pose.")
+
+    def _refresh_named_pose_status(self) -> None:
+        if not hasattr(self, "home_status"):
+            return
+        try:
+            library = self._get_pose_library()
+            home = library.get(HOME_POSE_NAME)
+            rest = library.get(REST_POSE_NAME)
+        except Exception as exc:
+            self.home_status.setText(f"Home: error ({exc})")
+            self.rest_status.setText(f"Rest: error ({exc})")
+            return
+        self.home_status.setText("Home: saved" if home else "Home: not saved")
+        self.rest_status.setText("Rest: saved" if rest else "Rest: not saved")
+
+    def _current_teaching_state(self) -> tuple[str, dict[str, Any] | None]:
+        source = str(self.teaching_source_combo.currentData())
+        state = self._latest_state if source == "follower" else self._latest_leader_state
+        return source, state
+
+    def _refresh_point_list(self) -> None:
+        if not hasattr(self, "point_combo"):
+            return
+        current = self.point_combo.currentText()
+        try:
+            names = [
+                name
+                for name in self._get_pose_library().names()
+                if name not in {HOME_POSE_NAME, REST_POSE_NAME}
+            ]
+        except Exception as exc:
+            self._on_error(f"Refresh taught points: {exc}")
+            names = []
+        self.point_combo.blockSignals(True)
+        self.point_combo.clear()
+        self.point_combo.addItems(names)
+        if current and current in names:
+            self.point_combo.setCurrentText(current)
+        self.point_combo.blockSignals(False)
+        self._update_enabled_state()
+
+    def _save_taught_point(self) -> None:
+        name = self.point_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Point name required", "Enter a name for the point.")
+            return
+        if name in {HOME_POSE_NAME, REST_POSE_NAME}:
+            QMessageBox.warning(
+                self,
+                "Reserved point name",
+                "Use the dedicated Home/Rest controls for those standard poses.",
+            )
+            return
+        source, state = self._current_teaching_state()
+        if state is None:
+            self._on_error(f"Cannot save point: {source} state is unavailable.")
+            return
+        try:
+            pose = self._saved_pose_from_state(state, source=source)
+            path = self._get_pose_library().save(name, pose)
+            self._log(f"Saved taught point {name!r} from {source} to {path}.")
+            self.point_name_edit.clear()
+            self._refresh_point_list()
+            self.point_combo.setCurrentText(name)
+        except Exception as exc:
+            self._on_error(f"Save taught point: {exc}")
+
+    def _delete_taught_point(self) -> None:
+        name = self.point_combo.currentText().strip()
+        if not name:
+            return
+        try:
+            self._get_pose_library().delete(name)
+            self._log(f"Deleted taught point {name!r}.")
+            self._refresh_point_list()
+        except Exception as exc:
+            self._on_error(f"Delete taught point: {exc}")
+
+    def _move_taught_point(self) -> None:
+        name = self.point_combo.currentText().strip()
+        if not name:
+            return
+        try:
+            pose = self._get_pose_library().require(name)
+        except Exception as exc:
+            self._on_error(f"Load taught point: {exc}")
+            return
+        self.move_saved_pose_requested.emit(
+            {
+                "pose": pose,
+                "mode": self.point_mode_combo.currentData(),
+                "speed_deg_s": self.joint_speed.value(),
+                "acceleration_deg_s2": self.joint_acceleration.value(),
+                "speed_mm_s": self.linear_speed.value(),
+                "acceleration_mm_s2": self.linear_acceleration.value(),
+                "orientation_mode": self.orientation_combo.currentData(),
+            }
+        )
+
+    def _toggle_recording(self) -> None:
+        if self._recording_source is not None:
+            if self._recording_source == "leader":
+                self.leader_recording_stop_requested.emit()
+            else:
+                self.recording_stop_requested.emit()
+            return
+
+        name = self.recording_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(
+                self, "Trajectory name required", "Enter a raw trajectory name first."
+            )
+            return
+        try:
+            library = self._get_trajectory_library()
+            library._validate_name(name)
+            if any(entry.kind == "raw" and entry.name == name for entry in library.entries()):
+                raise FileExistsError(
+                    f"raw trajectory {name!r} already exists; choose a new name"
+                )
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid trajectory name", str(exc))
+            return
+
+        source, state = self._current_teaching_state()
+        if state is None:
+            self._on_error(f"Cannot record: {source} state is unavailable.")
+            return
+        options = {
+            "frequency_hz": 50.0,
+            "record_effort": self.record_effort_check.isChecked(),
+            "source": source,
+        }
+        self._recording_source = source
+        self._pending_recording_name = name
+        if source == "leader":
+            self.leader_recording_start_requested.emit(options)
+        else:
+            self.recording_start_requested.emit(options)
+        self.record_button.setText("Stop recording")
+        self.recording_status.setText(
+            f"Recording {source} at 50 Hz. Move the selected arm through the motion."
+        )
+        self._update_enabled_state()
+
+    def _on_recording_changed(self, source: str, active: bool) -> None:
+        if active:
+            return
+        if self._recording_source == source:
+            self._recording_source = None
+            self.record_button.setText("Start recording selected source")
+            self._update_enabled_state()
+
+    def _on_recording_completed(self, trajectory: object) -> None:
+        if not isinstance(trajectory, Trajectory):
+            self._on_error("Recording returned an invalid trajectory object.")
+            return
+        name = self._pending_recording_name
+        self._pending_recording_name = None
+        if not name:
+            self._on_error("Recording completed without a pending trajectory name.")
+            return
+        try:
+            library = self._get_trajectory_library()
+            entry = library.save(name, trajectory, kind="raw")
+            loaded = library.load(entry.name, kind=entry.kind)
+            self.recording_status.setText(
+                f"Saved raw trajectory {name!r}: {loaded.sample_count} samples, "
+                f"{loaded.duration_s:.2f} s."
+            )
+            self._log(f"Saved immutable raw trajectory to {entry.data_path}.")
+            self.recording_name_edit.clear()
+            self._refresh_trajectory_list()
+            self._set_active_trajectory(loaded)
+            self.tabs.setCurrentIndex(3)
+        except Exception as exc:
+            self._on_error(f"Save raw trajectory: {exc}")
+
+    def _refresh_trajectory_list(self) -> None:
+        if not hasattr(self, "trajectory_combo"):
+            return
+        current = self.trajectory_combo.currentData()
+        try:
+            entries = self._get_trajectory_library().entries()
+        except Exception as exc:
+            self._on_error(f"Refresh trajectory library: {exc}")
+            entries = ()
+        self.trajectory_combo.blockSignals(True)
+        self.trajectory_combo.clear()
+        for entry in entries:
+            self.trajectory_combo.addItem(
+                f"{entry.kind}: {entry.name}", (entry.kind, entry.name)
+            )
+        if current is not None:
+            index = self.trajectory_combo.findData(current)
+            if index >= 0:
+                self.trajectory_combo.setCurrentIndex(index)
+        self.trajectory_combo.blockSignals(False)
+        self._update_enabled_state()
+
+    def _load_selected_trajectory(self) -> None:
+        data = self.trajectory_combo.currentData()
+        if not data:
+            return
+        kind, name = data
+        try:
+            trajectory = self._get_trajectory_library().load(name, kind=kind)
+            self._set_active_trajectory(trajectory)
+        except Exception as exc:
+            self._on_error(f"Load trajectory: {exc}")
+
+    def _set_active_trajectory(self, trajectory: Trajectory) -> None:
+        self._active_trajectory = trajectory
+        duration = trajectory.duration_s
+        self.trajectory_timeline.set_trajectory(trajectory)
+        self.selection_start.blockSignals(True)
+        self.selection_end.blockSignals(True)
+        self.selection_start.setRange(0.0, duration)
+        self.selection_end.setRange(0.0, duration)
+        self.selection_start.setValue(0.0)
+        self.selection_end.setValue(duration)
+        self.selection_start.blockSignals(False)
+        self.selection_end.blockSignals(False)
+        self.trajectory_scrub.setValue(0)
+        diagnostics = " + effort" if trajectory.effort_current_raw is not None else ""
+        self.trajectory_stats.setText(
+            f"{trajectory.metadata.get('kind', 'unsaved')} / "
+            f"{trajectory.metadata.get('name', 'recording')} — "
+            f"{trajectory.sample_count} samples, {duration:.3f} s, "
+            f"median {trajectory.sample_rate_hz:.1f} Hz{diagnostics}"
+        )
+        self._selection_changed()
+        self._update_enabled_state()
+
+    def _trajectory_scrub_changed(self, value: int) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        cursor = trajectory.duration_s * float(value) / 10000.0
+        self.trajectory_timeline.set_cursor(cursor)
+        self.trajectory_cursor_label.setText(f"{cursor:.3f} s")
+
+    def _cursor_seconds(self) -> float:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return 0.0
+        return trajectory.duration_s * self.trajectory_scrub.value() / 10000.0
+
+    def _set_selection_from_cursor(self, which: str) -> None:
+        cursor = self._cursor_seconds()
+        if which == "start":
+            self.selection_start.setValue(cursor)
+        else:
+            self.selection_end.setValue(cursor)
+        self._selection_changed()
+
+    def _selection_changed(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        start = self.selection_start.value()
+        end = self.selection_end.value()
+        if end <= start:
+            epsilon = min(0.02, max(0.001, trajectory.duration_s / 100.0))
+            if start + epsilon <= trajectory.duration_s:
+                self.selection_end.blockSignals(True)
+                self.selection_end.setValue(start + epsilon)
+                self.selection_end.blockSignals(False)
+            else:
+                self.selection_start.blockSignals(True)
+                self.selection_start.setValue(max(0.0, end - epsilon))
+                self.selection_start.blockSignals(False)
+            start = self.selection_start.value()
+            end = self.selection_end.value()
+        self.trajectory_timeline.set_selection(start, end)
+
+    def _selection_clip(self) -> Trajectory:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            raise RuntimeError("no trajectory is loaded")
+        return trajectory.crop(self.selection_start.value(), self.selection_end.value())
+
+    def _replay_trajectory(self, *, selection: bool) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        try:
+            clip = self._selection_clip() if selection else trajectory
+            self.trajectory_play_requested.emit(
+                {
+                    "trajectory": clip,
+                    "speed_scale": self.trajectory_speed_scale.value(),
+                    "move_to_start": True,
+                }
+            )
+        except Exception as exc:
+            self._on_error(f"Replay trajectory: {exc}")
+
+    def _save_edited_trajectory(self) -> None:
+        name = self.edited_trajectory_name.text().strip()
+        if not name:
+            QMessageBox.warning(
+                self, "Edited trajectory name required", "Enter a Save As name."
+            )
+            return
+        try:
+            clip = self._selection_clip().retime(self.trajectory_speed_scale.value())
+            entry = self._get_trajectory_library().save(name, clip, kind="edited")
+            loaded = self._get_trajectory_library().load(entry.name, kind=entry.kind)
+            self._log(
+                f"Saved derived trajectory {name!r}; raw source was not modified."
+            )
+            self.edited_trajectory_name.clear()
+            self._refresh_trajectory_list()
+            self._set_active_trajectory(loaded)
+        except Exception as exc:
+            self._on_error(f"Save edited trajectory: {exc}")
+
+    def _apply_joint_limits(self, limits: dict[str, object]) -> None:
+        normalized: dict[str, tuple[float, float]] = {}
+        for name in ARM_JOINTS:
+            bounds = limits.get(name)
+            if bounds is None:
+                continue
+            lower, upper = bounds  # type: ignore[misc]
+            lower_f, upper_f = float(lower), float(upper)
+            normalized[name] = (lower_f, upper_f)
+            slider = self.joint_sliders[name]
+            spin = self.joint_spins[name]
+            slider.setRange(round(lower_f * 10), round(upper_f * 10))
+            spin.setRange(lower_f, upper_f)
+        if normalized:
+            self._last_joint_limits = normalized
+
+    def _on_leader_connected(self, connected: bool) -> None:
+        self._leader_connected = connected
+        if not connected:
+            self._latest_leader_state = None
+        self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
+        self._update_teach_readout()
+        self._update_enabled_state()
+
+    def _on_leader_state(self, state: object) -> None:
+        self._latest_leader_state = dict(state)  # type: ignore[arg-type]
+        self._update_teach_readout()
+
+    def _update_teach_readout(self) -> None:
+        if not hasattr(self, "teaching_source_combo"):
+            return
+        source = str(self.teaching_source_combo.currentData())
+        state = self._latest_state if source == "follower" else self._latest_leader_state
+        if not state:
+            self.teach_source_status.setText(f"{source.title()} state unavailable")
+            for label in self.teach_joint_labels.values():
+                label.setText("—")
+            self.teach_gripper_label.setText("—")
+            self.teach_pose_label.setText("TCP: —")
+            return
+        self.teach_source_status.setText(
+            f"{source.title()} connected"
+            + (" — simulation" if state.get("simulation") else "")
+        )
+        for name in ARM_JOINTS:
+            self.teach_joint_labels[name].setText(
+                f"{float(state['joints_deg'][name]):.1f}°"
+            )
+        self.teach_gripper_label.setText(f"{float(state['gripper']):.3f}")
+        pose = [float(value) for value in state["pose_mm_deg"]]
+        self.teach_pose_label.setText(
+            f"TCP: X {pose[0]:.1f}, Y {pose[1]:.1f}, Z {pose[2]:.1f} mm\n"
+            f"RPY: {pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°"
         )
 
     def _move_joints(self) -> None:
@@ -508,6 +1352,8 @@ class MainWindow(QMainWindow):
             self._busy = False
             self._joint_targets_initialized = False
         self.connect_button.setText("Disconnect" if connected else "Connect")
+        self._refresh_named_pose_status()
+        self._refresh_point_list()
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
@@ -519,6 +1365,8 @@ class MainWindow(QMainWindow):
         self._latest_state = values
         self._connected = bool(values["connected"])
         self._torque_enabled = bool(values["torque_enabled"])
+        if values.get("joint_limits_deg"):
+            self._apply_joint_limits(dict(values["joint_limits_deg"]))
         moving = bool(values["moving"]) or self._busy
         faulted = bool(values["faulted"])
 
@@ -558,6 +1406,7 @@ class MainWindow(QMainWindow):
         if values.get("simulation"):
             status += " — simulation"
         self.status_label.setText(status)
+        self._update_teach_readout()
         self._update_enabled_state()
 
     def _update_enabled_state(self) -> None:
@@ -567,6 +1416,7 @@ class MainWindow(QMainWindow):
         self.port_combo.setEnabled(session_editable and not simulation)
         self.refresh_ports_button.setEnabled(session_editable and not simulation)
         self.robot_id_edit.setEnabled(session_editable)
+        self.allow_uncalibrated_check.setEnabled(session_editable and not simulation)
 
         self.enable_button.setEnabled(self._connected and not self._torque_enabled and not self._busy)
         self.relax_button.setEnabled(self._connected and self._torque_enabled)
@@ -583,6 +1433,61 @@ class MainWindow(QMainWindow):
         self.move_gripper_button.setEnabled(can_move)
         self.open_gripper_button.setEnabled(can_move)
 
+        self.run_calibration_button.setEnabled(
+            self._connected and not simulation and not self._busy
+        )
+
+        can_save_pose = self._connected and self._latest_state is not None and not self._busy
+        self.save_home_button.setEnabled(can_save_pose)
+        self.save_rest_button.setEnabled(can_save_pose)
+        try:
+            library = self._get_pose_library()
+            has_home = library.get(HOME_POSE_NAME) is not None
+            has_rest = library.get(REST_POSE_NAME) is not None
+        except Exception:
+            has_home = has_rest = False
+        self.go_home_button.setEnabled(can_move and has_home)
+        self.go_rest_button.setEnabled(can_move and has_rest)
+
+        leader_editable = not self._leader_connected
+        self.leader_simulation_check.setEnabled(leader_editable)
+        self.leader_port_combo.setEnabled(
+            leader_editable and not self.leader_simulation_check.isChecked()
+        )
+        self.leader_refresh_button.setEnabled(
+            leader_editable and not self.leader_simulation_check.isChecked()
+        )
+        self.leader_robot_id_edit.setEnabled(leader_editable)
+
+        source, source_state = self._current_teaching_state()
+        self.save_point_button.setEnabled(
+            source_state is not None and self._recording_source is None
+        )
+        has_point = bool(self.point_combo.currentText())
+        self.move_point_button.setEnabled(can_move and has_point)
+        self.delete_point_button.setEnabled(has_point and self._recording_source is None)
+
+        source_available = source_state is not None
+        self.record_button.setEnabled(
+            source_available or self._recording_source is not None
+        )
+        follower_recording = self._recording_source == "follower"
+        if follower_recording:
+            self.move_joints_button.setEnabled(False)
+            self.absolute_move_button.setEnabled(False)
+            for button in self.jog_buttons:
+                button.setEnabled(False)
+            self.close_gripper_button.setEnabled(False)
+            self.move_gripper_button.setEnabled(False)
+            self.open_gripper_button.setEnabled(False)
+            self.move_point_button.setEnabled(False)
+
+        has_trajectory = self._active_trajectory is not None
+        self.replay_full_button.setEnabled(can_move and has_trajectory)
+        self.replay_selection_button.setEnabled(can_move and has_trajectory)
+        self.save_edited_trajectory_button.setEnabled(has_trajectory)
+        self.load_trajectory_button.setEnabled(self.trajectory_combo.count() > 0)
+
     def _on_error(self, message: str) -> None:
         self._log(message)
         self.statusBar().showMessage(message, 8000)
@@ -592,6 +1497,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
+            if self._leader_thread.isRunning():
+                QMetaObject.invokeMethod(
+                    self._leader_worker,
+                    "shutdown",
+                    Qt.ConnectionType.BlockingQueuedConnection,
+                )
+                self._leader_thread.quit()
+                self._leader_thread.wait(3000)
             if self._thread.isRunning():
                 QMetaObject.invokeMethod(
                     self._worker,
