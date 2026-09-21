@@ -45,6 +45,7 @@ class RobotWorker(QObject):
         self._stream_timer: QTimer | None = None
         self._stream_readout_active = False
         self._teleop: dict[str, Any] | None = None
+        self._sequence_runner: SequenceRunner | None = None
 
     @Slot()
     def start(self) -> None:
@@ -411,6 +412,7 @@ class RobotWorker(QObject):
                     }
                 )
 
+            self._sequence_runner = runner
             result = runner.run(
                 sequence,
                 repeat=int(values.get("repeat", 1)),
@@ -423,6 +425,26 @@ class RobotWorker(QObject):
             self._track(f"sequence {sequence.name}", result)
         except BaseException as exc:
             self._report_error("run sequence", exc)
+
+    @Slot()
+    def pause_sequence(self) -> None:
+        runner = self._sequence_runner
+        if runner is None:
+            return
+        runner.pause()
+        self.sequence_progress.emit({"type": "sequence_control", "status": "paused"})
+        self.log_message.emit(
+            "Sequence pause requested; it takes effect at the next step boundary."
+        )
+
+    @Slot()
+    def resume_sequence(self) -> None:
+        runner = self._sequence_runner
+        if runner is None:
+            return
+        runner.resume()
+        self.sequence_progress.emit({"type": "sequence_control", "status": "running"})
+        self.log_message.emit("Sequence resumed.")
 
     @Slot(object)
     def move_saved_pose(self, command: object) -> None:
