@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QSlider,
+    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -32,6 +34,8 @@ from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
+from soarm101_motion.primitives import MotionPrimitive, MotionPrimitiveLibrary
+from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 
 
@@ -54,6 +58,11 @@ class MainWindow(QMainWindow):
     recording_stop_requested = Signal()
     leader_recording_start_requested = Signal(object)
     leader_recording_stop_requested = Signal()
+    leader_stream_start_requested = Signal(float)
+    leader_stream_stop_requested = Signal()
+    teleop_start_requested = Signal(object)
+    teleop_stop_requested = Signal()
+    sequence_run_requested = Signal(object)
 
     def __init__(
         self,
@@ -79,6 +88,10 @@ class MainWindow(QMainWindow):
         self._active_trajectory: Trajectory | None = None
         self._recording_source: str | None = None
         self._pending_recording_name: str | None = None
+        self._teleop_active = False
+        self._sequence_library_cache: tuple[str, SequenceLibrary] | None = None
+        self._primitive_library_cache: tuple[str, MotionPrimitiveLibrary] | None = None
+        self._sequence_steps: list[SequenceStep] = []
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -100,6 +113,9 @@ class MainWindow(QMainWindow):
         self.trajectory_play_requested.connect(self._worker.play_trajectory)
         self.recording_start_requested.connect(self._worker.start_recording)
         self.recording_stop_requested.connect(self._worker.stop_recording)
+        self.teleop_start_requested.connect(self._worker.start_teleop)
+        self.teleop_stop_requested.connect(self._worker.stop_teleop)
+        self.sequence_run_requested.connect(self._worker.run_sequence)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
@@ -111,6 +127,8 @@ class MainWindow(QMainWindow):
         self._worker.recording_changed.connect(
             lambda active: self._on_recording_changed("follower", active)
         )
+        self._worker.teleop_changed.connect(self._on_teleop_changed)
+        self._worker.sequence_progress.connect(self._on_sequence_progress)
 
         self._leader_thread = QThread(self)
         self._leader_worker = RobotWorker()
@@ -121,6 +139,9 @@ class MainWindow(QMainWindow):
         self.leader_disconnect_requested.connect(self._leader_worker.disconnect_robot)
         self.leader_recording_start_requested.connect(self._leader_worker.start_recording)
         self.leader_recording_stop_requested.connect(self._leader_worker.stop_recording)
+        self.leader_stream_start_requested.connect(self._leader_worker.start_stream_readout)
+        self.leader_stream_stop_requested.connect(self._leader_worker.stop_stream_readout)
+        self._leader_worker.stream_sample.connect(self._worker.apply_teleop_sample)
         self._leader_worker.state_changed.connect(self._on_leader_state)
         self._leader_worker.connected_changed.connect(self._on_leader_connected)
         self._leader_worker.log_message.connect(lambda message: self._log(f"Leader: {message}"))
@@ -140,6 +161,8 @@ class MainWindow(QMainWindow):
         self._refresh_named_pose_status()
         self._refresh_point_list()
         self._refresh_trajectory_list()
+        self._refresh_primitive_list()
+        self._refresh_sequence_list()
         self._update_enabled_state()
 
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
@@ -152,6 +175,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_control_tab(), "Control")
         self.tabs.addTab(self._build_teach_tab(), "Teach")
         self.tabs.addTab(self._build_trajectory_tab(), "Trajectories")
+        self.tabs.addTab(self._build_run_tab(), "Run")
         layout.addWidget(self.tabs, 1)
 
         status_row = QHBoxLayout()
