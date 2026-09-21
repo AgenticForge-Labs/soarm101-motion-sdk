@@ -29,6 +29,7 @@ from soarm101_motion.safety import (
     validate_joint_targets,
     validate_workspace_path,
 )
+from soarm101_motion.trajectories import Trajectory
 from soarm101_motion.types import MotionResult, Pose
 
 T = TypeVar("T")
