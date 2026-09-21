@@ -98,6 +98,14 @@ class RobotWorker(QObject):
                 self._report_error(label, exception)
             else:
                 self.log_message.emit(f"Completed {label}.")
+            if label.startswith("sequence "):
+                self._sequence_runner = None
+                self.sequence_progress.emit(
+                    {
+                        "type": "sequence_control",
+                        "status": "failed" if exception is not None else "completed",
+                    }
+                )
         self._handles = pending
         busy = bool(pending)
         self.busy_changed.emit(busy)
@@ -454,7 +462,7 @@ class RobotWorker(QObject):
             if not isinstance(pose, SavedPose):
                 raise TypeError("pose command must contain a SavedPose")
             mode = str(values.get("mode") or "joint")
-            arm = self._require_arm()
+            arm = self._require_motion_available()
             if mode == "joint":
                 result = arm.move_joints(
                     pose.joints,
@@ -518,7 +526,9 @@ class RobotWorker(QObject):
     @Slot(object)
     def start_recording(self, options: object) -> None:
         try:
-            self._require_arm()
+            arm = self._require_arm()
+            if arm.motion.is_streaming:
+                raise RuntimeError("stop live teleoperation before recording")
             if self._recording is not None:
                 raise RuntimeError("a trajectory recording is already active")
             if self._handles:
@@ -649,7 +659,7 @@ class RobotWorker(QObject):
         try:
             values = dict(command)  # type: ignore[arg-type]
             result = jog_linear_cli_units(
-                self._require_arm(),
+                self._require_motion_available(),
                 frame=values["frame"],
                 translation_mm=values["translation_mm"],
                 rotation_rpy_deg=values["rotation_rpy_deg"],
