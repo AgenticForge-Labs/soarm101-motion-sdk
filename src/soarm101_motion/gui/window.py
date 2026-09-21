@@ -1025,7 +1025,12 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            self._get_trajectory_library()._validate_name(name)
+            library = self._get_trajectory_library()
+            library._validate_name(name)
+            if any(entry.kind == "raw" and entry.name == name for entry in library.entries()):
+                raise FileExistsError(
+                    f"raw trajectory {name!r} already exists; choose a new name"
+                )
         except Exception as exc:
             QMessageBox.warning(self, "Invalid trajectory name", str(exc))
             return
@@ -1080,7 +1085,7 @@ class MainWindow(QMainWindow):
             self.recording_name_edit.clear()
             self._refresh_trajectory_list()
             self._set_active_trajectory(loaded)
-            self.tabs.setCurrentWidget(self.trajectory_timeline.parentWidget())
+            self.tabs.setCurrentIndex(3)
         except Exception as exc:
             self._on_error(f"Save raw trajectory: {exc}")
 
