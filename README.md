@@ -4,7 +4,7 @@ A focused Python motion SDK for the five-axis SO-ARM101 follower arm and its sto
 
 It talks directly to the six Feetech STS3215 servos and provides joint motion, FK/IK, Cartesian linear movement, tools/TCPs, diagnostics, calibration compatibility, conservative workspace checks, simulation, and an optional PySide6 controller. **ROS and LeRobot are not runtime dependencies.**
 
-> **Status:** Alpha hobby-arm software. Simulation and fake-transport tests are automated; each printed arm still needs a supervised no-payload smoke test with physical power accessible.
+> **Status:** Beta hobby-arm software. Simulation and fake-transport tests are automated; each printed arm still needs a supervised no-payload smoke test with physical power accessible.
 
 ## Install from this repository
 
