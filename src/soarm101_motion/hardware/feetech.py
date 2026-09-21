@@ -23,7 +23,6 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     ENCODER_MAX,
     EXPECTED_MODEL_NUMBER,
-    HALF_TURN,
     MOTOR_IDS,
     STOCK_GRIPPER,
     STS3215_REGISTERS,
