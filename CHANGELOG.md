@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added named taught points captured from follower or leader, with joint or Cartesian replay.
+- Added immutable 50 Hz trajectory recording, optional motor effort/current diagnostic channels,
+  validated exact replay, and non-destructive raw/edited trajectory libraries.
+- Added a PySide6 trajectory timeline/editor with scrub, crop selection, speed scaling,
+  Save As, and replay of full or selected clips.
 - Added Setup/Control/Teach GUI workspaces, persistent Home/Rest poses, calibrated joint-slider ranges, and independent leader-arm readout.
 - Unified GUI and CLI calibration on the mechanical-extrema midpoint method with encoder seam unwrapping.
 - Added TESTING.md as the staged handoff checklist for deferred physical validation.
