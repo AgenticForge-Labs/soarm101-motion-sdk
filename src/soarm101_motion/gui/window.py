@@ -2159,8 +2159,21 @@ class MainWindow(QMainWindow):
 
         source_available = source_state is not None
         self.record_button.setEnabled(
-            source_available or self._recording_source is not None
+            self._recording_source is not None
+            or (source_available and not self._busy and not self._teleop_active)
         )
+
+        can_start_teleop = (
+            self._connected
+            and self._torque_enabled
+            and self._leader_connected
+            and self._latest_leader_state is not None
+            and self._recording_source is None
+            and not self._busy
+        )
+        self.teleop_button.setEnabled(self._teleop_active or can_start_teleop)
+        self.teleop_mode_combo.setEnabled(not self._teleop_active)
+        self.teleop_gripper_check.setEnabled(not self._teleop_active)
         follower_recording = self._recording_source == "follower"
         if follower_recording:
             self.move_joints_button.setEnabled(False)
@@ -2177,6 +2190,54 @@ class MainWindow(QMainWindow):
         self.replay_selection_button.setEnabled(can_move and has_trajectory)
         self.save_edited_trajectory_button.setEnabled(has_trajectory)
         self.load_trajectory_button.setEnabled(self.trajectory_combo.count() > 0)
+        for control in (
+            self.smooth_button,
+            self.delete_selection_button,
+            self.insert_hold_button,
+            self.set_keyframe_button,
+            self.add_marker_button,
+            self.loop_selection_button,
+        ):
+            control.setEnabled(has_trajectory)
+        self.promote_primitive_button.setEnabled(has_trajectory)
+
+        has_steps = bool(self._sequence_steps)
+        can_run_sequence = can_move and has_steps
+        self.run_sequence_button.setEnabled(can_run_sequence)
+        self.run_step_button.setEnabled(
+            can_run_sequence and self.sequence_step_list.currentRow() >= 0
+        )
+        self.stop_sequence_button.setEnabled(self._connected)
+        self.sequence_up_button.setEnabled(
+            self.sequence_step_list.currentRow() > 0 and not self._busy
+        )
+        self.sequence_down_button.setEnabled(
+            0 <= self.sequence_step_list.currentRow() < len(self._sequence_steps) - 1
+            and not self._busy
+        )
+        self.sequence_delete_step_button.setEnabled(
+            self.sequence_step_list.currentRow() >= 0 and not self._busy
+        )
+        self.save_sequence_button.setEnabled(has_steps and not self._busy)
+        self.load_sequence_button.setEnabled(
+            self.sequence_combo.count() > 0 and not self._busy
+        )
+        self.delete_sequence_button.setEnabled(
+            self.sequence_combo.count() > 0 and not self._busy
+        )
+        self.add_point_step_button.setEnabled(
+            self.run_point_combo.count() > 0 and not self._busy
+        )
+        self.add_home_step_button.setEnabled(has_home and not self._busy)
+        self.add_rest_step_button.setEnabled(has_rest and not self._busy)
+        self.add_gripper_step_button.setEnabled(not self._busy)
+        self.add_wait_step_button.setEnabled(not self._busy)
+        self.add_trajectory_step_button.setEnabled(
+            self.run_trajectory_combo.count() > 0 and not self._busy
+        )
+        self.add_primitive_step_button.setEnabled(
+            self.run_primitive_combo.count() > 0 and not self._busy
+        )
 
     def _on_error(self, message: str) -> None:
         self._log(message)
