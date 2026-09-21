@@ -112,6 +112,14 @@ class RecordedPlan:
     pre_roll: PlannedPath | None = None
 
 
+@dataclass
+class JointStreamState:
+    last_command: dict[str, float]
+    last_velocity: dict[str, float]
+    previous_actual: dict[str, float]
+    tcp: Pose | None = None
+
+
 class MotionController:
     def __init__(
         self,
@@ -125,11 +133,18 @@ class MotionController:
         self.ik = IKSolver(self.model)
         self._state_lock = threading.RLock()
         self._active_handle: MotionHandle[MotionResult] | None = None
+        self._joint_stream: JointStreamState | None = None
 
     @property
     def is_moving(self) -> bool:
         with self._state_lock:
-            return self._active_handle is not None and not self._active_handle.done
+            active_motion = self._active_handle is not None and not self._active_handle.done
+            return active_motion or self._joint_stream is not None
+
+    @property
+    def is_streaming(self) -> bool:
+        with self._state_lock:
+            return self._joint_stream is not None
 
     def _clear_handle(self, handle: MotionHandle[MotionResult]) -> None:
         with self._state_lock:
@@ -139,6 +154,8 @@ class MotionController:
     def _ensure_idle_locked(self) -> None:
         if self._active_handle is not None and not self._active_handle.done:
             raise InvalidCommandError("another motion is already active")
+        if self._joint_stream is not None:
+            raise InvalidCommandError("joint streaming is active")
 
     def _require_ready(self) -> None:
         state = self.backend.get_hardware_state()
@@ -767,6 +784,137 @@ class MotionController:
             )
         return handle.wait() if wait else handle
 
+    def start_joint_stream(self, *, tcp: Pose | None = None) -> None:
+        """Begin guarded continuous joint streaming from the current measured pose."""
+        with self._state_lock:
+            self._ensure_idle_locked()
+            self._require_ready()
+            present = dict(self.backend.read_joint_positions())
+            self._joint_stream = JointStreamState(
+                last_command=present,
+                last_velocity={name: 0.0 for name in ARM_JOINTS},
+                previous_actual=present.copy(),
+                tcp=tcp,
+            )
+
+    def stream_joint_target(
+        self,
+        positions: Mapping[str, float],
+        *,
+        gripper: float | None = None,
+    ) -> MotionResult:
+        """Accept one guarded sample in an active joint stream.
+
+        This is intended for leader/follower teleoperation. It does not wait for
+        settling; successful return means the sample passed checks and was written.
+        """
+        with self._state_lock:
+            state = self._joint_stream
+            if state is None:
+                raise InvalidCommandError("joint streaming is not active")
+            self._require_ready()
+            if set(positions) != set(ARM_JOINTS):
+                raise InvalidCommandError(
+                    "stream target must provide exactly the five canonical arm joints"
+                )
+            target = validate_joint_targets(positions, limits=self._effective_limits())
+            validate_command_step(
+                state.last_command,
+                target,
+                self.config.max_command_step_radians,
+            )
+
+            dt = 1.0 / self.config.command_frequency_hz
+            velocity = {
+                name: (target[name] - state.last_command[name]) / dt
+                for name in ARM_JOINTS
+            }
+            max_speed = max(abs(value) for value in velocity.values())
+            if max_speed > self.config.max_joint_speed * 1.001:
+                raise SafetyViolationError(
+                    f"streamed joint speed {max_speed:.4f} rad/s exceeds "
+                    f"{self.config.max_joint_speed:.4f} rad/s"
+                )
+            acceleration = {
+                name: (velocity[name] - state.last_velocity[name]) / dt
+                for name in ARM_JOINTS
+            }
+            max_acceleration = max(abs(value) for value in acceleration.values())
+            if max_acceleration > self.config.max_joint_acceleration * 1.001:
+                raise SafetyViolationError(
+                    f"streamed joint acceleration {max_acceleration:.4f} rad/s² exceeds "
+                    f"{self.config.max_joint_acceleration:.4f} rad/s²"
+                )
+
+            if self.config.enable_workspace_checks:
+                max_delta = max(
+                    abs(target[name] - state.last_command[name])
+                    for name in ARM_JOINTS
+                )
+                segments = max(
+                    1,
+                    int(
+                        math.ceil(
+                            max_delta / self.config.workspace_check_step_rad
+                        )
+                    ),
+                )
+                samples = tuple(
+                    {
+                        name: state.last_command[name]
+                        + (target[name] - state.last_command[name]) * fraction
+                        for name in ARM_JOINTS
+                    }
+                    for fraction in np.linspace(0.0, 1.0, segments + 1)
+                )
+                validate_workspace_path(
+                    self.model,
+                    samples,
+                    tcp=state.tcp,
+                    **self._workspace_kwargs(),
+                )
+
+            if gripper is not None:
+                gripper_value = float(gripper)
+                if not math.isfinite(gripper_value) or not 0.0 <= gripper_value <= 1.0:
+                    raise InvalidCommandError("streamed gripper must be within [0, 1]")
+            else:
+                gripper_value = None
+
+            try:
+                self.backend.write_joint_positions(target)
+                if gripper_value is not None:
+                    self.backend.write_tool_position(STOCK_GRIPPER, gripper_value)
+                actual = self._monitor_motion(
+                    target,
+                    state.last_command,
+                    state.previous_actual,
+                )
+            except BaseException:
+                self._joint_stream = None
+                try:
+                    self.backend.stop()
+                except Exception:
+                    pass
+                raise
+
+            state.last_command = dict(target)
+            state.last_velocity = velocity
+            state.previous_actual = dict(actual)
+            return MotionResult(
+                True,
+                False,
+                message="stream target accepted",
+                final_positions=actual,
+            )
+
+    def stop_joint_stream(self, *, hold: bool = True) -> None:
+        with self._state_lock:
+            was_streaming = self._joint_stream is not None
+            self._joint_stream = None
+        if was_streaming and hold:
+            self.backend.stop()
+
     def play_trajectory(
         self,
         trajectory: Trajectory,
@@ -792,6 +940,7 @@ class MotionController:
     def stop(self, *, wait: bool = True) -> None:
         with self._state_lock:
             handle = self._active_handle
+            self._joint_stream = None
             if handle is not None and not handle.done:
                 handle.cancel()
         self.backend.stop()
