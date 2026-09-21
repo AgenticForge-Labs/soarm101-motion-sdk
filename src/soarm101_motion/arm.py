@@ -13,7 +13,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion.config import SOARM101Config
-from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS
+from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS, JOINT_LIMITS
 from soarm101_motion.exceptions import (
     ConfigurationError,
     InvalidCommandError,
@@ -246,6 +246,24 @@ class SOARM101:
 
     def get_state(self) -> HardwareState:
         return self.backend.get_hardware_state()
+
+    def get_joint_limits(self) -> dict[str, tuple[float, float]]:
+        """Return effective model/calibration limits for the five pose joints."""
+        limits = dict(JOINT_LIMITS)
+        calibration = getattr(self.backend, "calibration", None)
+        if calibration is None:
+            return limits
+        for name in ARM_JOINTS:
+            motor = calibration.motors.get(name)
+            if motor is None:
+                continue
+            model_lower, model_upper = limits[name]
+            calibrated_lower, calibrated_upper = motor.radians_limits
+            lower = max(model_lower, calibrated_lower)
+            upper = min(model_upper, calibrated_upper)
+            if lower < upper:
+                limits[name] = (lower, upper)
+        return limits
 
     def get_joint_positions(self) -> JointState:
         return JointState(self.backend.read_joint_positions(), time.monotonic())
