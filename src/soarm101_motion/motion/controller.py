@@ -115,7 +115,7 @@ class RecordedPlan:
 @dataclass
 class JointStreamState:
     last_command: dict[str, float]
-    last_velocity: dict[str, float]
+    last_velocity: dict[str, float] | None
     previous_actual: dict[str, float]
     tcp: Pose | None = None
 
@@ -792,7 +792,7 @@ class MotionController:
             present = dict(self.backend.read_joint_positions())
             self._joint_stream = JointStreamState(
                 last_command=present,
-                last_velocity={name: 0.0 for name in ARM_JOINTS},
+                last_velocity=None,
                 previous_actual=present.copy(),
                 tcp=tcp,
             )
@@ -835,16 +835,17 @@ class MotionController:
                     f"streamed joint speed {max_speed:.4f} rad/s exceeds "
                     f"{self.config.max_joint_speed:.4f} rad/s"
                 )
-            acceleration = {
-                name: (velocity[name] - state.last_velocity[name]) / dt
-                for name in ARM_JOINTS
-            }
-            max_acceleration = max(abs(value) for value in acceleration.values())
-            if max_acceleration > self.config.max_joint_acceleration * 1.001:
-                raise SafetyViolationError(
-                    f"streamed joint acceleration {max_acceleration:.4f} rad/s² exceeds "
-                    f"{self.config.max_joint_acceleration:.4f} rad/s²"
-                )
+            if state.last_velocity is not None:
+                acceleration = {
+                    name: (velocity[name] - state.last_velocity[name]) / dt
+                    for name in ARM_JOINTS
+                }
+                max_acceleration = max(abs(value) for value in acceleration.values())
+                if max_acceleration > self.config.max_joint_acceleration * 1.001:
+                    raise SafetyViolationError(
+                        f"streamed joint acceleration {max_acceleration:.4f} rad/s² exceeds "
+                        f"{self.config.max_joint_acceleration:.4f} rad/s²"
+                    )
 
             if self.config.enable_workspace_checks:
                 max_delta = max(
