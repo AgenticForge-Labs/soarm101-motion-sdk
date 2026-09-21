@@ -28,9 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
+from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 
 
 class MainWindow(QMainWindow):
