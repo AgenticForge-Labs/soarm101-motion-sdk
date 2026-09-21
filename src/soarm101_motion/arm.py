@@ -499,5 +499,24 @@ class SOARM101:
             wait=wait,
         )
 
+    def play_trajectory(
+        self,
+        trajectory: Trajectory,
+        *,
+        speed_scale: float = 1.0,
+        move_to_start: bool = True,
+        wait: bool = True,
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        """Replay an immutable recorded trajectory through the guarded motion stack."""
+        if self.tool.is_moving:
+            self._stop_tool(wait=True)
+        return self.motion.play_trajectory(
+            trajectory,
+            speed_scale=speed_scale,
+            move_to_start=move_to_start,
+            tcp=self.active_tcp,
+            wait=wait,
+        )
+
     def diagnostics(self):
         return self.backend.diagnostics()
