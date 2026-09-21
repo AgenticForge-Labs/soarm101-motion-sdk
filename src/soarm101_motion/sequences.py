@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from soarm101_motion.exceptions import MotionCancelledError
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary
@@ -155,6 +156,39 @@ class SequenceRunner:
         self.pose_library = pose_library
         self.trajectory_library = trajectory_library
         self.primitive_library = primitive_library
+        self._pause_event = threading.Event()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._pause_event.is_set()
+
+    def pause(self) -> None:
+        self._pause_event.set()
+
+    def resume(self) -> None:
+        self._pause_event.clear()
+
+    def _wait_if_paused(self, cancel_event: threading.Event) -> None:
+        while self._pause_event.is_set():
+            if cancel_event.wait(0.05):
+                raise MotionCancelledError("sequence cancelled while paused")
+
+    def _wait_seconds(self, seconds: float, cancel_event: threading.Event) -> None:
+        remaining = seconds
+        last = time.monotonic()
+        while remaining > 0:
+            if cancel_event.is_set():
+                raise MotionCancelledError("sequence cancelled during wait")
+            if self._pause_event.is_set():
+                self._wait_if_paused(cancel_event)
+                last = time.monotonic()
+                continue
+            interval = min(0.05, remaining)
+            if cancel_event.wait(interval):
+                raise MotionCancelledError("sequence cancelled during wait")
+            now = time.monotonic()
+            remaining -= max(0.0, now - last)
+            last = now
 
     def _scaled(self, value: float, overall: float, local: float = 1.0) -> float:
         result = float(value) * float(overall) * float(local)
@@ -210,8 +244,7 @@ class SequenceRunner:
             seconds = float(params["seconds"])
             if not math.isfinite(seconds) or seconds < 0:
                 raise ValueError("wait seconds must be finite and non-negative")
-            if cancel_event.wait(seconds):
-                raise RuntimeError("sequence cancelled during wait")
+            self._wait_seconds(seconds, cancel_event)
             return MotionResult(True, True, message=f"waited {seconds:.3f}s")
         if step.kind == "trajectory":
             trajectory = self.trajectory_library.load(
@@ -224,7 +257,7 @@ class SequenceRunner:
             result = MotionResult(True, True)
             for _ in range(loops):
                 if cancel_event.is_set():
-                    raise RuntimeError("sequence cancelled")
+                    raise MotionCancelledError("sequence cancelled")
                 result = self.arm.play_trajectory(
                     trajectory,
                     speed_scale=scale,
@@ -289,7 +322,8 @@ class SequenceRunner:
             for _cycle in range(repeat_count):
                 for absolute_index, step in enumerate(selected, start=start_index):
                     if cancel_event.is_set():
-                        raise RuntimeError("sequence cancelled")
+                        raise MotionCancelledError("sequence cancelled")
+                    self._wait_if_paused(cancel_event)
                     if on_progress is not None:
                         on_progress(absolute_index, total, step, "started")
                     try:
