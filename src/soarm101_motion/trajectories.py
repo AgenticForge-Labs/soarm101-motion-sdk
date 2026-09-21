@@ -183,9 +183,27 @@ class Trajectory:
                 **self.metadata,
                 "derived_from": self.metadata.get("derived_from") or parent,
                 "edits": edits,
+                "markers": [
+                    {**marker, "time_s": float(marker["time_s"]) - start}
+                    for marker in self._markers()
+                    if start <= float(marker["time_s"]) <= end
+                ],
             },
             created_at=_utc_timestamp(),
         )
+
+    def _markers(self) -> list[dict[str, Any]]:
+        markers: list[dict[str, Any]] = []
+        for item in self.metadata.get("markers", []):
+            value = dict(item)
+            try:
+                at_s = float(value["time_s"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(at_s):
+                value["time_s"] = at_s
+                markers.append(value)
+        return markers
 
     def retime(self, speed_scale: float) -> "Trajectory":
         scale = float(speed_scale)
@@ -193,10 +211,304 @@ class Trajectory:
             raise ValueError("speed_scale must be positive and finite")
         edits = list(self.metadata.get("edits", []))
         edits.append({"op": "speed_scale", "scale": scale})
+        markers = [
+            {**marker, "time_s": float(marker["time_s"]) / scale}
+            for marker in self._markers()
+        ]
         return replace(
             self,
             timestamps_s=self.timestamps_s / scale,
+            metadata={**self.metadata, "edits": edits, "markers": markers},
+            created_at=_utc_timestamp(),
+        )
+
+    def smooth(self, window_samples: int = 5) -> "Trajectory":
+        """Centered moving-average smoothing for joint/gripper channels.
+
+        Endpoints are preserved exactly so derived motion keeps the same start/end
+        poses. Diagnostics are left untouched because they are observations, not commands.
+        """
+        window = int(window_samples)
+        if window < 3 or window % 2 == 0:
+            raise ValueError("window_samples must be an odd integer >= 3")
+        if window > self.sample_count:
+            raise ValueError("window_samples cannot exceed trajectory sample count")
+
+        def smooth_array(values: FloatArray) -> FloatArray:
+            radius = window // 2
+            padded = np.pad(values, ((radius, radius), (0, 0)), mode="edge")
+            kernel = np.ones(window, dtype=float) / window
+            result = np.column_stack(
+                [
+                    np.convolve(padded[:, column], kernel, mode="valid")
+                    for column in range(values.shape[1])
+                ]
+            )
+            result[0] = values[0]
+            result[-1] = values[-1]
+            return result
+
+        joints = smooth_array(self.joints_rad)
+        gripper_matrix = smooth_array(self.gripper.reshape(-1, 1))
+        gripper = np.clip(gripper_matrix[:, 0], 0.0, 1.0)
+        edits = list(self.metadata.get("edits", []))
+        edits.append({"op": "smooth", "window_samples": window})
+        return replace(
+            self,
+            joints_rad=joints,
+            gripper=gripper,
             metadata={**self.metadata, "edits": edits},
+            created_at=_utc_timestamp(),
+        )
+
+    def delete_region(self, start_s: float, end_s: float) -> "Trajectory":
+        """Remove a time region and splice the remaining samples together.
+
+        Replay validation remains authoritative: a splice that creates too large a
+        step/speed/acceleration transition is rejected before hardware commands.
+        """
+        start = float(start_s)
+        end = float(end_s)
+        if start <= 0 or end >= self.duration_s or end <= start:
+            raise ValueError("delete region must be strictly inside the trajectory")
+
+        left_mask = self.timestamps_s < start
+        right_mask = self.timestamps_s > end
+        left_times = self.timestamps_s[left_mask]
+        right_times = self.timestamps_s[right_mask] - (end - start)
+        times = np.concatenate((left_times, right_times))
+        if len(times) < 2:
+            raise ValueError("delete would leave fewer than two samples")
+
+        joints = np.vstack((self.joints_rad[left_mask], self.joints_rad[right_mask]))
+        gripper = np.concatenate((self.gripper[left_mask], self.gripper[right_mask]))
+
+        def splice_optional(values: FloatArray | None) -> FloatArray | None:
+            if values is None:
+                return None
+            return np.vstack((values[left_mask], values[right_mask]))
+
+        markers: list[dict[str, Any]] = []
+        removed = end - start
+        for marker in self._markers():
+            time_s = float(marker["time_s"])
+            if start <= time_s <= end:
+                continue
+            markers.append(
+                {
+                    **marker,
+                    "time_s": time_s if time_s < start else time_s - removed,
+                }
+            )
+        edits = list(self.metadata.get("edits", []))
+        edits.append({"op": "delete_region", "start_s": start, "end_s": end})
+        return replace(
+            self,
+            timestamps_s=times,
+            joints_rad=joints,
+            gripper=gripper,
+            effort_current_raw=splice_optional(self.effort_current_raw),
+            effort_load_raw=splice_optional(self.effort_load_raw),
+            metadata={**self.metadata, "edits": edits, "markers": markers},
+            created_at=_utc_timestamp(),
+        )
+
+    def insert_hold(self, at_s: float, duration_s: float) -> "Trajectory":
+        at = float(at_s)
+        duration = float(duration_s)
+        if not 0.0 <= at <= self.duration_s:
+            raise ValueError("hold insertion time is outside trajectory")
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("hold duration must be positive and finite")
+
+        before = self.timestamps_s < at
+        after = self.timestamps_s > at
+        joint_at = self._interpolate_matrix(self.joints_rad, np.array([at]))[0]
+        gripper_at = float(self._interpolate_vector(self.gripper, np.array([at]))[0])
+
+        times = np.concatenate(
+            (
+                self.timestamps_s[before],
+                np.array([at, at + duration]),
+                self.timestamps_s[after] + duration,
+            )
+        )
+        joints = np.vstack(
+            (
+                self.joints_rad[before],
+                joint_at,
+                joint_at,
+                self.joints_rad[after],
+            )
+        )
+        gripper = np.concatenate(
+            (
+                self.gripper[before],
+                np.array([gripper_at, gripper_at]),
+                self.gripper[after],
+            )
+        )
+
+        def insert_optional(values: FloatArray | None) -> FloatArray | None:
+            if values is None:
+                return None
+            value_at = self._interpolate_matrix(values, np.array([at]))[0]
+            return np.vstack((values[before], value_at, value_at, values[after]))
+
+        markers = [
+            {
+                **marker,
+                "time_s": (
+                    float(marker["time_s"])
+                    if float(marker["time_s"]) < at
+                    else float(marker["time_s"]) + duration
+                ),
+            }
+            for marker in self._markers()
+        ]
+        edits = list(self.metadata.get("edits", []))
+        edits.append({"op": "insert_hold", "at_s": at, "duration_s": duration})
+        return replace(
+            self,
+            timestamps_s=times,
+            joints_rad=joints,
+            gripper=gripper,
+            effort_current_raw=insert_optional(self.effort_current_raw),
+            effort_load_raw=insert_optional(self.effort_load_raw),
+            metadata={**self.metadata, "edits": edits, "markers": markers},
+            created_at=_utc_timestamp(),
+        )
+
+    def set_keyframe(self, at_s: float, channel: str, value: float) -> "Trajectory":
+        """Insert or replace one exact channel value at a selected time."""
+        at = float(at_s)
+        target = float(value)
+        if not math.isfinite(at) or not 0.0 <= at <= self.duration_s:
+            raise ValueError("keyframe time is outside trajectory")
+        if not math.isfinite(target):
+            raise ValueError("keyframe value must be finite")
+        valid_channels = {*ARM_JOINTS, "gripper"}
+        if channel not in valid_channels:
+            raise ValueError(f"unknown trajectory channel {channel!r}")
+        if channel == "gripper" and not 0.0 <= target <= 1.0:
+            raise ValueError("gripper keyframe must be within [0, 1]")
+
+        exact = np.where(np.isclose(self.timestamps_s, at, atol=1e-9))[0]
+        if exact.size:
+            times = self.timestamps_s.copy()
+            joints = self.joints_rad.copy()
+            gripper = self.gripper.copy()
+            index = int(exact[0])
+            current = self.effort_current_raw
+            load = self.effort_load_raw
+        else:
+            index = int(np.searchsorted(self.timestamps_s, at))
+            times = np.insert(self.timestamps_s, index, at)
+            interpolated_joint = self._interpolate_matrix(
+                self.joints_rad, np.array([at])
+            )[0]
+            joints = np.insert(self.joints_rad, index, interpolated_joint, axis=0)
+            interpolated_gripper = float(
+                self._interpolate_vector(self.gripper, np.array([at]))[0]
+            )
+            gripper = np.insert(self.gripper, index, interpolated_gripper)
+
+            def insert_diag(values: FloatArray | None) -> FloatArray | None:
+                if values is None:
+                    return None
+                row = self._interpolate_matrix(values, np.array([at]))[0]
+                return np.insert(values, index, row, axis=0)
+
+            current = insert_diag(self.effort_current_raw)
+            load = insert_diag(self.effort_load_raw)
+
+        if channel == "gripper":
+            gripper[index] = target
+        else:
+            joints[index, ARM_JOINTS.index(channel)] = target
+
+        edits = list(self.metadata.get("edits", []))
+        edits.append({"op": "set_keyframe", "time_s": at, "channel": channel, "value": target})
+        return replace(
+            self,
+            timestamps_s=times,
+            joints_rad=joints,
+            gripper=gripper,
+            effort_current_raw=current,
+            effort_load_raw=load,
+            metadata={**self.metadata, "edits": edits},
+            created_at=_utc_timestamp(),
+        )
+
+    def add_marker(self, at_s: float, label: str, *, marker_type: str = "cue") -> "Trajectory":
+        at = float(at_s)
+        text = str(label).strip()
+        kind = str(marker_type).strip() or "cue"
+        if not math.isfinite(at) or not 0.0 <= at <= self.duration_s:
+            raise ValueError("marker time is outside trajectory")
+        if not text:
+            raise ValueError("marker label must not be empty")
+        markers = self._markers()
+        markers.append({"time_s": at, "label": text, "type": kind})
+        markers.sort(key=lambda item: float(item["time_s"]))
+        edits = list(self.metadata.get("edits", []))
+        edits.append({"op": "add_marker", "time_s": at, "label": text, "type": kind})
+        return replace(
+            self,
+            metadata={**self.metadata, "edits": edits, "markers": markers},
+            created_at=_utc_timestamp(),
+        )
+
+    def repeat(self, count: int) -> "Trajectory":
+        repeats = int(count)
+        if repeats < 1:
+            raise ValueError("repeat count must be >= 1")
+        if repeats == 1:
+            return self
+        epsilon = max(1e-9, float(np.min(np.diff(self.timestamps_s))) * 0.001)
+        times: list[FloatArray] = []
+        joints: list[FloatArray] = []
+        gripper: list[FloatArray] = []
+        current: list[FloatArray] = []
+        load: list[FloatArray] = []
+        markers: list[dict[str, Any]] = []
+        offset = 0.0
+        for index in range(repeats):
+            source_times = self.timestamps_s if index == 0 else self.timestamps_s[1:]
+            shifted = source_times + offset
+            if index > 0:
+                shifted = shifted + epsilon
+            times.append(shifted)
+            joints.append(self.joints_rad if index == 0 else self.joints_rad[1:])
+            gripper.append(self.gripper if index == 0 else self.gripper[1:])
+            if self.effort_current_raw is not None:
+                current.append(
+                    self.effort_current_raw
+                    if index == 0
+                    else self.effort_current_raw[1:]
+                )
+            if self.effort_load_raw is not None:
+                load.append(
+                    self.effort_load_raw if index == 0 else self.effort_load_raw[1:]
+                )
+            for marker in self._markers():
+                markers.append(
+                    {
+                        **marker,
+                        "time_s": float(marker["time_s"]) + offset + (epsilon if index else 0.0),
+                    }
+                )
+            offset = float(shifted[-1])
+        edits = list(self.metadata.get("edits", []))
+        edits.append({"op": "repeat", "count": repeats})
+        return replace(
+            self,
+            timestamps_s=np.concatenate(times),
+            joints_rad=np.vstack(joints),
+            gripper=np.concatenate(gripper),
+            effort_current_raw=(np.vstack(current) if current else None),
+            effort_load_raw=(np.vstack(load) if load else None),
+            metadata={**self.metadata, "edits": edits, "markers": markers},
             created_at=_utc_timestamp(),
         )
 
