@@ -78,3 +78,91 @@ Do not start with Home/Rest or Cartesian moves.
 - Live leader-to-follower teleoperation.
 
 Those will receive their own test sections when implemented.
+
+## Batch 2 — Taught points, trajectory recording, and trajectory editing
+
+These checks can wait until the Batch 1 hardware checks pass.
+
+### 6. Software-only point teaching
+
+1. Run `soarm101-gui --simulation`.
+2. Connect and enable the follower simulation.
+3. In Teach, leave Follower selected as the teaching source.
+4. Move the simulated follower to a non-home joint pose.
+5. Save it as a named taught point such as `test_point_1`.
+6. Move away from the point.
+7. Replay it in Joint / angular mode and confirm the measured joint state returns to it.
+8. Move away again, replay it in Cartesian linear mode, and confirm the TCP returns to
+   the saved pose.
+9. Restart the GUI and confirm the taught point remains in the pose library.
+
+### 7. Software-only raw trajectory recording and replay
+
+1. Connect the follower simulation and the leader simulation.
+2. Select Leader as the teaching source.
+3. Enter a unique raw trajectory name such as `sim_wave_raw_01`.
+4. Leave effort/current recording off for the first test.
+5. Start recording, allow it to run for several seconds, then stop.
+6. Confirm the Trajectories tab opens with a six-lane timeline (five joints + gripper).
+7. Confirm the raw file appears under the library as `raw`.
+8. Try to reuse the same raw name and confirm the GUI refuses to overwrite it.
+9. Enable the follower simulation and replay the raw trajectory.
+10. Confirm replay first moves safely to the clip start and then executes the recorded
+    stream.
+
+### 8. Software-only trajectory editing
+
+1. Load the raw test trajectory.
+2. Scrub through the timeline and verify the cursor time updates.
+3. Set selection start/end inside the full recording.
+4. Replay only the selection.
+5. Set speed scale to 0.5x and replay the selection; duration should approximately double.
+6. Save the selection as a new edited name such as `sim_wave_trim_v1`.
+7. Confirm both the raw and edited versions remain in the library.
+8. Reload the raw version and confirm it was not changed by the edit.
+9. Load the edited version and replay it.
+10. Try a faster speed scale. If the resulting trajectory exceeds configured joint
+    speed, acceleration, or command-step limits, replay should be rejected rather than
+    silently retimed.
+
+### 9. Physical taught-point replay — DO LATER
+
+Only continue after Batch 1 first-motion validation passes.
+
+1. Teach one point from the follower while torque is off, then enable torque.
+2. Move a small distance away and replay the point in Joint mode at low speed.
+3. Verify physical direction and endpoint before trying a larger move.
+4. Teach a second point with at least 20 mm of clear workspace around the whole path.
+5. Replay it in Cartesian linear mode at low speed.
+6. Keep a hand at the physical power switch throughout the first tests.
+
+### 10. Physical leader recording — DO LATER
+
+1. Keep leader torque OFF and follower disconnected or relaxed for the first capture.
+2. Record a slow 3–5 second leader motion at 50 Hz with effort/current recording OFF.
+3. Confirm the reported median sample rate is close to 50 Hz and that no capture errors
+   are logged.
+4. Inspect/crop the recording before any follower replay.
+5. Put the follower near the recorded start area, enable it, set playback speed to 0.5x,
+   and replay with the workspace clear.
+6. Confirm the pre-roll is smooth and the replay has no discontinuous jump into sample 1.
+7. Press STOP/HOLD during a slow replay and confirm cancellation/hold works.
+8. Only after basic recording is stable should you enable effort/current recording.
+   Compare achieved sample rate and logs; disable the diagnostic channel if serial load
+   makes 50 Hz capture unreliable.
+
+### 11. Physical edited-motion replay — DO LATER
+
+1. Crop a known-safe physical recording to a shorter region and save it under a new name.
+2. Replay at 0.5x first.
+3. Verify the crop boundary does not create a joint jump; the SDK should reject it if it
+   violates command-step/speed/acceleration limits.
+4. Test 1.0x only after the slower replay passes.
+5. Treat >1.0x playback as a separate validation: faster timing is allowed only when all
+   configured hard limits still pass.
+
+## Still not implemented
+
+- Sequence editor / Run tab combining points, gripper actions, waits, and trajectories.
+- Live leader-to-follower teleoperation.
+- Advanced trajectory editing (smoothing, splicing, keyframes, holds, loops/markers).
