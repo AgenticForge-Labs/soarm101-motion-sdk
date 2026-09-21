@@ -16,6 +16,8 @@ from soarm101_motion.integration import (
 )
 from soarm101_motion.kinematics import IKOptions, IKSolver, SO101KinematicModel
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
+from soarm101_motion.primitives import MotionPrimitive, MotionPrimitiveLibrary
+from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceRunner, SequenceStep
 from soarm101_motion.tools import CameraTool, SO101Gripper, ToolAssembly
 from soarm101_motion.trajectories import Trajectory, TrajectoryEntry, TrajectoryLibrary
 from soarm101_motion.types import HardwareState, IKResult, JointState, MotionResult, Pose
@@ -36,7 +38,10 @@ __all__ = [
     "IKSolver",
     "IntegrationMetadata",
     "JointState",
+    "MotionPrimitive",
+    "MotionPrimitiveLibrary",
     "MotionResult",
+    "MotionSequence",
     "MotorCalibration",
     "MotorSetupResult",
     "Pose",
@@ -50,6 +55,9 @@ __all__ = [
     "SOARM101Config",
     "SOFTWARE_STOP_IS_CERTIFIED_EMERGENCY_STOP",
     "SavedPose",
+    "SequenceLibrary",
+    "SequenceRunner",
+    "SequenceStep",
     "ToolAssembly",
     "Trajectory",
     "TrajectoryEntry",
