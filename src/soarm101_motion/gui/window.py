@@ -63,6 +63,8 @@ class MainWindow(QMainWindow):
     teleop_start_requested = Signal(object)
     teleop_stop_requested = Signal()
     sequence_run_requested = Signal(object)
+    sequence_pause_requested = Signal()
+    sequence_resume_requested = Signal()
 
     def __init__(
         self,
@@ -92,6 +94,7 @@ class MainWindow(QMainWindow):
         self._sequence_library_cache: tuple[str, SequenceLibrary] | None = None
         self._primitive_library_cache: tuple[str, MotionPrimitiveLibrary] | None = None
         self._sequence_steps: list[SequenceStep] = []
+        self._sequence_paused = False
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -116,6 +119,8 @@ class MainWindow(QMainWindow):
         self.teleop_start_requested.connect(self._worker.start_teleop)
         self.teleop_stop_requested.connect(self._worker.stop_teleop)
         self.sequence_run_requested.connect(self._worker.run_sequence)
+        self.sequence_pause_requested.connect(self._worker.pause_sequence)
+        self.sequence_resume_requested.connect(self._worker.resume_sequence)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
@@ -753,11 +758,14 @@ class MainWindow(QMainWindow):
         self.run_sequence_button = QPushButton("Run sequence")
         self.run_sequence_button.clicked.connect(lambda _checked=False: self._run_sequence(step_only=False))
         run_grid.addWidget(self.run_sequence_button, 1, 2)
+        self.pause_sequence_button = QPushButton("Pause after current step")
+        self.pause_sequence_button.clicked.connect(self._toggle_sequence_pause)
+        run_grid.addWidget(self.pause_sequence_button, 1, 3)
         self.stop_sequence_button = QPushButton("STOP / HOLD")
         self.stop_sequence_button.clicked.connect(lambda _checked=False: self.stop_requested.emit())
-        run_grid.addWidget(self.stop_sequence_button, 1, 3)
+        run_grid.addWidget(self.stop_sequence_button, 2, 3)
         self.sequence_status = QLabel("No sequence running")
-        run_grid.addWidget(self.sequence_status, 2, 0, 1, 4)
+        run_grid.addWidget(self.sequence_status, 2, 0, 1, 3)
         layout.addWidget(run_box)
         return page
 
@@ -1855,8 +1863,23 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._on_error(f"Run sequence: {exc}")
 
+    def _toggle_sequence_pause(self) -> None:
+        if self._sequence_paused:
+            self.sequence_resume_requested.emit()
+        else:
+            self.sequence_pause_requested.emit()
+
     def _on_sequence_progress(self, payload: object) -> None:
         values = dict(payload)  # type: ignore[arg-type]
+        if values.get("type") == "sequence_control":
+            self._sequence_paused = values.get("status") == "paused"
+            self.pause_sequence_button.setText(
+                "Resume sequence" if self._sequence_paused else "Pause after current step"
+            )
+            self.sequence_status.setText(
+                "Sequence paused" if self._sequence_paused else "Sequence running"
+            )
+            return
         if values.get("type") == "teleop":
             if self._teleop_active:
                 self.teleop_status.setText(
@@ -2208,6 +2231,7 @@ class MainWindow(QMainWindow):
             can_run_sequence and self.sequence_step_list.currentRow() >= 0
         )
         self.stop_sequence_button.setEnabled(self._connected)
+        self.pause_sequence_button.setEnabled(self._busy and not self._teleop_active)
         self.sequence_up_button.setEnabled(
             self.sequence_step_list.currentRow() > 0 and not self._busy
         )
