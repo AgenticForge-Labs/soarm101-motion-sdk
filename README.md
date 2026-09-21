@@ -89,7 +89,7 @@ soarm101-gui --simulation
 
 The GUI provides:
 
-- Setup, Control, and Teach workspaces while the trajectory/run workspaces are developed;
+- Setup, Control, Teach, Trajectories, and Run workspaces;
 - live mechanical-stop midpoint calibration using the same backend as the CLI;
 - persistent user-recorded Home and Rest poses;
 - a second read-only leader/controller-arm session and selectable teaching source;
@@ -97,6 +97,14 @@ The GUI provides:
 - 50 Hz exact trajectory recording with gripper and optional effort/current diagnostics;
 - non-destructive raw/edited trajectory storage and a lightweight timeline editor;
 - validated replay with crop selection, speed scaling, and safe movement to the clip start;
+- advanced non-destructive trajectory editing: smoothing, delete/splice, holds, keyframes,
+  markers, and repeated clips;
+- semantic motion primitives that reference saved trajectories for higher-level consumers;
+- a persistent sequence editor/runner combining points, Home/Rest, gripper actions, waits,
+  trajectories, and motion primitives, with step execution, repeats, speed scaling,
+  step-boundary pause/resume, and STOP/HOLD;
+- guarded 50 Hz leader-to-follower joint teleoperation with relative/clutch-safe or
+  absolute calibrated mapping and optional gripper mirroring;
 - calibrated slider limits after calibration;
 - measured and target values for all five joints, with degree sliders;
 - guarded absolute joint moves;
@@ -110,7 +118,9 @@ The GUI provides:
 - connect, torque-enable, software stop/hold, relax, and live status;
 - a persistent worker-thread session so the window remains responsive while SDK motion runs.
 
-Every Cartesian GUI jog uses the normal `move_linear()` planner. The GUI does not bypass joint, calibration, workspace, following-error, timing, or fault checks.
+Every Cartesian GUI jog uses the normal `move_linear()` planner. The GUI does not bypass joint, calibration, workspace, following-error, timing, or fault checks. Live teleoperation likewise uses the guarded streaming API: every sample is checked for calibrated/model limits, command step, speed, acceleration, workspace path, following error, faults, and effort trips.
+
+The streaming/teleoperation implementation is covered by simulation and automated tests but has **not yet been physically validated on this arm**. Follow `TESTING.md` before relying on it with hardware.
 
 Matching CLI controls are available for scripting and troubleshooting:
 

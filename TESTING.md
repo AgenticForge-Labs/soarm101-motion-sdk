@@ -8,7 +8,7 @@ you are ready to put the real SO-ARM101 on the bench.
 
 ### 1. Launch and simulation smoke test
 
-1. Pull the feature branch and install the GUI extra:
+1. Pull the latest tested branch/main and install the GUI extra:
    `pip install -e ".[gui]"`
 2. Run:
    `soarm101-gui --simulation`
@@ -69,15 +69,11 @@ Do not start with Home/Rest or Cartesian moves.
    readout follows the selected arm.
 6. Do not enable live teleoperation yet. That is a later implementation/testing stage.
 
-## Not implemented in Batch 1
+## Implemented after Batch 1
 
-- Point teaching and joint/linear replay from taught points.
-- 50 Hz raw trajectory recording/playback.
-- Timeline editing/cropping.
-- Sequence editor and runner.
-- Live leader-to-follower teleoperation.
-
-Those will receive their own test sections when implemented.
+Point teaching, trajectory recording/replay, timeline editing, sequence execution,
+guarded live teleoperation, and advanced trajectory editing are now implemented in
+software. Their deferred checks are below.
 
 ## Batch 2 — Taught points, trajectory recording, and trajectory editing
 
@@ -161,8 +157,124 @@ Only continue after Batch 1 first-motion validation passes.
 5. Treat >1.0x playback as a separate validation: faster timing is allowed only when all
    configured hard limits still pass.
 
-## Still not implemented
+## Batch 3 — Sequences, live teleoperation, and advanced motion primitives
 
-- Sequence editor / Run tab combining points, gripper actions, waits, and trajectories.
-- Live leader-to-follower teleoperation.
-- Advanced trajectory editing (smoothing, splicing, keyframes, holds, loops/markers).
+### 12. Software-only sequence editor and runner
+
+1. Run `soarm101-gui --simulation`, connect the follower simulation, and enable it.
+2. Ensure Home/Rest and at least one taught point exist. Keep one saved trajectory from
+   Batch 2 if available.
+3. Open Run and create a short sequence such as:
+   Home → Point → Gripper 0.3 → Wait 0.25 s → Home.
+4. Save the sequence, clear/load it again, and confirm step order is preserved.
+5. Use **Run selected step** on each step individually.
+6. Run the entire sequence once at 0.5× speed, then at 1.0×.
+7. Set Repeat to 2 and confirm the complete sequence runs twice.
+8. Add a WAIT of at least 1 second. Start the sequence, press
+   **Pause after current step**, and confirm it pauses at a step boundary or pauses the
+   WAIT timer. Resume and confirm execution continues.
+9. During another run press **STOP / HOLD** and confirm the active sequence is cancelled
+   and the follower holds.
+10. Restart the GUI and confirm saved sequences remain available.
+
+### 13. Software-only advanced trajectory editing and primitives
+
+1. Load a known trajectory in Trajectories.
+2. Apply a 5-sample smoothing window. Confirm the displayed shape changes while the
+   first and last poses remain unchanged.
+3. Select an interior region and use Delete. Save As a new edited trajectory.
+4. Reload the source trajectory to confirm it was not modified.
+5. Insert a 0.5 second hold at the scrub cursor and confirm duration increases by about
+   0.5 seconds.
+6. Set a small joint keyframe at the cursor, or set a gripper keyframe within [0, 1].
+   Replay validation remains authoritative; deliberately extreme edits should be rejected.
+7. Add markers such as `contact`, `beat`, or `release` and confirm they appear on
+   the timeline.
+8. Select a region and make a 2× repeated clip. Inspect the loop boundary before replay;
+   a discontinuous loop must be rejected by normal motion safety validation.
+9. Save a safe edited trajectory, give it a semantic name such as `wave_gentle`, add
+   tags, and promote it to a motion primitive.
+10. In Run, add that primitive as a sequence step and execute it in simulation.
+
+### 14. Software-only live teleoperation lifecycle
+
+The automated tests exercise moving streaming targets directly. The GUI simulation is
+mainly a lifecycle/UI check because the simulated leader has no physical hand input.
+
+1. Connect follower simulation and leader simulation.
+2. Enable only the follower simulation.
+3. In Teach choose **Relative / clutch-safe** and leave Mirror gripper enabled.
+4. Start live teleoperation. Confirm the UI reports a 50 Hz guarded stream and ordinary
+   follower jog/sequence controls are disabled while teleop is active.
+5. Stop live teleoperation and confirm the follower returns to holding state.
+6. Start it again and press the global **STOP / HOLD**. Confirm teleop ends.
+7. Disconnect the leader while teleop is active. Confirm follower teleop terminates and
+   holds rather than continuing with stale targets.
+8. Repeat the lifecycle with Absolute mode only as a software check; on hardware,
+   Absolute mode is deferred until calibration/alignment validation below.
+
+### 15. Physical sequence execution — DO LATER
+
+Only continue after the Batch 1 and Batch 2 physical checks pass.
+
+1. Build a sequence containing only Home, one already-validated small taught point, a
+   short WAIT, and Home.
+2. Set global sequence speed to 0.5× and Repeat to 1.
+3. Keep the physical power switch accessible and execute each step with
+   **Run selected step** before running the whole sequence.
+4. Run the full sequence once.
+5. Test **Pause after current step** and Resume.
+6. Test **STOP / HOLD** during a slow joint step and during a WAIT.
+7. Add a previously hardware-validated trajectory only after the point sequence passes.
+8. Increase speed/repeat only after single-run behavior is repeatable.
+
+### 16. Physical relative leader → follower teleoperation — DO LATER
+
+This is a new continuous-control path and has not yet been physically validated.
+
+1. Complete calibration, joint-direction, FK, low-speed joint, and STOP checks first.
+2. Secure both bases, clear the follower workspace, remove payloads, and keep physical
+   follower power immediately accessible.
+3. Connect both arms. Keep the leader torque OFF; enable the follower.
+4. Put both arms in comfortable poses. They do not need identical poses for Relative mode.
+5. Select **Relative / clutch-safe**, initially disable gripper mirroring, and start teleop.
+6. Move only one leader joint a few degrees, slowly. Confirm the follower moves the same
+   signed delta and does not jump when teleop starts.
+7. Return that joint and repeat for the other four joints one at a time.
+8. Test STOP/HOLD while making a slow motion. The follower must stop/hold and teleop must
+   terminate.
+9. Restart teleop, then disconnect/unplug the leader data connection. The follower must
+   stop receiving stream targets and hold.
+10. Re-enable gripper mirroring and test a small leader gripper delta.
+11. Deliberately move the leader faster only enough to verify configured step/speed/
+    acceleration guards reject unsafe streaming rather than following it.
+12. Do not treat software STOP as an emergency stop; physical power remains the ultimate
+    intervention during these tests.
+
+### 17. Physical absolute teleoperation — DO LATER, AFTER RELATIVE PASSES
+
+1. Verify leader and follower use compatible calibrated joint signs and zero conventions.
+2. Manually place the follower very near the leader's measured joint pose before starting.
+3. Start Absolute mode at low speed. If the initial difference exceeds command-step or
+   other stream limits, rejection is expected and preferable to a jump.
+4. Test only a few degrees on one joint at a time before coordinated motion.
+5. Repeat the STOP and leader-readout-loss tests from Relative mode.
+
+### 18. Physical advanced motion primitives — DO LATER
+
+1. Start from a trajectory already proven safe on hardware.
+2. Apply one edit at a time and save every version under a new name.
+3. Replay smoothing/hold/keyframe/splice variants first at 0.5×.
+4. Inspect repeated/looped clips especially carefully at the end→start boundary.
+5. Promote only hardware-validated edited trajectories to show motion primitives.
+6. Run a primitive first by itself, then as a single sequence step, then in a multi-step
+   sequence.
+7. Record which primitive versions, speed ranges, and payload conditions have actually
+   passed hardware testing.
+
+## Software-complete / hardware-validation pending
+
+The teaching workflow is now implemented through the Run/primitive layer. Remaining work
+is physical validation and future optional capabilities such as Cartesian velocity
+streaming, richer mesh collision models, and show-level orchestration in the appropriate
+Robo Puppeteer/Director repositories.

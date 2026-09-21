@@ -500,6 +500,25 @@ class SOARM101:
             wait=wait,
         )
 
+    def start_joint_stream(self) -> None:
+        """Start guarded continuous joint streaming for teleoperation."""
+        if self.tool.is_moving:
+            self._stop_tool(wait=True)
+        self.motion.start_joint_stream(tcp=self.active_tcp)
+
+    def stream_joint_target(
+        self,
+        positions: Mapping[str, float],
+        *,
+        gripper: float | None = None,
+    ) -> MotionResult:
+        """Send one guarded streaming target while a joint stream is active."""
+        return self.motion.stream_joint_target(positions, gripper=gripper)
+
+    def stop_joint_stream(self, *, hold: bool = True) -> None:
+        """End continuous streaming and optionally hold the measured pose."""
+        self.motion.stop_joint_stream(hold=hold)
+
     def play_trajectory(
         self,
         trajectory: Trajectory,

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a persistent sequence editor/runner with point, Home/Rest, gripper, wait,
+  trajectory, and semantic primitive steps; supports Run Step, repeat, speed scaling,
+  step-boundary pause/resume, cancellation, and STOP/HOLD.
+- Added guarded 50 Hz joint streaming and leader-to-follower teleoperation with
+  relative/clutch-safe and absolute calibrated mappings plus optional gripper mirroring.
+- Added advanced non-destructive trajectory editing for smoothing, delete/splice, holds,
+  keyframes, markers, repeated clips, and semantic motion primitives.
 - Added named taught points captured from follower or leader, with joint or Cartesian replay.
 - Added immutable 50 Hz trajectory recording, optional motor effort/current diagnostic channels,
   validated exact replay, and non-destructive raw/edited trajectory libraries.

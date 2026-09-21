@@ -34,6 +34,13 @@ The SDK owns flange-to-active-TCP transforms used by FK, IK, and motion planning
 
 Puppeteer exposes only named semantic gestures. Director scripts never send raw joints, motor IDs, register writes, calibration changes, or unrestricted Cartesian targets through the character interface.
 
+The SDK now provides persistent `MotionPrimitive` metadata and saved `MotionSequence`
+definitions so an adapter can resolve names such as `wave_gentle` to validated local
+motion data. Puppeteer remains responsible for character semantics and Director remains
+responsible for show-level timing, lighting/audio/camera cues, resource claims, and
+cross-system orchestration. Timeline markers stored on trajectories are metadata; this
+SDK does not execute show cues.
+
 ## Validation gate
 
 Simulation validates API integration and cancellation. Physical hardware validation remains required for calibration direction, low-speed movement, feedback completion, stop behavior, TCP accuracy, and workspace safety.
