@@ -30,6 +30,7 @@ from soarm101_motion.safety import (
     validate_workspace_path,
 )
 from soarm101_motion.tools import RobotTool, SO101Gripper
+from soarm101_motion.trajectories import Trajectory
 from soarm101_motion.types import HardwareState, IKResult, JointState, MotionResult, Pose
 
 
