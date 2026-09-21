@@ -52,6 +52,11 @@ class RobotWorker(QObject):
             raise RuntimeError("robot is not connected")
         return self.arm
 
+    def _require_motion_available(self) -> SOARM101:
+        if self._recording is not None:
+            raise RuntimeError("stop trajectory recording before commanding this arm")
+        return self._require_arm()
+
     def _track(self, label: str, result: Any) -> None:
         if isinstance(result, MotionHandle):
             self._handles.append((label, result))
@@ -212,7 +217,7 @@ class RobotWorker(QObject):
             trajectory = values["trajectory"]
             if not isinstance(trajectory, Trajectory):
                 raise TypeError("trajectory command must contain a Trajectory")
-            result = self._require_arm().play_trajectory(
+            result = self._require_motion_available().play_trajectory(
                 trajectory,
                 speed_scale=float(values.get("speed_scale", 1.0)),
                 move_to_start=bool(values.get("move_to_start", True)),
@@ -362,7 +367,7 @@ class RobotWorker(QObject):
             positions = {
                 name: radians(float(values["joints_deg"][name])) for name in ARM_JOINTS
             }
-            result = self._require_arm().move_joints(
+            result = self._require_motion_available().move_joints(
                 positions,
                 speed=radians(float(values["speed_deg_s"])),
                 acceleration=radians(float(values["acceleration_deg_s2"])),
@@ -404,7 +409,7 @@ class RobotWorker(QObject):
                 radians(float(rpy[1])),
                 radians(float(rpy[2])),
             )
-            result = self._require_arm().move_linear(
+            result = self._require_motion_available().move_linear(
                 target,
                 orientation_mode=values["orientation_mode"],
                 speed=float(values["speed_mm_s"]) / 1000.0,
@@ -418,7 +423,7 @@ class RobotWorker(QObject):
     @Slot(float)
     def move_gripper(self, position: float) -> None:
         try:
-            result = self._require_arm().tool.move(float(position), wait=False)
+            result = self._require_motion_available().tool.move(float(position), wait=False)
             self._track("gripper move", result)
         except BaseException as exc:
             self._report_error("gripper", exc)
