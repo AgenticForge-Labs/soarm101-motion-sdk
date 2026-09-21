@@ -474,23 +474,16 @@ class Trajectory:
         markers: list[dict[str, Any]] = []
         offset = 0.0
         for index in range(repeats):
-            source_times = self.timestamps_s if index == 0 else self.timestamps_s[1:]
-            shifted = source_times + offset
+            shifted = self.timestamps_s + offset
             if index > 0:
                 shifted = shifted + epsilon
             times.append(shifted)
-            joints.append(self.joints_rad if index == 0 else self.joints_rad[1:])
-            gripper.append(self.gripper if index == 0 else self.gripper[1:])
+            joints.append(self.joints_rad)
+            gripper.append(self.gripper)
             if self.effort_current_raw is not None:
-                current.append(
-                    self.effort_current_raw
-                    if index == 0
-                    else self.effort_current_raw[1:]
-                )
+                current.append(self.effort_current_raw)
             if self.effort_load_raw is not None:
-                load.append(
-                    self.effort_load_raw if index == 0 else self.effort_load_raw[1:]
-                )
+                load.append(self.effort_load_raw)
             for marker in self._markers():
                 markers.append(
                     {
