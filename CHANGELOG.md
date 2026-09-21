@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added Setup/Control/Teach GUI workspaces, persistent Home/Rest poses, calibrated joint-slider ranges, and independent leader-arm readout.
+- Unified GUI and CLI calibration on the mechanical-extrema midpoint method with encoder seam unwrapping.
+- Added TESTING.md as the staged handoff checklist for deferred physical validation.
+
 - Added Agentic Forge Director 0.2 integration metadata, library manifest, resource identity, frame convention, stop classification, and TCP ownership rules.
 - Documented the Studio and Puppeteer adapter responsibilities while keeping the SDK independent of Director.
 - Replaced the LeRobot runtime plan with direct official Feetech SDK control.
