@@ -129,6 +129,27 @@ class TrajectoryTimeline(QWidget):
             painter.setPen(curve_pen)
             painter.drawPath(path)
 
+        marker_pen = QPen(palette.link().color(), 1.0, Qt.PenStyle.DotLine)
+        painter.setPen(marker_pen)
+        for marker in trajectory.metadata.get("markers", []):
+            try:
+                marker_time = float(marker["time_s"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not 0.0 <= marker_time <= trajectory.duration_s:
+                continue
+            marker_x = plot.left() + marker_time / trajectory.duration_s * plot.width()
+            painter.drawLine(
+                QPointF(marker_x, plot.top()), QPointF(marker_x, plot.bottom())
+            )
+            label = str(marker.get("label", "")).strip()
+            if label:
+                painter.drawText(
+                    QRectF(marker_x + 2.0, plot.top(), 120.0, 18.0),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                    label,
+                )
+
         start_s, end_s = self._selection
         start_x = plot.left() + start_s / trajectory.duration_s * plot.width()
         end_x = plot.left() + end_s / trajectory.duration_s * plot.width()
