@@ -19,6 +19,7 @@ class RobotWorker(QObject):
     busy_changed = Signal(bool)
     log_message = Signal(str)
     error_message = Signal(str)
+    calibration_completed = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -85,6 +86,11 @@ class RobotWorker(QObject):
                     SOARM101Config(
                         port=str(values.get("port") or "") or None,
                         robot_id=str(values.get("robot_id") or "so101"),
+                        allow_uncalibrated=bool(values.get("allow_uncalibrated", False)),
+                        use_stored_calibration=not bool(values.get("allow_uncalibrated", False)),
+                        verify_calibration_on_connect=not bool(
+                            values.get("allow_uncalibrated", False)
+                        ),
                         configure_motors_on_connect=False,
                     )
                 )
@@ -226,6 +232,45 @@ class RobotWorker(QObject):
         except BaseException as exc:
             self._report_error("gripper", exc)
 
+    @Slot(float)
+    def run_calibration(self, seconds: float) -> None:
+        try:
+            arm = self._require_arm()
+            if self._simulation:
+                raise RuntimeError("live mechanical-stop calibration requires physical hardware")
+            if arm.get_state().torque_enabled:
+                arm.relax()
+            backend = arm.backend
+            calibrate = getattr(backend, "interactive_calibration", None)
+            save = getattr(backend, "save_calibration", None)
+            if not callable(calibrate) or not callable(save):
+                raise RuntimeError("active backend does not support live calibration")
+            duration = float(seconds)
+            if duration <= 0:
+                raise ValueError("calibration duration must be positive")
+            self.busy_changed.emit(True)
+            self.log_message.emit(
+                f"Calibration recording started for {duration:.1f} s; torque is off."
+            )
+            calibration = calibrate(record_seconds=duration)
+            path = save(calibration)
+            limits = arm.get_joint_limits()
+            payload = {
+                "path": str(path),
+                "source": calibration.source,
+                "joint_limits_deg": {
+                    name: (degrees(bounds[0]), degrees(bounds[1]))
+                    for name, bounds in limits.items()
+                },
+            }
+            self.calibration_completed.emit(payload)
+            self.log_message.emit(f"Calibration saved to {path}.")
+            self.poll()
+        except BaseException as exc:
+            self._report_error("calibration", exc)
+        finally:
+            self.busy_changed.emit(False)
+
     @Slot()
     def poll(self) -> None:
         if self._process_handles():
@@ -256,6 +301,11 @@ class RobotWorker(QObject):
                     degrees(pose[5]),
                 ),
                 "gripper": gripper,
+                "robot_id": self.arm.config.robot_id,
+                "joint_limits_deg": {
+                    name: (degrees(bounds[0]), degrees(bounds[1]))
+                    for name, bounds in self.arm.get_joint_limits().items()
+                },
             }
             self.state_changed.emit(payload)
         except BaseException as exc:
