@@ -14,6 +14,10 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] PySide6 Setup/Control/Teach workspaces with GUI mechanical-stop calibration.
 - [x] Persistent Home/Rest pose library and calibrated joint-control ranges.
 - [x] Independent read-only leader/controller connection and selectable teaching source.
+- [x] Named taught points captured from follower or leader and replayed as joint or linear moves.
+- [x] Immutable 50 Hz trajectory recording with gripper and optional effort/current diagnostics.
+- [x] Validated trajectory replay with safe pre-roll to the recorded start pose.
+- [x] Trajectory Editor v1: timeline, scrub, crop selection, speed scaling, Save As, and replay.
 
 ## Director ecosystem integration 0.2
 
