@@ -1020,10 +1020,16 @@ class MainWindow(QMainWindow):
     def _on_robot_id_changed(self) -> None:
         self._pose_library_cache = None
         self._trajectory_library_cache = None
+        self._sequence_library_cache = None
+        self._primitive_library_cache = None
         self._active_trajectory = None
+        self._sequence_steps = []
         self._refresh_named_pose_status()
         self._refresh_point_list()
         self._refresh_trajectory_list()
+        self._refresh_primitive_list()
+        self._refresh_sequence_list()
+        self._refresh_sequence_step_list()
         if hasattr(self, "save_home_button"):
             self._update_enabled_state()
 
@@ -1094,6 +1100,18 @@ class MainWindow(QMainWindow):
         if limits:
             self._apply_joint_limits(dict(limits))
         self._log("Mechanical-stop midpoint calibration completed.")
+
+    def _get_sequence_library(self) -> SequenceLibrary:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        if self._sequence_library_cache is None or self._sequence_library_cache[0] != robot_id:
+            self._sequence_library_cache = (robot_id, SequenceLibrary(robot_id))
+        return self._sequence_library_cache[1]
+
+    def _get_primitive_library(self) -> MotionPrimitiveLibrary:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        if self._primitive_library_cache is None or self._primitive_library_cache[0] != robot_id:
+            self._primitive_library_cache = (robot_id, MotionPrimitiveLibrary(robot_id))
+        return self._primitive_library_cache[1]
 
     def _get_trajectory_library(self) -> TrajectoryLibrary:
         robot_id = self.robot_id_edit.text().strip() or "so101"
@@ -1196,6 +1214,7 @@ class MainWindow(QMainWindow):
         if current and current in names:
             self.point_combo.setCurrentText(current)
         self.point_combo.blockSignals(False)
+        self._refresh_sequence_resources()
         self._update_enabled_state()
 
     def _save_taught_point(self) -> None:
@@ -1355,7 +1374,76 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 self.trajectory_combo.setCurrentIndex(index)
         self.trajectory_combo.blockSignals(False)
+        self._refresh_sequence_resources()
         self._update_enabled_state()
+
+    def _refresh_primitive_list(self) -> None:
+        if not hasattr(self, "run_primitive_combo"):
+            return
+        current = self.run_primitive_combo.currentText()
+        try:
+            names = self._get_primitive_library().names()
+        except Exception as exc:
+            self._on_error(f"Refresh motion primitives: {exc}")
+            names = ()
+        self.run_primitive_combo.blockSignals(True)
+        self.run_primitive_combo.clear()
+        self.run_primitive_combo.addItems(names)
+        if current and current in names:
+            self.run_primitive_combo.setCurrentText(current)
+        self.run_primitive_combo.blockSignals(False)
+        self._update_enabled_state()
+
+    def _refresh_sequence_list(self) -> None:
+        if not hasattr(self, "sequence_combo"):
+            return
+        current = self.sequence_combo.currentText()
+        try:
+            names = self._get_sequence_library().names()
+        except Exception as exc:
+            self._on_error(f"Refresh sequence library: {exc}")
+            names = ()
+        self.sequence_combo.blockSignals(True)
+        self.sequence_combo.clear()
+        self.sequence_combo.addItems(names)
+        if current and current in names:
+            self.sequence_combo.setCurrentText(current)
+        self.sequence_combo.blockSignals(False)
+        self._update_enabled_state()
+
+    def _refresh_sequence_resources(self) -> None:
+        if not hasattr(self, "run_point_combo"):
+            return
+        try:
+            point_names = [
+                name
+                for name in self._get_pose_library().names()
+                if name not in {HOME_POSE_NAME, REST_POSE_NAME}
+            ]
+        except Exception:
+            point_names = []
+        current_point = self.run_point_combo.currentText()
+        self.run_point_combo.clear()
+        self.run_point_combo.addItems(point_names)
+        if current_point in point_names:
+            self.run_point_combo.setCurrentText(current_point)
+
+        try:
+            entries = self._get_trajectory_library().entries()
+        except Exception:
+            entries = ()
+        current_trajectory = self.run_trajectory_combo.currentData()
+        self.run_trajectory_combo.clear()
+        for entry in entries:
+            self.run_trajectory_combo.addItem(
+                f"{entry.kind}: {entry.name}", (entry.kind, entry.name)
+            )
+        if current_trajectory is not None:
+            index = self.run_trajectory_combo.findData(current_trajectory)
+            if index >= 0:
+                self.run_trajectory_combo.setCurrentIndex(index)
+
+        self._refresh_primitive_list()
 
     def _load_selected_trajectory(self) -> None:
         data = self.trajectory_combo.currentData()
@@ -1475,6 +1563,316 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._on_error(f"Save edited trajectory: {exc}")
 
+    def _update_keyframe_units(self) -> None:
+        if not hasattr(self, "keyframe_value_spin"):
+            return
+        channel = self.keyframe_channel_combo.currentData()
+        if channel == "gripper":
+            self.keyframe_value_spin.setRange(0.0, 1.0)
+            self.keyframe_value_spin.setDecimals(3)
+            self.keyframe_value_spin.setSingleStep(0.05)
+            self.keyframe_value_spin.setSuffix("")
+        else:
+            self.keyframe_value_spin.setRange(-180.0, 180.0)
+            self.keyframe_value_spin.setDecimals(2)
+            self.keyframe_value_spin.setSingleStep(1.0)
+            self.keyframe_value_spin.setSuffix("°")
+
+    def _apply_smoothing(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        try:
+            window = self.smooth_window_spin.value()
+            if window % 2 == 0:
+                window += 1
+                self.smooth_window_spin.setValue(window)
+            self._set_active_trajectory(trajectory.smooth(window))
+            self._log(f"Applied in-memory smoothing window {window}; use Save As to persist.")
+        except Exception as exc:
+            self._on_error(f"Smooth trajectory: {exc}")
+
+    def _delete_trajectory_selection(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        try:
+            edited = trajectory.delete_region(
+                self.selection_start.value(), self.selection_end.value()
+            )
+            self._set_active_trajectory(edited)
+            self._log("Deleted selected region in memory; use Save As to persist.")
+        except Exception as exc:
+            self._on_error(f"Delete trajectory region: {exc}")
+
+    def _insert_trajectory_hold(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        try:
+            edited = trajectory.insert_hold(
+                self._cursor_seconds(), self.hold_duration_spin.value()
+            )
+            self._set_active_trajectory(edited)
+            self._log("Inserted hold in memory; use Save As to persist.")
+        except Exception as exc:
+            self._on_error(f"Insert trajectory hold: {exc}")
+
+    def _set_trajectory_keyframe(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        try:
+            channel = str(self.keyframe_channel_combo.currentData())
+            value = self.keyframe_value_spin.value()
+            if channel != "gripper":
+                value = radians(value)
+            edited = trajectory.set_keyframe(self._cursor_seconds(), channel, value)
+            self._set_active_trajectory(edited)
+            self._log(f"Set {channel} keyframe in memory; use Save As to persist.")
+        except Exception as exc:
+            self._on_error(f"Set trajectory keyframe: {exc}")
+
+    def _add_trajectory_marker(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        label = self.marker_label_edit.text().strip()
+        if not label:
+            QMessageBox.warning(self, "Marker label required", "Enter a marker label.")
+            return
+        try:
+            edited = trajectory.add_marker(self._cursor_seconds(), label)
+            self._set_active_trajectory(edited)
+            self.marker_label_edit.clear()
+            self._log(f"Added marker {label!r} at the cursor.")
+        except Exception as exc:
+            self._on_error(f"Add trajectory marker: {exc}")
+
+    def _loop_trajectory_selection(self) -> None:
+        try:
+            edited = self._selection_clip().repeat(self.loop_count_spin.value())
+            self._set_active_trajectory(edited)
+            self._log(
+                f"Created {self.loop_count_spin.value()}× repeated clip in memory."
+            )
+        except Exception as exc:
+            self._on_error(f"Loop trajectory selection: {exc}")
+
+    def _promote_trajectory_primitive(self) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None:
+            return
+        name = self.primitive_name_edit.text().strip()
+        trajectory_name = str(trajectory.metadata.get("name") or "").strip()
+        trajectory_kind = str(trajectory.metadata.get("kind") or "").strip()
+        if not name:
+            QMessageBox.warning(self, "Primitive name required", "Enter a primitive name.")
+            return
+        if trajectory_kind not in {"raw", "edited"} or not trajectory_name:
+            QMessageBox.warning(
+                self,
+                "Save trajectory first",
+                "Save the current derived trajectory before promoting it to a primitive.",
+            )
+            return
+        try:
+            tags = tuple(
+                item.strip()
+                for item in self.primitive_tags_edit.text().split(",")
+                if item.strip()
+            )
+            primitive = MotionPrimitive(
+                name=name,
+                trajectory_name=trajectory_name,
+                trajectory_kind=trajectory_kind,
+                tags=tags,
+                loopable=self.primitive_loopable_check.isChecked(),
+                interruptible=self.primitive_interruptible_check.isChecked(),
+                default_speed_scale=self.trajectory_speed_scale.value(),
+            )
+            path = self._get_primitive_library().save(primitive)
+            self._log(f"Saved motion primitive {name!r} to {path}.")
+            self.primitive_name_edit.clear()
+            self.primitive_tags_edit.clear()
+            self._refresh_primitive_list()
+        except Exception as exc:
+            self._on_error(f"Promote motion primitive: {exc}")
+
+    @staticmethod
+    def _sequence_step_text(step: SequenceStep) -> str:
+        params = step.params
+        if step.kind == "point":
+            return f"POINT {params.get('name')} [{params.get('mode', 'joint')}]"
+        if step.kind in {"home", "rest"}:
+            return step.kind.upper()
+        if step.kind == "gripper":
+            return f"GRIPPER {float(params.get('position', 0.0)):.3f}"
+        if step.kind == "wait":
+            return f"WAIT {float(params.get('seconds', 0.0)):.2f} s"
+        if step.kind == "trajectory":
+            return (
+                f"TRAJECTORY {params.get('kind', 'edited')}:{params.get('name')} "
+                f"×{int(params.get('loops', 1))}"
+            )
+        if step.kind == "primitive":
+            return f"PRIMITIVE {params.get('name')} ×{int(params.get('loops', 1))}"
+        return step.kind.upper()
+
+    def _refresh_sequence_step_list(self) -> None:
+        if not hasattr(self, "sequence_step_list"):
+            return
+        current = self.sequence_step_list.currentRow()
+        self.sequence_step_list.clear()
+        for index, step in enumerate(self._sequence_steps, start=1):
+            self.sequence_step_list.addItem(f"{index:02d}  {self._sequence_step_text(step)}")
+        if self._sequence_steps:
+            self.sequence_step_list.setCurrentRow(
+                min(max(current, 0), len(self._sequence_steps) - 1)
+            )
+        self._update_enabled_state()
+
+    def _append_sequence_step(self, step: SequenceStep) -> None:
+        self._sequence_steps.append(step)
+        self._refresh_sequence_step_list()
+        self.sequence_step_list.setCurrentRow(len(self._sequence_steps) - 1)
+
+    def _add_point_sequence_step(self) -> None:
+        name = self.run_point_combo.currentText().strip()
+        if name:
+            self._append_sequence_step(
+                SequenceStep(
+                    "point",
+                    {"name": name, "mode": self.run_point_mode_combo.currentData()},
+                )
+            )
+
+    def _add_gripper_sequence_step(self) -> None:
+        self._append_sequence_step(
+            SequenceStep("gripper", {"position": self.sequence_gripper_spin.value()})
+        )
+
+    def _add_wait_sequence_step(self) -> None:
+        self._append_sequence_step(
+            SequenceStep("wait", {"seconds": self.sequence_wait_spin.value()})
+        )
+
+    def _add_trajectory_sequence_step(self) -> None:
+        data = self.run_trajectory_combo.currentData()
+        if data:
+            kind, name = data
+            self._append_sequence_step(
+                SequenceStep("trajectory", {"kind": kind, "name": name, "loops": 1})
+            )
+
+    def _add_primitive_sequence_step(self) -> None:
+        name = self.run_primitive_combo.currentText().strip()
+        if name:
+            self._append_sequence_step(
+                SequenceStep("primitive", {"name": name, "loops": 1})
+            )
+
+    def _move_sequence_step(self, delta: int) -> None:
+        row = self.sequence_step_list.currentRow()
+        target = row + int(delta)
+        if row < 0 or not 0 <= target < len(self._sequence_steps):
+            return
+        self._sequence_steps[row], self._sequence_steps[target] = (
+            self._sequence_steps[target],
+            self._sequence_steps[row],
+        )
+        self._refresh_sequence_step_list()
+        self.sequence_step_list.setCurrentRow(target)
+
+    def _delete_sequence_step(self) -> None:
+        row = self.sequence_step_list.currentRow()
+        if 0 <= row < len(self._sequence_steps):
+            del self._sequence_steps[row]
+            self._refresh_sequence_step_list()
+
+    def _save_sequence(self) -> None:
+        name = self.sequence_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Sequence name required", "Enter a sequence name.")
+            return
+        if not self._sequence_steps:
+            QMessageBox.warning(self, "No steps", "Add at least one sequence step.")
+            return
+        try:
+            sequence = MotionSequence(name, tuple(self._sequence_steps))
+            path = self._get_sequence_library().save(sequence)
+            self._log(f"Saved sequence {name!r} to {path}.")
+            self._refresh_sequence_list()
+            self.sequence_combo.setCurrentText(name)
+        except Exception as exc:
+            self._on_error(f"Save sequence: {exc}")
+
+    def _load_sequence(self) -> None:
+        name = self.sequence_combo.currentText().strip()
+        if not name:
+            return
+        try:
+            sequence = self._get_sequence_library().require(name)
+            self._sequence_steps = list(sequence.steps)
+            self.sequence_name_edit.setText(sequence.name)
+            self._refresh_sequence_step_list()
+            self._log(f"Loaded sequence {name!r}.")
+        except Exception as exc:
+            self._on_error(f"Load sequence: {exc}")
+
+    def _delete_sequence(self) -> None:
+        name = self.sequence_combo.currentText().strip()
+        if not name:
+            return
+        try:
+            self._get_sequence_library().delete(name)
+            self._log(f"Deleted sequence {name!r}.")
+            self._refresh_sequence_list()
+        except Exception as exc:
+            self._on_error(f"Delete sequence: {exc}")
+
+    def _run_sequence(self, *, step_only: bool) -> None:
+        if not self._sequence_steps:
+            return
+        try:
+            name = self.sequence_name_edit.text().strip() or "unsaved_sequence"
+            sequence = MotionSequence(name, tuple(self._sequence_steps))
+            row = self.sequence_step_list.currentRow()
+            start_index = row if step_only and row >= 0 else 0
+            stop_index = start_index + 1 if step_only else None
+            self.sequence_run_requested.emit(
+                {
+                    "sequence": sequence,
+                    "repeat": 1 if step_only else self.sequence_repeat_spin.value(),
+                    "speed_scale": self.sequence_speed_spin.value(),
+                    "start_index": start_index,
+                    "stop_index": stop_index,
+                }
+            )
+            self.sequence_status.setText(
+                f"Running {'step ' + str(start_index + 1) if step_only else sequence.name}…"
+            )
+        except Exception as exc:
+            self._on_error(f"Run sequence: {exc}")
+
+    def _on_sequence_progress(self, payload: object) -> None:
+        values = dict(payload)  # type: ignore[arg-type]
+        if values.get("type") == "teleop":
+            if self._teleop_active:
+                self.teleop_status.setText(
+                    f"Live teleop active — {int(values.get('samples', 0))} samples."
+                )
+            return
+        if values.get("type") != "sequence":
+            return
+        index = int(values.get("index", -1))
+        status = str(values.get("status", ""))
+        if 0 <= index < self.sequence_step_list.count():
+            self.sequence_step_list.setCurrentRow(index)
+        self.sequence_status.setText(
+            f"Step {index + 1}: {values.get('kind', 'unknown')} — {status}"
+        )
+
     def _apply_joint_limits(self, limits: dict[str, object]) -> None:
         normalized: dict[str, tuple[float, float]] = {}
         for name in ARM_JOINTS:
@@ -1491,9 +1889,57 @@ class MainWindow(QMainWindow):
         if normalized:
             self._last_joint_limits = normalized
 
+    def _toggle_teleop(self) -> None:
+        if self._teleop_active:
+            self.teleop_stop_requested.emit()
+            return
+        if not self._connected or not self._torque_enabled:
+            QMessageBox.warning(
+                self,
+                "Follower not ready",
+                "Connect and enable the follower before starting live teleoperation.",
+            )
+            return
+        if not self._leader_connected or self._latest_leader_state is None:
+            QMessageBox.warning(
+                self,
+                "Leader not ready",
+                "Connect the leader/controller arm before starting live teleoperation.",
+            )
+            return
+        leader = self._latest_leader_state
+        self.teleop_start_requested.emit(
+            {
+                "mode": self.teleop_mode_combo.currentData(),
+                "leader_joints_rad": {
+                    name: radians(float(leader["joints_deg"][name]))
+                    for name in ARM_JOINTS
+                },
+                "leader_gripper": float(leader["gripper"]),
+                "mirror_gripper": self.teleop_gripper_check.isChecked(),
+            }
+        )
+        self.teleop_status.setText("Starting guarded 50 Hz live teleoperation…")
+
+    def _on_teleop_changed(self, active: bool) -> None:
+        self._teleop_active = bool(active)
+        if active:
+            self.teleop_button.setText("Stop live teleop")
+            self.teleop_status.setText(
+                f"Live teleop active — {self.teleop_mode_combo.currentText()}."
+            )
+            self.leader_stream_start_requested.emit(50.0)
+        else:
+            self.teleop_button.setText("Start live teleop")
+            self.leader_stream_stop_requested.emit()
+            self.teleop_status.setText("Live teleoperation stopped / follower holding.")
+        self._update_enabled_state()
+
     def _on_leader_connected(self, connected: bool) -> None:
         self._leader_connected = connected
         if not connected:
+            if self._teleop_active:
+                self.teleop_stop_requested.emit()
             self._latest_leader_state = None
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
