@@ -168,6 +168,9 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel("Robot ID"), 0, 4)
         self.robot_id_edit = QLineEdit(robot_id)
+        self.robot_id_edit.textChanged.connect(
+            lambda _text: self._on_robot_id_changed()
+        )
         layout.addWidget(self.robot_id_edit, 0, 5)
 
         self.connect_button = QPushButton("Connect")
@@ -305,6 +308,9 @@ class MainWindow(QMainWindow):
         grid = QGridLayout(leader)
         self.leader_simulation_check = QCheckBox("Simulation")
         self.leader_simulation_check.setChecked(self.simulation_check.isChecked())
+        self.leader_simulation_check.toggled.connect(
+            lambda _checked: self._update_enabled_state()
+        )
         grid.addWidget(self.leader_simulation_check, 0, 0)
         grid.addWidget(QLabel("Port"), 0, 1)
         self.leader_port_combo = QComboBox()
@@ -615,6 +621,12 @@ class MainWindow(QMainWindow):
             }
         )
 
+    def _on_robot_id_changed(self) -> None:
+        self._pose_library_cache = None
+        self._refresh_named_pose_status()
+        if hasattr(self, "save_home_button"):
+            self._update_enabled_state()
+
     def _refresh_leader_ports(self) -> None:
         if not hasattr(self, "leader_port_combo"):
             return
@@ -872,6 +884,7 @@ class MainWindow(QMainWindow):
             self._busy = False
             self._joint_targets_initialized = False
         self.connect_button.setText("Disconnect" if connected else "Connect")
+        self._refresh_named_pose_status()
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
