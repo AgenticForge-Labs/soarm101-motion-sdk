@@ -279,10 +279,13 @@ class RobotWorker(QObject):
                 name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
             }
             follower_origin = dict(arm.get_joint_positions().positions)
+            follower_gripper = float(arm.tool.get_position())
             self._teleop = {
                 "mode": mode,
-                "leader_origin": leader_origin,
+                "leader_origin": None if mode == "relative" else leader_origin,
                 "follower_origin": follower_origin,
+                "leader_gripper_origin": None,
+                "follower_gripper_origin": follower_gripper,
                 "mirror_gripper": bool(values.get("mirror_gripper", True)),
                 "samples": 0,
             }
@@ -324,17 +327,32 @@ class RobotWorker(QObject):
                 name: float(values["joints_rad"][name]) for name in ARM_JOINTS
             }
             if teleop["mode"] == "relative":
+                if teleop["leader_origin"] is None:
+                    teleop["leader_origin"] = dict(leader)
+                    teleop["leader_gripper_origin"] = float(values["gripper"])
                 target = {
                     name: teleop["follower_origin"][name]
                     + leader[name]
                     - teleop["leader_origin"][name]
                     for name in ARM_JOINTS
                 }
+                gripper = None
+                if teleop["mirror_gripper"]:
+                    leader_gripper_origin = float(teleop["leader_gripper_origin"])
+                    gripper = max(
+                        0.0,
+                        min(
+                            1.0,
+                            teleop["follower_gripper_origin"]
+                            + float(values["gripper"])
+                            - leader_gripper_origin,
+                        ),
+                    )
             else:
                 target = leader
-            gripper = (
-                float(values["gripper"]) if teleop["mirror_gripper"] else None
-            )
+                gripper = (
+                    float(values["gripper"]) if teleop["mirror_gripper"] else None
+                )
             result = self._require_arm().stream_joint_target(target, gripper=gripper)
             teleop["samples"] += 1
             if teleop["samples"] % 10 == 0:
