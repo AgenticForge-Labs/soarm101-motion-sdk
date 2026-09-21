@@ -16,6 +16,7 @@ from soarm101_motion.calibration import (
     default_calibration_path,
     resolve_calibration,
 )
+from soarm101_motion.calibration_live import EncoderSweep, calibration_from_sweeps
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
     ALL_MOTORS,
@@ -543,7 +544,17 @@ class FeetechBackend(SO101HardwareBackend):
         record_seconds: float = 20.0,
         poll_interval: float = 0.02,
     ) -> SO101Calibration:
-        """Record calibration transactionally, restoring EEPROM on any failure."""
+        """Calibrate from repeated mechanical-stop sweeps.
+
+        Torque remains disabled. Raw encoders are sampled with zero homing offsets
+        and unrestricted position limits, and each encoder is unwrapped across the
+        4095/0 seam. The physical zero is the midpoint between the observed extrema.
+        EEPROM changes are transactional and restored on failure when possible.
+        """
+        if record_seconds <= 0:
+            raise ValueError("record_seconds must be positive")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be positive")
         with self._io_lock:
             self._require_connected()
             previous_calibration = self.calibration
@@ -551,41 +562,19 @@ class FeetechBackend(SO101HardwareBackend):
             self.disable_torque()
             try:
                 self.reset_calibration()
-                center_before_offset = self.read_all_raw_positions()
-                offsets = {name: raw - HALF_TURN for name, raw in center_before_offset.items()}
-                for name, offset in offsets.items():
-                    with self.eprom_unlocked(name):
-                        self.write_register(name, "Homing_Offset", offset)
-                start = self.read_all_raw_positions()
-                mins = dict(start)
-                maxes = dict(start)
+                initial = self.read_all_raw_positions()
+                sweeps = {
+                    name: EncoderSweep.start(raw)
+                    for name, raw in initial.items()
+                }
                 deadline = time.monotonic() + record_seconds
                 while time.monotonic() < deadline:
                     values = self.read_all_raw_positions()
-                    mins = {name: min(mins[name], values[name]) for name in ALL_MOTORS}
-                    maxes = {name: max(maxes[name], values[name]) for name in ALL_MOTORS}
+                    for name, raw in values.items():
+                        sweeps[name].update(raw)
                     time.sleep(poll_interval)
-                mins["wrist_roll"] = 0
-                maxes["wrist_roll"] = ENCODER_MAX
-                unmoved = [
-                    name
-                    for name in ALL_MOTORS
-                    if name != "wrist_roll" and mins[name] == maxes[name]
-                ]
-                if unmoved:
-                    raise CalibrationError("no range was recorded for: " + ", ".join(unmoved))
-                motors = {
-                    name: MotorCalibration(
-                        motor_id=MOTOR_IDS[name],
-                        drive_mode=0,
-                        homing_offset=offsets[name],
-                        range_min=mins[name],
-                        range_max=maxes[name],
-                    )
-                    for name in ALL_MOTORS
-                }
-                calibration = SO101Calibration(motors=motors, source="interactive-calibration")
-                calibration.validate()
+
+                calibration = calibration_from_sweeps(sweeps)
                 self.apply_calibration(calibration)
                 verified = self.read_calibration_from_motors()
                 self._verify_calibration_matches_motors(calibration, verified)
