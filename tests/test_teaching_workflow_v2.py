@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 
 import numpy as np
 import pytest
@@ -196,3 +197,39 @@ def test_advanced_trajectory_edits_are_non_destructive() -> None:
 
     assert original.duration_s == pytest.approx(1.0)
     assert "markers" not in original.metadata
+
+
+def test_sequence_pause_resume_during_wait(tmp_path: Path) -> None:
+    poses = PoseLibrary("pause-test", path=tmp_path / "poses.json")
+    trajectories = TrajectoryLibrary("pause-test", root=tmp_path / "trajectories")
+    arm = SOARM101(
+        SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False),
+        backend=SimulationBackend(realtime=False),
+    )
+    arm.connect()
+    arm.enable()
+    try:
+        runner = SequenceRunner(
+            arm,
+            pose_library=poses,
+            trajectory_library=trajectories,
+        )
+        sequence = MotionSequence(
+            "pause_demo",
+            (
+                SequenceStep("wait", {"seconds": 0.15}),
+                SequenceStep("gripper", {"position": 0.4}),
+            ),
+        )
+        handle = runner.run(sequence, wait=False)
+        time.sleep(0.03)
+        runner.pause()
+        assert runner.is_paused
+        time.sleep(0.08)
+        assert not handle.done
+        runner.resume()
+        result = handle.wait(1.0)
+        assert result.completed
+        assert arm.tool.get_position() == pytest.approx(0.4)
+    finally:
+        arm.disconnect()
