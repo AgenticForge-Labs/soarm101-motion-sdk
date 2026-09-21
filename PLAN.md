@@ -18,6 +18,13 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] Immutable 50 Hz trajectory recording with gripper and optional effort/current diagnostics.
 - [x] Validated trajectory replay with safe pre-roll to the recorded start pose.
 - [x] Trajectory Editor v1: timeline, scrub, crop selection, speed scaling, Save As, and replay.
+- [x] Persistent sequence editor/runner with point, Home/Rest, gripper, wait, trajectory,
+  and semantic primitive steps plus step execution, repeat, speed scaling, pause/resume,
+  cancellation, and STOP/HOLD integration.
+- [x] Guarded 50 Hz joint streaming and leader-to-follower teleoperation in relative or
+  absolute calibrated modes, with optional gripper mirroring.
+- [x] Advanced non-destructive trajectory editing: smoothing, delete/splice, holds,
+  keyframes, markers, repeated clips, and semantic motion primitives.
 
 ## Director ecosystem integration 0.2
 
@@ -39,11 +46,13 @@ Robo Director is the primary source of cross-repository integration requirements
 - [ ] Validate stop, completion timeout, and torque-safe enable on hardware.
 - [ ] Validate FK against measured TCP positions.
 - [ ] Validate low-speed linear paths and tune tolerances.
+- [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
+  leader-readout loss, gripper mirroring, and stream safety trips.
+- [ ] Validate sequence execution and edited motion primitives on hardware.
 - [ ] Tag the first hardware-validated alpha release.
 
 ## Later
 
-- [ ] Trajectory recording, editing, and playback formats.
 - [ ] Parallel gripper implementation.
 - [ ] Tool assemblies with camera and gripper TCPs.
 - [ ] Optional collision geometry and self-collision checks.
