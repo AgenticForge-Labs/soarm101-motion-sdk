@@ -1,8 +1,10 @@
 import pytest
 
 from soarm101_motion.calibration_live import (
+    PROVISIONAL_MINIMUM_TRAVEL_TICKS,
     EncoderSweep,
     calibration_from_sweeps,
+    sweep_progress_snapshot,
 )
 from soarm101_motion.constants import ALL_MOTORS, ENCODER_RESOLUTION, HALF_TURN
 from soarm101_motion.exceptions import CalibrationError
@@ -26,7 +28,7 @@ def test_encoder_sweep_unwraps_across_zero_seam() -> None:
 def test_live_calibration_maps_mechanical_midpoint_to_half_turn() -> None:
     # Use a seam-crossing sweep for every motor to exercise the difficult case.
     sweeps = {
-        name: sweep([3500, 3900, 100, 500, 700, 100, 3900, 3500])
+        name: sweep([2800, 3500, 100, 700, 1200, 700, 100, 3500, 2800])
         for name in ALL_MOTORS
     }
     calibration = calibration_from_sweeps(sweeps)
@@ -51,3 +53,50 @@ def test_live_calibration_rejects_more_than_one_encoder_turn() -> None:
     }
     with pytest.raises(CalibrationError, match="one full encoder turn or more"):
         calibration_from_sweeps(sweeps)
+
+
+def test_default_threshold_requires_half_turn_for_pose_joints() -> None:
+    assert PROVISIONAL_MINIMUM_TRAVEL_TICKS["shoulder_pan"] == ENCODER_RESOLUTION // 2
+    assert PROVISIONAL_MINIMUM_TRAVEL_TICKS["shoulder_lift"] == ENCODER_RESOLUTION // 2
+    assert PROVISIONAL_MINIMUM_TRAVEL_TICKS["elbow_flex"] == ENCODER_RESOLUTION // 2
+    assert PROVISIONAL_MINIMUM_TRAVEL_TICKS["wrist_flex"] == ENCODER_RESOLUTION // 2
+    assert PROVISIONAL_MINIMUM_TRAVEL_TICKS["wrist_roll"] == ENCODER_RESOLUTION // 2
+
+
+def test_live_calibration_rejects_pose_joint_below_half_turn() -> None:
+    complete = sweep([1000, 2000, 3000, 3100])
+    short = sweep([1000, 1800, 2800])
+    gripper = sweep([2000, 2300])
+    sweeps = {name: complete for name in ALL_MOTORS}
+    sweeps = dict(sweeps)
+    sweeps["shoulder_pan"] = short
+    sweeps["so101_gripper"] = gripper
+
+    with pytest.raises(CalibrationError, match=r"shoulder_pan moved only 1800.*2048"):
+        calibration_from_sweeps(sweeps)
+
+
+def test_gripper_keeps_separate_provisional_threshold() -> None:
+    complete = sweep([1000, 2000, 3000, 3100])
+    gripper = sweep([2000, 2300])
+    sweeps = {name: complete for name in ALL_MOTORS}
+    sweeps = dict(sweeps)
+    sweeps["so101_gripper"] = gripper
+
+    calibration = calibration_from_sweeps(sweeps)
+    assert calibration.motors["so101_gripper"].range_max > calibration.motors["so101_gripper"].range_min
+
+
+def test_sweep_progress_reports_fraction_ticks_and_pass_state() -> None:
+    sweeps = {name: sweep([1000, 1500]) for name in ALL_MOTORS}
+    progress = sweep_progress_snapshot(sweeps)
+
+    assert progress["shoulder_pan"]["travel_ticks"] == 500
+    assert progress["shoulder_pan"]["required_ticks"] == 2048
+    assert progress["shoulder_pan"]["fraction"] == pytest.approx(500 / 2048)
+    assert progress["shoulder_pan"]["passed"] is False
+
+    sweeps["shoulder_pan"] = sweep([1000, 2000, 3000, 3100])
+    progress = sweep_progress_snapshot(sweeps)
+    assert progress["shoulder_pan"]["fraction"] == 1.0
+    assert progress["shoulder_pan"]["passed"] is True
