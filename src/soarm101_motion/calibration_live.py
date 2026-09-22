@@ -165,7 +165,7 @@ def calibration_from_sweeps(
         if travel < required:
             raise CalibrationError(
                 f"{name} moved only {travel} encoder ticks; at least {required} ticks "
-                "are required by the current provisional sweep threshold. Sweep it "
+                "are required by the current provisional sweep threshold; sweep it "
                 "repeatedly between both mechanical stops and recalibrate."
             )
         if travel >= ENCODER_RESOLUTION:
