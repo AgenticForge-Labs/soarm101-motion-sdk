@@ -500,11 +500,18 @@ class SOARM101:
             wait=wait,
         )
 
-    def start_joint_stream(self) -> None:
+    def start_joint_stream(
+        self,
+        *,
+        frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    ) -> None:
         """Start guarded continuous joint streaming for teleoperation."""
         if self.tool.is_moving:
             self._stop_tool(wait=True)
-        self.motion.start_joint_stream(tcp=self.active_tcp)
+        self.motion.start_joint_stream(
+            frequency_hz=frequency_hz,
+            tcp=self.active_tcp,
+        )
 
     def stream_joint_target(
         self,
