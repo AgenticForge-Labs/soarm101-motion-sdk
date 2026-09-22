@@ -29,7 +29,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from soarm101_motion.calibration_live import PROVISIONAL_MINIMUM_TRAVEL_TICKS
 from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.hardware import FeetechBackend
@@ -128,6 +130,7 @@ class MainWindow(QMainWindow):
         self._worker.log_message.connect(self._log)
         self._worker.error_message.connect(self._on_error)
         self._worker.calibration_completed.connect(self._on_calibration_completed)
+        self._worker.calibration_progress.connect(self._on_calibration_progress)
         self._worker.recording_completed.connect(self._on_recording_completed)
         self._worker.recording_changed.connect(
             lambda active: self._on_recording_changed("follower", active)
@@ -310,6 +313,18 @@ class MainWindow(QMainWindow):
         )
         self.calibration_status.setWordWrap(True)
         grid.addWidget(self.calibration_status, 2, 0, 1, 3)
+
+        target_note = QLabel(
+            "Live circles show observed encoder span versus the current provisional "
+            "minimum. Pose joints require at least 180° / 2048 ticks. The gripper "
+            "threshold is intentionally conservative until physical travel is measured."
+        )
+        target_note.setWordWrap(True)
+        grid.addWidget(target_note, 3, 0, 1, 3)
+
+        self.calibration_sweep_panel = CalibrationSweepPanel()
+        self.calibration_sweep_panel.reset(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
+        grid.addWidget(self.calibration_sweep_panel, 4, 0, 1, 3)
         layout.addWidget(calibration)
 
         later = QLabel(
@@ -1098,8 +1113,24 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self.calibration_status.setText("Calibration recording in progress…")
+        self.calibration_sweep_panel.reset(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
+        self.calibration_status.setText(
+            "Calibration recording in progress… Sweep every actuator fully between both stops."
+        )
         self.calibration_requested.emit(self.calibration_duration.value())
+
+    def _on_calibration_progress(self, result: object) -> None:
+        values = dict(result)  # type: ignore[arg-type]
+        self.calibration_sweep_panel.set_progress(values)
+        passed = sum(
+            1
+            for item in values.values()
+            if isinstance(item, dict) and bool(item.get("passed", False))
+        )
+        self.calibration_status.setText(
+            f"Calibration recording in progress… {passed}/{len(PROVISIONAL_MINIMUM_TRAVEL_TICKS)} "
+            "actuators have reached their provisional minimum sweep."
+        )
 
     def _on_calibration_completed(self, result: object) -> None:
         values = dict(result)  # type: ignore[arg-type]

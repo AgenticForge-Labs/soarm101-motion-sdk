@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from soarm101_motion.calibration import SO101Calibration
-from soarm101_motion.calibration_live import EncoderSweep, calibration_from_sweeps
+from soarm101_motion.calibration_live import (
+    EncoderSweep,
+    calibration_from_sweeps,
+    sweep_progress_snapshot,
+)
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ALL_MOTORS
 from soarm101_motion.exceptions import CalibrationError, CommunicationError, SafetyViolationError
@@ -324,6 +328,8 @@ class FeetechBackend(_ProtocolFeetechBackend):
         *,
         record_seconds: float = 20.0,
         poll_interval: float = 0.02,
+        progress_callback: Callable[[dict[str, dict[str, int | float | bool]]], None]
+        | None = None,
     ) -> SO101Calibration:
         """Calibrate all motors from one live sweep between printed end stops.
 
@@ -355,12 +361,21 @@ class FeetechBackend(_ProtocolFeetechBackend):
                 sweeps = {name: EncoderSweep.start(raw) for name, raw in start.items()}
 
                 deadline = time.monotonic() + record_seconds
+                next_progress = 0.0
+                if progress_callback is not None:
+                    progress_callback(sweep_progress_snapshot(sweeps))
                 while time.monotonic() < deadline:
                     values = self.read_all_raw_positions()
                     for name, raw in values.items():
                         sweeps[name].update(raw)
+                    now = time.monotonic()
+                    if progress_callback is not None and now >= next_progress:
+                        progress_callback(sweep_progress_snapshot(sweeps))
+                        next_progress = now + 0.10
                     time.sleep(poll_interval)
 
+                if progress_callback is not None:
+                    progress_callback(sweep_progress_snapshot(sweeps))
                 calibration = calibration_from_sweeps(sweeps)
                 self.apply_calibration(calibration)
                 verified = self.read_calibration_from_motors()

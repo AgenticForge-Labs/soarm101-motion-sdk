@@ -36,14 +36,20 @@ physical power switch/plug immediately accessible.
 
 1. Keep follower torque OFF.
 2. Open Setup > Calibration.
-3. Start the live calibration sweep.
+3. Start the live calibration sweep. Six circular gauges should reset to 0% and
+   begin filling from the observed encoder extrema, not from elapsed time.
 4. Move every arm joint and the gripper repeatedly through their complete safe travel.
    Gently touch both printed mechanical stops several times; do not hold or force a
    joint against a stop.
-5. Let the recording finish. The SDK should derive each zero from the midpoint of the
-   observed extrema, write symmetric limits, read them back, and save the calibration.
-6. Reconnect normally (without "allow uncalibrated").
-7. Confirm the GUI joint sliders now use the calibrated limits.
+5. Confirm every pose-joint gauge reaches PASS. The current provisional minimum is
+   2048 ticks (180°) for each of the five arm joints. The gripper uses a separate,
+   deliberately conservative 256-tick minimum until its physical travel is characterized.
+   The gauge also shows the raw observed tick span so these expectations can be refined.
+6. Let the recording finish. Calibration must fail rather than save if any actuator is
+   below its current minimum. Otherwise the SDK should derive each zero from the midpoint
+   of the observed extrema, write symmetric limits, read them back, and save the calibration.
+7. Reconnect normally (without "allow uncalibrated").
+8. Confirm the GUI joint sliders now use the calibrated limits.
 
 ### 4. First follower motion validation — DO LATER
 
