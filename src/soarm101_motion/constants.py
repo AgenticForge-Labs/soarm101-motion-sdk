@@ -56,6 +56,10 @@ DEFAULT_JOINT_ACCEL_RAD_S2 = 1.2
 DEFAULT_LINEAR_SPEED_M_S = 0.03
 DEFAULT_LINEAR_ACCEL_M_S2 = 0.10
 DEFAULT_COMMAND_FREQUENCY_HZ = 50.0
+# Conservative initial rate for physical leader→follower teleoperation.  The normal
+# trajectory clock remains 50 Hz; streaming starts slower because each sample currently
+# performs synchronous hardware safety/feedback reads on the serial bus.
+DEFAULT_TELEOP_STREAM_FREQUENCY_HZ = 10.0
 DEFAULT_MAX_COMMAND_STEP_RAD = 5.0 * pi / 180.0
 
 # Feetech STS3215 control table. Address and byte width.
