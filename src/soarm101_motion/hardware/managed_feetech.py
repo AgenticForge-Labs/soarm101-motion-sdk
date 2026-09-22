@@ -38,6 +38,17 @@ class FeetechBackend(_ProtocolFeetechBackend):
         super().__init__(config)
         self._effort_trip_message: str | None = None
         self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
+        self._effort_safety_enabled = bool(config.effort_safety_enabled)
+        self._effort_current_trip_raw = config.effort_current_trip_raw
+        self._effort_load_trip_raw = config.effort_load_trip_raw
+        self._effort_trip_consecutive_samples = config.effort_trip_consecutive_samples
+        self._motor_current_trip_raw = dict(config.motor_current_trip_raw)
+        self._motor_load_trip_raw = dict(config.motor_load_trip_raw)
+        self._last_effort_readings: dict[str, dict[str, int]] = {}
+        self._effort_peaks = {
+            name: {"current_raw": 0, "abs_load_raw": 0} for name in ALL_MOTORS
+        }
+        self._effort_sample_monotonic: float | None = None
 
     def _ensure_effort_state(self) -> None:
         """Initialize safety-latch state for normal and lightweight backend instances."""
@@ -50,6 +61,26 @@ class FeetechBackend(_ProtocolFeetechBackend):
             self._effort_trip_message = None
         if not hasattr(self, "_effort_violation_counts"):
             self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
+        if not hasattr(self, "_effort_safety_enabled"):
+            self._effort_safety_enabled = bool(self.config.effort_safety_enabled)
+        if not hasattr(self, "_effort_current_trip_raw"):
+            self._effort_current_trip_raw = self.config.effort_current_trip_raw
+        if not hasattr(self, "_effort_load_trip_raw"):
+            self._effort_load_trip_raw = self.config.effort_load_trip_raw
+        if not hasattr(self, "_effort_trip_consecutive_samples"):
+            self._effort_trip_consecutive_samples = self.config.effort_trip_consecutive_samples
+        if not hasattr(self, "_motor_current_trip_raw"):
+            self._motor_current_trip_raw = dict(self.config.motor_current_trip_raw)
+        if not hasattr(self, "_motor_load_trip_raw"):
+            self._motor_load_trip_raw = dict(self.config.motor_load_trip_raw)
+        if not hasattr(self, "_last_effort_readings"):
+            self._last_effort_readings = {}
+        if not hasattr(self, "_effort_peaks"):
+            self._effort_peaks = {
+                name: {"current_raw": 0, "abs_load_raw": 0} for name in ALL_MOTORS
+            }
+        if not hasattr(self, "_effort_sample_monotonic"):
+            self._effort_sample_monotonic = None
 
     def _require_effort_clear(self) -> None:
         self._ensure_effort_state()
@@ -68,15 +99,17 @@ class FeetechBackend(_ProtocolFeetechBackend):
         return -magnitude if value & 0x0400 else magnitude
 
     def _current_limit(self, motor: str) -> int | None:
-        return self.config.motor_current_trip_raw.get(
+        self._ensure_effort_state()
+        return self._motor_current_trip_raw.get(
             motor,
-            self.config.effort_current_trip_raw,
+            self._effort_current_trip_raw,
         )
 
     def _load_limit(self, motor: str) -> int | None:
-        return self.config.motor_load_trip_raw.get(
+        self._ensure_effort_state()
+        return self._motor_load_trip_raw.get(
             motor,
-            self.config.effort_load_trip_raw,
+            self._effort_load_trip_raw,
         )
 
     def read_motor_effort(self, motor: str) -> dict[str, int]:
@@ -90,12 +123,97 @@ class FeetechBackend(_ProtocolFeetechBackend):
             load = self._decode_present_load(self.read_register(motor, "Present_Load"))
             return {"current_raw": current, "load_raw": load}
 
+    def _read_all_motor_effort(self) -> dict[str, dict[str, int]]:
+        readings = {name: self.read_motor_effort(name) for name in ALL_MOTORS}
+        self._last_effort_readings = {
+            name: dict(values) for name, values in readings.items()
+        }
+        self._effort_sample_monotonic = time.monotonic()
+        for name, values in readings.items():
+            peak = self._effort_peaks[name]
+            peak["current_raw"] = max(peak["current_raw"], abs(int(values["current_raw"])))
+            peak["abs_load_raw"] = max(peak["abs_load_raw"], abs(int(values["load_raw"])))
+        return readings
+
+    def get_effort_safety_status(self, *, refresh: bool = False) -> dict[str, object]:
+        """Return live/cached effort guard settings, readings, peaks, and trip state."""
+
+        with self._io_lock:
+            self._ensure_effort_state()
+            if refresh:
+                if not self._connected:
+                    raise CommunicationError("robot is not connected")
+                self._read_all_motor_effort()
+            return {
+                "supported": True,
+                "enabled": self._effort_safety_enabled,
+                "current_trip_raw": self._effort_current_trip_raw,
+                "load_trip_raw": self._effort_load_trip_raw,
+                "consecutive_samples": self._effort_trip_consecutive_samples,
+                "trip_message": self._effort_trip_message,
+                "sample_monotonic": self._effort_sample_monotonic,
+                "readings": {
+                    name: dict(values)
+                    for name, values in self._last_effort_readings.items()
+                },
+                "peaks": {
+                    name: dict(values) for name, values in self._effort_peaks.items()
+                },
+                "effective_limits": {
+                    name: {
+                        "current_raw": self._current_limit(name),
+                        "load_raw": self._load_limit(name),
+                    }
+                    for name in ALL_MOTORS
+                },
+            }
+
+    def configure_effort_safety(
+        self,
+        *,
+        enabled: bool,
+        current_trip_raw: int | None,
+        load_trip_raw: int | None,
+        consecutive_samples: int,
+    ) -> None:
+        """Apply session-only global effort thresholds while torque is disabled."""
+
+        with self._io_lock:
+            self._ensure_effort_state()
+            if self._torque_enabled:
+                raise SafetyViolationError(
+                    "disable torque before changing effort-safety settings"
+                )
+            if current_trip_raw is not None and int(current_trip_raw) <= 0:
+                raise ValueError("current trip threshold must be positive or disabled")
+            if load_trip_raw is not None and not 1 <= int(load_trip_raw) <= 1023:
+                raise ValueError("load trip threshold must be in [1, 1023] or disabled")
+            if int(consecutive_samples) < 1:
+                raise ValueError("consecutive effort samples must be at least 1")
+            self._effort_safety_enabled = bool(enabled)
+            self._effort_current_trip_raw = (
+                None if current_trip_raw is None else int(current_trip_raw)
+            )
+            self._effort_load_trip_raw = (
+                None if load_trip_raw is None else int(load_trip_raw)
+            )
+            self._effort_trip_consecutive_samples = int(consecutive_samples)
+            self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
+
+    def reset_effort_peaks(self) -> None:
+        with self._io_lock:
+            self._ensure_effort_state()
+            self._effort_peaks = {
+                name: {"current_raw": 0, "abs_load_raw": 0} for name in ALL_MOTORS
+            }
+
     def _sample_effort_trip(self) -> str | None:
         self._ensure_effort_state()
-        if not self.config.effort_safety_enabled:
+        if not self._effort_safety_enabled:
             return None
 
-        required = self.config.effort_trip_consecutive_samples
+        required = self._effort_trip_consecutive_samples
+        readings = self._read_all_motor_effort()
         tripped: list[str] = []
         for name in ALL_MOTORS:
             current_limit = self._current_limit(name)
@@ -104,7 +222,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
                 self._effort_violation_counts[name] = 0
                 continue
 
-            reading = self.read_motor_effort(name)
+            reading = readings[name]
             current = reading["current_raw"]
             load = reading["load_raw"]
             violations: list[str] = []
@@ -296,7 +414,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
                 effort_message is None
                 and self._connected
                 and self._torque_enabled
-                and self.config.effort_safety_enabled
+                and self._effort_safety_enabled
             ):
                 try:
                     effort_message = self._sample_effort_trip()
