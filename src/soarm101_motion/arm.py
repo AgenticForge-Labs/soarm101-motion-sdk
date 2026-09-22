@@ -13,7 +13,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion.config import SOARM101Config
-from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS, JOINT_LIMITS
+from soarm101_motion.constants import (
+    ARM_JOINTS,
+    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    HOME_JOINTS,
+    JOINT_LIMITS,
+)
 from soarm101_motion.exceptions import (
     ConfigurationError,
     InvalidCommandError,
