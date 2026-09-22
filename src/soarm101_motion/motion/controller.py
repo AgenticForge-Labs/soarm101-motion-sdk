@@ -13,7 +13,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from soarm101_motion.config import SOARM101Config
-from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS, STOCK_GRIPPER
+from soarm101_motion.constants import (
+    ARM_JOINTS,
+    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    JOINT_LIMITS,
+    STOCK_GRIPPER,
+)
 from soarm101_motion.exceptions import (
     HardwareFaultError,
     InvalidCommandError,
@@ -117,6 +122,7 @@ class JointStreamState:
     last_command: dict[str, float]
     last_velocity: dict[str, float] | None
     previous_actual: dict[str, float]
+    frequency_hz: float
     tcp: Pose | None = None
 
 
@@ -784,8 +790,24 @@ class MotionController:
             )
         return handle.wait() if wait else handle
 
-    def start_joint_stream(self, *, tcp: Pose | None = None) -> None:
-        """Begin guarded continuous joint streaming from the current measured pose."""
+    def start_joint_stream(
+        self,
+        *,
+        frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+        tcp: Pose | None = None,
+    ) -> None:
+        """Begin guarded continuous joint streaming from the current measured pose.
+
+        Streaming has its own explicit clock.  It defaults below the normal 50 Hz
+        trajectory command clock because hardware teleoperation currently performs
+        synchronous feedback/fault/effort checks on every accepted sample.
+        """
+        frequency = self._positive(frequency_hz, "stream frequency")
+        if frequency > self.config.command_frequency_hz:
+            raise SafetyViolationError(
+                f"stream frequency {frequency:.1f} Hz exceeds configured command "
+                f"frequency ceiling {self.config.command_frequency_hz:.1f} Hz"
+            )
         with self._state_lock:
             self._ensure_idle_locked()
             self._require_ready()
@@ -794,6 +816,7 @@ class MotionController:
                 last_command=present,
                 last_velocity=None,
                 previous_actual=present.copy(),
+                frequency_hz=frequency,
                 tcp=tcp,
             )
 
@@ -824,7 +847,7 @@ class MotionController:
                 self.config.max_command_step_radians,
             )
 
-            dt = 1.0 / self.config.command_frequency_hz
+            dt = 1.0 / state.frequency_hz
             velocity = {
                 name: (target[name] - state.last_command[name]) / dt
                 for name in ARM_JOINTS
