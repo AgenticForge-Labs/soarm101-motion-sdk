@@ -169,9 +169,24 @@ class FeetechBackend(_ProtocolFeetechBackend):
                 acceleration_raw=acceleration_raw,
             )
 
-    def _validate_enable_positions_in_eeprom_limits(
+    def _read_enable_position_limits(
         self,
+        motors: Sequence[str],
+    ) -> dict[str, tuple[int, int]]:
+        """Read the exact EEPROM limits the servo firmware applies to position goals."""
+
+        return {
+            name: (
+                int(self.read_register(name, "Min_Position_Limit")),
+                int(self.read_register(name, "Max_Position_Limit")),
+            )
+            for name in motors
+        }
+
+    @staticmethod
+    def _validate_enable_positions_in_eeprom_limits(
         raw_positions: Mapping[str, int],
+        limits: Mapping[str, tuple[int, int]],
     ) -> None:
         """Refuse torque enable if a measured position would be clamped by firmware.
 
@@ -185,8 +200,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
         violations: list[str] = []
         invalid_ranges: list[str] = []
         for name, position in raw_positions.items():
-            minimum = int(self.read_register(name, "Min_Position_Limit"))
-            maximum = int(self.read_register(name, "Max_Position_Limit"))
+            minimum, maximum = limits[name]
             if minimum >= maximum:
                 invalid_ranges.append(
                     f"{name}: invalid EEPROM limits {minimum}..{maximum}"
@@ -215,11 +229,12 @@ class FeetechBackend(_ProtocolFeetechBackend):
             if unknown:
                 raise KeyError(next(iter(unknown)))
 
-            # Read and validate every selected motor before writing any goal.
-            # A present position outside the servo's active EEPROM range can cause
-            # Goal_Position to be clamped and produce a sudden movement at torque-on.
+            # Read the persistent limits first, then take the final measured-position
+            # snapshot immediately before validation/latching. This minimizes the time
+            # between the pose we intend to hold and the Goal_Position write.
+            limits = self._read_enable_position_limits(selected)
             raw_positions = {name: self.read_raw_position(name) for name in selected}
-            self._validate_enable_positions_in_eeprom_limits(raw_positions)
+            self._validate_enable_positions_in_eeprom_limits(raw_positions, limits)
 
             # Only after all motors pass the precheck do we latch measured positions.
             self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
