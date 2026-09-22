@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+from soarm101_motion.exceptions import SafetyViolationError
 from soarm101_motion.hardware import FeetechBackend
 
 
@@ -114,7 +115,7 @@ def test_enable_refuses_out_of_range_position_before_any_goal_or_torque_write() 
     )
 
     with pytest.raises(
-        Exception,
+        SafetyViolationError,
         match=r"shoulder_lift: present 90 outside EEPROM limits 100\.\.3995",
     ):
         backend.enable_torque(["shoulder_pan", "shoulder_lift"])
@@ -136,7 +137,10 @@ def test_enable_refuses_invalid_eeprom_range_before_any_write() -> None:
         (motor, register, value)
     )
 
-    with pytest.raises(Exception, match=r"invalid EEPROM limits 3000\.\.1000"):
+    with pytest.raises(
+        SafetyViolationError,
+        match=r"invalid EEPROM limits 3000\.\.1000",
+    ):
         backend.enable_torque(["shoulder_pan"])
 
     assert latched == []
