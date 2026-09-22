@@ -295,6 +295,12 @@ class RobotWorker(QObject):
             frequency = float(
                 values.get("frequency_hz", DEFAULT_TELEOP_STREAM_FREQUENCY_HZ)
             )
+            if frequency <= 0:
+                raise ValueError("teleoperation frequency must be positive")
+            if frequency > arm.config.command_frequency_hz:
+                raise ValueError(
+                    "teleoperation frequency exceeds the configured command-frequency ceiling"
+                )
             leader_origin = {
                 name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
             }
