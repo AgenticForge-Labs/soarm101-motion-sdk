@@ -69,6 +69,38 @@ Do not start with Home/Rest or Cartesian moves.
 8. Only after all five joints pass should you test saved Home/Rest positions.
 9. Only after joint motion passes should you test 5 mm Cartesian jogs.
 
+### 4a. Motor effort/current characterization — DO LATER
+
+Do this after the first small joint-motion checks and before relying on the effort guard
+for larger or continuous motion. Raw current/load are safety indicators, not calibrated
+force.
+
+1. Open Setup > **Motor effort safety / characterization**. Confirm the guard is enabled
+   and note the session defaults and each motor's effective thresholds.
+2. With torque OFF and no payload, press **Refresh readings** once. Confirm all six motors
+   return plausible raw values and there are no communication errors.
+3. Press **Reset peaks**, place the arm near its centered pose, enable torque, and let it
+   hold without commanded motion for several seconds. Record the displayed per-motor
+   current/load values and peaks.
+4. Run the already-validated slow ±5° motion on one joint at a time. After each move,
+   inspect the session peaks. The backend samples effort during guarded motion, so the
+   peak display should capture values seen by the safety monitor without adding a second
+   serial-read loop from the GUI.
+5. Keep the default thresholds for the first characterization pass. If normal unloaded
+   holding/motion produces false trips, **Relax first**, then make a small explicit
+   threshold adjustment and repeat the same test. Do not change effort settings while
+   torque is enabled.
+6. If a trip occurs, confirm the global status and effort panel show the latched motor and
+   reason, and that motion remains blocked. Remove any contact/obstruction before pressing
+   **Clear latched trip**. Clearing the latch must not itself move the arm.
+7. Test **Reset peaks** between controlled conditions so unloaded hold, single-joint
+   motion, gripper motion, and later payload tests can be compared separately.
+8. Treat disabling the effort guard as diagnostic-only. The GUI requires explicit
+   confirmation, the setting lasts only for the current connection/session, and all
+   other SDK safety layers remain active.
+9. Record useful provisional per-joint ranges for current and |load|. Only after repeated
+   tests should the defaults or per-motor overrides be tightened/relaxed in code.
+
 ### 5. Leader readout — DO LATER
 
 1. Connect the follower and leader on separate USB serial adapters.
