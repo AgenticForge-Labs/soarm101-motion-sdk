@@ -253,6 +253,46 @@ class SOARM101:
     def get_state(self) -> HardwareState:
         return self.backend.get_hardware_state()
 
+    def get_effort_safety_status(self, *, refresh: bool = False) -> dict[str, object]:
+        """Return backend effort-guard state when supported."""
+
+        getter = getattr(self.backend, "get_effort_safety_status", None)
+        if not callable(getter):
+            return {"supported": False}
+        return dict(getter(refresh=refresh))
+
+    def configure_effort_safety(
+        self,
+        *,
+        enabled: bool,
+        current_trip_raw: int | None,
+        load_trip_raw: int | None,
+        consecutive_samples: int,
+    ) -> None:
+        """Apply session-only effort guard settings on supported hardware."""
+
+        configure = getattr(self.backend, "configure_effort_safety", None)
+        if not callable(configure):
+            raise RuntimeError("active backend does not provide effort safety configuration")
+        configure(
+            enabled=enabled,
+            current_trip_raw=current_trip_raw,
+            load_trip_raw=load_trip_raw,
+            consecutive_samples=consecutive_samples,
+        )
+
+    def clear_effort_trip(self) -> None:
+        clear = getattr(self.backend, "clear_effort_trip", None)
+        if not callable(clear):
+            raise RuntimeError("active backend does not provide an effort safety interlock")
+        clear()
+
+    def reset_effort_peaks(self) -> None:
+        reset = getattr(self.backend, "reset_effort_peaks", None)
+        if not callable(reset):
+            raise RuntimeError("active backend does not provide effort peak tracking")
+        reset()
+
     def get_joint_limits(self) -> dict[str, tuple[float, float]]:
         """Return effective model/calibration limits for the five pose joints."""
         limits = dict(JOINT_LIMITS)

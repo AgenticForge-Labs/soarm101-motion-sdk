@@ -94,3 +94,111 @@ def test_per_motor_load_override_can_be_more_sensitive() -> None:
     assert "so101_gripper" in (state.fault_message or "")
     assert "|load| 450 >= 400" in (state.fault_message or "")
     assert backend.hold_count == 1
+
+
+def test_effort_status_reports_live_readings_peaks_and_effective_limits() -> None:
+    config = SOARM101Config(
+        port="fake",
+        use_stored_calibration=False,
+        effort_current_trip_raw=250,
+        effort_load_trip_raw=850,
+        motor_current_trip_raw={"wrist_roll": 180},
+    )
+    backend = FakeEffortBackend(config)
+    backend.currents["wrist_roll"] = 120
+    backend.loads["wrist_roll"] = 0x0400 | 300
+
+    state = backend.get_hardware_state()
+    assert not state.faulted
+
+    status = backend.get_effort_safety_status()
+    assert status["supported"] is True
+    assert status["enabled"] is True
+    assert status["readings"]["wrist_roll"] == {
+        "current_raw": 120,
+        "load_raw": -300,
+    }
+    assert status["peaks"]["wrist_roll"] == {
+        "current_raw": 120,
+        "abs_load_raw": 300,
+    }
+    assert status["effective_limits"]["wrist_roll"]["current_raw"] == 180
+    assert status["effective_limits"]["wrist_roll"]["load_raw"] == 850
+
+    backend.currents["wrist_roll"] = 150
+    backend.loads["wrist_roll"] = 100
+    backend.get_hardware_state()
+    status = backend.get_effort_safety_status()
+    assert status["peaks"]["wrist_roll"]["current_raw"] == 150
+    assert status["peaks"]["wrist_roll"]["abs_load_raw"] == 300
+
+    backend.reset_effort_peaks()
+    status = backend.get_effort_safety_status()
+    assert status["peaks"]["wrist_roll"] == {
+        "current_raw": 0,
+        "abs_load_raw": 0,
+    }
+
+
+def test_effort_settings_can_only_change_with_torque_off() -> None:
+    backend = FakeEffortBackend(
+        SOARM101Config(port="fake", use_stored_calibration=False)
+    )
+
+    with pytest.raises(SafetyViolationError, match="disable torque"):
+        backend.configure_effort_safety(
+            enabled=False,
+            current_trip_raw=None,
+            load_trip_raw=500,
+            consecutive_samples=3,
+        )
+
+    backend._torque_enabled = False
+    backend.configure_effort_safety(
+        enabled=False,
+        current_trip_raw=None,
+        load_trip_raw=500,
+        consecutive_samples=3,
+    )
+    status = backend.get_effort_safety_status()
+    assert status["enabled"] is False
+    assert status["current_trip_raw"] is None
+    assert status["load_trip_raw"] == 500
+    assert status["consecutive_samples"] == 3
+
+
+def test_changing_effort_settings_does_not_clear_latched_trip() -> None:
+    backend = FakeEffortBackend(
+        SOARM101Config(port="fake", use_stored_calibration=False)
+    )
+    backend._effort_trip_message = "motor effort safety trip: test"
+    backend._torque_enabled = False
+
+    backend.configure_effort_safety(
+        enabled=True,
+        current_trip_raw=300,
+        load_trip_raw=900,
+        consecutive_samples=4,
+    )
+
+    assert backend.effort_trip_message == "motor effort safety trip: test"
+    with pytest.raises(SafetyViolationError, match="clear_effort_trip"):
+        backend._require_effort_clear()
+
+
+def test_manual_effort_refresh_updates_cache_without_trip_evaluation() -> None:
+    backend = FakeEffortBackend(
+        SOARM101Config(
+            port="fake",
+            use_stored_calibration=False,
+            effort_current_trip_raw=100,
+            effort_trip_consecutive_samples=1,
+        )
+    )
+    backend._torque_enabled = False
+    backend.currents["elbow_flex"] = 150
+
+    status = backend.get_effort_safety_status(refresh=True)
+
+    assert status["readings"]["elbow_flex"]["current_raw"] == 150
+    assert status["trip_message"] is None

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a Setup GUI motor-effort safety/characterization panel with per-motor live
+  current/load, session peaks, effective thresholds, latched-trip visibility, manual
+  refresh/reset/clear actions, and explicit session-only global threshold controls.
+- Effort threshold changes now require torque OFF; changing settings never clears a
+  latched trip, and disabling the effort guard requires an explicit GUI confirmation.
+- Cached effort readings/peaks are updated by the existing guarded motion monitor so the
+  GUI can display characterization data without adding a competing serial-read loop.
 - Fixed LeRobot calibration coordinate compatibility: arm-joint zero is now the
   midpoint of each calibrated `range_min` / `range_max` pair rather than always
   encoder tick 2047. Asymmetric imported LeRobot calibrations therefore preserve

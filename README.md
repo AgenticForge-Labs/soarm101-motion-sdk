@@ -112,6 +112,8 @@ The GUI provides:
 - guarded leader-to-follower joint teleoperation with relative/clutch-safe or
   absolute calibrated mapping, optional gripper mirroring, and a conservative 10 Hz
   default stream rate (5/10/20/50 Hz selectable; higher rates require hardware validation);
+- a Setup motor-effort characterization panel with per-motor current/load, session
+  peaks, effective thresholds, latched-trip visibility, and torque-off-only session tuning;
 - calibrated slider limits after calibration;
 - measured and target values for all five joints, with degree sliders;
 - guarded absolute joint moves;

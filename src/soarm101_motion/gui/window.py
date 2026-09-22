@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from soarm101_motion.calibration_live import PROVISIONAL_MINIMUM_TRAVEL_TICKS
 from soarm101_motion.constants import (
+    ALL_MOTORS,
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     JOINT_LIMITS,
@@ -71,6 +72,10 @@ class MainWindow(QMainWindow):
     sequence_run_requested = Signal(object)
     sequence_pause_requested = Signal()
     sequence_resume_requested = Signal()
+    effort_refresh_requested = Signal()
+    effort_clear_requested = Signal()
+    effort_reset_peaks_requested = Signal()
+    effort_configure_requested = Signal(object)
 
     def __init__(
         self,
@@ -101,6 +106,8 @@ class MainWindow(QMainWindow):
         self._primitive_library_cache: tuple[str, MotionPrimitiveLibrary] | None = None
         self._sequence_steps: list[SequenceStep] = []
         self._sequence_paused = False
+        self._latest_effort_status: dict[str, Any] = {"supported": False}
+        self._effort_controls_initialized = False
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -127,6 +134,10 @@ class MainWindow(QMainWindow):
         self.sequence_run_requested.connect(self._worker.run_sequence)
         self.sequence_pause_requested.connect(self._worker.pause_sequence)
         self.sequence_resume_requested.connect(self._worker.resume_sequence)
+        self.effort_refresh_requested.connect(self._worker.refresh_effort)
+        self.effort_clear_requested.connect(self._worker.clear_effort_trip)
+        self.effort_reset_peaks_requested.connect(self._worker.reset_effort_peaks)
+        self.effort_configure_requested.connect(self._worker.configure_effort_safety)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
@@ -141,6 +152,7 @@ class MainWindow(QMainWindow):
         )
         self._worker.teleop_changed.connect(self._on_teleop_changed)
         self._worker.sequence_progress.connect(self._on_sequence_progress)
+        self._worker.effort_changed.connect(self._on_effort_status)
 
         self._leader_thread = QThread(self)
         self._leader_worker = RobotWorker()
@@ -330,6 +342,86 @@ class MainWindow(QMainWindow):
         self.calibration_sweep_panel.reset(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
         grid.addWidget(self.calibration_sweep_panel, 4, 0, 1, 3)
         layout.addWidget(calibration)
+
+        effort = QGroupBox("Motor effort safety / characterization")
+        effort_grid = QGridLayout(effort)
+        effort_note = QLabel(
+            "Current/load feedback is a raw safety signal, not calibrated force. "
+            "Settings below are session-only and reset on reconnect. Change thresholds "
+            "only with torque OFF; hard joint, calibration, workspace, following-error, "
+            "fault, and timing protections are unaffected."
+        )
+        effort_note.setWordWrap(True)
+        effort_grid.addWidget(effort_note, 0, 0, 1, 7)
+
+        self.effort_guard_check = QCheckBox("Effort guard enabled")
+        self.effort_guard_check.setChecked(True)
+        effort_grid.addWidget(self.effort_guard_check, 1, 0, 1, 2)
+
+        effort_grid.addWidget(QLabel("Current trip"), 1, 2)
+        self.effort_current_spin = QSpinBox()
+        self.effort_current_spin.setRange(0, 4095)
+        self.effort_current_spin.setValue(250)
+        self.effort_current_spin.setSpecialValueText("disabled")
+        self.effort_current_spin.setToolTip("0 disables the global current threshold.")
+        effort_grid.addWidget(self.effort_current_spin, 1, 3)
+
+        effort_grid.addWidget(QLabel("|Load| trip"), 1, 4)
+        self.effort_load_spin = QSpinBox()
+        self.effort_load_spin.setRange(0, 1023)
+        self.effort_load_spin.setValue(850)
+        self.effort_load_spin.setSpecialValueText("disabled")
+        self.effort_load_spin.setToolTip("0 disables the global load threshold.")
+        effort_grid.addWidget(self.effort_load_spin, 1, 5)
+
+        effort_grid.addWidget(QLabel("Consecutive"), 1, 6)
+        self.effort_consecutive_spin = QSpinBox()
+        self.effort_consecutive_spin.setRange(1, 20)
+        self.effort_consecutive_spin.setValue(2)
+        effort_grid.addWidget(self.effort_consecutive_spin, 1, 7)
+
+        self.effort_apply_button = QPushButton("Apply session settings")
+        self.effort_apply_button.clicked.connect(self._apply_effort_settings)
+        effort_grid.addWidget(self.effort_apply_button, 2, 0, 1, 2)
+        self.effort_refresh_button = QPushButton("Refresh readings")
+        self.effort_refresh_button.clicked.connect(
+            lambda _checked=False: self.effort_refresh_requested.emit()
+        )
+        effort_grid.addWidget(self.effort_refresh_button, 2, 2, 1, 2)
+        self.effort_reset_peaks_button = QPushButton("Reset peaks")
+        self.effort_reset_peaks_button.clicked.connect(
+            lambda _checked=False: self.effort_reset_peaks_requested.emit()
+        )
+        effort_grid.addWidget(self.effort_reset_peaks_button, 2, 4, 1, 2)
+        self.effort_clear_button = QPushButton("Clear latched trip")
+        self.effort_clear_button.clicked.connect(self._clear_effort_trip)
+        effort_grid.addWidget(self.effort_clear_button, 2, 6, 1, 2)
+
+        headers = ("Motor", "Current", "Load", "Peak I", "Peak |Load|", "I limit", "|Load| limit")
+        for column, header in enumerate(headers):
+            label = QLabel(header)
+            label.setStyleSheet("font-weight: 600;")
+            effort_grid.addWidget(label, 3, column)
+
+        self.effort_value_labels: dict[str, dict[str, QLabel]] = {}
+        for row, motor in enumerate(ALL_MOTORS, start=4):
+            effort_grid.addWidget(QLabel(motor.replace("_", " ").title()), row, 0)
+            labels: dict[str, QLabel] = {}
+            for column, key in enumerate(
+                ("current", "load", "peak_current", "peak_load", "current_limit", "load_limit"),
+                start=1,
+            ):
+                label = QLabel("—")
+                labels[key] = label
+                effort_grid.addWidget(label, row, column)
+            self.effort_value_labels[motor] = labels
+
+        self.effort_status_label = QLabel(
+            "Effort telemetry unavailable until compatible hardware is connected."
+        )
+        self.effort_status_label.setWordWrap(True)
+        effort_grid.addWidget(self.effort_status_label, 10, 0, 1, 8)
+        layout.addWidget(effort)
 
         later = QLabel(
             "Physical validation is intentionally deferred. Follow TESTING.md when you are "
@@ -2149,6 +2241,8 @@ class MainWindow(QMainWindow):
             self._torque_enabled = False
             self._busy = False
             self._joint_targets_initialized = False
+            self._latest_effort_status = {"supported": False}
+            self._effort_controls_initialized = False
         self.connect_button.setText("Disconnect" if connected else "Connect")
         self._refresh_named_pose_status()
         self._refresh_point_list()
@@ -2211,6 +2305,114 @@ class MainWindow(QMainWindow):
         self._update_teach_readout()
         self._update_enabled_state()
 
+    def _on_effort_status(self, status: object) -> None:
+        values = dict(status)  # type: ignore[arg-type]
+        self._latest_effort_status = values
+        supported = bool(values.get("supported", False))
+        if not supported:
+            self.effort_status_label.setText(
+                "Effort telemetry is not available for this backend (simulation included)."
+            )
+            for labels in self.effort_value_labels.values():
+                for label in labels.values():
+                    label.setText("—")
+            self._update_enabled_state()
+            return
+
+        enabled = bool(values.get("enabled", True))
+        if not self._effort_controls_initialized:
+            self.effort_guard_check.setChecked(enabled)
+            current_trip = values.get("current_trip_raw")
+            load_trip = values.get("load_trip_raw")
+            self.effort_current_spin.setValue(
+                0 if current_trip is None else int(current_trip)
+            )
+            self.effort_load_spin.setValue(
+                0 if load_trip is None else int(load_trip)
+            )
+            self.effort_consecutive_spin.setValue(
+                int(values.get("consecutive_samples", 2))
+            )
+            self._effort_controls_initialized = True
+
+        readings = dict(values.get("readings") or {})
+        peaks = dict(values.get("peaks") or {})
+        limits = dict(values.get("effective_limits") or {})
+        for motor, labels in self.effort_value_labels.items():
+            reading = dict(readings.get(motor) or {})
+            peak = dict(peaks.get(motor) or {})
+            limit = dict(limits.get(motor) or {})
+            labels["current"].setText(
+                "—" if "current_raw" not in reading else str(int(reading["current_raw"]))
+            )
+            labels["load"].setText(
+                "—" if "load_raw" not in reading else str(int(reading["load_raw"]))
+            )
+            labels["peak_current"].setText(str(int(peak.get("current_raw", 0))))
+            labels["peak_load"].setText(str(int(peak.get("abs_load_raw", 0))))
+            labels["current_limit"].setText(
+                "off" if limit.get("current_raw") is None else str(int(limit["current_raw"]))
+            )
+            labels["load_limit"].setText(
+                "off" if limit.get("load_raw") is None else str(int(limit["load_raw"]))
+            )
+
+        trip = values.get("trip_message")
+        if trip:
+            self.effort_status_label.setText(f"LATCHED TRIP: {trip}")
+            self.effort_status_label.setStyleSheet(
+                "font-weight: 700; padding: 4px; background: #7f1d1d; color: white;"
+            )
+        else:
+            state = "enabled" if enabled else "DISABLED"
+            self.effort_status_label.setText(
+                f"Effort guard {state}. Raw current/load are diagnostic signals; "
+                "session peaks accumulate until Reset peaks."
+            )
+            self.effort_status_label.setStyleSheet("padding: 4px;")
+        self._update_enabled_state()
+
+    def _apply_effort_settings(self) -> None:
+        if self._torque_enabled:
+            QMessageBox.warning(
+                self,
+                "Torque must be off",
+                "Relax the follower before changing motor-effort safety thresholds.",
+            )
+            return
+        enabled = self.effort_guard_check.isChecked()
+        if not enabled:
+            answer = QMessageBox.question(
+                self,
+                "Disable effort guard?",
+                "This disables only current/load collision guarding for this session. "
+                "Other SDK safety checks remain active. Continue?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.effort_guard_check.setChecked(True)
+                return
+        self.effort_configure_requested.emit(
+            {
+                "enabled": enabled,
+                "current_trip_raw": self.effort_current_spin.value(),
+                "load_trip_raw": self.effort_load_spin.value(),
+                "consecutive_samples": self.effort_consecutive_spin.value(),
+            }
+        )
+
+    def _clear_effort_trip(self) -> None:
+        trip = self._latest_effort_status.get("trip_message")
+        if not trip:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Clear effort trip?",
+            "Only clear the latched trip after the obstruction/contact is removed. "
+            "Clearing does not move the arm. Continue?",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.effort_clear_requested.emit()
+
     def _update_enabled_state(self) -> None:
         simulation = self.simulation_check.isChecked()
         session_editable = not self._connected
@@ -2237,6 +2439,30 @@ class MainWindow(QMainWindow):
 
         self.run_calibration_button.setEnabled(
             self._connected and not simulation and not self._busy
+        )
+
+        effort_supported = bool(self._latest_effort_status.get("supported", False))
+        effort_editable = (
+            self._connected
+            and effort_supported
+            and not self._torque_enabled
+            and not self._busy
+        )
+        self.effort_guard_check.setEnabled(effort_editable)
+        self.effort_current_spin.setEnabled(effort_editable)
+        self.effort_load_spin.setEnabled(effort_editable)
+        self.effort_consecutive_spin.setEnabled(effort_editable)
+        self.effort_apply_button.setEnabled(effort_editable)
+        self.effort_refresh_button.setEnabled(
+            self._connected and effort_supported and not self._busy and not self._teleop_active
+        )
+        self.effort_reset_peaks_button.setEnabled(self._connected and effort_supported)
+        self.effort_clear_button.setEnabled(
+            self._connected
+            and effort_supported
+            and not self._busy
+            and not self._teleop_active
+            and bool(self._latest_effort_status.get("trip_message"))
         )
 
         can_save_pose = self._connected and self._latest_state is not None and not self._busy

@@ -36,6 +36,7 @@ class RobotWorker(QObject):
     stream_readout_changed = Signal(bool)
     teleop_changed = Signal(bool)
     sequence_progress = Signal(object)
+    effort_changed = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -788,13 +789,78 @@ class RobotWorker(QObject):
         finally:
             self.busy_changed.emit(False)
 
+    def _emit_effort_status(self, *, refresh: bool = False) -> None:
+        if self.arm is None or not self.arm.is_connected:
+            return
+        try:
+            self.effort_changed.emit(self.arm.get_effort_safety_status(refresh=refresh))
+        except BaseException as exc:
+            self._report_error("read effort safety", exc)
+
+    @Slot()
+    def refresh_effort(self) -> None:
+        try:
+            arm = self._require_motion_available()
+            self.effort_changed.emit(arm.get_effort_safety_status(refresh=True))
+        except BaseException as exc:
+            self._report_error("refresh effort", exc)
+
+    @Slot()
+    def clear_effort_trip(self) -> None:
+        try:
+            arm = self._require_arm()
+            arm.clear_effort_trip()
+            self.log_message.emit("Cleared latched motor-effort safety trip.")
+            self.effort_changed.emit(arm.get_effort_safety_status(refresh=False))
+            self.poll()
+        except BaseException as exc:
+            self._report_error("clear effort trip", exc)
+
+    @Slot()
+    def reset_effort_peaks(self) -> None:
+        try:
+            arm = self._require_arm()
+            arm.reset_effort_peaks()
+            self.log_message.emit("Reset session motor-effort peaks.")
+            self.effort_changed.emit(arm.get_effort_safety_status(refresh=False))
+        except BaseException as exc:
+            self._report_error("reset effort peaks", exc)
+
+    @Slot(object)
+    def configure_effort_safety(self, options: object) -> None:
+        try:
+            values = dict(options)  # type: ignore[arg-type]
+            arm = self._require_arm()
+            arm.configure_effort_safety(
+                enabled=bool(values.get("enabled", True)),
+                current_trip_raw=(
+                    None
+                    if int(values.get("current_trip_raw", 0)) <= 0
+                    else int(values["current_trip_raw"])
+                ),
+                load_trip_raw=(
+                    None
+                    if int(values.get("load_trip_raw", 0)) <= 0
+                    else int(values["load_trip_raw"])
+                ),
+                consecutive_samples=int(values.get("consecutive_samples", 2)),
+            )
+            self.log_message.emit(
+                "Applied session-only motor-effort safety settings (torque remains off)."
+            )
+            self.effort_changed.emit(arm.get_effort_safety_status(refresh=False))
+        except BaseException as exc:
+            self._report_error("configure effort safety", exc)
+
     @Slot()
     def poll(self) -> None:
         if self.arm is not None and self.arm.is_connected and self.arm.motion.is_streaming:
+            self._emit_effort_status(refresh=False)
             return
         if self._process_handles():
             # The SDK's motion thread already owns feedback polling. Avoid competing
             # serial traffic that could cause host-side command deadline misses.
+            self._emit_effort_status(refresh=False)
             return
         if self.arm is None or not self.arm.is_connected:
             return
@@ -827,5 +893,6 @@ class RobotWorker(QObject):
                 },
             }
             self.state_changed.emit(payload)
+            self._emit_effort_status(refresh=False)
         except BaseException as exc:
             self._report_error("read state", exc)
