@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Made leader→follower streaming rate explicit and conservative: 10 Hz default, with
+  5/10/20/50 Hz GUI choices and a warning before unvalidated >10 Hz hardware use.
+- Stream speed/acceleration checks now use the selected teleop rate rather than the
+  separate 50 Hz planned-trajectory clock.
+- Added stale-sample and repeated-cycle-overrun guards so serial backlog terminates
+  teleoperation and holds the follower instead of executing increasingly delayed commands.
+- Added live teleop cycle-time/sample-age reporting and a documented 5→10→20→50 Hz
+  hardware validation/optimization ladder.
 - Strengthened live mechanical-stop calibration with per-motor sweep thresholds:
   all five pose joints now require at least 2048 encoder ticks (180°) of observed
   stop-to-stop travel; the shorter gripper keeps a separate provisional threshold.
