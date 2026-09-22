@@ -103,8 +103,9 @@ The GUI provides:
 - a persistent sequence editor/runner combining points, Home/Rest, gripper actions, waits,
   trajectories, and motion primitives, with step execution, repeats, speed scaling,
   step-boundary pause/resume, and STOP/HOLD;
-- guarded 50 Hz leader-to-follower joint teleoperation with relative/clutch-safe or
-  absolute calibrated mapping and optional gripper mirroring;
+- guarded leader-to-follower joint teleoperation with relative/clutch-safe or
+  absolute calibrated mapping, optional gripper mirroring, and a conservative 10 Hz
+  default stream rate (5/10/20/50 Hz selectable; higher rates require hardware validation);
 - calibrated slider limits after calibration;
 - measured and target values for all five joints, with degree sliders;
 - guarded absolute joint moves;

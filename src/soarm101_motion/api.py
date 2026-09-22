@@ -15,6 +15,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion.arm import SOARM101
+from soarm101_motion.constants import DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
 from soarm101_motion.kinematics import OrientationMode
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.types import MotionResult, Pose
@@ -103,9 +104,13 @@ class SOArmAPI(SOARM101):
             raise RuntimeError("active backend does not provide an effort safety interlock")
         clear()
 
-    def servo_j_start(self) -> None:
-        """Begin guarded servo-joint style streaming."""
-        self.start_joint_stream()
+    def servo_j_start(
+        self,
+        *,
+        frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    ) -> None:
+        """Begin guarded servo-joint style streaming at an explicit sample rate."""
+        self.start_joint_stream(frequency_hz=frequency_hz)
 
     def servo_j(
         self,

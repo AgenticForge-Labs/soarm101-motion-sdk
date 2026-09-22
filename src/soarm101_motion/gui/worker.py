@@ -9,7 +9,11 @@ from typing import Any
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS
+from soarm101_motion.constants import (
+    ALL_MOTORS,
+    ARM_JOINTS,
+    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+)
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.poses import PoseLibrary, SavedPose
@@ -228,7 +232,10 @@ class RobotWorker(QObject):
             self._report_error("stop", exc)
 
     @Slot(float)
-    def start_stream_readout(self, frequency_hz: float = 50.0) -> None:
+    def start_stream_readout(
+        self,
+        frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    ) -> None:
         try:
             self._require_arm()
             frequency = float(frequency_hz)
@@ -285,34 +292,42 @@ class RobotWorker(QObject):
             mode = str(values.get("mode") or "relative")
             if mode not in {"relative", "absolute"}:
                 raise ValueError("teleoperation mode must be relative or absolute")
+            frequency = float(
+                values.get("frequency_hz", DEFAULT_TELEOP_STREAM_FREQUENCY_HZ)
+            )
+            if frequency <= 0:
+                raise ValueError("teleoperation frequency must be positive")
+            if frequency > arm.config.command_frequency_hz:
+                raise ValueError(
+                    "teleoperation frequency exceeds the configured command-frequency ceiling"
+                )
             leader_origin = {
                 name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
             }
             follower_origin = dict(arm.get_joint_positions().positions)
             follower_gripper = float(arm.tool.get_position())
+            period_s = 1.0 / frequency
             self._teleop = {
                 "mode": mode,
+                # Relative mode latches the first fresh stream sample. Absolute mode
+                # also waits for fresh stream data instead of commanding from the
+                # slower GUI snapshot used only to verify leader availability.
                 "leader_origin": None if mode == "relative" else leader_origin,
                 "follower_origin": follower_origin,
                 "leader_gripper_origin": None,
                 "follower_gripper_origin": follower_gripper,
                 "mirror_gripper": bool(values.get("mirror_gripper", True)),
                 "samples": 0,
+                "frequency_hz": frequency,
+                "period_s": period_s,
+                "overruns": 0,
+                "last_processing_s": 0.0,
             }
-            arm.start_joint_stream()
-            if mode == "absolute":
-                arm.stream_joint_target(
-                    leader_origin,
-                    gripper=(
-                        float(values["leader_gripper"])
-                        if self._teleop["mirror_gripper"]
-                        else None
-                    ),
-                )
+            arm.start_joint_stream(frequency_hz=frequency)
             self.teleop_changed.emit(True)
             self.busy_changed.emit(True)
             self.log_message.emit(
-                f"Live teleoperation started in {mode} mapping mode."
+                f"Live teleoperation started in {mode} mapping mode at {frequency:.1f} Hz."
             )
         except BaseException as exc:
             self._teleop = None
@@ -332,7 +347,17 @@ class RobotWorker(QObject):
         if teleop is None:
             return
         try:
+            started = time.perf_counter()
             values = dict(sample)  # type: ignore[arg-type]
+            sample_timestamp = float(values.get("timestamp", started))
+            sample_age_s = max(0.0, started - sample_timestamp)
+            stale_limit_s = max(0.15, 3.0 * float(teleop["period_s"]))
+            if sample_age_s > stale_limit_s:
+                raise RuntimeError(
+                    f"leader sample is {sample_age_s * 1000.0:.0f} ms old; "
+                    f"teleop stale limit is {stale_limit_s * 1000.0:.0f} ms. "
+                    "Follower held to avoid executing a queued command backlog."
+                )
             leader = {
                 name: float(values["joints_rad"][name]) for name in ARM_JOINTS
             }
@@ -364,13 +389,28 @@ class RobotWorker(QObject):
                     float(values["gripper"]) if teleop["mirror_gripper"] else None
                 )
             result = self._require_arm().stream_joint_target(target, gripper=gripper)
+            processing_s = time.perf_counter() - started
+            teleop["last_processing_s"] = processing_s
             teleop["samples"] += 1
-            if teleop["samples"] % 10 == 0:
+            if processing_s > float(teleop["period_s"]):
+                teleop["overruns"] += 1
+            else:
+                teleop["overruns"] = 0
+            if teleop["overruns"] >= 3:
+                raise RuntimeError(
+                    "follower teleop processing exceeded the selected stream period "
+                    "for three consecutive samples; reduce the teleop rate before retrying"
+                )
+            if teleop["samples"] % 5 == 0:
                 self.sequence_progress.emit(
                     {
                         "type": "teleop",
                         "samples": teleop["samples"],
                         "message": result.message,
+                        "frequency_hz": teleop["frequency_hz"],
+                        "processing_ms": processing_s * 1000.0,
+                        "sample_age_ms": sample_age_s * 1000.0,
+                        "overruns": teleop["overruns"],
                     }
                 )
         except BaseException as exc:

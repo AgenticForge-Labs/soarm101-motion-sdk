@@ -215,8 +215,8 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
 1. Connect follower simulation and leader simulation.
 2. Enable only the follower simulation.
 3. In Teach choose **Relative / clutch-safe** and leave Mirror gripper enabled.
-4. Start live teleoperation. Confirm the UI reports a 50 Hz guarded stream and ordinary
-   follower jog/sequence controls are disabled while teleop is active.
+4. Select 10 Hz and start live teleoperation. Confirm the UI reports the selected guarded
+   stream rate and ordinary follower jog/sequence controls are disabled while teleop is active.
 5. Stop live teleoperation and confirm the follower returns to holding state.
 6. Start it again and press the global **STOP / HOLD**. Confirm teleop ends.
 7. Disconnect the leader while teleop is active. Confirm follower teleop terminates and
@@ -248,18 +248,29 @@ This is a new continuous-control path and has not yet been physically validated.
    follower power immediately accessible.
 3. Connect both arms. Keep the leader torque OFF; enable the follower.
 4. Put both arms in comfortable poses. They do not need identical poses for Relative mode.
-5. Select **Relative / clutch-safe**, initially disable gripper mirroring, and start teleop.
+5. Select **Relative / clutch-safe**, initially disable gripper mirroring, select
+   **5 Hz — first hardware tests**, and start teleop.
 6. Move only one leader joint a few degrees, slowly. Confirm the follower moves the same
    signed delta and does not jump when teleop starts.
-7. Return that joint and repeat for the other four joints one at a time.
-8. Test STOP/HOLD while making a slow motion. The follower must stop/hold and teleop must
+7. Watch the live follower-cycle and queued-age values. At 5 Hz the period is 200 ms;
+   processing should remain comfortably below that and queued age should stay low rather
+   than increasing over time.
+8. Return that joint and repeat for the other four joints one at a time.
+9. Test STOP/HOLD while making a slow motion. The follower must stop/hold and teleop must
    terminate.
-9. Restart teleop, then disconnect/unplug the leader data connection. The follower must
-   stop receiving stream targets and hold.
-10. Re-enable gripper mirroring and test a small leader gripper delta.
-11. Deliberately move the leader faster only enough to verify configured step/speed/
+10. Restart teleop, then disconnect/unplug the leader data connection. The follower must
+    stop receiving stream targets and hold.
+11. Re-enable gripper mirroring and test a small leader gripper delta.
+12. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
+13. Treat 20 Hz (50 ms period) and 50 Hz (20 ms period) as separate experimental
+    validation stages. Do not increase merely because motion looks smooth; record cycle
+    time, queued sample age, overruns, communication errors, STOP response, following
+    errors, and effort trips as described in `docs/teleoperation.md`.
+14. If follower processing exceeds the selected period repeatedly or queued sample age
+    grows, the software should terminate teleop and hold. Reduce the rate before retrying.
+15. Deliberately move the leader faster only enough to verify configured step/speed/
     acceleration guards reject unsafe streaming rather than following it.
-12. Do not treat software STOP as an emergency stop; physical power remains the ultimate
+16. Do not treat software STOP as an emergency stop; physical power remains the ultimate
     intervention during these tests.
 
 ### 17. Physical absolute teleoperation — DO LATER, AFTER RELATIVE PASSES

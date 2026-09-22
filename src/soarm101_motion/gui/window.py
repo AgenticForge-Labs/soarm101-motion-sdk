@@ -30,7 +30,11 @@ from PySide6.QtWidgets import (
 )
 
 from soarm101_motion.calibration_live import PROVISIONAL_MINIMUM_TRAVEL_TICKS
-from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+from soarm101_motion.constants import (
+    ARM_JOINTS,
+    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    JOINT_LIMITS,
+)
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
@@ -418,18 +422,32 @@ class MainWindow(QMainWindow):
         self.teleop_mode_combo.addItem("Relative / clutch-safe", "relative")
         self.teleop_mode_combo.addItem("Absolute calibrated angles", "absolute")
         teleop_grid.addWidget(self.teleop_mode_combo, 0, 1)
+
+        teleop_grid.addWidget(QLabel("Rate"), 0, 2)
+        self.teleop_rate_combo = QComboBox()
+        self.teleop_rate_combo.addItem("5 Hz — first hardware tests", 5.0)
+        self.teleop_rate_combo.addItem("10 Hz — conservative default", 10.0)
+        self.teleop_rate_combo.addItem("20 Hz — experimental", 20.0)
+        self.teleop_rate_combo.addItem("50 Hz — experimental", 50.0)
+        default_rate_index = self.teleop_rate_combo.findData(
+            DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+        )
+        if default_rate_index >= 0:
+            self.teleop_rate_combo.setCurrentIndex(default_rate_index)
+        teleop_grid.addWidget(self.teleop_rate_combo, 0, 3)
+
         self.teleop_gripper_check = QCheckBox("Mirror gripper")
         self.teleop_gripper_check.setChecked(True)
-        teleop_grid.addWidget(self.teleop_gripper_check, 0, 2)
+        teleop_grid.addWidget(self.teleop_gripper_check, 0, 4)
         self.teleop_button = QPushButton("Start live teleop")
         self.teleop_button.clicked.connect(self._toggle_teleop)
-        teleop_grid.addWidget(self.teleop_button, 0, 3)
+        teleop_grid.addWidget(self.teleop_button, 0, 5)
         self.teleop_status = QLabel(
-            "50 Hz guarded streaming. Relative mode maps leader motion from the "
-            "follower's current pose and avoids a startup jump."
+            "Start at 5–10 Hz on hardware. Each sample currently performs full guarded "
+            "feedback/fault/effort monitoring; higher rates remain experimental."
         )
         self.teleop_status.setWordWrap(True)
-        teleop_grid.addWidget(self.teleop_status, 1, 0, 1, 4)
+        teleop_grid.addWidget(self.teleop_status, 1, 0, 1, 6)
         layout.addWidget(teleop)
 
         source = QGroupBox("Teaching source")
@@ -1922,7 +1940,10 @@ class MainWindow(QMainWindow):
         if values.get("type") == "teleop":
             if self._teleop_active:
                 self.teleop_status.setText(
-                    f"Live teleop active — {int(values.get('samples', 0))} samples."
+                    f"Live teleop {float(values.get('frequency_hz', 0.0)):.0f} Hz — "
+                    f"{int(values.get('samples', 0))} samples; follower cycle "
+                    f"{float(values.get('processing_ms', 0.0)):.0f} ms; queued age "
+                    f"{float(values.get('sample_age_ms', 0.0)):.0f} ms."
                 )
             return
         if values.get("type") != "sequence":
@@ -1970,9 +1991,23 @@ class MainWindow(QMainWindow):
             )
             return
         leader = self._latest_leader_state
+        frequency_hz = float(
+            self.teleop_rate_combo.currentData() or DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+        )
+        if not self.simulation_check.isChecked() and frequency_hz > 10.0:
+            answer = QMessageBox.question(
+                self,
+                "Experimental teleop rate",
+                f"{frequency_hz:.0f} Hz has not been physically validated with the "
+                "current per-sample serial safety monitoring. Start at 5–10 Hz and "
+                "only increase after timing/STOP tests pass. Continue anyway?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         self.teleop_start_requested.emit(
             {
                 "mode": self.teleop_mode_combo.currentData(),
+                "frequency_hz": frequency_hz,
                 "leader_joints_rad": {
                     name: radians(float(leader["joints_deg"][name]))
                     for name in ARM_JOINTS
@@ -1981,16 +2016,23 @@ class MainWindow(QMainWindow):
                 "mirror_gripper": self.teleop_gripper_check.isChecked(),
             }
         )
-        self.teleop_status.setText("Starting guarded 50 Hz live teleoperation…")
+        self.teleop_status.setText(
+            f"Starting guarded {frequency_hz:.0f} Hz live teleoperation…"
+        )
 
     def _on_teleop_changed(self, active: bool) -> None:
         self._teleop_active = bool(active)
         if active:
+            frequency_hz = float(
+                self.teleop_rate_combo.currentData()
+                or DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+            )
             self.teleop_button.setText("Stop live teleop")
             self.teleop_status.setText(
-                f"Live teleop active — {self.teleop_mode_combo.currentText()}."
+                f"Live teleop active — {self.teleop_mode_combo.currentText()} "
+                f"at {frequency_hz:.0f} Hz."
             )
-            self.leader_stream_start_requested.emit(50.0)
+            self.leader_stream_start_requested.emit(frequency_hz)
         else:
             self.teleop_button.setText("Start live teleop")
             self.leader_stream_stop_requested.emit()
@@ -2243,6 +2285,7 @@ class MainWindow(QMainWindow):
         )
         self.teleop_button.setEnabled(self._teleop_active or can_start_teleop)
         self.teleop_mode_combo.setEnabled(not self._teleop_active)
+        self.teleop_rate_combo.setEnabled(not self._teleop_active)
         self.teleop_gripper_check.setEnabled(not self._teleop_active)
         follower_recording = self._recording_source == "follower"
         if follower_recording:
