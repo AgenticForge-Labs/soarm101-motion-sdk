@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Hardened Feetech torque enable: every selected motor's measured Present_Position is
+  checked against its active EEPROM Min/Max Position Limits before any Goal_Position,
+  EEPROM lock, or Torque_Enable write. Out-of-range or invalid limits now fail closed
+  with a SafetyViolationError to prevent firmware-clamped startup movement.
 - Added a persistent sequence editor/runner with point, Home/Rest, gripper, wait,
   trajectory, and semantic primitive steps; supports Run Step, repeat, speed scaling,
   step-boundary pause/resume, cancellation, and STOP/HOLD.
