@@ -61,12 +61,14 @@ See [effort-safety.md](effort-safety.md) for configuration and threshold semanti
 Guarded continuous joint streaming is available for leader/follower teleoperation and other low-latency control loops:
 
 ```python
-arm.servo_j_start()
+arm.servo_j_start(frequency_hz=10.0)
 arm.servo_j([0.0, -0.30, 0.55, 0.0, 0.15], is_radian=True)
 arm.servo_j([0.01, -0.29, 0.54, 0.0, 0.16], gripper=0.7)
 arm.servo_j_stop()
 ```
 
-Each streamed sample is checked against calibrated/model joint limits, maximum command step, joint speed and acceleration, the configured workspace envelope, following error, hardware faults, and motor-effort interlocks. Normal point-to-point and trajectory motion is excluded while a joint stream is active.
+Each streamed sample is checked against calibrated/model joint limits, maximum command step, rate-aware joint speed and acceleration, the configured workspace envelope, following error, hardware faults, and motor-effort interlocks. Normal point-to-point and trajectory motion is excluded while a joint stream is active.
 
-This streaming path is implemented and tested in simulation, but it is **not yet physically validated**. Before hardware teleoperation, complete the calibration/direction/kinematics gates and the dedicated low-speed streaming checks in `TESTING.md`. Cartesian velocity/servo streaming is still not implemented.
+The normal planned-motion clock remains 50 Hz, but guarded live streaming now defaults to **10 Hz** because the current hardware path performs synchronous serial safety/feedback reads for each accepted sample. The GUI offers 5/10/20/50 Hz; 5 Hz is recommended for the first physical teleop test, 10 Hz is the conservative initial target, and 20/50 Hz remain experimental until measured on real hardware. Stale queued samples and repeated follower-cycle overruns stop teleoperation and hold the follower.
+
+This streaming path is implemented and tested in simulation, but it is **not yet physically validated**. Before hardware teleoperation, complete the calibration/direction/kinematics gates and the dedicated low-speed streaming checks in `TESTING.md`. See [teleoperation.md](teleoperation.md) for the validation ladder, timing metrics, and the future path toward higher rates. Cartesian velocity/servo streaming is still not implemented.
