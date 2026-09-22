@@ -91,6 +91,7 @@ def test_stream_rate_changes_velocity_validation() -> None:
         enable_workspace_checks=False,
         effort_safety_enabled=False,
         command_frequency_hz=50.0,
+        default_joint_speed=0.1,
         max_joint_speed=0.2,
         max_joint_acceleration=100.0,
     )
