@@ -169,6 +169,43 @@ class FeetechBackend(_ProtocolFeetechBackend):
                 acceleration_raw=acceleration_raw,
             )
 
+    def _validate_enable_positions_in_eeprom_limits(
+        self,
+        raw_positions: Mapping[str, int],
+    ) -> None:
+        """Refuse torque enable if a measured position would be clamped by firmware.
+
+        STS3215 position goals are constrained by the motor's EEPROM Min/Max
+        Position Limit registers. Safe enable latches each measured Present_Position
+        as Goal_Position before energizing torque, but that is only safe when the
+        measured value is already inside the active EEPROM range. Otherwise the
+        firmware may clamp the goal to a limit and move abruptly when torque is enabled.
+        """
+
+        violations: list[str] = []
+        invalid_ranges: list[str] = []
+        for name, position in raw_positions.items():
+            minimum = int(self.read_register(name, "Min_Position_Limit"))
+            maximum = int(self.read_register(name, "Max_Position_Limit"))
+            if minimum >= maximum:
+                invalid_ranges.append(
+                    f"{name}: invalid EEPROM limits {minimum}..{maximum}"
+                )
+                continue
+            if position < minimum or position > maximum:
+                violations.append(
+                    f"{name}: present {position} outside EEPROM limits "
+                    f"{minimum}..{maximum}"
+                )
+
+        if invalid_ranges or violations:
+            details = "; ".join((*invalid_ranges, *violations))
+            raise SafetyViolationError(
+                "refusing torque enable because safe position latching cannot be "
+                f"guaranteed: {details}. With torque off, move the affected joint "
+                "inside its calibrated range or repair/re-run calibration before enabling."
+            )
+
     def enable_torque(self, motors: Sequence[str] | None = None) -> None:
         with self._io_lock:
             self._require_connected()
@@ -178,8 +215,13 @@ class FeetechBackend(_ProtocolFeetechBackend):
             if unknown:
                 raise KeyError(next(iter(unknown)))
 
-            # Latch measured positions before energizing any servo.
+            # Read and validate every selected motor before writing any goal.
+            # A present position outside the servo's active EEPROM range can cause
+            # Goal_Position to be clamped and produce a sudden movement at torque-on.
             raw_positions = {name: self.read_raw_position(name) for name in selected}
+            self._validate_enable_positions_in_eeprom_limits(raw_positions)
+
+            # Only after all motors pass the precheck do we latch measured positions.
             self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
 
             enabled: list[str] = []
