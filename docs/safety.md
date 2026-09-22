@@ -25,6 +25,33 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
 - Calibration snapshots and restores motor EEPROM on failure when possible.
 - Torque enable rolls back motors already energized when a later enable fails.
 
+## Motor effort guard
+
+The managed Feetech backend monitors raw STS3215 `Present_Current` and signed
+`Present_Load` while torque is enabled. These are useful contact/collision indicators,
+but they are **not calibrated force or torque measurements**.
+
+The Setup GUI exposes a characterization panel with:
+
+- current and signed load for each of the six motors;
+- session peak current and peak absolute load;
+- each motor's effective current/load trip thresholds;
+- the latched trip reason;
+- explicit Refresh readings, Reset peaks, and Clear latched trip actions; and
+- session-only global guard settings.
+
+Threshold changes require torque OFF. Disabling the effort guard requires explicit GUI
+confirmation and affects only the current/load interlock; joint/calibration limits,
+workspace checks, following-error monitoring, motor faults, command timing, and other
+motion protections remain active.
+
+A threshold change never clears a latched trip. Remove the obstruction first, then use
+**Clear latched trip** explicitly. Clearing the latch does not itself command motion.
+
+The current default thresholds are starting guardrails rather than validated physical
+limits. Characterize the exact arm at low speed/no payload before interpreting them as
+appropriate operating values. See `TESTING.md`.
+
 ## Coarse geometry envelope
 
 The SDK checks every requested joint path against a conservative centerline model:
