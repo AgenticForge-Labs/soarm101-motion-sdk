@@ -15,17 +15,71 @@ from typing import Mapping
 from soarm101_motion.calibration import MotorCalibration, SO101Calibration
 from soarm101_motion.constants import (
     ALL_MOTORS,
+    ARM_JOINTS,
     ENCODER_RESOLUTION,
     HALF_TURN,
     MOTOR_IDS,
+    STOCK_GRIPPER,
 )
 from soarm101_motion.exceptions import CalibrationError
 
-# A real stop-to-stop sweep should be far larger than this for every stock
-# SO-101 joint and gripper.  The threshold catches forgotten or barely moved
-# motors without trying to encode model-specific travel limits here.
-MINIMUM_CALIBRATION_TRAVEL_TICKS = 256
+# Provisional lower bounds for a credible stop-to-stop sweep.  The five pose joints
+# are known mechanically to exceed half an encoder revolution, so require at least
+# 180 degrees / 2048 ticks.  The gripper travel is shorter and remains deliberately
+# conservative until we characterize a physical arm.  Keep these values centralized:
+# once measured stop-to-stop spans are collected, only this table and its associated
+# UI wording need to change.
+PROVISIONAL_MINIMUM_TRAVEL_TICKS: dict[str, int] = {
+    **{name: ENCODER_RESOLUTION // 2 for name in ARM_JOINTS},
+    STOCK_GRIPPER: 256,
+}
+MINIMUM_CALIBRATION_TRAVEL_TICKS = min(PROVISIONAL_MINIMUM_TRAVEL_TICKS.values())
 MAXIMUM_HOMING_OFFSET = (ENCODER_RESOLUTION // 2) - 1
+
+
+def minimum_travel_targets(
+    override: int | Mapping[str, int] | None = None,
+) -> dict[str, int]:
+    """Return per-motor minimum sweep spans used for pass/fail and UI progress."""
+
+    if override is None:
+        return dict(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
+    if isinstance(override, int):
+        if override <= 0:
+            raise ValueError("minimum calibration travel must be positive")
+        return {name: int(override) for name in ALL_MOTORS}
+    targets = dict(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
+    for name, value in override.items():
+        if name not in ALL_MOTORS:
+            raise KeyError(name)
+        ticks = int(value)
+        if ticks <= 0:
+            raise ValueError(f"minimum calibration travel for {name} must be positive")
+        targets[name] = ticks
+    return targets
+
+
+def sweep_progress_snapshot(
+    sweeps: Mapping[str, "EncoderSweep"],
+    *,
+    minimum_travel_ticks: int | Mapping[str, int] | None = None,
+) -> dict[str, dict[str, int | float | bool]]:
+    """Return immutable UI/test-friendly progress for the current live sweep."""
+
+    targets = minimum_travel_targets(minimum_travel_ticks)
+    result: dict[str, dict[str, int | float | bool]] = {}
+    for name in ALL_MOTORS:
+        sweep = sweeps.get(name)
+        travel = 0 if sweep is None else sweep.travel_ticks
+        required = targets[name]
+        result[name] = {
+            "travel_ticks": int(travel),
+            "required_ticks": int(required),
+            "fraction": min(1.0, float(travel) / float(required)),
+            "passed": bool(travel >= required),
+            "samples": 0 if sweep is None else int(sweep.samples),
+        }
+    return result
 
 
 @dataclass
@@ -85,7 +139,7 @@ def _signed_homing_offset(center_raw: int) -> int:
 def calibration_from_sweeps(
     sweeps: Mapping[str, EncoderSweep],
     *,
-    minimum_travel_ticks: int = MINIMUM_CALIBRATION_TRAVEL_TICKS,
+    minimum_travel_ticks: int | Mapping[str, int] | None = None,
 ) -> SO101Calibration:
     """Build motor calibration from complete live stop-to-stop sweeps.
 
@@ -101,14 +155,18 @@ def calibration_from_sweeps(
     if missing:
         raise CalibrationError(f"calibration sweep is missing motors: {sorted(missing)}")
 
+    targets = minimum_travel_targets(minimum_travel_ticks)
+
     motors: dict[str, MotorCalibration] = {}
     for name in ALL_MOTORS:
         sweep = sweeps[name]
         travel = sweep.travel_ticks
-        if travel < minimum_travel_ticks:
+        required = targets[name]
+        if travel < required:
             raise CalibrationError(
-                f"{name} moved only {travel} encoder ticks; sweep it repeatedly "
-                "between both mechanical stops and recalibrate"
+                f"{name} moved only {travel} encoder ticks; at least {required} ticks "
+                "are required by the current provisional sweep threshold. Sweep it "
+                "repeatedly between both mechanical stops and recalibrate."
             )
         if travel >= ENCODER_RESOLUTION:
             raise CalibrationError(
