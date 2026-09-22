@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self._sequence_steps: list[SequenceStep] = []
         self._sequence_paused = False
         self._latest_effort_status: dict[str, Any] = {"supported": False}
+        self._effort_controls_initialized = False
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -2241,6 +2242,7 @@ class MainWindow(QMainWindow):
             self._busy = False
             self._joint_targets_initialized = False
             self._latest_effort_status = {"supported": False}
+            self._effort_controls_initialized = False
         self.connect_button.setText("Disconnect" if connected else "Connect")
         self._refresh_named_pose_status()
         self._refresh_point_list()
@@ -2318,12 +2320,20 @@ class MainWindow(QMainWindow):
             return
 
         enabled = bool(values.get("enabled", True))
-        self.effort_guard_check.setChecked(enabled)
-        current_trip = values.get("current_trip_raw")
-        load_trip = values.get("load_trip_raw")
-        self.effort_current_spin.setValue(0 if current_trip is None else int(current_trip))
-        self.effort_load_spin.setValue(0 if load_trip is None else int(load_trip))
-        self.effort_consecutive_spin.setValue(int(values.get("consecutive_samples", 2)))
+        if not self._effort_controls_initialized:
+            self.effort_guard_check.setChecked(enabled)
+            current_trip = values.get("current_trip_raw")
+            load_trip = values.get("load_trip_raw")
+            self.effort_current_spin.setValue(
+                0 if current_trip is None else int(current_trip)
+            )
+            self.effort_load_spin.setValue(
+                0 if load_trip is None else int(load_trip)
+            )
+            self.effort_consecutive_spin.setValue(
+                int(values.get("consecutive_samples", 2))
+            )
+            self._effort_controls_initialized = True
 
         readings = dict(values.get("readings") or {})
         peaks = dict(values.get("peaks") or {})
@@ -2450,6 +2460,8 @@ class MainWindow(QMainWindow):
         self.effort_clear_button.setEnabled(
             self._connected
             and effort_supported
+            and not self._busy
+            and not self._teleop_active
             and bool(self._latest_effort_status.get("trip_message"))
         )
 
