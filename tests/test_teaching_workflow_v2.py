@@ -86,6 +86,58 @@ def test_stream_rejects_large_command_step() -> None:
         arm.disconnect()
 
 
+def test_stream_rate_changes_velocity_validation() -> None:
+    config = SOARM101Config(
+        enable_workspace_checks=False,
+        effort_safety_enabled=False,
+        command_frequency_hz=50.0,
+        max_joint_speed=0.2,
+        max_joint_acceleration=100.0,
+    )
+    arm = SOARM101(config, backend=SimulationBackend(realtime=False))
+    arm.connect()
+    arm.enable()
+    target = {
+        "shoulder_pan": 0.03,
+        "shoulder_lift": 0.0,
+        "elbow_flex": 0.0,
+        "wrist_flex": 0.0,
+        "wrist_roll": 0.0,
+    }
+    try:
+        arm.start_joint_stream(frequency_hz=5.0)
+        assert arm.stream_joint_target(target).accepted
+        arm.stop_joint_stream()
+
+        arm.start_joint_stream(frequency_hz=50.0)
+        with pytest.raises(SafetyViolationError, match="streamed joint speed"):
+            arm.stream_joint_target(
+                {
+                    **target,
+                    "shoulder_pan": target["shoulder_pan"] + 0.03,
+                }
+            )
+        arm.stop_joint_stream()
+    finally:
+        arm.disconnect()
+
+
+def test_stream_rate_cannot_exceed_command_frequency_ceiling() -> None:
+    config = SOARM101Config(
+        enable_workspace_checks=False,
+        effort_safety_enabled=False,
+        command_frequency_hz=20.0,
+    )
+    arm = SOARM101(config, backend=SimulationBackend(realtime=False))
+    arm.connect()
+    arm.enable()
+    try:
+        with pytest.raises(SafetyViolationError, match="frequency"):
+            arm.start_joint_stream(frequency_hz=50.0)
+    finally:
+        arm.disconnect()
+
+
 def _pose(joint: float, gripper: float = 1.0) -> SavedPose:
     return SavedPose(
         joints={
