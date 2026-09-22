@@ -79,6 +79,26 @@ def test_gripper_calibration_round_trip_and_inversion() -> None:
     assert inverted.normalized_to_raw(0.25) == 850
 
 
+def test_imported_lerobot_asymmetric_range_uses_recorded_midpoint_zero() -> None:
+    calibration = SO101Calibration.from_mapping(
+        {
+            "shoulder_pan": {
+                "id": MOTOR_IDS["shoulder_pan"],
+                "drive_mode": 0,
+                "homing_offset": 53,
+                "range_min": 900,
+                "range_max": 3300,
+            }
+        }
+    )
+    motor = calibration.motors["shoulder_pan"]
+    assert calibration.source == "lerobot"
+    assert motor.center_raw == pytest.approx(2100.0)
+    assert motor.raw_to_radians(2100) == pytest.approx(0.0)
+    assert motor.radians_to_raw(0.0) == 2100
+    assert motor.raw_to_radians(HALF_TURN) < 0.0
+
+
 def test_load_and_export_lerobot_format(tmp_path) -> None:
     calibration = sample_calibration()
     own_path = tmp_path / "calibration.json"
