@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed LeRobot calibration coordinate compatibility: arm-joint zero is now the
+  midpoint of each calibrated `range_min` / `range_max` pair rather than always
+  encoder tick 2047. Asymmetric imported LeRobot calibrations therefore preserve
+  their recorded midpoint as 0 rad, while native symmetric mechanical-stop
+  calibrations remain effectively unchanged.
 - Made leader→follower streaming rate explicit and conservative: 10 Hz default, with
   5/10/20/50 Hz GUI choices and a warning before unvalidated >10 Hz hardware use.
 - Stream speed/acceleration checks now use the selected teleop rate rather than the
