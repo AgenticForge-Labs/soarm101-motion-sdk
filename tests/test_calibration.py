@@ -4,7 +4,6 @@ import pytest
 
 from soarm101_motion.calibration import MotorCalibration, SO101Calibration
 from soarm101_motion.constants import ALL_MOTORS, HALF_TURN, MOTOR_IDS, STOCK_GRIPPER
-from soarm101_motion.exceptions import CalibrationError
 
 
 def sample_calibration() -> SO101Calibration:
@@ -23,20 +22,38 @@ def test_joint_calibration_round_trip() -> None:
         assert recovered == pytest.approx(radians, abs=0.002)
 
 
-def test_joint_zero_is_half_turn_even_for_asymmetric_range() -> None:
+def test_joint_zero_is_calibrated_midpoint_for_asymmetric_range() -> None:
     calibration = MotorCalibration(1, 0, 123, 400, 3600)
-    assert calibration.raw_to_radians(HALF_TURN) == pytest.approx(0.0)
-    assert calibration.radians_to_raw(0.0) == HALF_TURN
+    assert calibration.center_raw == pytest.approx(2000.0)
+    assert calibration.raw_to_radians(2000) == pytest.approx(0.0)
+    assert calibration.radians_to_raw(0.0) == 2000
+    assert calibration.raw_to_radians(HALF_TURN) > 0.0
 
 
-def test_arm_joint_range_must_include_half_turn_zero() -> None:
+def test_asymmetric_joint_range_does_not_need_to_include_half_turn() -> None:
     calibration = SO101Calibration(
         motors={
             "shoulder_pan": MotorCalibration(MOTOR_IDS["shoulder_pan"], 0, 0, 100, 1000)
         }
     )
-    with pytest.raises(CalibrationError, match="does not include the zero reference"):
-        calibration.validate(require_all=False)
+    calibration.validate(require_all=False)
+    motor = calibration.motors["shoulder_pan"]
+    assert motor.center_raw == pytest.approx(550.0)
+    assert motor.raw_to_radians(550) == pytest.approx(0.0)
+
+
+def test_asymmetric_joint_limits_are_centered_on_zero() -> None:
+    calibration = MotorCalibration(1, 0, 0, 900, 3300)
+    lower, upper = calibration.radians_limits
+    assert lower == pytest.approx(-upper)
+    assert calibration.center_raw == pytest.approx(2100.0)
+
+
+def test_native_symmetric_calibration_still_uses_half_turn_zero() -> None:
+    calibration = MotorCalibration(1, 0, 0, 900, 3194)
+    assert calibration.center_raw == pytest.approx(HALF_TURN)
+    assert calibration.raw_to_radians(HALF_TURN) == pytest.approx(0.0)
+    assert calibration.radians_to_raw(0.0) == HALF_TURN
 
 
 def test_gripper_range_need_not_include_half_turn() -> None:
@@ -62,6 +79,26 @@ def test_gripper_calibration_round_trip_and_inversion() -> None:
     assert inverted.normalized_to_raw(0.25) == 850
 
 
+def test_imported_lerobot_asymmetric_range_uses_recorded_midpoint_zero() -> None:
+    calibration = SO101Calibration.from_mapping(
+        {
+            "shoulder_pan": {
+                "id": MOTOR_IDS["shoulder_pan"],
+                "drive_mode": 0,
+                "homing_offset": 53,
+                "range_min": 900,
+                "range_max": 3300,
+            }
+        }
+    )
+    motor = calibration.motors["shoulder_pan"]
+    assert calibration.source == "lerobot"
+    assert motor.center_raw == pytest.approx(2100.0)
+    assert motor.raw_to_radians(2100) == pytest.approx(0.0)
+    assert motor.radians_to_raw(0.0) == 2100
+    assert motor.raw_to_radians(HALF_TURN) < 0.0
+
+
 def test_load_and_export_lerobot_format(tmp_path) -> None:
     calibration = sample_calibration()
     own_path = tmp_path / "calibration.json"
@@ -72,6 +109,7 @@ def test_load_and_export_lerobot_format(tmp_path) -> None:
     assert SO101Calibration.load(own_path).motors.keys() == calibration.motors.keys()
     loaded = SO101Calibration.load(lerobot_path)
     assert STOCK_GRIPPER in loaded.motors
+    assert loaded.motors["shoulder_pan"].raw_to_radians(2047.5) == pytest.approx(0.0)
     payload = json.loads(lerobot_path.read_text())
     assert "gripper" in payload
     assert "so101_gripper" not in payload

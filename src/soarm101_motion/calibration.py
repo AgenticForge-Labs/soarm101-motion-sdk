@@ -9,13 +9,7 @@ from math import pi
 from pathlib import Path
 from typing import Any, Mapping
 
-from soarm101_motion.constants import (
-    ALL_MOTORS,
-    ARM_JOINTS,
-    ENCODER_MAX,
-    HALF_TURN,
-    STOCK_GRIPPER,
-)
+from soarm101_motion.constants import ALL_MOTORS, ENCODER_MAX, STOCK_GRIPPER
 from soarm101_motion.exceptions import CalibrationError, SafetyViolationError
 
 _LEROBOT_TO_SDK = {"gripper": STOCK_GRIPPER}
@@ -49,17 +43,28 @@ class MotorCalibration:
             raise CalibrationError(f"motor {self.motor_id} has invalid drive_mode={self.drive_mode}")
 
     @property
+    def center_raw(self) -> float:
+        """Calibrated joint zero in raw encoder coordinates.
+
+        LeRobot degree normalization defines zero from the midpoint of the recorded
+        calibrated range. Native mechanical-stop calibration produces symmetric
+        limits around the Feetech half-turn reference, so its midpoint remains 2047.
+        """
+
+        return (float(self.range_min) + float(self.range_max)) / 2.0
+
+    @property
     def radians_limits(self) -> tuple[float, float]:
         scale = 2.0 * pi / ENCODER_MAX
-        return (self.range_min - HALF_TURN) * scale, (self.range_max - HALF_TURN) * scale
+        center = self.center_raw
+        return (self.range_min - center) * scale, (self.range_max - center) * scale
 
     def raw_to_radians(self, raw: int) -> float:
-        degrees = (float(raw) - HALF_TURN) * 360.0 / ENCODER_MAX
-        return degrees * pi / 180.0
+        return (float(raw) - self.center_raw) * 2.0 * pi / ENCODER_MAX
 
     def radians_to_raw(self, radians: float) -> int:
         raw = int(
-            round((float(radians) * 180.0 / pi) * ENCODER_MAX / 360.0 + HALF_TURN)
+            round(float(radians) * ENCODER_MAX / (2.0 * pi) + self.center_raw)
         )
         if not self.range_min <= raw <= self.range_max:
             raise SafetyViolationError(
@@ -96,14 +101,6 @@ class SO101Calibration:
             if name not in ALL_MOTORS:
                 raise CalibrationError(f"unknown calibrated motor: {name}")
             calibration.validate()
-            # Arm joint angles use the Feetech half-turn reference as zero.
-            # The gripper is normalized only by its endpoints, so old LeRobot
-            # gripper calibrations remain valid even if their range excludes 2047.
-            if name in ARM_JOINTS and not calibration.range_min <= HALF_TURN <= calibration.range_max:
-                raise CalibrationError(
-                    f"joint {name} calibrated range {calibration.range_min}..{calibration.range_max} "
-                    f"does not include the zero reference {HALF_TURN}"
-                )
 
     @property
     def is_factory_range(self) -> bool:

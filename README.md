@@ -48,6 +48,12 @@ The serial port is selected automatically when exactly one adapter is connected.
 
 The setup command never enables torque. It ends by printing the exact first smoke-test command.
 
+LeRobot-style calibration JSON is supported without requiring LeRobot at runtime. For
+joint angles, the SDK defines 0 rad from the midpoint of each calibrated
+`range_min`/`range_max` pair, matching asymmetric imported calibration ranges. Native
+mechanical-stop calibration deliberately produces symmetric ranges around the Feetech
+half-turn reference, so its coordinate system is unchanged.
+
 ### New loose motors
 
 Fresh motors normally share a factory ID and must be assigned one at a time before the arm is fully daisy-chained:
