@@ -7,7 +7,11 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 
 from soarm101_motion.calibration import SO101Calibration
-from soarm101_motion.calibration_live import (\n    EncoderSweep,\n    calibration_from_sweeps,\n    sweep_progress_snapshot,\n)
+from soarm101_motion.calibration_live import (
+    EncoderSweep,
+    calibration_from_sweeps,
+    sweep_progress_snapshot,
+)
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ALL_MOTORS
 from soarm101_motion.exceptions import CalibrationError, CommunicationError, SafetyViolationError
