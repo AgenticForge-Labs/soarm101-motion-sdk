@@ -15,6 +15,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion.arm import SOARM101
+from soarm101_motion.constants import DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
 from soarm101_motion.kinematics import OrientationMode
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.types import MotionResult, Pose
