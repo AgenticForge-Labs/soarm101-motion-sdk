@@ -50,13 +50,18 @@ physical power switch/plug immediately accessible.
 Do not start with Home/Rest or Cartesian moves.
 
 1. Start near the mechanical midpoint with no payload.
-2. Enable torque and verify the arm holds the position where it was enabled.
-3. Test one joint at a time with approximately ±5° motion at low speed.
-4. Verify the physical direction matches the GUI direction.
-5. Press STOP/HOLD during a slow move and confirm the arm stops and holds.
-6. Relax and confirm torque is disabled.
-7. Only after all five joints pass should you test saved Home/Rest positions.
-8. Only after joint motion passes should you test 5 mm Cartesian jogs.
+2. Before torque-on, the SDK now reads every selected motor's Present_Position and
+   EEPROM Min/Max Position Limits. If any measured position is outside its active
+   range, enabling must fail before any goal or torque-enable write. With torque off,
+   manually move that joint back inside its calibrated range and investigate the
+   calibration if the reported limits are unexpected.
+3. Enable torque and verify the arm holds the position where it was enabled.
+4. Test one joint at a time with approximately ±5° motion at low speed.
+5. Verify the physical direction matches the GUI direction.
+6. Press STOP/HOLD during a slow move and confirm the arm stops and holds.
+7. Relax and confirm torque is disabled.
+8. Only after all five joints pass should you test saved Home/Rest positions.
+9. Only after joint motion passes should you test 5 mm Cartesian jogs.
 
 ### 5. Leader readout — DO LATER
 
