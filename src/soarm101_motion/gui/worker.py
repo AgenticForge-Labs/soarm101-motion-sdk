@@ -25,6 +25,7 @@ class RobotWorker(QObject):
     log_message = Signal(str)
     error_message = Signal(str)
     calibration_completed = Signal(object)
+    calibration_progress = Signal(object)
     recording_completed = Signal(object)
     recording_changed = Signal(bool)
     stream_sample = Signal(object)
@@ -725,7 +726,10 @@ class RobotWorker(QObject):
             self.log_message.emit(
                 f"Calibration recording started for {duration:.1f} s; torque is off."
             )
-            calibration = calibrate(record_seconds=duration)
+            calibration = calibrate(
+                record_seconds=duration,
+                progress_callback=lambda progress: self.calibration_progress.emit(progress),
+            )
             path = save(calibration)
             limits = arm.get_joint_limits()
             payload = {
