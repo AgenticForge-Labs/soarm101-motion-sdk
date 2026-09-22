@@ -61,18 +61,31 @@ class FeetechBackend(_ProtocolFeetechBackend):
             self._effort_trip_message = None
         if not hasattr(self, "_effort_violation_counts"):
             self._effort_violation_counts = dict.fromkeys(ALL_MOTORS, 0)
+        config = getattr(self, "config", None)
         if not hasattr(self, "_effort_safety_enabled"):
-            self._effort_safety_enabled = bool(self.config.effort_safety_enabled)
+            self._effort_safety_enabled = bool(
+                getattr(config, "effort_safety_enabled", True)
+            )
         if not hasattr(self, "_effort_current_trip_raw"):
-            self._effort_current_trip_raw = self.config.effort_current_trip_raw
+            self._effort_current_trip_raw = getattr(
+                config, "effort_current_trip_raw", 250
+            )
         if not hasattr(self, "_effort_load_trip_raw"):
-            self._effort_load_trip_raw = self.config.effort_load_trip_raw
+            self._effort_load_trip_raw = getattr(
+                config, "effort_load_trip_raw", 850
+            )
         if not hasattr(self, "_effort_trip_consecutive_samples"):
-            self._effort_trip_consecutive_samples = self.config.effort_trip_consecutive_samples
+            self._effort_trip_consecutive_samples = int(
+                getattr(config, "effort_trip_consecutive_samples", 2)
+            )
         if not hasattr(self, "_motor_current_trip_raw"):
-            self._motor_current_trip_raw = dict(self.config.motor_current_trip_raw)
+            self._motor_current_trip_raw = dict(
+                getattr(config, "motor_current_trip_raw", {})
+            )
         if not hasattr(self, "_motor_load_trip_raw"):
-            self._motor_load_trip_raw = dict(self.config.motor_load_trip_raw)
+            self._motor_load_trip_raw = dict(
+                getattr(config, "motor_load_trip_raw", {})
+            )
         if not hasattr(self, "_last_effort_readings"):
             self._last_effort_readings = {}
         if not hasattr(self, "_effort_peaks"):
