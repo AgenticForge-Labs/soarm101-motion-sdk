@@ -617,6 +617,10 @@ class SOARM101:
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Replay an immutable recorded trajectory through the guarded motion stack."""
+        self.require_artifact_calibration(
+            trajectory.metadata,
+            artifact_label="recorded trajectory",
+        )
         if self.tool.is_moving:
             self._stop_tool(wait=True)
         return self.motion.play_trajectory(
