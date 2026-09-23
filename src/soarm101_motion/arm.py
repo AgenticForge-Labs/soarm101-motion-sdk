@@ -29,6 +29,7 @@ from soarm101_motion.exceptions import (
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.motion import MotionController, MotionHandle
+from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
     validate_joint_targets,
     validate_workspace_configuration,
@@ -119,6 +120,42 @@ class SOARM101:
     def is_moving(self) -> bool:
         tool_moving = bool(getattr(self.tool, "is_moving", False))
         return self.motion.is_moving or tool_moving or self.backend.get_hardware_state().moving
+
+    @property
+    def calibration_id(self) -> str | None:
+        calibration = getattr(self.backend, "calibration", None)
+        if calibration is None:
+            return None
+        return str(calibration.calibration_id)
+
+    @property
+    def calibration_source(self) -> str | None:
+        calibration = getattr(self.backend, "calibration", None)
+        if calibration is None:
+            return None
+        return str(calibration.source)
+
+    def require_artifact_calibration(
+        self,
+        metadata: Mapping[str, object],
+        *,
+        artifact_label: str,
+    ) -> None:
+        """Require physical artifacts to match this robot's active calibration.
+
+        Simulation backends do not expose a physical calibration object, so provenance
+        gating is intentionally skipped there.
+        """
+
+        calibration = getattr(self.backend, "calibration", None)
+        if calibration is None:
+            return
+        require_calibration_compatibility(
+            metadata,
+            current_robot_id=self.config.robot_id,
+            current_calibration_id=calibration.calibration_id,
+            artifact_label=artifact_label,
+        )
 
     @property
     def active_tcp(self) -> Pose:
@@ -580,6 +617,10 @@ class SOARM101:
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Replay an immutable recorded trajectory through the guarded motion stack."""
+        self.require_artifact_calibration(
+            trajectory.metadata,
+            artifact_label="recorded trajectory",
+        )
         if self.tool.is_moving:
             self._stop_tool(wait=True)
         return self.motion.play_trajectory(

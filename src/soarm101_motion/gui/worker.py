@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from math import degrees, radians
 from typing import Any
@@ -16,6 +17,7 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
+from soarm101_motion.exceptions import MotionCancelledError
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitiveLibrary
@@ -493,6 +495,10 @@ class RobotWorker(QObject):
             if not isinstance(sequence, MotionSequence):
                 raise TypeError("sequence command must contain a MotionSequence")
             arm = self._require_motion_available()
+            arm.require_artifact_calibration(
+                sequence.metadata,
+                artifact_label=f"sequence {sequence.name!r}",
+            )
             runner = SequenceRunner(
                 arm,
                 pose_library=PoseLibrary(self._robot_id),
@@ -554,25 +560,55 @@ class RobotWorker(QObject):
                 raise TypeError("pose command must contain a SavedPose")
             mode = str(values.get("mode") or "joint")
             arm = self._require_motion_available()
-            if mode == "joint":
-                result = arm.move_joints(
-                    pose.joints,
-                    speed=radians(float(values["speed_deg_s"])),
-                    acceleration=radians(float(values["acceleration_deg_s2"])),
-                    wait=False,
-                )
-            elif mode == "linear":
-                target = Pose.from_xyz_rpy(*pose.tcp_xyz_rpy)
-                result = arm.move_linear(
-                    target,
-                    orientation_mode=str(values.get("orientation_mode") or "compatible"),
-                    speed=float(values["speed_mm_s"]) / 1000.0,
-                    acceleration=float(values["acceleration_mm_s2"]) / 1000.0,
-                    wait=False,
-                )
-            else:
+            arm.require_artifact_calibration(
+                {
+                    "source_robot_id": pose.source_robot_id,
+                    "source_calibration_id": pose.source_calibration_id,
+                    "target_robot_id": pose.target_robot_id,
+                    "target_calibration_id": pose.target_calibration_id,
+                },
+                artifact_label="saved pose",
+            )
+            move_gripper = bool(values.get("move_gripper", False))
+
+            def execute_pose(*, wait: bool) -> Any:
+                if mode == "joint":
+                    return arm.move_joints(
+                        pose.joints,
+                        speed=radians(float(values["speed_deg_s"])),
+                        acceleration=radians(float(values["acceleration_deg_s2"])),
+                        wait=wait,
+                    )
+                if mode == "linear":
+                    target = Pose.from_xyz_rpy(*pose.tcp_xyz_rpy)
+                    return arm.move_linear(
+                        target,
+                        orientation_mode=str(
+                            values.get("orientation_mode") or "compatible"
+                        ),
+                        speed=float(values["speed_mm_s"]) / 1000.0,
+                        acceleration=float(values["acceleration_mm_s2"]) / 1000.0,
+                        wait=wait,
+                    )
                 raise ValueError("saved pose mode must be 'joint' or 'linear'")
-            self._track(f"{mode} move to taught point", result)
+
+            if not move_gripper:
+                self._track(f"{mode} move to taught point", execute_pose(wait=False))
+                return
+
+            def operation(cancel_event: threading.Event) -> Any:
+                if cancel_event.is_set():
+                    raise MotionCancelledError("saved pose move cancelled before start")
+                result = execute_pose(wait=True)
+                if cancel_event.is_set():
+                    raise MotionCancelledError(
+                        "saved pose move cancelled before gripper command"
+                    )
+                return arm.tool.move(pose.gripper, wait=True) or result
+
+            handle: MotionHandle[Any] = MotionHandle(operation)
+            handle.start()
+            self._track(f"{mode} move to saved pose + gripper", handle)
         except BaseException as exc:
             self._report_error("taught point move", exc)
 
@@ -583,7 +619,12 @@ class RobotWorker(QObject):
             trajectory = values["trajectory"]
             if not isinstance(trajectory, Trajectory):
                 raise TypeError("trajectory command must contain a Trajectory")
-            result = self._require_motion_available().play_trajectory(
+            arm = self._require_motion_available()
+            arm.require_artifact_calibration(
+                trajectory.metadata,
+                artifact_label="recorded trajectory",
+            )
+            result = arm.play_trajectory(
                 trajectory,
                 speed_scale=float(values.get("speed_scale", 1.0)),
                 move_to_start=bool(values.get("move_to_start", True)),
@@ -632,6 +673,8 @@ class RobotWorker(QObject):
                 "frequency_hz": frequency,
                 "record_effort": bool(values.get("record_effort", False)),
                 "source": str(values.get("source") or "unknown"),
+                "source_robot_id": arm.config.robot_id,
+                "source_calibration_id": arm.calibration_id,
                 "timestamps_s": [],
                 "joints_rad": [],
                 "gripper": [],
@@ -682,6 +725,8 @@ class RobotWorker(QObject):
                 metadata={
                     "source": recording["source"],
                     "robot_id": self._robot_id,
+                    "source_robot_id": recording["source_robot_id"],
+                    "source_calibration_id": recording["source_calibration_id"],
                     "requested_sample_rate_hz": recording["frequency_hz"],
                     "effort_recorded": recording["record_effort"],
                 },
@@ -826,6 +871,7 @@ class RobotWorker(QObject):
                 "path": str(path),
                 "source": calibration.source,
                 "robot_id": arm.config.robot_id,
+                "calibration_id": calibration.calibration_id,
                 "joint_limits_deg": {
                     name: (degrees(bounds[0]), degrees(bounds[1]))
                     for name, bounds in limits.items()
@@ -937,6 +983,8 @@ class RobotWorker(QObject):
                 ),
                 "gripper": gripper,
                 "robot_id": self.arm.config.robot_id,
+                "calibration_id": self.arm.calibration_id,
+                "calibration_source": self.arm.calibration_source,
                 "joint_limits_deg": {
                     name: (degrees(bounds[0]), degrees(bounds[1]))
                     for name, bounds in self.arm.get_joint_limits().items()

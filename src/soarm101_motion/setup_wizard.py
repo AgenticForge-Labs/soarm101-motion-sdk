@@ -7,7 +7,10 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from soarm101_motion.calibration import default_calibration_path
+from soarm101_motion.calibration import (
+    calibration_history_path,
+    default_calibration_path,
+)
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.exceptions import RobotConnectionError
 from soarm101_motion.hardware import FeetechBackend
@@ -138,7 +141,12 @@ def _run(args: argparse.Namespace) -> int:
             path=output,
             lerobot_path=lerobot_path,
         )
+        print(f"Calibration ID: {calibration.calibration_id}")
         print(f"Calibration saved to {saved}")
+        print(
+            "Immutable calibration history: "
+            f"{calibration_history_path(args.robot_id, calibration)}"
+        )
         if lerobot_path is not None:
             print(f"LeRobot-compatible copy saved to {lerobot_path}")
 

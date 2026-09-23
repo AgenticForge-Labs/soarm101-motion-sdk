@@ -364,6 +364,20 @@ class FeetechBackend(_ProtocolFeetechBackend):
             if unknown:
                 raise KeyError(next(iter(unknown)))
 
+            calibration = self._require_calibration()
+            uncalibrated = [
+                name
+                for name in selected
+                if name in calibration.uncalibrated_motors
+            ]
+            if uncalibrated:
+                raise SafetyViolationError(
+                    "refusing torque enable while selected motors still use factory "
+                    "0..4095 calibration ranges: "
+                    + ", ".join(uncalibrated)
+                    + ". Complete mechanical-stop calibration and reconnect normally first."
+                )
+
             # Read the persistent limits first, then take the final measured-position
             # snapshot immediately before validation/latching. This minimizes the time
             # between the pose we intend to hold and the Goal_Position write.

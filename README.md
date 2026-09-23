@@ -54,6 +54,18 @@ joint angles, the SDK defines 0 rad from the midpoint of each calibrated
 mechanical-stop calibration deliberately produces symmetric ranges around the Feetech
 half-turn reference, so its coordinate system is unchanged.
 
+Every active calibration has a content-derived SHA-256 `calibration_id`. The familiar
+`~/.config/soarm101/calibration/<robot_id>.json` remains the current alias, while
+immutable snapshots are archived under
+`~/.config/soarm101/calibration/history/<robot_id>/<fingerprint>.json`.
+Saved poses, trajectories, primitives, and sequences carry calibration provenance.
+Physical replay fails closed when an artifact predates fingerprinting or its target
+calibration no longer matches the connected follower. Simulation remains permissive for
+software development.
+
+For the first real-arm session, follow [docs/physical-run.md](docs/physical-run.md)
+rather than jumping directly to GUI replay or teleoperation.
+
 ### New loose motors
 
 Fresh motors normally share a factory ID and must be assigned one at a time before the arm is fully daisy-chained:

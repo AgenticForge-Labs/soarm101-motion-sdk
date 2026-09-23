@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -102,6 +103,35 @@ class SO101Calibration:
                 raise CalibrationError(f"unknown calibrated motor: {name}")
             calibration.validate()
 
+    def canonical_motor_mapping(self) -> dict[str, dict[str, int]]:
+        """Return only physical calibration fields in deterministic order."""
+
+        return {
+            name: {
+                "motor_id": int(self.motors[name].motor_id),
+                "drive_mode": int(self.motors[name].drive_mode),
+                "homing_offset": int(self.motors[name].homing_offset),
+                "range_min": int(self.motors[name].range_min),
+                "range_max": int(self.motors[name].range_max),
+            }
+            for name in sorted(self.motors)
+        }
+
+    @property
+    def fingerprint(self) -> str:
+        """SHA-256 identity for the physical calibration, independent of file metadata."""
+
+        payload = json.dumps(
+            self.canonical_motor_mapping(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    @property
+    def calibration_id(self) -> str:
+        return f"sha256:{self.fingerprint}"
+
     @property
     def is_factory_range(self) -> bool:
         return all(
@@ -153,6 +183,7 @@ class SO101Calibration:
         payload = {
             "schema_version": self.schema_version,
             "source": self.source,
+            "calibration_id": self.calibration_id,
             "motors": {name: asdict(calibration) for name, calibration in self.motors.items()},
         }
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -177,6 +208,64 @@ class SO101Calibration:
 
 def default_calibration_path(robot_id: str) -> Path:
     return Path.home() / ".config" / "soarm101" / "calibration" / f"{robot_id}.json"
+
+
+def default_calibration_history_dir(robot_id: str) -> Path:
+    return (
+        Path.home()
+        / ".config"
+        / "soarm101"
+        / "calibration"
+        / "history"
+        / (str(robot_id).strip() or "so101")
+    )
+
+
+def calibration_history_path(robot_id: str, calibration: SO101Calibration) -> Path:
+    return default_calibration_history_dir(robot_id) / f"{calibration.fingerprint}.json"
+
+
+def archive_calibration(
+    calibration: SO101Calibration,
+    *,
+    robot_id: str,
+    history_dir: str | Path | None = None,
+) -> Path:
+    """Persist one immutable calibration snapshot keyed by its content fingerprint."""
+
+    calibration.validate()
+    root = (
+        Path(history_dir).expanduser()
+        if history_dir is not None
+        else default_calibration_history_dir(robot_id)
+    )
+    path = root / f"{calibration.fingerprint}.json"
+    if path.is_file():
+        existing = SO101Calibration.load(path)
+        if existing.fingerprint != calibration.fingerprint:
+            raise CalibrationError(
+                f"calibration history collision at {path}; refusing to overwrite"
+            )
+        return path
+    return calibration.save(path)
+
+
+def save_versioned_calibration(
+    calibration: SO101Calibration,
+    *,
+    robot_id: str,
+    current_path: str | Path | None = None,
+    history_dir: str | Path | None = None,
+) -> tuple[Path, Path]:
+    """Write the mutable current alias plus an immutable fingerprinted history copy."""
+
+    history = archive_calibration(
+        calibration,
+        robot_id=robot_id,
+        history_dir=history_dir,
+    )
+    current = calibration.save(current_path or default_calibration_path(robot_id))
+    return current, history
 
 
 def discover_lerobot_calibration(robot_id: str) -> Path | None:

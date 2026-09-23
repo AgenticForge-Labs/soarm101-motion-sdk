@@ -31,6 +31,10 @@ class SavedPose:
     gripper: float
     tcp_xyz_rpy: tuple[float, float, float, float, float, float]
     source: str = "follower"
+    source_robot_id: str | None = None
+    source_calibration_id: str | None = None
+    target_robot_id: str | None = None
+    target_calibration_id: str | None = None
     created_at: str = field(default_factory=_utc_timestamp)
 
     def __post_init__(self) -> None:
@@ -51,6 +55,18 @@ class SavedPose:
         if len(tcp) != 6 or not all(math.isfinite(value) for value in tcp):
             raise ValueError("saved pose TCP must contain six finite xyz/rpy values")
         source = str(self.source).strip() or "unknown"
+        for key in (
+            "source_robot_id",
+            "source_calibration_id",
+            "target_robot_id",
+            "target_calibration_id",
+        ):
+            value = getattr(self, key)
+            object.__setattr__(
+                self,
+                key,
+                None if value is None or not str(value).strip() else str(value).strip(),
+            )
         object.__setattr__(self, "joints", joints)
         object.__setattr__(self, "gripper", gripper)
         object.__setattr__(self, "tcp_xyz_rpy", tcp)
@@ -69,7 +85,14 @@ class SavedPose:
         gripper = float(arm.tool.get_position())
         tcp_pose = arm.model.forward(joints, tcp=arm.active_tcp)
         tcp = tuple(float(value) for value in tcp_pose.xyz_rpy())
-        return cls(joints=joints, gripper=gripper, tcp_xyz_rpy=tcp, source=source)
+        return cls(
+            joints=joints,
+            gripper=gripper,
+            tcp_xyz_rpy=tcp,
+            source=source,
+            source_robot_id=arm.config.robot_id,
+            source_calibration_id=arm.calibration_id,
+        )
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "SavedPose":
@@ -78,6 +101,22 @@ class SavedPose:
             gripper=float(data["gripper"]),
             tcp_xyz_rpy=tuple(float(value) for value in data["tcp_xyz_rpy"]),  # type: ignore[arg-type]
             source=str(data.get("source", "unknown")),
+            source_robot_id=(
+                None if data.get("source_robot_id") is None else str(data["source_robot_id"])
+            ),
+            source_calibration_id=(
+                None
+                if data.get("source_calibration_id") is None
+                else str(data["source_calibration_id"])
+            ),
+            target_robot_id=(
+                None if data.get("target_robot_id") is None else str(data["target_robot_id"])
+            ),
+            target_calibration_id=(
+                None
+                if data.get("target_calibration_id") is None
+                else str(data["target_calibration_id"])
+            ),
             created_at=str(data.get("created_at") or _utc_timestamp()),
         )
 
@@ -87,6 +126,10 @@ class SavedPose:
             "gripper": self.gripper,
             "tcp_xyz_rpy": list(self.tcp_xyz_rpy),
             "source": self.source,
+            "source_robot_id": self.source_robot_id,
+            "source_calibration_id": self.source_calibration_id,
+            "target_robot_id": self.target_robot_id,
+            "target_calibration_id": self.target_calibration_id,
             "created_at": self.created_at,
         }
 

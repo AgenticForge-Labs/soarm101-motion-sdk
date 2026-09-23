@@ -13,8 +13,9 @@ from typing import Any, Iterator
 from soarm101_motion.calibration import (
     MotorCalibration,
     SO101Calibration,
-    default_calibration_path,
+    archive_calibration,
     resolve_calibration,
+    save_versioned_calibration,
 )
 from soarm101_motion.calibration_live import (
     EncoderSweep,
@@ -132,6 +133,11 @@ class FeetechBackend(SO101HardwareBackend):
                     )
                 if self.config.configure_motors_on_connect:
                     self.configure_motors()
+                if self.calibration is not None and not self.calibration.uncalibrated_motors:
+                    archive_calibration(
+                        self.calibration,
+                        robot_id=self.config.robot_id,
+                    )
                 self._connected = True
             except Exception:
                 self._connected = False
@@ -610,7 +616,12 @@ class FeetechBackend(SO101HardwareBackend):
         path: Path | None = None,
         lerobot_path: Path | None = None,
     ) -> Path:
-        saved = calibration.save(path or default_calibration_path(self.config.robot_id))
+        saved, _history = save_versioned_calibration(
+            calibration,
+            robot_id=self.config.robot_id,
+            current_path=path,
+        )
+        self.calibration = calibration
         if lerobot_path is not None:
             calibration.save_lerobot(lerobot_path)
         return saved

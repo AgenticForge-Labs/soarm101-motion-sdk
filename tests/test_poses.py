@@ -29,6 +29,9 @@ def test_saved_pose_round_trip(tmp_path: Path) -> None:
     assert loaded.require("home").joints == pose.joints
     assert loaded.require("home").gripper == pytest.approx(pose.gripper)
     assert loaded.require("home").tcp_xyz_rpy == pytest.approx(pose.tcp_xyz_rpy)
+    assert loaded.require("home").source_robot_id == pose.source_robot_id
+    assert loaded.require("home").source_calibration_id == pose.source_calibration_id
+
 
 
 def test_saved_pose_capture_uses_one_measured_joint_snapshot(
@@ -56,6 +59,33 @@ def test_saved_pose_capture_uses_one_measured_joint_snapshot(
 
     assert reads == 1
     assert pose.tcp_xyz_rpy == pytest.approx(expected_tcp)
+
+
+def test_saved_pose_round_trip_preserves_explicit_target_binding(tmp_path: Path) -> None:
+    pose = SavedPose(
+        joints={
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 0.0,
+            "elbow_flex": 0.0,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+        },
+        gripper=0.5,
+        tcp_xyz_rpy=(0, 0, 0, 0, 0, 0),
+        source="leader",
+        source_robot_id="leader",
+        source_calibration_id="sha256:leader",
+        target_robot_id="follower",
+        target_calibration_id="sha256:follower",
+    )
+    library = PoseLibrary("follower", path=tmp_path / "poses.json")
+    library.save("point", pose)
+
+    loaded = PoseLibrary("follower", path=tmp_path / "poses.json").require("point")
+    assert loaded.source_robot_id == "leader"
+    assert loaded.source_calibration_id == "sha256:leader"
+    assert loaded.target_robot_id == "follower"
+    assert loaded.target_calibration_id == "sha256:follower"
 
 
 def test_saved_pose_validation() -> None:

@@ -199,6 +199,15 @@ class SequenceRunner:
 
     def _move_pose(self, name: str, mode: str, speed_scale: float) -> MotionResult:
         pose = self.pose_library.require(name)
+        self.arm.require_artifact_calibration(
+            {
+                "source_robot_id": pose.source_robot_id,
+                "source_calibration_id": pose.source_calibration_id,
+                "target_robot_id": pose.target_robot_id,
+                "target_calibration_id": pose.target_calibration_id,
+            },
+            artifact_label=f"saved pose {name!r}",
+        )
         if mode == "linear":
             target = Pose.from_xyz_rpy(*pose.tcp_xyz_rpy)
             return self.arm.move_linear(
@@ -252,6 +261,10 @@ class SequenceRunner:
                 str(params["name"]),
                 kind=str(params.get("kind", "edited")),
             )
+            self.arm.require_artifact_calibration(
+                trajectory.metadata,
+                artifact_label=f"trajectory {params['name']!r}",
+            )
             loops = int(params.get("loops", 1))
             if loops < 1:
                 raise ValueError("trajectory loops must be >= 1")
@@ -276,6 +289,10 @@ class SequenceRunner:
             trajectory = self.trajectory_library.load(
                 primitive.trajectory_name,
                 kind=primitive.trajectory_kind,
+            )
+            self.arm.require_artifact_calibration(
+                trajectory.metadata,
+                artifact_label=f"primitive {primitive.name!r}",
             )
             result = MotionResult(True, True)
             primitive_scale = scale * primitive.default_speed_scale
@@ -302,6 +319,10 @@ class SequenceRunner:
         on_progress: ProgressCallback | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
+        self.arm.require_artifact_calibration(
+            sequence.metadata,
+            artifact_label=f"sequence {sequence.name!r}",
+        )
         repeat_count = int(repeat)
         if repeat_count < 1:
             raise ValueError("repeat must be >= 1")

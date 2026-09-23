@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added content-addressed calibration provenance: every physical calibration has a
+  SHA-256 ID, the current calibration file is retained for compatibility, and immutable
+  history snapshots are archived per robot ID.
+- Bound saved Home/Rest poses, taught points, raw/edited trajectories, primitives, and
+  sequences to their source/target calibration context. Physical replay now fails closed
+  for legacy, stale, or cross-robot-unbound artifacts; simulation remains permissive.
+- Moved trajectory and sequence provenance checks into the public replay APIs so scripts
+  and higher-level consumers cannot bypass the GUI safety gate.
+- Routed Home/Rest through guarded saved-pose replay and sequence the stored gripper
+  command only after the arm reaches the saved joint pose.
+- Added a backend torque-enable refusal for motors that still use factory 0..4095
+  calibration ranges, even when connected through the setup/uncalibrated path.
+- Added a first-physical-run bench card and tightened TESTING.md around ordered stop
+  gates, 2° joint smoke tests, small initial gripper motion, and calibration-ID checks.
 - Unified follower and leader mechanical-stop calibration in the Setup tab. A single
   target selector routes the same sweep algorithm, live gauges, and pass criteria to
   either arm while preserving separate robot IDs and calibration files.
