@@ -16,6 +16,7 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
+from soarm101_motion.exceptions import MotionCancelledError
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitiveLibrary
@@ -563,25 +564,47 @@ class RobotWorker(QObject):
                 },
                 artifact_label="saved pose",
             )
-            if mode == "joint":
-                result = arm.move_joints(
-                    pose.joints,
-                    speed=radians(float(values["speed_deg_s"])),
-                    acceleration=radians(float(values["acceleration_deg_s2"])),
-                    wait=False,
-                )
-            elif mode == "linear":
-                target = Pose.from_xyz_rpy(*pose.tcp_xyz_rpy)
-                result = arm.move_linear(
-                    target,
-                    orientation_mode=str(values.get("orientation_mode") or "compatible"),
-                    speed=float(values["speed_mm_s"]) / 1000.0,
-                    acceleration=float(values["acceleration_mm_s2"]) / 1000.0,
-                    wait=False,
-                )
-            else:
+            move_gripper = bool(values.get("move_gripper", False))
+
+            def execute_pose(*, wait: bool) -> Any:
+                if mode == "joint":
+                    return arm.move_joints(
+                        pose.joints,
+                        speed=radians(float(values["speed_deg_s"])),
+                        acceleration=radians(float(values["acceleration_deg_s2"])),
+                        wait=wait,
+                    )
+                if mode == "linear":
+                    target = Pose.from_xyz_rpy(*pose.tcp_xyz_rpy)
+                    return arm.move_linear(
+                        target,
+                        orientation_mode=str(
+                            values.get("orientation_mode") or "compatible"
+                        ),
+                        speed=float(values["speed_mm_s"]) / 1000.0,
+                        acceleration=float(values["acceleration_mm_s2"]) / 1000.0,
+                        wait=wait,
+                    )
                 raise ValueError("saved pose mode must be 'joint' or 'linear'")
-            self._track(f"{mode} move to taught point", result)
+
+            if not move_gripper:
+                self._track(f"{mode} move to taught point", execute_pose(wait=False))
+                return
+
+            def operation(cancel_event: object) -> Any:
+                event = cancel_event
+                if getattr(event, "is_set")():
+                    raise MotionCancelledError("saved pose move cancelled before start")
+                result = execute_pose(wait=True)
+                if getattr(event, "is_set")():
+                    raise MotionCancelledError(
+                        "saved pose move cancelled before gripper command"
+                    )
+                return arm.tool.move(pose.gripper, wait=True) or result
+
+            handle: MotionHandle[Any] = MotionHandle(operation)
+            handle.start()
+            self._track(f"{mode} move to saved pose + gripper", handle)
         except BaseException as exc:
             self._report_error("taught point move", exc)
 
