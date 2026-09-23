@@ -15,6 +15,7 @@ from soarm101_motion.constants import (
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
 )
 from soarm101_motion.control import jog_linear_cli_units
+from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitiveLibrary
@@ -37,6 +38,7 @@ class RobotWorker(QObject):
     teleop_changed = Signal(bool)
     sequence_progress = Signal(object)
     effort_changed = Signal(object)
+    arm_discovery_completed = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -67,6 +69,28 @@ class RobotWorker(QObject):
     def _report_error(self, operation: str, exc: BaseException) -> None:
         self.error_message.emit(f"{operation}: {exc}")
         self.log_message.emit(f"ERROR {operation}: {exc}")
+
+    @Slot()
+    def discover_arms(self) -> None:
+        """Probe candidate serial ports without enabling torque or changing configuration."""
+
+        if self.arm is not None and self.arm.is_connected:
+            self._report_error("find arms", RuntimeError("disconnect the follower before scanning"))
+            return
+        try:
+            self.busy_changed.emit(True)
+            self.log_message.emit("Scanning serial ports for SO-101 arms...")
+            results = discover_so101_arms()
+            self.arm_discovery_completed.emit(results)
+            found = sum(1 for item in results if item.get("status") == "ok")
+            self.log_message.emit(
+                f"Arm discovery complete: {found} SO-101 arm(s) found on {len(results)} candidate port(s)."
+            )
+        except BaseException as exc:
+            self.arm_discovery_completed.emit([])
+            self._report_error("find arms", exc)
+        finally:
+            self.busy_changed.emit(False)
 
     def _require_arm(self) -> SOARM101:
         if self.arm is None or not self.arm.is_connected:
