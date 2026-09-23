@@ -31,6 +31,33 @@ def test_saved_pose_round_trip(tmp_path: Path) -> None:
     assert loaded.require("home").tcp_xyz_rpy == pytest.approx(pose.tcp_xyz_rpy)
 
 
+def test_saved_pose_capture_uses_one_measured_joint_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arm = SOARM101.simulated()
+    arm.connect()
+    original_read = arm.backend.read_joint_positions
+    reads = 0
+
+    def counted_read():
+        nonlocal reads
+        reads += 1
+        return original_read()
+
+    monkeypatch.setattr(arm.backend, "read_joint_positions", counted_read)
+    try:
+        pose = SavedPose.capture(arm)
+        expected_tcp = arm.model.forward(
+            pose.joints,
+            tcp=arm.active_tcp,
+        ).xyz_rpy()
+    finally:
+        arm.disconnect()
+
+    assert reads == 1
+    assert pose.tcp_xyz_rpy == pytest.approx(expected_tcp)
+
+
 def test_saved_pose_validation() -> None:
     with pytest.raises(ValueError, match="joints must match"):
         SavedPose(joints={}, gripper=0.5, tcp_xyz_rpy=(0, 0, 0, 0, 0, 0))
