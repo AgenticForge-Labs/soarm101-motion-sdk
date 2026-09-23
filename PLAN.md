@@ -11,7 +11,8 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] FK, bounded IK, minimum-jerk joint movement, and preplanned linear movement.
 - [x] Blocking and nonblocking motion handles with unified cancellation.
 - [x] Torque-safe enable, trajectory validation, feedback completion, timeouts, diagnostics, CLI, and simulation.
-- [x] PySide6 Setup/Control/Teach workspaces with GUI mechanical-stop calibration.
+- [x] PySide6 Setup/Control/Teach workspaces with shared follower/leader GUI
+  mechanical-stop calibration.
 - [x] Persistent Home/Rest pose library and calibrated joint-control ranges.
 - [x] Independent read-only leader/controller connection and selectable teaching source.
 - [x] Named taught points captured from follower or leader and replayed as joint or linear moves.
