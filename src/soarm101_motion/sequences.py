@@ -319,6 +319,10 @@ class SequenceRunner:
         on_progress: ProgressCallback | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
+        self.arm.require_artifact_calibration(
+            sequence.metadata,
+            artifact_label=f"sequence {sequence.name!r}",
+        )
         repeat_count = int(repeat)
         if repeat_count < 1:
             raise ValueError("repeat must be >= 1")
