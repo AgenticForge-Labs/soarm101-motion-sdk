@@ -25,8 +25,11 @@ The port is auto-selected when exactly one serial adapter is connected. The wiza
 2. Verifies all six IDs, models, diagnostics, and status values.
 3. Applies the recommended position/PID and gripper-protection settings.
 4. Keeps a usable EEPROM calibration or guides a new center-and-sweep calibration.
-5. Saves `~/.config/soarm101/calibration/forge-arm.json`.
-6. Disconnects with torque off and prints the next smoke-test command.
+5. Saves the current alias at `~/.config/soarm101/calibration/forge-arm.json` and an
+   immutable SHA-256 fingerprinted copy under
+   `~/.config/soarm101/calibration/history/forge-arm/`.
+6. Prints the calibration ID, disconnects with torque off, and prints the next
+   smoke-test command.
 
 Use `--recalibrate` to deliberately replace an existing EEPROM calibration.
 
@@ -51,6 +54,14 @@ Calibration search order:
 1. Explicit `calibration_path`
 2. `~/.config/soarm101/calibration/<robot_id>.json`
 3. LeRobot calibration directories under `HF_LEROBOT_CALIBRATION` or `HF_LEROBOT_HOME`
+
+A normal physical connection archives a usable active calibration into the immutable
+history if that fingerprint is not already present. Setup/uncalibrated connections may
+read factory ranges for calibration, but torque enable is rejected while any selected
+motor still has the unrestricted 0..4095 range.
+
+Persistent motion artifacts are matched against the connected robot's active
+calibration ID before physical replay.
 
 ## First powered test
 
