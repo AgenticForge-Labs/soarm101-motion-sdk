@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from math import degrees, radians
 from typing import Any
@@ -595,12 +596,11 @@ class RobotWorker(QObject):
                 self._track(f"{mode} move to taught point", execute_pose(wait=False))
                 return
 
-            def operation(cancel_event: object) -> Any:
-                event = cancel_event
-                if getattr(event, "is_set")():
+            def operation(cancel_event: threading.Event) -> Any:
+                if cancel_event.is_set():
                     raise MotionCancelledError("saved pose move cancelled before start")
                 result = execute_pose(wait=True)
-                if getattr(event, "is_set")():
+                if cancel_event.is_set():
                     raise MotionCancelledError(
                         "saved pose move cancelled before gripper command"
                     )
