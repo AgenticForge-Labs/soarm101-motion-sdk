@@ -58,9 +58,17 @@ class SavedPose:
 
     @classmethod
     def capture(cls, arm: "SOARM101", *, source: str = "follower") -> "SavedPose":
-        joints = arm.get_joint_positions().positions
+        """Capture one measured arm snapshot.
+
+        Joint positions are read once and reused for forward kinematics so the saved
+        TCP corresponds to the same measured joint sample. This matters especially
+        during live teleoperation, when the follower may be moving between reads.
+        """
+
+        joints = dict(arm.get_joint_positions().positions)
         gripper = float(arm.tool.get_position())
-        tcp = tuple(float(value) for value in arm.get_position().xyz_rpy())
+        tcp_pose = arm.model.forward(joints, tcp=arm.active_tcp)
+        tcp = tuple(float(value) for value in tcp_pose.xyz_rpy())
         return cls(joints=joints, gripper=gripper, tcp_xyz_rpy=tcp, source=source)
 
     @classmethod
