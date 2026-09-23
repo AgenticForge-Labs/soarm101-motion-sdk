@@ -259,12 +259,12 @@ def save_versioned_calibration(
 ) -> tuple[Path, Path]:
     """Write the mutable current alias plus an immutable fingerprinted history copy."""
 
-    current = calibration.save(current_path or default_calibration_path(robot_id))
     history = archive_calibration(
         calibration,
         robot_id=robot_id,
         history_dir=history_dir,
     )
+    current = calibration.save(current_path or default_calibration_path(robot_id))
     return current, history
 
 
