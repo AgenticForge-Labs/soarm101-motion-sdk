@@ -32,24 +32,37 @@ physical power switch/plug immediately accessible.
 4. Confirm all six motors are detected and the displayed measured positions change
    sensibly when the unpowered arm is moved.
 
-### 3. Mechanical-stop calibration — DO LATER
+### 3. Mechanical-stop calibration — follower and leader — DO LATER
 
-1. Keep follower torque OFF.
-2. Open Setup > Calibration.
-3. Start the live calibration sweep. Six circular gauges should reset to 0% and
+Follower and leader use the same calibration algorithm and the same Setup panel. Their
+calibration files remain separate because each physical arm has its own robot ID and
+measured endpoints.
+
+1. Keep both arms torque OFF.
+2. Open **Setup > Mechanical-stop calibration** and select **Follower**.
+3. If the follower has no usable calibration, connect it with
+   **Follower setup: allow uncalibrated connection** enabled.
+4. Start the live calibration sweep. Six circular gauges should reset to 0% and
    begin filling from the observed encoder extrema, not from elapsed time.
-4. Move every arm joint and the gripper repeatedly through their complete safe travel.
-   Gently touch both printed mechanical stops several times; do not hold or force a
-   joint against a stop.
-5. Confirm every pose-joint gauge reaches PASS. The current provisional minimum is
+5. Move every follower joint and the gripper repeatedly through their complete safe
+   travel. Gently touch both printed mechanical stops several times; do not hold or force
+   a joint against a stop.
+6. Confirm every pose-joint gauge reaches PASS. The current provisional minimum is
    2048 ticks (180°) for each of the five arm joints. The gripper uses a separate,
    deliberately conservative 256-tick minimum until its physical travel is characterized.
-   The gauge also shows the raw observed tick span so these expectations can be refined.
-6. Let the recording finish. Calibration must fail rather than save if any actuator is
-   below its current minimum. Otherwise the SDK should derive each zero from the midpoint
-   of the observed extrema, write symmetric limits, read them back, and save the calibration.
-7. Reconnect normally (without "allow uncalibrated").
-8. Confirm the GUI joint sliders now use the calibrated limits.
+7. Let the recording finish. Calibration must fail rather than save if any actuator is
+   below its current minimum. Otherwise the SDK derives each zero from the midpoint of
+   the observed extrema, writes symmetric limits, reads them back, and saves calibration
+   under the follower robot ID.
+8. Reconnect the follower normally and confirm its GUI joint sliders use the calibrated
+   limits.
+9. Connect the leader with torque OFF. For a fresh leader, enable
+   **Leader setup: allow uncalibrated connection** before connecting it.
+10. In the same Setup calibration panel select **Leader** and repeat the exact sweep
+    procedure. The same six gauges and thresholds are used, but the result is saved under
+    the leader robot ID.
+11. Reconnect the leader normally, keep its torque OFF, and confirm its readout changes
+    sensibly as it is moved by hand.
 
 ### 4. First follower motion validation — DO LATER
 
@@ -103,9 +116,10 @@ force.
 
 ### 5. Leader readout — DO LATER
 
-1. Connect the follower and leader on separate USB serial adapters.
-2. In Teach, select the leader port and a distinct leader robot ID/calibration.
-3. Connect the leader with torque OFF.
+1. Connect the already-calibrated follower and leader on separate USB serial adapters.
+2. In Teach, select the leader port and its distinct leader robot ID.
+3. Connect the leader with torque OFF. If it still needs calibration, return to Setup;
+   calibration is no longer a Teach workflow.
 4. Move each leader joint by hand and confirm the displayed angles and gripper position
    update independently of the follower.
 5. Switch Teaching source between Follower and Leader and confirm the current-source
