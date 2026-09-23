@@ -6,7 +6,8 @@ Robo Director is the primary source of cross-repository integration requirements
 
 - [x] Direct official Feetech SDK hardware backend.
 - [x] STS3215 IDs, register table, model verification, and synchronized commands.
-- [x] Native and LeRobot-compatible calibration storage and discovery.
+- [x] Native and LeRobot-compatible calibration storage/discovery with content-addressed
+  calibration IDs, immutable history, and motion-artifact provenance.
 - [x] Five-joint arm and `SO101Gripper` tool separation.
 - [x] FK, bounded IK, minimum-jerk joint movement, and preplanned linear movement.
 - [x] Blocking and nonblocking motion handles with unified cancellation.
@@ -43,7 +44,8 @@ Robo Director is the primary source of cross-repository integration requirements
 
 - [ ] Run port discovery and six-motor model check on the user's arm.
 - [ ] Import or perform calibration and verify all directions.
-- [ ] Run ±5° joint smoke tests with no payload.
+- [ ] Run the conservative 2° CLI smoke test on each joint with no payload and verify
+  physical direction before Cartesian motion.
 - [ ] Validate stop, completion timeout, and torque-safe enable on hardware.
 - [ ] Validate FK against measured TCP positions.
 - [ ] Validate low-speed linear paths and tune tolerances.
