@@ -4,6 +4,8 @@ import threading
 
 import pytest
 
+from soarm101_motion.calibration import MotorCalibration, SO101Calibration
+from soarm101_motion.constants import ALL_MOTORS, MOTOR_IDS
 from soarm101_motion.exceptions import SafetyViolationError
 from soarm101_motion.hardware import FeetechBackend
 
@@ -13,6 +15,12 @@ def _backend() -> FeetechBackend:
     backend._io_lock = threading.RLock()
     backend._connected = True
     backend._torque_enabled = False
+    backend.calibration = SO101Calibration(
+        motors={
+            name: MotorCalibration(MOTOR_IDS[name], 0, 0, 100, 3995)
+            for name in ALL_MOTORS
+        }
+    )
     return backend
 
 
@@ -175,3 +183,26 @@ def test_enable_accepts_positions_exactly_on_eeprom_boundaries() -> None:
         ("shoulder_lift", "Lock", 1),
         ("shoulder_lift", "Torque_Enable", 1),
     ]
+
+
+def test_enable_refuses_factory_range_before_any_goal_or_torque_write() -> None:
+    backend = _backend()
+    backend.calibration = SO101Calibration(
+        motors={
+            name: MotorCalibration(MOTOR_IDS[name], 0, 0, 0, 4095)
+            for name in ALL_MOTORS
+        }
+    )
+    latched: list[dict[str, int]] = []
+    writes: list[tuple[str, str, int]] = []
+    backend._write_raw_positions = lambda positions, **_: latched.append(dict(positions))
+    backend.write_register = lambda motor, register, value: writes.append(
+        (motor, register, value)
+    )
+
+    with pytest.raises(SafetyViolationError, match="factory 0..4095 calibration ranges"):
+        backend.enable_torque(["shoulder_pan"])
+
+    assert latched == []
+    assert writes == []
+    assert not backend._torque_enabled
