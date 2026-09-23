@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.calibration import (
     MotorCalibration,
     SO101Calibration,
@@ -12,6 +13,7 @@ from soarm101_motion.calibration import (
 )
 from soarm101_motion.constants import ALL_MOTORS, MOTOR_IDS
 from soarm101_motion.exceptions import CalibrationError
+from soarm101_motion.hardware import SimulationBackend
 from soarm101_motion.provenance import require_calibration_compatibility
 
 
@@ -145,4 +147,31 @@ def test_legacy_artifact_fails_closed() -> None:
             current_robot_id="follower",
             current_calibration_id="sha256:current",
             artifact_label="trajectory",
+        )
+
+
+def test_arm_artifact_guard_uses_active_backend_calibration() -> None:
+    calibration = _calibration()
+    backend = SimulationBackend(realtime=False)
+    backend.calibration = calibration  # type: ignore[attr-defined]
+    arm = SOARM101(
+        SOARM101Config(robot_id="follower"),
+        backend=backend,
+    )
+
+    arm.require_artifact_calibration(
+        {
+            "source_robot_id": "follower",
+            "source_calibration_id": calibration.calibration_id,
+        },
+        artifact_label="pose",
+    )
+
+    with pytest.raises(CalibrationError, match="active calibration"):
+        arm.require_artifact_calibration(
+            {
+                "source_robot_id": "follower",
+                "source_calibration_id": "sha256:stale",
+            },
+            artifact_label="pose",
         )
