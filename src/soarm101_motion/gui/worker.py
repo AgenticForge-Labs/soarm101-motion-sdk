@@ -494,6 +494,10 @@ class RobotWorker(QObject):
             if not isinstance(sequence, MotionSequence):
                 raise TypeError("sequence command must contain a MotionSequence")
             arm = self._require_motion_available()
+            arm.require_artifact_calibration(
+                sequence.metadata,
+                artifact_label=f"sequence {sequence.name!r}",
+            )
             runner = SequenceRunner(
                 arm,
                 pose_library=PoseLibrary(self._robot_id),
