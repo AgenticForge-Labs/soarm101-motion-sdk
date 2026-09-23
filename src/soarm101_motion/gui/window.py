@@ -1556,9 +1556,21 @@ class MainWindow(QMainWindow):
         for joint, value in pose.joints.items():
             self.joint_spins[joint].setValue(degrees(value))
         self.gripper_spin.setValue(pose.gripper)
-        self._move_joints()
-        self.gripper_requested.emit(pose.gripper)
-        self._log(f"Moving to saved {name} pose.")
+        self.move_saved_pose_requested.emit(
+            {
+                "pose": pose,
+                "mode": "joint",
+                "move_gripper": True,
+                "speed_deg_s": self.joint_speed.value(),
+                "acceleration_deg_s2": self.joint_acceleration.value(),
+                "speed_mm_s": self.linear_speed.value(),
+                "acceleration_mm_s2": self.linear_acceleration.value(),
+                "orientation_mode": self.orientation_combo.currentData(),
+            }
+        )
+        self._log(
+            f"Moving to saved {name} pose; gripper command follows after arm settles."
+        )
 
     def _refresh_named_pose_status(self) -> None:
         if not hasattr(self, "home_status"):
