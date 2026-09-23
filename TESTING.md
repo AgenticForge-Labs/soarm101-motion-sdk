@@ -4,6 +4,31 @@ This file is the handoff checklist for physical testing. Implementation can cont
 simulation before any of these steps are run. Work through the sections in order when
 you are ready to put the real SO-ARM101 on the bench.
 
+## First physical bench session — stop gates
+
+Use `docs/physical-run.md` as the short bench card. For the first powered session, stop
+after any failed gate rather than continuing into later capabilities.
+
+1. Discover/identify the follower and verify voltage, six motor IDs/models, diagnostics,
+   and clean status with torque OFF.
+2. Calibrate the follower through complete mechanical-stop sweeps. Record its displayed
+   calibration ID and verify both the current calibration file and immutable history copy
+   exist.
+3. Disconnect the setup session and reconnect normally. A factory-range/uncalibrated
+   session must now refuse torque enable before any goal or torque write.
+4. Run the CLI 2° smoke test on **one joint at a time**, beginning with shoulder_pan.
+   Confirm physical sign, clean return, STOP/power accessibility, and no fault/effort trip
+   before proceeding to the next joint.
+5. After all five pose joints pass, test the gripper from near mid travel with small
+   normalized changes around 0.5. Do not make the first gripper command full open/close.
+6. Characterize unloaded effort/current at the already-validated slow motions.
+7. Only then save and test Home/Rest. Home/Rest replay is calibration-bound and now moves
+   the arm first, then commands the saved gripper position.
+8. Do **not** test Cartesian motion, recorded-trajectory replay, sequences, primitives, or
+   leader→follower teleoperation during the first foundational run unless every preceding
+   gate has passed.
+
+
 ## Batch 1 — Setup, follower control, and leader readout
 
 ### 1. Launch and simulation smoke test
@@ -54,14 +79,19 @@ measured endpoints.
    below its current minimum. Otherwise the SDK derives each zero from the midpoint of
    the observed extrema, writes symmetric limits, reads them back, and saves calibration
    under the follower robot ID.
-8. Reconnect the follower normally and confirm its GUI joint sliders use the calibrated
+8. Record the short calibration ID shown in Setup. Verify
+   `~/.config/soarm101/calibration/<follower-id>.json` exists and that an immutable
+   fingerprint-named copy exists under
+   `~/.config/soarm101/calibration/history/<follower-id>/`.
+9. Reconnect the follower normally and confirm its GUI joint sliders use the calibrated
    limits.
-9. Connect the leader with torque OFF. For a fresh leader, enable
+10. Connect the leader with torque OFF. For a fresh leader, enable
    **Leader setup: allow uncalibrated connection** before connecting it.
-10. In the same Setup calibration panel select **Leader** and repeat the exact sweep
+11. In the same Setup calibration panel select **Leader** and repeat the exact sweep
     procedure. The same six gauges and thresholds are used, but the result is saved under
     the leader robot ID.
-11. Reconnect the leader normally, keep its torque OFF, and confirm its readout changes
+12. Record the leader calibration ID/history copy, reconnect the leader normally, keep
+   its torque OFF, and confirm its readout changes
     sensibly as it is moved by hand.
 
 ### 4. First follower motion validation — DO LATER
@@ -74,13 +104,25 @@ Do not start with Home/Rest or Cartesian moves.
    range, enabling must fail before any goal or torque-enable write. With torque off,
    manually move that joint back inside its calibrated range and investigate the
    calibration if the reported limits are unexpected.
-3. Enable torque and verify the arm holds the position where it was enabled.
-4. Test one joint at a time with approximately ±5° motion at low speed.
-5. Verify the physical direction matches the GUI direction.
-6. Press STOP/HOLD during a slow move and confirm the arm stops and holds.
-7. Relax and confirm torque is disabled.
-8. Only after all five joints pass should you test saved Home/Rest positions.
-9. Only after joint motion passes should you test 5 mm Cartesian jogs.
+3. Confirm that an intentionally uncalibrated/factory-range setup session refuses torque
+   enable. This rejection must occur before any Goal_Position, Lock, or Torque_Enable write.
+4. For the calibrated follower, use the CLI smoke test first:
+   `soarm101 smoke-test --port PORT --robot-id ROBOT --joint shoulder_pan`.
+   Its default motion is only 2° at 0.05 rad/s with 0.20 rad/s² acceleration, then it
+   returns and relaxes.
+5. Repeat the same 2° CLI smoke test for shoulder_lift, elbow_flex, wrist_flex, and
+   wrist_roll one at a time. Verify the **physical positive direction** for each joint
+   agrees with the GUI/model convention before any Cartesian testing.
+6. After the CLI tests pass, enable in the GUI and make similarly small one-joint moves.
+   Press STOP/HOLD during one slow move and confirm the arm stops/holds; Relax must then
+   disable torque.
+7. Put the relaxed gripper near mid travel by hand. Enable and command small normalized
+   changes such as 0.50 → 0.55 → 0.45 → 0.50. Confirm direction and effort behavior.
+   Do not use Open/Close endpoints as the first powered gripper test.
+8. Only after all five joints and the small gripper test pass should you save fresh
+   Home/Rest positions under the current calibration and replay them at low speed.
+9. Only after joint-direction, STOP, gripper, Home/Rest, and FK checks pass should you test
+   5 mm Cartesian jogs.
 
 ### 4a. Motor effort/current characterization — DO LATER
 
@@ -133,6 +175,19 @@ guarded live teleoperation, and advanced trajectory editing are now implemented 
 software. Their deferred checks are below.
 
 ## Batch 2 — Taught points, trajectory recording, and trajectory editing
+
+### Calibration-provenance replay gate — before physical artifact replay
+
+1. Save a fresh follower taught point and confirm its pose JSON contains
+   `source_calibration_id` and `target_calibration_id` matching the active follower.
+2. Record one leader trajectory only after both arms are calibrated. Its metadata should
+   retain the leader source calibration and the follower target calibration.
+3. Derived trajectory edits must preserve the source provenance and target binding.
+4. Do not reuse old pre-fingerprint physical artifacts. They are expected to fail closed.
+5. After any future follower recalibration, existing poses/trajectories/sequences are
+   expected to refuse physical replay until explicitly reviewed and re-saved/re-bound.
+6. Simulation intentionally ignores this physical provenance gate.
+
 
 These checks can wait until the Batch 1 hardware checks pass.
 
