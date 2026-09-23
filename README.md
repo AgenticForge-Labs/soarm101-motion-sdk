@@ -95,6 +95,9 @@ soarm101-gui --simulation
 
 The GUI provides:
 
+- read-only **Find Arms** discovery that probes candidate serial devices, verifies the expected
+  SO-101 servo bus, reports measured voltage, and auto-selects a ~5 V leader and ~12 V follower
+  when exactly one of each is present;
 - Setup, Control, Teach, Trajectories, and Run workspaces;
 - live mechanical-stop midpoint calibration using the same backend as the CLI;
 - persistent user-recorded Home and Rest poses;
