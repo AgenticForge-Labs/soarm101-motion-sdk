@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
     effort_clear_requested = Signal()
     effort_reset_peaks_requested = Signal()
     effort_configure_requested = Signal(object)
+    discover_arms_requested = Signal()
 
     def __init__(
         self,
@@ -138,6 +139,7 @@ class MainWindow(QMainWindow):
         self.effort_clear_requested.connect(self._worker.clear_effort_trip)
         self.effort_reset_peaks_requested.connect(self._worker.reset_effort_peaks)
         self.effort_configure_requested.connect(self._worker.configure_effort_safety)
+        self.discover_arms_requested.connect(self._worker.discover_arms)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
@@ -153,6 +155,7 @@ class MainWindow(QMainWindow):
         self._worker.teleop_changed.connect(self._on_teleop_changed)
         self._worker.sequence_progress.connect(self._on_sequence_progress)
         self._worker.effort_changed.connect(self._on_effort_status)
+        self._worker.arm_discovery_completed.connect(self._on_arm_discovery_completed)
 
         self._leader_thread = QThread(self)
         self._leader_worker = RobotWorker()
@@ -246,16 +249,23 @@ class MainWindow(QMainWindow):
         self.refresh_ports_button.clicked.connect(self._refresh_ports)
         layout.addWidget(self.refresh_ports_button, 0, 3)
 
-        layout.addWidget(QLabel("Robot ID"), 0, 4)
+        self.find_arms_button = QPushButton("Find Arms")
+        self.find_arms_button.setToolTip(
+            "Probe serial devices read-only, verify SO-101 servos, and identify leader/follower by voltage."
+        )
+        self.find_arms_button.clicked.connect(self._find_arms)
+        layout.addWidget(self.find_arms_button, 0, 4)
+
+        layout.addWidget(QLabel("Robot ID"), 0, 5)
         self.robot_id_edit = QLineEdit(robot_id)
         self.robot_id_edit.textChanged.connect(
             lambda _text: self._on_robot_id_changed()
         )
-        layout.addWidget(self.robot_id_edit, 0, 5)
+        layout.addWidget(self.robot_id_edit, 0, 6)
 
         self.connect_button = QPushButton("Connect")
         self.connect_button.clicked.connect(self._toggle_connection)
-        layout.addWidget(self.connect_button, 0, 6)
+        layout.addWidget(self.connect_button, 0, 7)
 
         self.enable_button = QPushButton("Enable")
         self.enable_button.setToolTip("Latch current positions, then enable torque.")
@@ -281,7 +291,13 @@ class MainWindow(QMainWindow):
         self.allow_uncalibrated_check.setToolTip(
             "For calibration/setup only. Keep torque off until calibration is complete."
         )
-        layout.addWidget(self.allow_uncalibrated_check, 2, 0, 1, 7)
+        layout.addWidget(self.allow_uncalibrated_check, 2, 0, 1, 8)
+
+        self.arm_discovery_status = QLabel(
+            "Arm discovery: not run. Find Arms can identify ~5 V leaders and ~12 V followers."
+        )
+        self.arm_discovery_status.setWordWrap(True)
+        layout.addWidget(self.arm_discovery_status, 3, 0, 1, 8)
         return box
 
     @staticmethod
@@ -1116,6 +1132,75 @@ class MainWindow(QMainWindow):
         self.gripper_slider.blockSignals(True)
         self.gripper_slider.setValue(round(value * 1000.0))
         self.gripper_slider.blockSignals(False)
+
+    @staticmethod
+    def _set_combo_port(combo: QComboBox, port: str) -> None:
+        if combo.findText(port) < 0:
+            combo.addItem(port)
+        combo.setCurrentText(port)
+
+    def _find_arms(self) -> None:
+        if self._connected or self._leader_connected:
+            QMessageBox.information(
+                self,
+                "Disconnect before scanning",
+                "Disconnect the follower and leader before running read-only arm discovery.",
+            )
+            return
+        if self.simulation_check.isChecked():
+            QMessageBox.information(
+                self,
+                "Hardware discovery only",
+                "Find Arms probes physical serial devices and is unavailable in simulation.",
+            )
+            return
+        self.arm_discovery_status.setText("Arm discovery: scanning serial ports…")
+        self.discover_arms_requested.emit()
+
+    def _on_arm_discovery_completed(self, result: object) -> None:
+        results = [dict(item) for item in list(result)]  # type: ignore[arg-type]
+        found = [item for item in results if item.get("status") == "ok"]
+
+        for item in results:
+            port = str(item.get("port") or "unknown")
+            if item.get("status") == "ok":
+                voltage = float(item.get("voltage_v") or 0.0)
+                role = str(item.get("role") or "unknown")
+                count = int(item.get("motor_count") or 0)
+                total = int(item.get("motor_total") or 6)
+                self._log(
+                    f"Found SO-101 on {port}: {voltage:.1f} V, {count}/{total} servos, role={role}."
+                )
+            else:
+                self._log(f"Skipped {port}: {item.get('error') or 'not an SO-101'}")
+
+        followers = [item for item in found if item.get("role") == "follower"]
+        leaders = [item for item in found if item.get("role") == "leader"]
+        if len(followers) == 1:
+            self._set_combo_port(self.port_combo, str(followers[0]["port"]))
+        if len(leaders) == 1:
+            self._set_combo_port(self.leader_port_combo, str(leaders[0]["port"]))
+
+        if not found:
+            self.arm_discovery_status.setText(
+                "Arm discovery: no SO-101 arms found. Check USB connections and arm power, then rescan."
+            )
+            return
+
+        summaries: list[str] = []
+        for item in found:
+            role = str(item.get("role") or "unknown")
+            role_label = role.title() if role != "unknown" else "SO-101"
+            summaries.append(
+                f"{role_label} {item['port']} {float(item['voltage_v']):.1f} V "
+                f"({int(item.get('motor_count') or 0)}/{int(item.get('motor_total') or 6)} servos)"
+            )
+        suffix = ""
+        if len(followers) > 1 or len(leaders) > 1:
+            suffix = " Multiple arms share a voltage role; choose the intended port manually."
+        elif not followers or not leaders:
+            suffix = " Manual port selection remains available for unclassified or missing roles."
+        self.arm_discovery_status.setText("Arm discovery: " + "; ".join(summaries) + "." + suffix)
 
     def _refresh_ports(self) -> None:
         current = self.port_combo.currentText().strip()
@@ -2421,6 +2506,12 @@ class MainWindow(QMainWindow):
         self.refresh_ports_button.setEnabled(session_editable and not simulation)
         self.robot_id_edit.setEnabled(session_editable)
         self.allow_uncalibrated_check.setEnabled(session_editable and not simulation)
+        self.find_arms_button.setEnabled(
+            session_editable
+            and not simulation
+            and not self._leader_connected
+            and not self._busy
+        )
 
         self.enable_button.setEnabled(self._connected and not self._torque_enabled and not self._busy)
         self.relax_button.setEnabled(self._connected and self._torque_enabled)
