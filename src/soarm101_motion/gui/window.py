@@ -516,8 +516,9 @@ class MainWindow(QMainWindow):
         self.leader_connect_button.clicked.connect(self._toggle_leader_connection)
         grid.addWidget(self.leader_connect_button, 0, 6)
         note = QLabel(
-            "The leader is read-only here: leave its torque off and move it by hand. "
-            "Live leader→follower teleoperation is a later stage."
+            "The leader stays read-only with torque off: move it by hand while the "
+            "follower mirrors it through guarded live teleoperation. Start physical "
+            "testing at 5–10 Hz before trying the experimental higher rates."
         )
         note.setWordWrap(True)
         grid.addWidget(note, 1, 0, 1, 7)
