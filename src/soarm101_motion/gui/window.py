@@ -1524,20 +1524,6 @@ class MainWindow(QMainWindow):
                 if name not in {HOME_POSE_NAME, REST_POSE_NAME}:
                     raise ValueError(f"unknown standard pose {name!r}")
                 path = self._get_pose_library().save(name, pose)
-                self._latest_state = {
-                    "joints_deg": {
-                        joint: degrees(value) for joint, value in pose.joints.items()
-                    },
-                    "gripper": pose.gripper,
-                    "pose_mm_deg": (
-                        pose.tcp_xyz_rpy[0] * 1000.0,
-                        pose.tcp_xyz_rpy[1] * 1000.0,
-                        pose.tcp_xyz_rpy[2] * 1000.0,
-                        degrees(pose.tcp_xyz_rpy[3]),
-                        degrees(pose.tcp_xyz_rpy[4]),
-                        degrees(pose.tcp_xyz_rpy[5]),
-                    ),
-                }
                 self._log(f"Saved {name} from fresh measured follower pose to {path}.")
                 self._refresh_named_pose_status()
                 self._update_enabled_state()
