@@ -1417,9 +1417,15 @@ class MainWindow(QMainWindow):
         values = dict(result)  # type: ignore[arg-type]
         self._active_calibration_target = None
         self.calibration_target_combo.setEnabled(True)
+        calibration_id = str(values.get("calibration_id") or "unknown")
+        short_id = (
+            calibration_id.split(":", 1)[-1][:12]
+            if calibration_id != "unknown"
+            else "unknown"
+        )
         self.calibration_status.setText(
             f"{target.title()} calibration complete ({values.get('source', 'unknown')}); "
-            f"saved to {values.get('path', 'unknown path')}."
+            f"ID {short_id}; saved to {values.get('path', 'unknown path')}."
         )
         limits = values.get("joint_limits_deg")
         if target == "follower" and limits:
