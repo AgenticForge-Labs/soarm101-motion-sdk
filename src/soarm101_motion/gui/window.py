@@ -2364,7 +2364,10 @@ class MainWindow(QMainWindow):
     def _on_leader_busy(self, busy: bool) -> None:
         self._leader_busy = busy
         if not busy and self._active_calibration_target == "leader":
-            self.calibration_target_combo.setEnabled(True)
+            self._active_calibration_target = None
+            self.calibration_status.setText(
+                "Leader calibration ended without a completion result; see the log."
+            )
         self._update_enabled_state()
 
     def _on_leader_connected(self, connected: bool) -> None:
@@ -2484,6 +2487,11 @@ class MainWindow(QMainWindow):
     def _on_busy(self, busy: bool) -> None:
         self._busy = busy
         if not busy:
+            if self._active_calibration_target == "follower":
+                self._active_calibration_target = None
+                self.calibration_status.setText(
+                    "Follower calibration ended without a completion result; see the log."
+                )
             self._sequence_paused = False
             if hasattr(self, "pause_sequence_button"):
                 self.pause_sequence_button.setText("Pause after current step")
