@@ -25,6 +25,26 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
 - Calibration snapshots and restores motor EEPROM on failure when possible.
 - Torque enable rolls back motors already energized when a later enable fails.
 
+## Calibration provenance
+
+Each physical calibration has a deterministic SHA-256 identity derived from motor ID,
+drive mode, homing offset, and calibrated encoder limits. Successful calibration saves
+the normal current file and an immutable fingerprinted history copy.
+
+Persistent motion artifacts record the calibration context in which they were created.
+Same-arm artifacts must match the connected robot's active calibration. Leader-recorded
+artifacts additionally carry the follower calibration they were approved to target.
+After recalibration, stale physical replay is rejected until the artifact is explicitly
+reviewed and saved/bound again.
+
+Legacy artifacts without calibration provenance are intentionally blocked on physical
+hardware. Simulation skips this gate so old software fixtures and editing workflows remain
+usable.
+
+A setup connection that still uses factory `0..4095` ranges is also torque-inhibited at
+the backend. The setup/uncalibrated option allows readout and calibration only; it is not
+a way to bypass powered-motion calibration requirements.
+
 ## Motor effort guard
 
 The managed Feetech backend monitors raw STS3215 `Present_Current` and signed
