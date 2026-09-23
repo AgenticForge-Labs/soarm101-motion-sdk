@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from soarm101_motion import SOARM101, SOARM101Config
@@ -14,7 +15,10 @@ from soarm101_motion.calibration import (
 from soarm101_motion.constants import ALL_MOTORS, MOTOR_IDS
 from soarm101_motion.exceptions import CalibrationError
 from soarm101_motion.hardware import SimulationBackend
+from soarm101_motion.poses import PoseLibrary
 from soarm101_motion.provenance import require_calibration_compatibility
+from soarm101_motion.sequences import MotionSequence, SequenceRunner, SequenceStep
+from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 
 
 def _calibration(*, offset_delta: int = 0, source: str = "test") -> SO101Calibration:
@@ -175,3 +179,62 @@ def test_arm_artifact_guard_uses_active_backend_calibration() -> None:
             },
             artifact_label="pose",
         )
+
+
+def _minimal_trajectory(metadata: dict[str, str]) -> Trajectory:
+    return Trajectory(
+        timestamps_s=np.array([0.0, 0.1]),
+        joints_rad=np.zeros((2, 5)),
+        gripper=np.array([0.5, 0.5]),
+        metadata=metadata,
+    )
+
+
+def test_public_play_trajectory_rejects_stale_calibration_before_motion() -> None:
+    calibration = _calibration()
+    backend = SimulationBackend(realtime=False)
+    backend.calibration = calibration  # type: ignore[attr-defined]
+    arm = SOARM101(
+        SOARM101Config(robot_id="follower"),
+        backend=backend,
+    )
+    trajectory = _minimal_trajectory(
+        {
+            "source_robot_id": "follower",
+            "source_calibration_id": "sha256:stale",
+        }
+    )
+
+    with pytest.raises(CalibrationError, match="active calibration"):
+        arm.play_trajectory(trajectory)
+
+
+def test_sequence_runner_rejects_stale_gripper_only_sequence(
+    tmp_path: Path,
+) -> None:
+    calibration = _calibration()
+    backend = SimulationBackend(realtime=False)
+    backend.calibration = calibration  # type: ignore[attr-defined]
+    arm = SOARM101(
+        SOARM101Config(robot_id="follower"),
+        backend=backend,
+    )
+    runner = SequenceRunner(
+        arm,
+        pose_library=PoseLibrary("follower", path=tmp_path / "poses.json"),
+        trajectory_library=TrajectoryLibrary(
+            "follower",
+            root=tmp_path / "trajectories",
+        ),
+    )
+    sequence = MotionSequence(
+        "stale_gripper",
+        (SequenceStep("gripper", {"position": 0.5}),),
+        metadata={
+            "target_robot_id": "follower",
+            "target_calibration_id": "sha256:stale",
+        },
+    )
+
+    with pytest.raises(CalibrationError, match="review and re-bind"):
+        runner.run(sequence)
