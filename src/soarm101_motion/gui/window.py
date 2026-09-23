@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from math import degrees, radians
 from typing import Any
 
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from soarm101_motion.calibration import SO101Calibration, default_calibration_path
 from soarm101_motion.calibration_live import PROVISIONAL_MINIMUM_TRAVEL_TICKS
 from soarm101_motion.constants import (
     ALL_MOTORS,
@@ -42,6 +44,7 @@ from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitive, MotionPrimitiveLibrary
+from soarm101_motion.provenance import bind_target_calibration, provenance_subset
 from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 
@@ -1454,6 +1457,48 @@ class MainWindow(QMainWindow):
             self._pose_library_cache = (robot_id, PoseLibrary(robot_id))
         return self._pose_library_cache[1]
 
+    def _follower_calibration_binding(self) -> tuple[str, str] | None:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        if self._latest_state is not None:
+            calibration_id = self._latest_state.get("calibration_id")
+            state_robot_id = str(self._latest_state.get("robot_id") or robot_id)
+            if calibration_id:
+                return state_robot_id, str(calibration_id)
+        path = default_calibration_path(robot_id)
+        if path.is_file():
+            try:
+                calibration = SO101Calibration.load(path)
+            except Exception as exc:
+                self._log(f"Could not read follower calibration binding from {path}: {exc}")
+                return None
+            return robot_id, calibration.calibration_id
+        return None
+
+    def _bind_pose_to_follower(self, pose: SavedPose) -> SavedPose:
+        binding = self._follower_calibration_binding()
+        if binding is None:
+            return pose
+        robot_id, calibration_id = binding
+        return replace(
+            pose,
+            target_robot_id=robot_id,
+            target_calibration_id=calibration_id,
+        )
+
+    def _bind_trajectory_to_follower(self, trajectory: Trajectory) -> Trajectory:
+        binding = self._follower_calibration_binding()
+        if binding is None:
+            return trajectory
+        robot_id, calibration_id = binding
+        return replace(
+            trajectory,
+            metadata=bind_target_calibration(
+                trajectory.metadata,
+                robot_id=robot_id,
+                calibration_id=calibration_id,
+            ),
+        )
+
     @staticmethod
     def _saved_pose_from_state(state: dict[str, Any], *, source: str) -> SavedPose:
         joints = {
@@ -1474,6 +1519,14 @@ class MainWindow(QMainWindow):
             gripper=float(state["gripper"]),
             tcp_xyz_rpy=tcp,
             source=source,
+            source_robot_id=(
+                None if state.get("robot_id") is None else str(state["robot_id"])
+            ),
+            source_calibration_id=(
+                None
+                if state.get("calibration_id") is None
+                else str(state["calibration_id"])
+            ),
         )
 
     def _save_named_pose(self, name: str) -> None:
@@ -1572,7 +1625,9 @@ class MainWindow(QMainWindow):
             self._on_error(f"Cannot save point: {source} state is unavailable.")
             return
         try:
-            pose = self._saved_pose_from_state(state, source=source)
+            pose = self._bind_pose_to_follower(
+                self._saved_pose_from_state(state, source=source)
+            )
             path = self._get_pose_library().save(name, pose)
             self._log(f"Saved taught point {name!r} from {source} to {path}.")
             self.point_name_edit.clear()
@@ -1599,6 +1654,8 @@ class MainWindow(QMainWindow):
             if kind == "named":
                 if name not in {HOME_POSE_NAME, REST_POSE_NAME}:
                     raise ValueError(f"unknown standard pose {name!r}")
+                pose = self._bind_pose_to_follower(pose)
+                pose = self._bind_pose_to_follower(pose)
                 path = self._get_pose_library().save(name, pose)
                 self._log(f"Saved {name} from fresh measured follower pose to {path}.")
                 self._refresh_named_pose_status()
@@ -1718,6 +1775,7 @@ class MainWindow(QMainWindow):
             return
         try:
             library = self._get_trajectory_library()
+            trajectory = self._bind_trajectory_to_follower(trajectory)
             entry = library.save(name, trajectory, kind="raw")
             loaded = library.load(entry.name, kind=entry.kind)
             self.recording_status.setText(
@@ -1929,7 +1987,9 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            clip = self._selection_clip().retime(self.trajectory_speed_scale.value())
+            clip = self._bind_trajectory_to_follower(
+                self._selection_clip().retime(self.trajectory_speed_scale.value())
+            )
             entry = self._get_trajectory_library().save(name, clip, kind="edited")
             loaded = self._get_trajectory_library().load(entry.name, kind=entry.kind)
             self._log(
@@ -2068,6 +2128,10 @@ class MainWindow(QMainWindow):
                 loopable=self.primitive_loopable_check.isChecked(),
                 interruptible=self.primitive_interruptible_check.isChecked(),
                 default_speed_scale=self.trajectory_speed_scale.value(),
+                metadata={
+                    **provenance_subset(trajectory.metadata),
+                    "trajectory_created_at": trajectory.created_at,
+                },
             )
             path = self._get_primitive_library().save(primitive)
             self._log(f"Saved motion primitive {name!r} to {path}.")
@@ -2177,7 +2241,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No steps", "Add at least one sequence step.")
             return
         try:
-            sequence = MotionSequence(name, tuple(self._sequence_steps))
+            binding = self._follower_calibration_binding()
+            sequence_metadata: dict[str, Any] = {}
+            if binding is not None:
+                sequence_metadata = {
+                    "target_robot_id": binding[0],
+                    "target_calibration_id": binding[1],
+                }
+            sequence = MotionSequence(
+                name,
+                tuple(self._sequence_steps),
+                metadata=sequence_metadata,
+            )
             path = self._get_sequence_library().save(sequence)
             self._log(f"Saved sequence {name!r} to {path}.")
             self._refresh_sequence_list()
