@@ -39,6 +39,7 @@ class RobotWorker(QObject):
     sequence_progress = Signal(object)
     effort_changed = Signal(object)
     arm_discovery_completed = Signal(object)
+    measured_pose_captured = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -91,6 +92,30 @@ class RobotWorker(QObject):
             self._report_error("find arms", exc)
         finally:
             self.busy_changed.emit(False)
+
+    @Slot(object)
+    def capture_measured_pose(self, request: object) -> None:
+        """Capture the follower's measured pose without interrupting live teleoperation."""
+
+        values = dict(request)  # type: ignore[arg-type]
+        try:
+            pose = SavedPose.capture(self._require_arm(), source="follower")
+            self.measured_pose_captured.emit(
+                {
+                    "request": values,
+                    "pose": pose,
+                    "error": None,
+                }
+            )
+        except BaseException as exc:
+            self.measured_pose_captured.emit(
+                {
+                    "request": values,
+                    "pose": None,
+                    "error": str(exc),
+                }
+            )
+            self._report_error("capture measured follower pose", exc)
 
     def _require_arm(self) -> SOARM101:
         if self.arm is None or not self.arm.is_connected:
