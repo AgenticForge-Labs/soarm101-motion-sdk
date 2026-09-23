@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Unified follower and leader mechanical-stop calibration in the Setup tab. A single
+  target selector routes the same sweep algorithm, live gauges, and pass criteria to
+  either arm while preserving separate robot IDs and calibration files.
+- Added a leader setup-only "allow uncalibrated connection" option so a fresh leader can
+  connect for calibration without weakening its normal read-only teaching workflow.
 - Added a Setup GUI motor-effort safety/characterization panel with per-motor live
   current/load, session peaks, effective thresholds, latched-trip visibility, manual
   refresh/reset/clear actions, and explicit session-only global threshold controls.

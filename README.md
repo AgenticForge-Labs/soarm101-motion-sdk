@@ -99,7 +99,8 @@ The GUI provides:
   SO-101 servo bus, reports measured voltage, and auto-selects a ~5 V leader and ~12 V follower
   when exactly one of each is present;
 - Setup, Control, Teach, Trajectories, and Run workspaces;
-- live mechanical-stop midpoint calibration using the same backend as the CLI;
+- shared Setup mechanical-stop midpoint calibration for either the follower or leader,
+  using the same backend, sweep gauges, pass criteria, and save path logic as the CLI;
 - persistent user-recorded Home and Rest poses;
 - a second read-only leader/controller-arm session and selectable teaching source;
 - named taught points replayable as joint or Cartesian linear moves; with Follower selected

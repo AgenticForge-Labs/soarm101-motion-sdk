@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
     absolute_pose_requested = Signal(object)
     gripper_requested = Signal(float)
     calibration_requested = Signal(float)
+    leader_calibration_requested = Signal(float)
     leader_connect_requested = Signal(object)
     leader_disconnect_requested = Signal()
     move_saved_pose_requested = Signal(object)
@@ -97,7 +98,9 @@ class MainWindow(QMainWindow):
         self._joint_targets_initialized = False
         self._last_joint_limits: dict[str, tuple[float, float]] | None = None
         self._leader_connected = False
+        self._leader_busy = False
         self._latest_leader_state: dict[str, Any] | None = None
+        self._active_calibration_target: str | None = None
         self._pose_library_cache: tuple[str, PoseLibrary] | None = None
         self._trajectory_library_cache: tuple[str, TrajectoryLibrary] | None = None
         self._active_trajectory: Trajectory | None = None
@@ -148,8 +151,12 @@ class MainWindow(QMainWindow):
         self._worker.busy_changed.connect(self._on_busy)
         self._worker.log_message.connect(self._log)
         self._worker.error_message.connect(self._on_error)
-        self._worker.calibration_completed.connect(self._on_calibration_completed)
-        self._worker.calibration_progress.connect(self._on_calibration_progress)
+        self._worker.calibration_completed.connect(
+            lambda result: self._on_calibration_completed("follower", result)
+        )
+        self._worker.calibration_progress.connect(
+            lambda result: self._on_calibration_progress("follower", result)
+        )
         self._worker.recording_completed.connect(self._on_recording_completed)
         self._worker.recording_changed.connect(
             lambda active: self._on_recording_changed("follower", active)
@@ -167,6 +174,7 @@ class MainWindow(QMainWindow):
         self._leader_thread.finished.connect(self._leader_worker.deleteLater)
         self.leader_connect_requested.connect(self._leader_worker.connect_robot)
         self.leader_disconnect_requested.connect(self._leader_worker.disconnect_robot)
+        self.leader_calibration_requested.connect(self._leader_worker.run_calibration)
         self.leader_recording_start_requested.connect(self._leader_worker.start_recording)
         self.leader_recording_stop_requested.connect(self._leader_worker.stop_recording)
         self.leader_stream_start_requested.connect(self._leader_worker.start_stream_readout)
@@ -177,6 +185,13 @@ class MainWindow(QMainWindow):
         )
         self._leader_worker.state_changed.connect(self._on_leader_state)
         self._leader_worker.connected_changed.connect(self._on_leader_connected)
+        self._leader_worker.busy_changed.connect(self._on_leader_busy)
+        self._leader_worker.calibration_completed.connect(
+            lambda result: self._on_calibration_completed("leader", result)
+        )
+        self._leader_worker.calibration_progress.connect(
+            lambda result: self._on_calibration_progress("leader", result)
+        )
         self._leader_worker.log_message.connect(lambda message: self._log(f"Leader: {message}"))
         self._leader_worker.error_message.connect(
             lambda message: self._on_error(f"Leader: {message}")
@@ -290,7 +305,9 @@ class MainWindow(QMainWindow):
         self.read_targets_button.clicked.connect(self._load_current_targets)
         layout.addWidget(self.read_targets_button, 1, 5, 1, 2)
 
-        self.allow_uncalibrated_check = QCheckBox("Setup: allow uncalibrated connection")
+        self.allow_uncalibrated_check = QCheckBox(
+            "Follower setup: allow uncalibrated connection"
+        )
         self.allow_uncalibrated_check.setToolTip(
             "For calibration/setup only. Keep torque off until calibration is complete."
         )
@@ -326,40 +343,60 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        calibration = QGroupBox("Mechanical-stop calibration")
+        calibration = QGroupBox("Mechanical-stop calibration — follower or leader")
         grid = QGridLayout(calibration)
         explanation = QLabel(
-            "Calibration keeps torque off while you sweep every joint and the gripper "
-            "between both mechanical stops. Zero is computed from the midpoint of the "
-            "observed extrema; no visual midpoint placement is required."
+            "Follower and leader use the same calibration procedure. Select the arm, "
+            "keep torque off, then sweep every joint and the gripper between both "
+            "mechanical stops. Zero is computed from the midpoint of the observed extrema."
         )
         explanation.setWordWrap(True)
-        grid.addWidget(explanation, 0, 0, 1, 3)
-        grid.addWidget(QLabel("Sweep duration"), 1, 0)
+        grid.addWidget(explanation, 0, 0, 1, 4)
+
+        grid.addWidget(QLabel("Calibration target"), 1, 0)
+        self.calibration_target_combo = QComboBox()
+        self.calibration_target_combo.addItem("Follower", "follower")
+        self.calibration_target_combo.addItem("Leader", "leader")
+        self.calibration_target_combo.currentIndexChanged.connect(
+            lambda _index: self._on_calibration_target_changed()
+        )
+        grid.addWidget(self.calibration_target_combo, 1, 1)
+
+        grid.addWidget(QLabel("Sweep duration"), 1, 2)
         self.calibration_duration = self._spin(
             5.0, 120.0, 30.0, decimals=1, step=5.0, suffix=" s"
         )
-        grid.addWidget(self.calibration_duration, 1, 1)
+        grid.addWidget(self.calibration_duration, 1, 3)
+
+        self.leader_allow_uncalibrated_check = QCheckBox(
+            "Leader setup: allow uncalibrated connection"
+        )
+        self.leader_allow_uncalibrated_check.setToolTip(
+            "Used on the next leader connection for calibration/setup only. "
+            "Keep leader torque off."
+        )
+        grid.addWidget(self.leader_allow_uncalibrated_check, 2, 0, 1, 3)
+
         self.run_calibration_button = QPushButton("Start live calibration")
         self.run_calibration_button.clicked.connect(self._start_calibration)
-        grid.addWidget(self.run_calibration_button, 1, 2)
+        grid.addWidget(self.run_calibration_button, 2, 3)
+
         self.calibration_status = QLabel(
-            "Not run in this session. Simulation cannot perform encoder calibration."
+            "Select Follower or Leader. Simulation cannot perform encoder calibration."
         )
         self.calibration_status.setWordWrap(True)
-        grid.addWidget(self.calibration_status, 2, 0, 1, 3)
+        grid.addWidget(self.calibration_status, 3, 0, 1, 4)
 
         target_note = QLabel(
-            "Live circles show observed encoder span versus the current provisional "
-            "minimum. Pose joints require at least 180° / 2048 ticks. The gripper "
-            "threshold is intentionally conservative until physical travel is measured."
+            "The same live circles and pass criteria are used for both arms. Pose joints "
+            "require at least 180° / 2048 ticks. The gripper threshold remains provisional."
         )
         target_note.setWordWrap(True)
-        grid.addWidget(target_note, 3, 0, 1, 3)
+        grid.addWidget(target_note, 4, 0, 1, 4)
 
         self.calibration_sweep_panel = CalibrationSweepPanel()
         self.calibration_sweep_panel.reset(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
-        grid.addWidget(self.calibration_sweep_panel, 4, 0, 1, 3)
+        grid.addWidget(self.calibration_sweep_panel, 5, 0, 1, 4)
         layout.addWidget(calibration)
 
         effort = QGroupBox("Motor effort safety / characterization")
@@ -1299,14 +1336,36 @@ class MainWindow(QMainWindow):
                 "simulation": simulation,
                 "port": port,
                 "robot_id": self.leader_robot_id_edit.text().strip() or "so101-leader",
+                "allow_uncalibrated": self.leader_allow_uncalibrated_check.isChecked(),
             }
         )
 
+    def _on_calibration_target_changed(self) -> None:
+        target = str(self.calibration_target_combo.currentData())
+        if self._active_calibration_target is None:
+            self.calibration_sweep_panel.reset(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
+            self.calibration_status.setText(
+                f"{target.title()} selected for mechanical-stop calibration."
+            )
+        self._update_enabled_state()
+
     def _start_calibration(self) -> None:
-        if not self._connected:
-            QMessageBox.warning(self, "Follower not connected", "Connect the follower first.")
+        target = str(self.calibration_target_combo.currentData())
+        if target == "leader":
+            connected = self._leader_connected
+            simulation = self.leader_simulation_check.isChecked()
+        else:
+            connected = self._connected
+            simulation = self.simulation_check.isChecked()
+
+        if not connected:
+            QMessageBox.warning(
+                self,
+                f"{target.title()} not connected",
+                f"Connect the {target} first.",
+            )
             return
-        if self.simulation_check.isChecked():
+        if simulation:
             QMessageBox.information(
                 self,
                 "Hardware calibration only",
@@ -1315,19 +1374,29 @@ class MainWindow(QMainWindow):
             return
         answer = QMessageBox.question(
             self,
-            "Start calibration",
-            "Torque will be disabled. Sweep every joint and the gripper repeatedly "
-            "between both mechanical stops for the full recording period. Continue?",
+            f"Calibrate {target}?",
+            f"{target.title()} torque will be disabled. Sweep every joint and the gripper "
+            "repeatedly between both mechanical stops for the full recording period. Continue?",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
+
+        self._active_calibration_target = target
+        self.calibration_target_combo.setEnabled(False)
         self.calibration_sweep_panel.reset(PROVISIONAL_MINIMUM_TRAVEL_TICKS)
         self.calibration_status.setText(
-            "Calibration recording in progress… Sweep every actuator fully between both stops."
+            f"{target.title()} calibration recording in progress… "
+            "Sweep every actuator fully between both stops."
         )
-        self.calibration_requested.emit(self.calibration_duration.value())
+        duration = self.calibration_duration.value()
+        if target == "leader":
+            self.leader_calibration_requested.emit(duration)
+        else:
+            self.calibration_requested.emit(duration)
 
-    def _on_calibration_progress(self, result: object) -> None:
+    def _on_calibration_progress(self, target: str, result: object) -> None:
+        if self._active_calibration_target not in (None, target):
+            return
         values = dict(result)  # type: ignore[arg-type]
         self.calibration_sweep_panel.set_progress(values)
         passed = sum(
@@ -1336,20 +1405,27 @@ class MainWindow(QMainWindow):
             if isinstance(item, dict) and bool(item.get("passed", False))
         )
         self.calibration_status.setText(
-            f"Calibration recording in progress… {passed}/{len(PROVISIONAL_MINIMUM_TRAVEL_TICKS)} "
-            "actuators have reached their provisional minimum sweep."
+            f"{target.title()} calibration recording in progress… "
+            f"{passed}/{len(PROVISIONAL_MINIMUM_TRAVEL_TICKS)} actuators have reached "
+            "their provisional minimum sweep."
         )
 
-    def _on_calibration_completed(self, result: object) -> None:
+    def _on_calibration_completed(self, target: str, result: object) -> None:
         values = dict(result)  # type: ignore[arg-type]
+        self._active_calibration_target = None
+        self.calibration_target_combo.setEnabled(True)
         self.calibration_status.setText(
-            f"Calibration complete ({values.get('source', 'unknown')}); "
+            f"{target.title()} calibration complete ({values.get('source', 'unknown')}); "
             f"saved to {values.get('path', 'unknown path')}."
         )
         limits = values.get("joint_limits_deg")
-        if limits:
+        if target == "follower" and limits:
             self._apply_joint_limits(dict(limits))
-        self._log("Mechanical-stop midpoint calibration completed.")
+        self._log(
+            f"{target.title()} mechanical-stop midpoint calibration completed "
+            f"for {values.get('robot_id', 'unknown robot')}."
+        )
+        self._update_enabled_state()
 
     def _get_sequence_library(self) -> SequenceLibrary:
         robot_id = self.robot_id_edit.text().strip() or "so101"
@@ -2285,12 +2361,22 @@ class MainWindow(QMainWindow):
         if not active and self._teleop_active:
             self.teleop_stop_requested.emit()
 
+    def _on_leader_busy(self, busy: bool) -> None:
+        self._leader_busy = busy
+        if not busy and self._active_calibration_target == "leader":
+            self._active_calibration_target = None
+            self.calibration_status.setText(
+                "Leader calibration ended without a completion result; see the log."
+            )
+        self._update_enabled_state()
+
     def _on_leader_connected(self, connected: bool) -> None:
         self._leader_connected = connected
         if not connected:
             if self._teleop_active:
                 self.teleop_stop_requested.emit()
             self._latest_leader_state = None
+            self._leader_busy = False
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
         self._update_enabled_state()
@@ -2401,6 +2487,11 @@ class MainWindow(QMainWindow):
     def _on_busy(self, busy: bool) -> None:
         self._busy = busy
         if not busy:
+            if self._active_calibration_target == "follower":
+                self._active_calibration_target = None
+                self.calibration_status.setText(
+                    "Follower calibration ended without a completion result; see the log."
+                )
             self._sequence_paused = False
             if hasattr(self, "pause_sequence_button"):
                 self.pause_sequence_button.setText("Pause after current step")
@@ -2593,8 +2684,32 @@ class MainWindow(QMainWindow):
         self.move_gripper_button.setEnabled(can_move)
         self.open_gripper_button.setEnabled(can_move)
 
+        calibration_target = str(self.calibration_target_combo.currentData())
+        if calibration_target == "leader":
+            calibration_connected = self._leader_connected
+            calibration_simulation = self.leader_simulation_check.isChecked()
+            calibration_busy = self._leader_busy
+        else:
+            calibration_connected = self._connected
+            calibration_simulation = simulation
+            calibration_busy = self._busy
+        any_calibration_busy = self._busy or self._leader_busy
+        self.calibration_target_combo.setEnabled(
+            self._active_calibration_target is None and not any_calibration_busy
+        )
+        self.calibration_duration.setEnabled(not any_calibration_busy)
         self.run_calibration_button.setEnabled(
-            self._connected and not simulation and not self._busy
+            calibration_connected
+            and not calibration_simulation
+            and not calibration_busy
+            and not any_calibration_busy
+            and self._recording_source is None
+            and not self._teleop_active
+        )
+        self.leader_allow_uncalibrated_check.setEnabled(
+            not self._leader_connected
+            and not self.leader_simulation_check.isChecked()
+            and not any_calibration_busy
         )
 
         effort_supported = bool(self._latest_effort_status.get("supported", False))
