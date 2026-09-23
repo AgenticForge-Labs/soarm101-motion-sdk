@@ -844,6 +844,7 @@ class RobotWorker(QObject):
                 "path": str(path),
                 "source": calibration.source,
                 "robot_id": arm.config.robot_id,
+                "calibration_id": calibration.calibration_id,
                 "joint_limits_deg": {
                     name: (degrees(bounds[0]), degrees(bounds[1]))
                     for name, bounds in limits.items()
