@@ -77,6 +77,7 @@ class MainWindow(QMainWindow):
     effort_reset_peaks_requested = Signal()
     effort_configure_requested = Signal(object)
     discover_arms_requested = Signal()
+    capture_follower_pose_requested = Signal(object)
 
     def __init__(
         self,
@@ -140,6 +141,7 @@ class MainWindow(QMainWindow):
         self.effort_reset_peaks_requested.connect(self._worker.reset_effort_peaks)
         self.effort_configure_requested.connect(self._worker.configure_effort_safety)
         self.discover_arms_requested.connect(self._worker.discover_arms)
+        self.capture_follower_pose_requested.connect(self._worker.capture_measured_pose)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.connected_changed.connect(self._on_connected)
@@ -156,6 +158,7 @@ class MainWindow(QMainWindow):
         self._worker.sequence_progress.connect(self._on_sequence_progress)
         self._worker.effort_changed.connect(self._on_effort_status)
         self._worker.arm_discovery_completed.connect(self._on_arm_discovery_completed)
+        self._worker.measured_pose_captured.connect(self._on_measured_pose_captured)
 
         self._leader_thread = QThread(self)
         self._leader_worker = RobotWorker()
@@ -465,8 +468,14 @@ class MainWindow(QMainWindow):
         self.home_status = QLabel("Home: not saved")
         self.rest_status = QLabel("Rest: not saved")
         self.save_home_button = QPushButton("Save current as Home")
+        self.save_home_button.setToolTip(
+            "Capture the follower's fresh measured pose, including during live teleoperation."
+        )
         self.go_home_button = QPushButton("Go Home")
         self.save_rest_button = QPushButton("Save current as Rest")
+        self.save_rest_button.setToolTip(
+            "Capture the follower's fresh measured pose, including during live teleoperation."
+        )
         self.go_rest_button = QPushButton("Go Rest")
         self.save_home_button.clicked.connect(
             lambda _checked=False: self._save_named_pose(HOME_POSE_NAME)
@@ -594,6 +603,9 @@ class MainWindow(QMainWindow):
         self.point_name_edit.setPlaceholderText("pick, above_drop, camera_pose...")
         point_grid.addWidget(self.point_name_edit, 0, 1, 1, 2)
         self.save_point_button = QPushButton("Save current point")
+        self.save_point_button.setToolTip(
+            "With Follower selected, capture a fresh measured follower pose even during live teleop."
+        )
         self.save_point_button.clicked.connect(self._save_taught_point)
         point_grid.addWidget(self.save_point_button, 0, 3)
         point_grid.addWidget(QLabel("Saved point"), 1, 0)
@@ -1389,17 +1401,16 @@ class MainWindow(QMainWindow):
         )
 
     def _save_named_pose(self, name: str) -> None:
-        if not self._latest_state:
-            self._on_error("Cannot save pose: follower state is unavailable.")
+        if not self._connected:
+            self._on_error("Cannot save pose: follower is not connected.")
             return
-        try:
-            pose = self._saved_pose_from_state(self._latest_state, source="follower")
-            path = self._get_pose_library().save(name, pose)
-            self._log(f"Saved {name} pose to {path}.")
-            self._refresh_named_pose_status()
-            self._update_enabled_state()
-        except Exception as exc:
-            self._on_error(f"Save {name}: {exc}")
+        self.capture_follower_pose_requested.emit(
+            {
+                "kind": "named",
+                "name": name,
+            }
+        )
+        self._log(f"Capturing fresh measured follower pose for {name}…")
 
     def _go_named_pose(self, name: str) -> None:
         try:
@@ -1468,6 +1479,19 @@ class MainWindow(QMainWindow):
             )
             return
         source, state = self._current_teaching_state()
+        if source == "follower":
+            if not self._connected:
+                self._on_error("Cannot save point: follower is not connected.")
+                return
+            self.capture_follower_pose_requested.emit(
+                {
+                    "kind": "point",
+                    "name": name,
+                }
+            )
+            self._log(f"Capturing fresh measured follower pose for taught point {name!r}…")
+            return
+
         if state is None:
             self._on_error(f"Cannot save point: {source} state is unavailable.")
             return
@@ -1480,6 +1504,60 @@ class MainWindow(QMainWindow):
             self.point_combo.setCurrentText(name)
         except Exception as exc:
             self._on_error(f"Save taught point: {exc}")
+
+    def _on_measured_pose_captured(self, result: object) -> None:
+        values = dict(result)  # type: ignore[arg-type]
+        request = dict(values.get("request") or {})
+        error = values.get("error")
+        if error:
+            return
+
+        pose = values.get("pose")
+        if not isinstance(pose, SavedPose):
+            self._on_error("Save measured follower pose: worker returned no valid pose.")
+            return
+
+        kind = str(request.get("kind") or "")
+        name = str(request.get("name") or "").strip()
+        try:
+            if kind == "named":
+                if name not in {HOME_POSE_NAME, REST_POSE_NAME}:
+                    raise ValueError(f"unknown standard pose {name!r}")
+                path = self._get_pose_library().save(name, pose)
+                self._latest_state = {
+                    "joints_deg": {
+                        joint: degrees(value) for joint, value in pose.joints.items()
+                    },
+                    "gripper": pose.gripper,
+                    "pose_mm_deg": (
+                        pose.tcp_xyz_rpy[0] * 1000.0,
+                        pose.tcp_xyz_rpy[1] * 1000.0,
+                        pose.tcp_xyz_rpy[2] * 1000.0,
+                        degrees(pose.tcp_xyz_rpy[3]),
+                        degrees(pose.tcp_xyz_rpy[4]),
+                        degrees(pose.tcp_xyz_rpy[5]),
+                    ),
+                }
+                self._log(f"Saved {name} from fresh measured follower pose to {path}.")
+                self._refresh_named_pose_status()
+                self._update_enabled_state()
+                return
+
+            if kind == "point":
+                if not name:
+                    raise ValueError("point name is empty")
+                path = self._get_pose_library().save(name, pose)
+                self._log(
+                    f"Saved taught point {name!r} from fresh measured follower pose to {path}."
+                )
+                self.point_name_edit.clear()
+                self._refresh_point_list()
+                self.point_combo.setCurrentText(name)
+                return
+
+            raise ValueError(f"unknown measured-pose save request {kind!r}")
+        except Exception as exc:
+            self._on_error(f"Save measured follower pose: {exc}")
 
     def _delete_taught_point(self) -> None:
         name = self.point_combo.currentText().strip()
@@ -2557,7 +2635,11 @@ class MainWindow(QMainWindow):
             and bool(self._latest_effort_status.get("trip_message"))
         )
 
-        can_save_pose = self._connected and self._latest_state is not None and not self._busy
+        can_save_pose = (
+            self._connected
+            and self._recording_source is None
+            and (not self._busy or self._teleop_active)
+        )
         self.save_home_button.setEnabled(can_save_pose)
         self.save_rest_button.setEnabled(can_save_pose)
         try:
@@ -2580,9 +2662,14 @@ class MainWindow(QMainWindow):
         self.leader_robot_id_edit.setEnabled(leader_editable)
 
         source, source_state = self._current_teaching_state()
-        self.save_point_button.setEnabled(
-            source_state is not None and self._recording_source is None
+        can_save_point = (
+            self._recording_source is None
+            and (
+                (source == "follower" and self._connected)
+                or (source != "follower" and source_state is not None)
+            )
         )
+        self.save_point_button.setEnabled(can_save_point)
         has_point = bool(self.point_combo.currentText())
         self.move_point_button.setEnabled(can_move and has_point)
         self.delete_point_button.setEnabled(has_point and self._recording_source is None)
