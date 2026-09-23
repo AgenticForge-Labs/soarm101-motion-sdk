@@ -102,7 +102,9 @@ The GUI provides:
 - live mechanical-stop midpoint calibration using the same backend as the CLI;
 - persistent user-recorded Home and Rest poses;
 - a second read-only leader/controller-arm session and selectable teaching source;
-- named taught points replayable as joint or Cartesian linear moves;
+- named taught points replayable as joint or Cartesian linear moves; with Follower selected
+  (the default), saving captures a fresh measured follower pose even during live teleoperation;
+- Home and Rest saving likewise capture the follower's fresh measured pose;
 - 50 Hz exact trajectory recording with gripper and optional effort/current diagnostics;
 - non-destructive raw/edited trajectory storage and a lightweight timeline editor;
 - validated replay with crop selection, speed scaling, and safe movement to the clip start;
