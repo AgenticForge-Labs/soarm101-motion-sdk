@@ -68,4 +68,8 @@ print(arm.get_motor_effort("elbow_flex"))
 
 ## Gripper contact behavior
 
-The same interlock covers the gripper motor. A lower gripper-specific threshold can therefore make a commanded close stop when the fingers contact an object. A later `grip_until_contact()` convenience API can interpret that contact as a successful grasp rather than a general safety fault, but it should use the same underlying effort monitor.
+Ordinary gripper commands remain covered by the same current/load interlock as the arm joints. A lower gripper-specific threshold can therefore stop a normal commanded close when the fingers contact an object.
+
+Live leader→follower teleoperation also has a separate contact-hold behavior for gripper mirroring. The follower target is ramped rather than jumped toward the leader command and stops short of the calibrated hard-close endpoint. If the measured follower gripper stops progressing while it is closing, teleoperation eases it open slightly and latches that opening while the five arm joints continue streaming. Opening the leader gripper from the contact position releases the latch.
+
+While this teleoperation contact latch is active, the managed software effort threshold is exempted **only for gripper current/load** so expected grasp contact does not terminate the whole arm stream. Arm-joint effort checks remain active, and servo-reported hardware faults still stop teleoperation. This behavior is a convenience contact heuristic, not calibrated grasp-force control.
