@@ -39,6 +39,9 @@ class SOARM101Config:
     # but may never exceed these values.
     max_joint_speed: float = 1.0
     max_joint_acceleration: float = 5.0
+    # Optional live-stream ceilings. None keeps the planned-motion ceiling.
+    teleop_max_joint_speed: float | None = None
+    teleop_max_joint_acceleration: float | None = None
     max_linear_speed: float = 0.06
     max_linear_acceleration: float = 0.20
     max_angular_speed: float = 1.0
@@ -72,6 +75,11 @@ class SOARM101Config:
     # Coarse hobby-arm geometry envelope. This is intentionally conservative
     # and is not a substitute for measured collision geometry.
     enable_workspace_checks: bool = True
+    # Live leader/follower streaming uses calibrated joint, step, rate,
+    # acceleration, effort, and stale-sample guards by default. The coarse
+    # floor/reach/self-clearance model is opt-in because it depends on a
+    # robot-specific table frame and tool geometry calibration.
+    teleop_workspace_checks: bool = False
     workspace_check_step_rad: float = 0.05
     minimum_workspace_z_m: float = 0.0
     maximum_tcp_reach_m: float = 0.50
@@ -93,6 +101,14 @@ class SOARM101Config:
     position_p_coefficient: int = 16
     position_i_coefficient: int = 0
     position_d_coefficient: int = 32
+
+    @property
+    def stream_joint_speed_limit(self) -> float:
+        return self.teleop_max_joint_speed or self.max_joint_speed
+
+    @property
+    def stream_joint_acceleration_limit(self) -> float:
+        return self.teleop_max_joint_acceleration or self.max_joint_acceleration
 
     def __post_init__(self) -> None:
         positive = {
@@ -130,6 +146,10 @@ class SOARM101Config:
         }
         for name, value in positive.items():
             if not math.isfinite(value) or value <= 0:
+                raise ConfigurationError(f"{name} must be a positive finite value")
+        for name in ("teleop_max_joint_speed", "teleop_max_joint_acceleration"):
+            value = getattr(self, name)
+            if value is not None and (not math.isfinite(value) or value <= 0):
                 raise ConfigurationError(f"{name} must be a positive finite value")
         if not math.isfinite(self.minimum_workspace_z_m):
             raise ConfigurationError("minimum_workspace_z_m must be finite")

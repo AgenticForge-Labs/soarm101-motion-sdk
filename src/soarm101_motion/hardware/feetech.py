@@ -20,6 +20,7 @@ from soarm101_motion.calibration import (
 from soarm101_motion.calibration_live import (
     EncoderSweep,
     calibration_from_sweeps,
+    display_travel_targets,
     sweep_progress_snapshot,
 )
 from soarm101_motion.config import SOARM101Config
@@ -33,11 +34,13 @@ from soarm101_motion.constants import (
     STS3215_REGISTERS,
 )
 from soarm101_motion.exceptions import (
+    CalibrationCancelledError,
     CalibrationError,
     CommunicationError,
     InvalidCommandError,
     MissingDependencyError,
     RobotConnectionError,
+    SafetyViolationError,
 )
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.types import HardwareState, MotorDiagnostic
@@ -218,6 +221,51 @@ class FeetechBackend(SO101HardwareBackend):
             elif register in {"Present_Position", "Present_Velocity", "Goal_Position", "Goal_Velocity"}:
                 value = self._packet_handler.scs_tohost(value, 15)
             return int(value)
+
+    def read_voltage_snapshot(self, motor: str, *, include_limits: bool = False) -> dict[str, object]:
+        """Read voltage and packet status without discarding values on a servo fault.
+
+        This is diagnostic only. Normal position/register reads still reject every
+        nonzero packet error; callers must stop motion when a snapshot reports one.
+        """
+        with self._io_lock:
+            self._require_transport()
+            if motor not in MOTOR_IDS:
+                raise KeyError(motor)
+            registers = ["Present_Voltage"]
+            if include_limits:
+                registers.extend(("Min_Voltage_Limit", "Max_Voltage_Limit", "Status"))
+            result: dict[str, object] = {"motor": motor}
+            readings: dict[str, dict[str, object]] = {}
+            for register in registers:
+                address, _width = STS3215_REGISTERS[register]
+                try:
+                    value, comm, error = self._packet_handler.read1ByteTxRx(
+                        MOTOR_IDS[motor], address
+                    )
+                    readings[register] = {
+                        "value": int(value) if comm == self._comm_success else None,
+                        "comm": int(comm),
+                        "comm_success": bool(comm == self._comm_success),
+                        "packet_error": int(error),
+                        "error_text": (
+                            self._packet_handler.getRxPacketError(error) if error else None
+                        ),
+                    }
+                except Exception as exc:
+                    readings[register] = {"read_error": str(exc)}
+            result["readings"] = readings
+            voltage = readings["Present_Voltage"].get("value")
+            result["voltage_v"] = None if voltage is None else int(voltage) / 10.0
+            if include_limits:
+                for register, key in (
+                    ("Min_Voltage_Limit", "minimum_voltage_v"),
+                    ("Max_Voltage_Limit", "maximum_voltage_v"),
+                ):
+                    value = readings[register].get("value")
+                    result[key] = None if value is None else int(value) / 10.0
+                result["status_raw"] = readings["Status"].get("value")
+            return result
 
     def write_register(self, motor: str, register: str, value: int) -> None:
         with self._io_lock:
@@ -445,7 +493,36 @@ class FeetechBackend(SO101HardwareBackend):
             unknown = set(selected) - set(ALL_MOTORS)
             if unknown:
                 raise KeyError(next(iter(unknown)))
+            calibration = self._require_calibration()
+            uncalibrated = set(calibration.uncalibrated_motors) & set(selected)
+            if uncalibrated:
+                raise CalibrationError(
+                    "cannot enable torque with uncalibrated motors: "
+                    + ", ".join(sorted(uncalibrated))
+                )
+            limits = {
+                name: (
+                    self.read_register(name, "Min_Position_Limit"),
+                    self.read_register(name, "Max_Position_Limit"),
+                )
+                for name in selected
+            }
             raw_positions = {name: self.read_raw_position(name) for name in selected}
+            violations = []
+            for name, position in raw_positions.items():
+                minimum, maximum = limits[name]
+                if minimum >= maximum:
+                    violations.append(f"{name}: invalid EEPROM limits {minimum}..{maximum}")
+                elif position < minimum or position > maximum:
+                    violations.append(
+                        f"{name}: present {position} outside EEPROM limits {minimum}..{maximum}"
+                    )
+            if violations:
+                raise SafetyViolationError(
+                    "refusing torque enable because safe position latching cannot be "
+                    "guaranteed: " + "; ".join(violations) + ". With torque off, move the "
+                    "affected joint inside its calibrated range or repair/re-run calibration."
+                )
             self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
             enabled: list[str] = []
             try:
@@ -550,8 +627,9 @@ class FeetechBackend(SO101HardwareBackend):
     def interactive_calibration(
         self,
         *,
-        record_seconds: float = 20.0,
+        record_seconds: float = 90.0,
         poll_interval: float = 0.02,
+        cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict[str, dict[str, int | float | bool]]], None]
         | None = None,
     ) -> SO101Calibration:
@@ -572,36 +650,52 @@ class FeetechBackend(SO101HardwareBackend):
             eeprom_snapshot = self.read_calibration_from_motors()
             self.disable_torque()
             try:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CalibrationCancelledError("calibration cancelled")
                 self.reset_calibration()
                 initial = self.read_all_raw_positions()
                 sweeps = {
                     name: EncoderSweep.start(raw)
                     for name, raw in initial.items()
                 }
+                display_targets = display_travel_targets(self.config.robot_id)
                 deadline = time.monotonic() + record_seconds
                 next_progress = 0.0
                 if progress_callback is not None:
-                    progress_callback(sweep_progress_snapshot(sweeps))
+                    progress_callback(sweep_progress_snapshot(sweeps, display_travel_ticks=display_targets))
                 while time.monotonic() < deadline:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise CalibrationCancelledError("calibration cancelled")
                     values = self.read_all_raw_positions()
                     for name, raw in values.items():
                         sweeps[name].update(raw)
+                    snapshot = sweep_progress_snapshot(
+                        sweeps, display_travel_ticks=display_targets
+                    )
                     now = time.monotonic()
                     if progress_callback is not None and now >= next_progress:
-                        progress_callback(sweep_progress_snapshot(sweeps))
+                        progress_callback(snapshot)
                         next_progress = now + 0.10
+                    if all(item["passed"] for item in snapshot.values()):
+                        break
                     time.sleep(poll_interval)
 
                 if progress_callback is not None:
-                    progress_callback(sweep_progress_snapshot(sweeps))
+                    progress_callback(sweep_progress_snapshot(sweeps, display_travel_ticks=display_targets))
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CalibrationCancelledError("calibration cancelled")
                 calibration = calibration_from_sweeps(sweeps)
                 self.apply_calibration(calibration)
                 verified = self.read_calibration_from_motors()
                 self._verify_calibration_matches_motors(calibration, verified)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CalibrationCancelledError("calibration cancelled")
                 return calibration
             except BaseException:
                 try:
                     self.apply_calibration(eeprom_snapshot)
+                    restored = self.read_calibration_from_motors()
+                    self._verify_calibration_matches_motors(eeprom_snapshot, restored)
                     self.calibration = previous_calibration or eeprom_snapshot
                 except Exception as rollback_exc:
                     raise CalibrationError(

@@ -18,6 +18,8 @@ from soarm101_motion.constants import (
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     JOINT_LIMITS,
     STOCK_GRIPPER,
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.exceptions import (
     HardwareFaultError,
@@ -123,6 +125,7 @@ class JointStreamState:
     last_velocity: dict[str, float] | None
     previous_actual: dict[str, float]
     frequency_hz: float
+    limits: dict[str, tuple[float, float]]
     tcp: Pose | None = None
 
 
@@ -192,6 +195,13 @@ class MotionController:
             limits[name] = (lower, upper)
         return limits
 
+    def _limits_for_present(self, present: Mapping[str, float]) -> dict[str, tuple[float, float]]:
+        limits = self._effective_limits()
+        for name in ARM_JOINTS:
+            lower, upper = limits[name]
+            limits[name] = (min(lower, present[name]), max(upper, present[name]))
+        return limits
+
     @staticmethod
     def _minimum_duration(delta: float, speed: float, acceleration: float) -> float:
         if delta < 1e-12:
@@ -247,8 +257,9 @@ class MotionController:
         *,
         speed_limit: float,
         acceleration_limit: float,
+        limits: Mapping[str, tuple[float, float]] | None = None,
     ) -> None:
-        limits = self._effective_limits()
+        limits = limits or self._effective_limits()
         for sample in samples:
             validate_joint_targets(sample, limits=limits)
         for previous, command in zip(samples, samples[1:]):
@@ -271,6 +282,7 @@ class MotionController:
         *,
         speed_limit: float,
         acceleration_limit: float,
+        limits: Mapping[str, tuple[float, float]] | None = None,
     ) -> tuple[tuple[dict[str, float], ...], float]:
         duration = max(initial_duration, 1.0 / self.config.command_frequency_hz)
         for _ in range(12):
@@ -286,9 +298,10 @@ class MotionController:
             )
             if scale <= 1.001:
                 self._validate_samples(
-                    samples,
-                    speed_limit=speed_limit,
-                    acceleration_limit=acceleration_limit,
+            samples,
+            speed_limit=speed_limit,
+            acceleration_limit=acceleration_limit,
+            limits=limits,
                 )
                 actual_duration = (len(samples) - 1) / self.config.command_frequency_hz
                 return samples, actual_duration
@@ -302,6 +315,7 @@ class MotionController:
         *,
         speed: float,
         acceleration: float,
+        limits: Mapping[str, tuple[float, float]] | None = None,
     ) -> PlannedPath:
         max_delta = max(abs(target[name] - start[name]) for name in ARM_JOINTS)
         initial = self._minimum_duration(max_delta, speed, acceleration)
@@ -323,6 +337,7 @@ class MotionController:
             initial,
             speed_limit=speed,
             acceleration_limit=acceleration,
+            limits=limits,
         )
         return PlannedPath((dict(start), dict(target)), (), samples, duration)
 
@@ -541,11 +556,13 @@ class MotionController:
         if state.faulted:
             raise HardwareFaultError(state.fault_message or "robot faulted during motion")
         actual = self.backend.read_joint_positions()
-        following_error = max(abs(actual[name] - command[name]) for name in ARM_JOINTS)
+        worst_joint = max(ARM_JOINTS, key=lambda name: abs(actual[name] - command[name]))
+        following_error = abs(actual[worst_joint] - command[worst_joint])
         if following_error > self.config.following_error_limit_rad:
             raise SafetyViolationError(
-                f"following error {following_error:.3f} rad exceeds "
-                f"{self.config.following_error_limit_rad:.3f} rad"
+                f"{worst_joint} following error {following_error:.3f} rad exceeds "
+                f"{self.config.following_error_limit_rad:.3f} rad "
+                f"(target {command[worst_joint]:.3f}, measured {actual[worst_joint]:.3f})"
             )
         for name in ARM_JOINTS:
             command_delta = command[name] - previous_command[name]
@@ -575,7 +592,9 @@ class MotionController:
             if state.faulted:
                 raise HardwareFaultError(state.fault_message or "robot faulted during motion")
             now = time.monotonic()
-            if error <= self.config.joint_position_tolerance_rad and not state.moving:
+            # HardwareState.moving includes the tool actuator. A gripper that is
+            # still moving must not prevent a five-joint path from completing.
+            if error <= self.config.joint_position_tolerance_rad:
                 if not getattr(self.backend, "realtime", True):
                     return MotionResult(True, True, final_positions=actual)
                 stable_since = stable_since or now
@@ -596,6 +615,8 @@ class MotionController:
         cancel_event: threading.Event,
         *,
         cancellation_message: str,
+        servo_speed_raw: int | None = None,
+        servo_acceleration_raw: int | None = None,
     ) -> MotionResult:
         samples = plan.command_samples
         try:
@@ -617,7 +638,14 @@ class MotionController:
                         f"motion command deadline missed by {lateness:.3f}s"
                     )
                 self._check_cancelled(cancel_event, cancellation_message)
-                self.backend.write_joint_positions(command)
+                if servo_speed_raw is None and servo_acceleration_raw is None:
+                    self.backend.write_joint_positions(command)
+                else:
+                    self.backend.write_joint_positions(
+                        command,
+                        speed_raw=servo_speed_raw,
+                        acceleration_raw=servo_acceleration_raw,
+                    )
                 if index % monitor_every == 0 or index == len(samples) - 1:
                     previous_actual = self._monitor_motion(
                         command,
@@ -713,12 +741,23 @@ class MotionController:
         acceleration: float | None = None,
         relative: bool = False,
         wait: bool = True,
+        servo_speed_raw: int | None = None,
+        servo_acceleration_raw: int | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
+        if servo_speed_raw is not None and (
+            not isinstance(servo_speed_raw, int) or not 0 <= servo_speed_raw <= 32767
+        ):
+            raise InvalidCommandError("servo speed must be an integer within [0, 32767]")
+        if servo_acceleration_raw is not None and (
+            not isinstance(servo_acceleration_raw, int)
+            or not 0 <= servo_acceleration_raw <= 254
+        ):
+            raise InvalidCommandError("servo acceleration must be an integer within [0, 254]")
         with self._state_lock:
             self._ensure_idle_locked()
             self._require_ready()
             present = self.backend.read_joint_positions()
-            limits = self._effective_limits()
+            limits = self._limits_for_present(present)
             if isinstance(positions, Mapping):
                 provided = validate_joint_targets(positions, limits=limits)
             else:
@@ -750,12 +789,15 @@ class MotionController:
                 target,
                 speed=joint_speed,
                 acceleration=joint_acceleration,
+                limits=limits,
             )
             handle = self._start_locked(
                 lambda event: self._execute_plan(
                     plan,
                     event,
                     cancellation_message="joint motion cancelled",
+                    servo_speed_raw=servo_speed_raw,
+                    servo_acceleration_raw=servo_acceleration_raw,
                 )
             )
         return handle.wait() if wait else handle
@@ -812,11 +854,28 @@ class MotionController:
             self._ensure_idle_locked()
             self._require_ready()
             present = dict(self.backend.read_joint_positions())
+            # A manually placed, calibrated rest pose can sit just outside the
+            # generic URDF joint limits. Accept that measured baseline, but do
+            # not let a stream travel farther out on that side. Motion back
+            # toward and through the model's normal range remains available.
+            stream_limits = self._effective_limits()
+            calibration = getattr(self.backend, "calibration", None)
+            measured_limits = {
+                name: calibration.motors[name].radians_limits
+                if calibration is not None and name in calibration.motors
+                else stream_limits[name]
+                for name in ARM_JOINTS
+            }
+            validate_joint_targets(present, limits=measured_limits)
+            for name, position in present.items():
+                lower, upper = stream_limits[name]
+                stream_limits[name] = (min(lower, position), max(upper, position))
             self._joint_stream = JointStreamState(
                 last_command=present,
                 last_velocity=None,
                 previous_actual=present.copy(),
                 frequency_hz=frequency,
+                limits=stream_limits,
                 tcp=tcp,
             )
 
@@ -840,7 +899,7 @@ class MotionController:
                 raise InvalidCommandError(
                     "stream target must provide exactly the five canonical arm joints"
                 )
-            target = validate_joint_targets(positions, limits=self._effective_limits())
+            target = validate_joint_targets(positions, limits=state.limits)
             validate_command_step(
                 state.last_command,
                 target,
@@ -853,10 +912,10 @@ class MotionController:
                 for name in ARM_JOINTS
             }
             max_speed = max(abs(value) for value in velocity.values())
-            if max_speed > self.config.max_joint_speed * 1.001:
+            if max_speed > self.config.stream_joint_speed_limit * 1.001:
                 raise SafetyViolationError(
                     f"streamed joint speed {max_speed:.4f} rad/s exceeds "
-                    f"{self.config.max_joint_speed:.4f} rad/s"
+                    f"{self.config.stream_joint_speed_limit:.4f} rad/s"
                 )
             if state.last_velocity is not None:
                 acceleration = {
@@ -864,13 +923,13 @@ class MotionController:
                     for name in ARM_JOINTS
                 }
                 max_acceleration = max(abs(value) for value in acceleration.values())
-                if max_acceleration > self.config.max_joint_acceleration * 1.001:
+                if max_acceleration > self.config.stream_joint_acceleration_limit * 1.001:
                     raise SafetyViolationError(
                         f"streamed joint acceleration {max_acceleration:.4f} rad/s² exceeds "
-                        f"{self.config.max_joint_acceleration:.4f} rad/s²"
+                        f"{self.config.stream_joint_acceleration_limit:.4f} rad/s²"
                     )
 
-            if self.config.enable_workspace_checks:
+            if self.config.enable_workspace_checks and self.config.teleop_workspace_checks:
                 max_delta = max(
                     abs(target[name] - state.last_command[name])
                     for name in ARM_JOINTS
@@ -906,7 +965,16 @@ class MotionController:
                 gripper_value = None
 
             try:
-                self.backend.write_joint_positions(target)
+                # Match the direct position-command behavior used by LeRobot's
+                # Feetech follower: the host-side stream limiter shapes targets,
+                # while the servo is not given a second, much slower speed cap.
+                # Goal speed 0 means the servo's maximum speed; acceleration 254
+                # is LeRobot's configured maximum acceleration profile.
+                self.backend.write_joint_positions(
+                    target,
+                    speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                )
                 if gripper_value is not None:
                     self.backend.write_tool_position(STOCK_GRIPPER, gripper_value)
                 actual = self._monitor_motion(
@@ -934,9 +1002,11 @@ class MotionController:
 
     def stop_joint_stream(self, *, hold: bool = True) -> None:
         with self._state_lock:
-            was_streaming = self._joint_stream is not None
             self._joint_stream = None
-        if was_streaming and hold:
+        # A failed stream write clears its state before control returns to the GUI.
+        # Still issue an explicit hold when asked: the last servo goal may otherwise
+        # continue executing if the first best-effort stop failed.
+        if hold:
             self.backend.stop()
 
     def play_trajectory(

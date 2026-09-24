@@ -185,5 +185,5 @@ def test_setup_wizard_parser_is_small_and_has_safe_defaults() -> None:
     args = build_parser().parse_args(["--robot-id", "forge-arm"])
     assert args.port is None
     assert args.robot_id == "forge-arm"
-    assert args.seconds == 30.0
+    assert args.seconds == 90.0
     assert args.recalibrate is False

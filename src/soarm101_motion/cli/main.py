@@ -16,7 +16,13 @@ from soarm101_motion import SOARM101, SOARM101Config, __version__
 from soarm101_motion.calibration import default_calibration_path
 from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, MOTOR_IDS
 from soarm101_motion.control import jog_linear_cli_units
+from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
+from soarm101_motion.poses import PoseLibrary, SavedPose
+from soarm101_motion.primitives import MotionPrimitiveLibrary
+from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
+from soarm101_motion.trajectories import TrajectoryLibrary
+from soarm101_motion.types import Pose
 
 
 def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101Config:
@@ -30,6 +36,14 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
         values["calibration_path"] = Path(calibration)
     values.update(overrides)
     return SOARM101Config(**values)
+
+
+def _arm_from_args(args: argparse.Namespace) -> SOARM101:
+    if getattr(args, "simulation", False):
+        return SOARM101.simulated(realtime=True)
+    if not args.port:
+        raise ValueError("--port is required unless --simulation is selected")
+    return SOARM101(_hardware_config(args))
 
 
 def _confirm(args: argparse.Namespace, word: str, message: str) -> bool:
@@ -55,6 +69,22 @@ def _cmd_ports(_: argparse.Namespace) -> int:
     for port in ports:
         print(port)
     return 0
+
+
+def _cmd_discover(args: argparse.Namespace) -> int:
+    results = discover_so101_arms(args.ports or None)
+    if args.json:
+        print(json.dumps(results, indent=2))
+    else:
+        for item in results:
+            if item["status"] == "ok":
+                print(
+                    f"{item['port']}: {item['role']} ({item['voltage_v']:.1f} V, "
+                    f"{item['motor_count']}/{item['motor_total']} motors)"
+                )
+            else:
+                print(f"{item['port']}: unavailable ({item['error']})")
+    return 0 if results and all(item["status"] == "ok" for item in results) else 1
 
 
 def _cmd_setup_motors(args: argparse.Namespace) -> int:
@@ -198,12 +228,12 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
         backend.configure_motors()
         print("\nLIVE MECHANICAL-STOP CALIBRATION")
         print("During the live sweep:")
-        print("- Move every joint and the gripper repeatedly through its full safe travel.")
-        print("- Reach both printed mechanical stops several times.")
+        print("- Move every joint and the gripper fully from stop to stop and back.")
+        print("- Two end-to-end traversals are required for every motor.")
         print("- The SDK calculates zero halfway between the observed extrema.")
         print("- Crossing the encoder 4095/0 seam is handled automatically.")
         input("Press ENTER when you are ready to begin the live sweep. ")
-        print(f"Recording extrema for {args.seconds:.1f} seconds...")
+        print(f"Recording extrema for up to {args.seconds:.1f} seconds; finishing when all six complete two traversals...")
         calibration = backend.interactive_calibration(record_seconds=args.seconds)
         _print_calibration(calibration)
         output = Path(args.output) if args.output else default_calibration_path(args.robot_id)
@@ -264,6 +294,126 @@ def _cmd_gripper(args: argparse.Namespace) -> int:
         arm.enable()
         result = arm.tool.move(position)
         print(result)
+    return 0
+
+
+def _cmd_move_linear(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        return 2
+    target = Pose.from_xyz_rpy(
+        args.x_mm / 1000.0,
+        args.y_mm / 1000.0,
+        args.z_mm / 1000.0,
+        *(value * pi / 180.0 for value in (args.roll_deg, args.pitch_deg, args.yaw_deg)),
+    )
+    with _arm_from_args(args) as arm:
+        arm.enable()
+        print(
+            arm.move_linear(
+                target,
+                orientation_mode=args.orientation_mode,
+                speed=args.speed_mm_s / 1000.0,
+                acceleration=args.acceleration_mm_s2 / 1000.0,
+            )
+        )
+    return 0
+
+
+def _cmd_pose_list(args: argparse.Namespace) -> int:
+    library = PoseLibrary(args.robot_id)
+    for name in library.names():
+        pose = library.require(name)
+        print(f"{name}\t{pose.source}\t{pose.created_at}")
+    return 0
+
+
+def _cmd_pose_capture(args: argparse.Namespace) -> int:
+    with _arm_from_args(args) as arm:
+        pose = SavedPose.capture(arm, source=args.source)
+    path = PoseLibrary(args.robot_id).save(args.name, pose)
+    print(f"Saved {args.name} to {path}")
+    return 0
+
+
+def _cmd_pose_go(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        return 2
+    pose = PoseLibrary(args.robot_id).require(args.name)
+    with _arm_from_args(args) as arm:
+        arm.enable()
+        if args.mode == "joint":
+            result = arm.move_joints(
+                pose.joints,
+                speed=args.speed_deg_s * pi / 180.0,
+                acceleration=args.acceleration_deg_s2 * pi / 180.0,
+            )
+        else:
+            result = arm.move_linear(
+                Pose.from_xyz_rpy(*pose.tcp_xyz_rpy),
+                orientation_mode=args.orientation_mode,
+                speed=args.speed_mm_s / 1000.0,
+                acceleration=args.acceleration_mm_s2 / 1000.0,
+            )
+        print(result)
+        print(arm.tool.move(pose.gripper))
+    return 0
+
+
+def _cmd_trajectory_list(args: argparse.Namespace) -> int:
+    for entry in TrajectoryLibrary(args.robot_id).entries():
+        print(f"{entry.kind}\t{entry.name}")
+    return 0
+
+
+def _cmd_trajectory_play(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        return 2
+    trajectory = TrajectoryLibrary(args.robot_id).load(args.name, kind=args.kind)
+    with _arm_from_args(args) as arm:
+        arm.enable()
+        print(arm.play_trajectory(trajectory, speed_scale=args.speed_scale, move_to_start=True))
+    return 0
+
+
+def _cmd_sequence_list(args: argparse.Namespace) -> int:
+    library = SequenceLibrary(args.robot_id)
+    for name in library.names():
+        sequence = library.require(name)
+        print(f"{name}\t{len(sequence.steps)} steps")
+    return 0
+
+
+def _cmd_sequence_run(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        return 2
+    sequence = SequenceLibrary(args.robot_id).require(args.name)
+    with _arm_from_args(args) as arm:
+        arm.enable()
+        runner = SequenceRunner(
+            arm,
+            pose_library=PoseLibrary(args.robot_id),
+            trajectory_library=TrajectoryLibrary(args.robot_id),
+            primitive_library=MotionPrimitiveLibrary(args.robot_id),
+        )
+        print(
+            runner.run(
+                sequence,
+                repeat=args.repeat,
+                speed_scale=args.speed_scale,
+                start_index=args.start_index,
+                stop_index=args.stop_index,
+            )
+        )
+    return 0
+
+
+def _cmd_effort_status(args: argparse.Namespace) -> int:
+    with _arm_from_args(args) as arm:
+        print(json.dumps(arm.get_effort_safety_status(refresh=args.refresh), indent=2))
     return 0
 
 
@@ -367,11 +517,26 @@ def build_parser() -> argparse.ArgumentParser:
     info.set_defaults(func=_cmd_info)
     ports = sub.add_parser("ports", help="list candidate serial ports")
     ports.set_defaults(func=_cmd_ports)
+    discover = sub.add_parser("discover", help="identify connected SO-101 arms without enabling torque")
+    discover.add_argument("ports", nargs="*")
+    discover.add_argument("--json", action="store_true")
+    discover.set_defaults(func=_cmd_discover)
 
     def add_hardware_options(command: argparse.ArgumentParser) -> None:
         command.add_argument("--port", required=True, help="serial port, for example /dev/ttyACM0")
         command.add_argument("--robot-id", default="so101")
         command.add_argument("--calibration")
+
+    def add_session_options(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--port", help="physical serial port; required without --simulation")
+        command.add_argument("--robot-id", default="so101")
+        command.add_argument("--calibration")
+        command.add_argument("--simulation", action="store_true")
+
+    def add_linear_options(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--orientation-mode", choices=("compatible", "position_only", "exact"), default="compatible")
+        command.add_argument("--speed-mm-s", type=float, default=10.0)
+        command.add_argument("--acceleration-mm-s2", type=float, default=40.0)
 
     setup = sub.add_parser("setup-motors", help="assign IDs and baud rate one isolated motor at a time")
     setup.add_argument("--port", required=True)
@@ -403,10 +568,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     calibrate = sub.add_parser(
         "calibrate",
-        help="calibrate all six motors from one live sweep between printed mechanical stops",
+        help="calibrate all six motors with two full stop-to-stop traversals each",
     )
     add_hardware_options(calibrate)
-    calibrate.add_argument("--seconds", type=float, default=20.0)
+    calibrate.add_argument("--seconds", type=float, default=90.0)
     calibrate.add_argument("--output")
     calibrate.add_argument("--export-lerobot", action="store_true")
     calibrate.add_argument("--yes", action="store_true")
@@ -445,6 +610,71 @@ def build_parser() -> argparse.ArgumentParser:
     gripper.add_argument("target", help="open, close, or normalized position 0..1")
     gripper.add_argument("--yes", action="store_true")
     gripper.set_defaults(func=_cmd_gripper)
+
+    linear = sub.add_parser("move-linear", help="move to an absolute world TCP pose")
+    add_session_options(linear)
+    for axis in ("x", "y", "z"):
+        linear.add_argument(f"--{axis}-mm", type=float, required=True)
+    for axis in ("roll", "pitch", "yaw"):
+        linear.add_argument(f"--{axis}-deg", type=float, default=0.0)
+    add_linear_options(linear)
+    linear.add_argument("--yes", action="store_true")
+    linear.set_defaults(func=_cmd_move_linear)
+
+    pose = sub.add_parser("pose", help="list, capture, and replay GUI named poses")
+    pose_sub = pose.add_subparsers(dest="pose_command", required=True)
+    pose_list = pose_sub.add_parser("list")
+    pose_list.add_argument("--robot-id", default="so101")
+    pose_list.set_defaults(func=_cmd_pose_list)
+    pose_capture = pose_sub.add_parser("capture")
+    add_session_options(pose_capture)
+    pose_capture.add_argument("name")
+    pose_capture.add_argument("--source", choices=("follower", "leader"), default="follower")
+    pose_capture.set_defaults(func=_cmd_pose_capture)
+    pose_go = pose_sub.add_parser("go")
+    add_session_options(pose_go)
+    pose_go.add_argument("name")
+    pose_go.add_argument("--mode", choices=("joint", "linear"), default="joint")
+    pose_go.add_argument("--speed-deg-s", type=float, default=8.0)
+    pose_go.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    add_linear_options(pose_go)
+    pose_go.add_argument("--yes", action="store_true")
+    pose_go.set_defaults(func=_cmd_pose_go)
+
+    trajectory = sub.add_parser("trajectory", help="list and replay GUI trajectories")
+    trajectory_sub = trajectory.add_subparsers(dest="trajectory_command", required=True)
+    trajectory_list = trajectory_sub.add_parser("list")
+    trajectory_list.add_argument("--robot-id", default="so101")
+    trajectory_list.set_defaults(func=_cmd_trajectory_list)
+    trajectory_play = trajectory_sub.add_parser("play")
+    add_session_options(trajectory_play)
+    trajectory_play.add_argument("name")
+    trajectory_play.add_argument("--kind", choices=("raw", "edited"), default="edited")
+    trajectory_play.add_argument("--speed-scale", type=float, default=1.0)
+    trajectory_play.add_argument("--yes", action="store_true")
+    trajectory_play.set_defaults(func=_cmd_trajectory_play)
+
+    sequence = sub.add_parser("sequence", help="list and run GUI sequences")
+    sequence_sub = sequence.add_subparsers(dest="sequence_command", required=True)
+    sequence_list = sequence_sub.add_parser("list")
+    sequence_list.add_argument("--robot-id", default="so101")
+    sequence_list.set_defaults(func=_cmd_sequence_list)
+    sequence_run = sequence_sub.add_parser("run")
+    add_session_options(sequence_run)
+    sequence_run.add_argument("name")
+    sequence_run.add_argument("--repeat", type=int, default=1)
+    sequence_run.add_argument("--speed-scale", type=float, default=1.0)
+    sequence_run.add_argument("--start-index", type=int, default=0)
+    sequence_run.add_argument("--stop-index", type=int)
+    sequence_run.add_argument("--yes", action="store_true")
+    sequence_run.set_defaults(func=_cmd_sequence_run)
+
+    effort = sub.add_parser("effort", help="read session motor-effort safety status")
+    effort_sub = effort.add_subparsers(dest="effort_command", required=True)
+    effort_status = effort_sub.add_parser("status")
+    add_session_options(effort_status)
+    effort_status.add_argument("--refresh", action="store_true")
+    effort_status.set_defaults(func=_cmd_effort_status)
 
     smoke = sub.add_parser("smoke-test", help="perform a tiny supervised relative one-joint test")
     add_hardware_options(smoke)

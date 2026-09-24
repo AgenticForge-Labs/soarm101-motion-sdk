@@ -5,6 +5,7 @@ import threading
 import time
 import types
 from collections import defaultdict
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -102,6 +103,47 @@ def test_wait_true_requires_feedback_completion() -> None:
         arm.enable()
         with pytest.raises(MotionTimeoutError):
             arm.move_joints([0.1, 0, 0, 0, 0], speed=1.0, acceleration=5.0)
+
+
+def test_joint_completion_does_not_wait_for_moving_gripper() -> None:
+    class ToolMovingBackend(SimulationBackend):
+        def get_hardware_state(self):
+            return replace(super().get_hardware_state(), moving=True)
+
+    arm = SOARM101(
+        SOARM101Config(enable_workspace_checks=False, settle_time_s=0.01),
+        backend=ToolMovingBackend(realtime=True),
+    )
+    with arm:
+        arm.enable()
+        result = arm.move_joints([0.05, 0, 0, 0, 0], speed=1.0, acceleration=5.0)
+        assert result.completed
+
+
+def test_planned_joint_motion_forwards_explicit_servo_profile() -> None:
+    class CapturingBackend(SimulationBackend):
+        def __init__(self):
+            super().__init__(realtime=False)
+            self.profiles = []
+
+        def write_joint_positions(self, positions, **kwargs):
+            self.profiles.append(dict(kwargs))
+            return super().write_joint_positions(positions, **kwargs)
+
+    backend = CapturingBackend()
+    arm = SOARM101(SOARM101Config(enable_workspace_checks=False), backend=backend)
+    with arm:
+        arm.enable()
+        assert arm.move_joints(
+            [0.05, 0, 0, 0, 0],
+            servo_speed_raw=0,
+            servo_acceleration_raw=254,
+        ).completed
+    assert backend.profiles
+    assert all(
+        item == {"speed_raw": 0, "acceleration_raw": 254}
+        for item in backend.profiles
+    )
 
 
 class FakePortHandler:

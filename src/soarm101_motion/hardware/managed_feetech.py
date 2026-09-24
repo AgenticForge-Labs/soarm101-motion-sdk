@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 
@@ -10,11 +11,12 @@ from soarm101_motion.calibration import SO101Calibration
 from soarm101_motion.calibration_live import (
     EncoderSweep,
     calibration_from_sweeps,
+    display_travel_targets,
     sweep_progress_snapshot,
 )
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ALL_MOTORS
-from soarm101_motion.exceptions import CalibrationError, CommunicationError, SafetyViolationError
+from soarm101_motion.exceptions import CalibrationCancelledError, CalibrationError, CommunicationError, SafetyViolationError
 from soarm101_motion.hardware.feetech import FeetechBackend as _ProtocolFeetechBackend
 from soarm101_motion.types import HardwareState
 
@@ -49,6 +51,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
             name: {"current_raw": 0, "abs_load_raw": 0} for name in ALL_MOTORS
         }
         self._effort_sample_monotonic: float | None = None
+        self._gripper_contact_latched = False
 
     def _ensure_effort_state(self) -> None:
         """Initialize safety-latch state for normal and lightweight backend instances."""
@@ -94,6 +97,19 @@ class FeetechBackend(_ProtocolFeetechBackend):
             }
         if not hasattr(self, "_effort_sample_monotonic"):
             self._effort_sample_monotonic = None
+        if not hasattr(self, "_gripper_contact_latched"):
+            self._gripper_contact_latched = False
+
+    def set_gripper_contact_latched(self, latched: bool) -> None:
+        """Treat gripper effort as expected while teleop holds object contact.
+
+        Hardware status faults remain active. This only prevents the software
+        effort threshold for the gripper from aborting the other arm joints.
+        """
+        with self._io_lock:
+            self._ensure_effort_state()
+            self._gripper_contact_latched = bool(latched)
+            self._effort_violation_counts["so101_gripper"] = 0
 
     def _require_effort_clear(self) -> None:
         self._ensure_effort_state()
@@ -136,11 +152,18 @@ class FeetechBackend(_ProtocolFeetechBackend):
             load = self._decode_present_load(self.read_register(motor, "Present_Load"))
             return {"current_raw": current, "load_raw": load}
 
-    def _read_all_motor_effort(self) -> dict[str, dict[str, int]]:
-        readings = {name: self.read_motor_effort(name) for name in ALL_MOTORS}
-        self._last_effort_readings = {
-            name: dict(values) for name, values in readings.items()
+    def _read_all_motor_effort(
+        self, *, skip_motors: set[str] | None = None
+    ) -> dict[str, dict[str, int]]:
+        skipped = skip_motors or set()
+        readings = {
+            name: self.read_motor_effort(name)
+            for name in ALL_MOTORS
+            if name not in skipped
         }
+        self._last_effort_readings.update(
+            {name: dict(values) for name, values in readings.items()}
+        )
         self._effort_sample_monotonic = time.monotonic()
         for name, values in readings.items():
             peak = self._effort_peaks[name]
@@ -226,9 +249,13 @@ class FeetechBackend(_ProtocolFeetechBackend):
             return None
 
         required = self._effort_trip_consecutive_samples
-        readings = self._read_all_motor_effort()
+        skipped = {"so101_gripper"} if self._gripper_contact_latched else set()
+        readings = self._read_all_motor_effort(skip_motors=skipped)
         tripped: list[str] = []
         for name in ALL_MOTORS:
+            if name in skipped:
+                self._effort_violation_counts[name] = 0
+                continue
             current_limit = self._current_limit(name)
             load_limit = self._load_limit(name)
             if current_limit is None and load_limit is None:
@@ -471,12 +498,13 @@ class FeetechBackend(_ProtocolFeetechBackend):
     def interactive_calibration(
         self,
         *,
-        record_seconds: float = 20.0,
+        record_seconds: float = 90.0,
         poll_interval: float = 0.02,
+        cancel_event: threading.Event | None = None,
         progress_callback: Callable[[dict[str, dict[str, int | float | bool]]], None]
         | None = None,
     ) -> SO101Calibration:
-        """Calibrate all motors from one live sweep between printed end stops.
+        """Calibrate all motors from two stop-to-stop traversals per actuator.
 
         Torque is disabled and the old homing/range values are temporarily reset.
         The user then moves every motor repeatedly through its complete safe range.
@@ -499,36 +527,52 @@ class FeetechBackend(_ProtocolFeetechBackend):
             eeprom_snapshot = self.read_calibration_from_motors()
             self.disable_torque()
             try:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CalibrationCancelledError("calibration cancelled")
                 # Observe the physical mechanism in raw encoder space. Do not ask
                 # the user to guess the midpoint before the true stops are known.
                 self.reset_calibration()
                 start = self.read_all_raw_positions()
                 sweeps = {name: EncoderSweep.start(raw) for name, raw in start.items()}
+                display_targets = display_travel_targets(self.config.robot_id)
 
                 deadline = time.monotonic() + record_seconds
                 next_progress = 0.0
                 if progress_callback is not None:
-                    progress_callback(sweep_progress_snapshot(sweeps))
+                    progress_callback(sweep_progress_snapshot(sweeps, display_travel_ticks=display_targets))
                 while time.monotonic() < deadline:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise CalibrationCancelledError("calibration cancelled")
                     values = self.read_all_raw_positions()
                     for name, raw in values.items():
                         sweeps[name].update(raw)
+                    snapshot = sweep_progress_snapshot(
+                        sweeps, display_travel_ticks=display_targets
+                    )
                     now = time.monotonic()
                     if progress_callback is not None and now >= next_progress:
-                        progress_callback(sweep_progress_snapshot(sweeps))
+                        progress_callback(snapshot)
                         next_progress = now + 0.10
+                    if all(item["passed"] for item in snapshot.values()):
+                        break
                     time.sleep(poll_interval)
 
                 if progress_callback is not None:
-                    progress_callback(sweep_progress_snapshot(sweeps))
+                    progress_callback(sweep_progress_snapshot(sweeps, display_travel_ticks=display_targets))
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CalibrationCancelledError("calibration cancelled")
                 calibration = calibration_from_sweeps(sweeps)
                 self.apply_calibration(calibration)
                 verified = self.read_calibration_from_motors()
                 self._verify_calibration_matches_motors(calibration, verified)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CalibrationCancelledError("calibration cancelled")
                 return calibration
             except BaseException:
                 try:
                     self.apply_calibration(eeprom_snapshot)
+                    restored = self.read_calibration_from_motors()
+                    self._verify_calibration_matches_motors(eeprom_snapshot, restored)
                     self.calibration = previous_calibration or eeprom_snapshot
                 except Exception as rollback_exc:
                     raise CalibrationError(

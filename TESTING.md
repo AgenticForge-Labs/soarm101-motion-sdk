@@ -65,18 +65,26 @@ measured endpoints.
 
 1. Keep both arms torque OFF.
 2. Open **Setup > Mechanical-stop calibration** and select **Follower**.
-3. If the follower has no usable calibration, connect it with
-   **Follower setup: allow uncalibrated connection** enabled.
-4. Start the live calibration sweep. Six circular gauges should reset to 0% and
-   begin filling from the observed encoder extrema, not from elapsed time.
-5. Move every follower joint and the gripper repeatedly through their complete safe
-   travel. Gently touch both printed mechanical stops several times; do not hold or force
-   a joint against a stop.
-6. Confirm every pose-joint gauge reaches PASS. The current provisional minimum is
-   2048 ticks (180°) for each of the five arm joints. The gripper uses a separate,
-   deliberately conservative 256-tick minimum until its physical travel is characterized.
-7. Let the recording finish. Calibration must fail rather than save if any actuator is
-   below its current minimum. Otherwise the SDK derives each zero from the midpoint of
+3. In **Setup / Calibrate**, click **Find Arms**, select **Follower**, then click
+   **Connect for calibration (torque off)**. This sets the uncalibrated setup option
+   for the follower connection. Do not press Enable.
+4. Start recording. Six circular gauges reset to 0%. Each gauge fills while the
+   encoder moves across its range, resets for the return traversal, and shows
+   **DONE** with a brief black pop after two complete end-to-end traversals.
+5. Gently move every joint and the gripper from one printed stop to the other and
+   back. Do not hold or force a joint against a stop. Allow time for all six
+   gauges to reach 2/2.
+6. The minimum observed range is 2048 ticks (180°) for each pose joint and
+   900 ticks for the gripper. The gripper gauge uses the selected arm's saved
+   range as its visual scale when available; the leader and follower need not
+   have the same gripper travel. **DONE** means two traversals were observed,
+   not that the calibration file has been saved.
+7. Recording ends automatically when all six reach 2/2; otherwise the selected
+   time limit applies. Wait for **CALIBRATION SAVED** or **CALIBRATION FAILED**.
+   Calibration must fail rather than save if any actuator is
+   below its current minimum or has fewer than two traversals. A servo input-voltage
+   fault also stops the sweep regardless of gauge progress. Otherwise the SDK derives
+   each zero from the midpoint of
    the observed extrema, writes symmetric limits, reads them back, and saves calibration
    under the follower robot ID.
 8. Record the short calibration ID shown in Setup. Verify
@@ -85,8 +93,9 @@ measured endpoints.
    `~/.config/soarm101/calibration/history/<follower-id>/`.
 9. Reconnect the follower normally and confirm its GUI joint sliders use the calibrated
    limits.
-10. Connect the leader with torque OFF. For a fresh leader, enable
-   **Leader setup: allow uncalibrated connection** before connecting it.
+10. Select **Leader** in the same Setup panel, then click
+    **Connect for calibration (torque off)**. The discovered leader port and its own
+    robot ID are used, and torque remains off.
 11. In the same Setup calibration panel select **Leader** and repeat the exact sweep
     procedure. The same six gauges and thresholds are used, but the result is saved under
     the leader robot ID.

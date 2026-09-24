@@ -96,6 +96,31 @@ def test_per_motor_load_override_can_be_more_sensitive() -> None:
     assert backend.hold_count == 1
 
 
+def test_contact_latched_gripper_effort_does_not_stop_arm_stream() -> None:
+    config = SOARM101Config(
+        port="fake",
+        use_stored_calibration=False,
+        effort_current_trip_raw=100,
+        effort_load_trip_raw=None,
+        effort_trip_consecutive_samples=1,
+    )
+    backend = FakeEffortBackend(config)
+    backend.currents["so101_gripper"] = 150
+    backend.set_gripper_contact_latched(True)
+
+    state = backend.get_hardware_state()
+
+    assert not state.faulted
+    assert backend.hold_count == 0
+    assert "so101_gripper" not in backend._last_effort_readings
+
+    backend.currents["wrist_flex"] = 150
+    state = backend.get_hardware_state()
+    assert state.faulted
+    assert "wrist_flex" in (state.fault_message or "")
+    assert backend.hold_count == 1
+
+
 def test_effort_status_reports_live_readings_peaks_and_effective_limits() -> None:
     config = SOARM101Config(
         port="fake",

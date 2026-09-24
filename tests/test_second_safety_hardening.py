@@ -59,7 +59,7 @@ def test_following_error_aborts_during_streaming() -> None:
     arm = SOARM101(config, backend=backend)
     with arm:
         arm.enable()
-        with pytest.raises(SafetyViolationError, match="following error"):
+        with pytest.raises(SafetyViolationError, match="shoulder_pan following error"):
             arm.move_joints([0.2, 0, 0, 0, 0], speed=0.2, acceleration=0.5)
         assert backend.stop_count >= 1
 

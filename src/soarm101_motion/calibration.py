@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from math import pi
 from pathlib import Path
@@ -186,7 +187,20 @@ class SO101Calibration:
             "calibration_id": self.calibration_id,
             "motors": {name: asdict(calibration) for name, calibration in self.motors.items()},
         }
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(payload, indent=2) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         return path
 
     def save_lerobot(self, path: str | Path) -> Path:

@@ -17,6 +17,10 @@ class CalibrationError(SOARM101Error):
     """Calibration is missing, invalid, or unsafe to use."""
 
 
+class CalibrationCancelledError(CalibrationError):
+    """A calibration sweep was cancelled and its motor settings restored."""
+
+
 class CommunicationError(SOARM101Error):
     """A Feetech packet or serial communication operation failed."""
 

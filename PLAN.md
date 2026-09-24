@@ -40,6 +40,20 @@ Robo Director is the primary source of cross-repository integration requirements
 - [ ] Validate the Puppeteer named-gesture embodiment in simulation.
 - [ ] Pass the Director cross-repository simulated-show suite.
 
+## CLI and GUI feature parity
+
+The CLI and GUI must call the same SDK operations and saved libraries. The GUI keeps
+its own persistent connection for live controls; it must not launch CLI subprocesses.
+
+- [x] Match basic setup, readout, joint motion, Cartesian jogs, and gripper motion.
+- [x] Add CLI arm discovery, absolute Cartesian moves, named pose capture/replay,
+  trajectory replay, sequence execution, and effort status.
+- [ ] Add CLI trajectory recording, non-destructive editing, and primitive management.
+- [ ] Add CLI sequence and named pose library editing beyond capture/replay.
+- [ ] Add CLI effort guard configuration, peak reset, and trip clearing.
+- [ ] Add a persistent CLI session for STOP/HOLD, pause/resume, and guarded leader-to-follower teleoperation.
+- [ ] Verify matching behavior in simulation and fake transport before hardware use.
+
 ## Physical validation gate
 
 - [ ] Run port discovery and six-motor model check on the user's arm.

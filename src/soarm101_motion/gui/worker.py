@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import threading
 import time
-from math import degrees, radians
+import threading
+from math import degrees, isfinite, radians
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -14,6 +15,9 @@ from soarm101_motion.constants import (
     ALL_MOTORS,
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    STOCK_GRIPPER,
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
@@ -23,6 +27,19 @@ from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.sequences import MotionSequence, SequenceRunner
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
+from soarm101_motion.gui.session_log import record as record_session
+from soarm101_motion.gui.teleop_rate import (
+    GripperContactLatch,
+    TELEOP_GRIPPER_SPEED_PER_S,
+    limit_joint_target,
+    plan_alignment_target,
+    update_gripper_contact_latch,
+)
+from soarm101_motion.exceptions import CalibrationCancelledError, CalibrationError
+from soarm101_motion.hardware.simulation import SimulationBackend
+
+GUI_TELEOP_MAX_JOINT_SPEED_RAD_S = 1.2
+GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2 = 6.0
 
 
 class RobotWorker(QObject):
@@ -33,15 +50,19 @@ class RobotWorker(QObject):
     error_message = Signal(str)
     calibration_completed = Signal(object)
     calibration_progress = Signal(object)
+    calibration_cancelled = Signal()
     recording_completed = Signal(object)
     recording_changed = Signal(bool)
     stream_sample = Signal(object)
     stream_readout_changed = Signal(bool)
     teleop_changed = Signal(bool)
+    teleop_alignment_adjusted = Signal(object)
     sequence_progress = Signal(object)
     effort_changed = Signal(object)
     arm_discovery_completed = Signal(object)
     measured_pose_captured = Signal(object)
+    teleop_start_pose = Signal(object)
+    joint_measurements = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -49,14 +70,19 @@ class RobotWorker(QObject):
         self._timer: QTimer | None = None
         self._handles: list[tuple[str, MotionHandle[Any]]] = []
         self._simulation = False
+        self._detailed_logging = True
+        self._calibration_cancel = threading.Event()
         self._robot_id = "so101"
         self._record_timer: QTimer | None = None
         self._recording: dict[str, Any] | None = None
         self._record_started = 0.0
         self._stream_timer: QTimer | None = None
         self._stream_readout_active = False
+        self._last_voltage_log_s = 0.0
         self._teleop: dict[str, Any] | None = None
+        self._teleop_staging: dict[str, Any] | None = None
         self._sequence_runner: SequenceRunner | None = None
+        self._last_poll_error: str | None = None
 
     @Slot()
     def start(self) -> None:
@@ -70,8 +96,39 @@ class RobotWorker(QObject):
         self._stream_timer.timeout.connect(self._emit_stream_sample)
 
     def _report_error(self, operation: str, exc: BaseException) -> None:
-        self.error_message.emit(f"{operation}: {exc}")
-        self.log_message.emit(f"ERROR {operation}: {exc}")
+        details = [str(exc)]
+        cause = exc.__cause__
+        while cause is not None:
+            if str(cause) not in details:
+                details.append(str(cause))
+            cause = cause.__cause__
+        message = f"{operation}: " + ": ".join(details)
+        record_session("error", worker=self._robot_id, operation=operation, message=message)
+        self.error_message.emit(message)
+
+    def _record_gripper_snapshot(self, phase: str, *, leader_gripper: float | None = None) -> None:
+        """Log raw gripper feedback and goal around teleop staging."""
+        arm = self.arm
+        backend = None if arm is None else getattr(arm, "backend", None)
+        read_raw = getattr(backend, "read_raw_position", None)
+        if not callable(read_raw):
+            return
+        fields: dict[str, object] = {"worker": self._robot_id, "phase": phase}
+        if leader_gripper is not None:
+            fields["leader_gripper"] = leader_gripper
+        try:
+            fields["present_raw"] = int(read_raw(STOCK_GRIPPER))
+            read_register = getattr(backend, "read_register", None)
+            if callable(read_register):
+                fields["goal_raw"] = int(read_register(STOCK_GRIPPER, "Goal_Position"))
+            calibration = getattr(backend, "calibration", None)
+            if calibration is not None and STOCK_GRIPPER in calibration.motors:
+                motor = calibration.motors[STOCK_GRIPPER]
+                fields["calibrated_closed_raw"] = motor.range_min
+                fields["calibrated_open_raw"] = motor.range_max
+        except BaseException as exc:
+            fields["read_error"] = str(exc)
+        record_session("teleop_gripper_snapshot", **fields)
 
     @Slot()
     def discover_arms(self) -> None:
@@ -137,12 +194,16 @@ class RobotWorker(QObject):
             self._handles.append((label, result))
             self.busy_changed.emit(True)
             self.log_message.emit(f"Started {label}.")
+            record_session("motion_started", worker=self._robot_id, label=label)
         else:
             self.log_message.emit(f"Completed {label}.")
+            record_session("motion_completed", worker=self._robot_id, label=label)
             self.poll()
 
     def _process_handles(self) -> bool:
         pending: list[tuple[str, MotionHandle[Any]]] = []
+        begin_teleop: dict[str, Any] | None = None
+        align_gripper: dict[str, Any] | None = None
         for label, handle in self._handles:
             if not handle.done:
                 pending.append((label, handle))
@@ -155,6 +216,33 @@ class RobotWorker(QObject):
                 self._report_error(label, exception)
             else:
                 self.log_message.emit(f"Completed {label}.")
+                record_session("motion_completed", worker=self._robot_id, label=label)
+            if label == "teleop alignment":
+                self._record_gripper_snapshot(
+                    "joint_alignment_finished" if exception is None else "joint_alignment_failed",
+                    leader_gripper=(
+                        float(self._teleop_staging["leader_gripper"])
+                        if self._teleop_staging is not None
+                        and "leader_gripper" in self._teleop_staging else None
+                    ),
+                )
+                options = self._teleop_staging
+                if exception is None and options is not None:
+                    if options.get("mirror_gripper", True):
+                        align_gripper = options
+                    else:
+                        begin_teleop = {**options, "align_follower": False}
+                        self._teleop_staging = None
+                elif options is not None:
+                    self._teleop_staging = None
+                    self.teleop_changed.emit(False)
+            if label == "teleop gripper alignment":
+                options = self._teleop_staging
+                self._teleop_staging = None
+                if exception is None and options is not None:
+                    begin_teleop = {**options, "align_follower": False}
+                elif options is not None:
+                    self.teleop_changed.emit(False)
             if label.startswith("sequence "):
                 self._sequence_runner = None
                 self.sequence_progress.emit(
@@ -166,7 +254,41 @@ class RobotWorker(QObject):
         self._handles = pending
         busy = bool(pending)
         self.busy_changed.emit(busy)
-        return busy
+        if align_gripper is not None:
+            try:
+                arm = self._require_arm()
+                leader_gripper = float(align_gripper["leader_gripper"])
+                follower_gripper = float(arm.tool.get_position())
+                record_session(
+                    "teleop_gripper_alignment_requested",
+                    worker=self._robot_id,
+                    leader_gripper=leader_gripper,
+                    follower_gripper=follower_gripper,
+                )
+                if follower_gripper >= leader_gripper - 0.03:
+                    self._teleop_staging = None
+                    begin_teleop = {**align_gripper, "align_follower": False}
+                    if follower_gripper > leader_gripper + 0.03:
+                        self.log_message.emit(
+                            "Follower gripper will close toward the leader under "
+                            "the live contact guard."
+                        )
+                else:
+                    self.log_message.emit(
+                        f"Aligning follower gripper {follower_gripper:.3f} → "
+                        f"leader {leader_gripper:.3f}…"
+                    )
+                    self._track(
+                        "teleop gripper alignment",
+                        arm.tool.move(leader_gripper, wait=False, timeout=5.0),
+                    )
+            except BaseException as exc:
+                self._teleop_staging = None
+                self.teleop_changed.emit(False)
+                self._report_error("teleop gripper alignment", exc)
+        if begin_teleop is not None:
+            self.start_teleop(begin_teleop)
+        return bool(self._handles) or begin_teleop is not None
 
     @Slot(object)
     def connect_robot(self, options: object) -> None:
@@ -177,7 +299,13 @@ class RobotWorker(QObject):
             self._simulation = bool(values.get("simulation", False))
             self._robot_id = str(values.get("robot_id") or "so101")
             if self._simulation:
-                self.arm = SOARM101.simulated(realtime=True)
+                self.arm = SOARM101(
+                    SOARM101Config(
+                        teleop_max_joint_speed=GUI_TELEOP_MAX_JOINT_SPEED_RAD_S,
+                        teleop_max_joint_acceleration=GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2,
+                    ),
+                    backend=SimulationBackend(realtime=True),
+                )
             else:
                 self.arm = SOARM101(
                     SOARM101Config(
@@ -189,6 +317,9 @@ class RobotWorker(QObject):
                             values.get("allow_uncalibrated", False)
                         ),
                         configure_motors_on_connect=False,
+                        enable_workspace_checks=False,
+                        teleop_max_joint_speed=GUI_TELEOP_MAX_JOINT_SPEED_RAD_S,
+                        teleop_max_joint_acceleration=GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2,
                     )
                 )
             self.arm.connect()
@@ -211,6 +342,7 @@ class RobotWorker(QObject):
     def disconnect_robot(self) -> None:
         arm = self.arm
         self.arm = None
+        self._teleop_staging = None
         for _label, handle in self._handles:
             handle.cancel()
         self._handles.clear()
@@ -253,6 +385,7 @@ class RobotWorker(QObject):
     @Slot()
     def relax(self) -> None:
         try:
+            self._teleop_staging = None
             for _label, handle in self._handles:
                 handle.cancel()
             arm = self._require_arm()
@@ -270,6 +403,7 @@ class RobotWorker(QObject):
     @Slot()
     def stop(self) -> None:
         try:
+            self._teleop_staging = None
             for _label, handle in self._handles:
                 handle.cancel()
             arm = self._require_arm()
@@ -296,6 +430,7 @@ class RobotWorker(QObject):
             assert self._stream_timer is not None
             self._stream_timer.setInterval(max(1, round(1000.0 / frequency)))
             self._stream_readout_active = True
+            self._last_voltage_log_s = 0.0
             self._emit_stream_sample()
             self._stream_timer.start()
             self.stream_readout_changed.emit(True)
@@ -307,6 +442,51 @@ class RobotWorker(QObject):
     @Slot()
     def stop_stream_readout(self) -> None:
         self._stop_stream_readout()
+
+    @Slot()
+    def read_teleop_start_pose(self) -> None:
+        """Read the leader at Start, rather than using the slower GUI display cache."""
+        try:
+            arm = self._require_arm()
+            joints = arm.get_joint_positions().positions
+            self.teleop_start_pose.emit({
+                "joints_rad": {name: float(joints[name]) for name in ARM_JOINTS},
+                "gripper": float(arm.tool.get_position()),
+            })
+        except BaseException as exc:
+            self._record_voltage_fault("read leader for teleoperation", exc)
+            self.teleop_start_pose.emit({"error": str(exc)})
+            self._report_error("read leader for teleoperation", exc)
+
+    def _record_voltage_fault(self, operation: str, exc: BaseException) -> None:
+        """Capture a fresh read-only snapshot after a servo voltage status error."""
+        if "input voltage error" not in str(exc).lower() or self.arm is None:
+            return
+        reader = getattr(self.arm.backend, "read_voltage_snapshot", None)
+        if not callable(reader):
+            return
+        motor = next((name for name in ALL_MOTORS if name in str(exc)), STOCK_GRIPPER)
+        try:
+            snapshot = reader(motor, include_limits=True)
+        except Exception as snapshot_error:
+            snapshot = {"motor": motor, "snapshot_error": str(snapshot_error)}
+        record_session(
+            "servo_voltage_fault",
+            worker=self._robot_id,
+            operation=operation,
+            original_error=str(exc),
+            snapshot_after_fault=snapshot,
+        )
+        voltage = snapshot.get("voltage_v")
+        minimum = snapshot.get("minimum_voltage_v")
+        maximum = snapshot.get("maximum_voltage_v")
+        self.log_message.emit(
+            f"Voltage fault snapshot after {operation}: {motor} "
+            f"{voltage if voltage is not None else 'unavailable'} V "
+            f"(configured {minimum if minimum is not None else '?'}–"
+            f"{maximum if maximum is not None else '?'} V). "
+            "This reading was taken after the fault; a brief dip may have passed."
+        )
 
     def _stop_stream_readout(self) -> None:
         if self._stream_timer is not None:
@@ -323,15 +503,33 @@ class RobotWorker(QObject):
         try:
             arm = self._require_arm()
             joints = arm.get_joint_positions().positions
+            gripper = float(arm.tool.get_position())
+            now = time.perf_counter()
+            if now - self._last_voltage_log_s >= 1.0:
+                reader = getattr(arm.backend, "read_voltage_snapshot", None)
+                if callable(reader):
+                    snapshot = reader(STOCK_GRIPPER)
+                    record_session(
+                        "leader_voltage_sample", worker=self._robot_id, snapshot=snapshot
+                    )
+                    reading = snapshot["readings"]["Present_Voltage"]
+                    if not reading.get("comm_success") or reading.get("packet_error"):
+                        raise RuntimeError(
+                            "leader gripper voltage sample failed: "
+                            + str(reading.get("error_text") or reading.get("read_error")
+                                  or reading.get("comm"))
+                        )
+                self._last_voltage_log_s = now
             self.stream_sample.emit(
                 {
                     "timestamp": time.perf_counter(),
                     "joints_rad": {name: float(joints[name]) for name in ARM_JOINTS},
-                    "gripper": float(arm.tool.get_position()),
+                    "gripper": gripper,
                 }
             )
         except BaseException as exc:
             self._stop_stream_readout()
+            self._record_voltage_fault("high-rate readout", exc)
             self._report_error("high-rate readout", exc)
 
     @Slot(object)
@@ -356,8 +554,70 @@ class RobotWorker(QObject):
             leader_origin = {
                 name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
             }
+            if bool(values.get("align_follower", False)):
+                if bool(values.get("mirror_gripper", True)):
+                    leader_gripper = float(values["leader_gripper"])
+                    if not isfinite(leader_gripper) or not 0.0 <= leader_gripper <= 1.0:
+                        raise ValueError("leader gripper position must be within [0, 1]")
+                calibration = getattr(arm.backend, "calibration", None)
+                calibrated_limits = (
+                    {
+                        name: calibration.motors[name].radians_limits
+                        for name in ARM_JOINTS
+                        if name in calibration.motors
+                    }
+                    if calibration is not None else None
+                )
+                alignment_target, offset_rad = plan_alignment_target(
+                    leader_origin, arm.get_joint_limits(), calibrated_limits
+                )
+                adjustments = {name: degrees(abs(value)) for name, value in offset_rad.items()}
+                if adjustments:
+                    values["mode"] = "relative"
+                    self.teleop_alignment_adjusted.emit(adjustments)
+                    self.log_message.emit(
+                        "Leader extends beyond the conservative motion range: "
+                        "aligning to a legal pose and using relative mapping for "
+                        + ", ".join(f"{name} ({amount:.1f}°)" for name, amount in adjustments.items())
+                        + "."
+                    )
+                if not arm.get_state().torque_enabled:
+                    self._record_gripper_snapshot(
+                        "before_torque_enable",
+                        leader_gripper=float(values.get("leader_gripper", 0.0)),
+                    )
+                    arm.enable()
+                    self._record_gripper_snapshot(
+                        "after_torque_enable",
+                        leader_gripper=float(values.get("leader_gripper", 0.0)),
+                    )
+                    self.log_message.emit("Follower holding its current pose before alignment.")
+                    self.poll()
+                self.log_message.emit("Aligning follower with the measured leader pose…")
+                record_session("teleop_alignment_requested", worker=self._robot_id,
+                               leader_joints_rad=leader_origin,
+                               follower_target_rad=alignment_target,
+                               adjustments_deg=adjustments)
+                result = arm.move_joints(
+                    alignment_target,
+                    speed=radians(25.0),
+                    acceleration=radians(60.0),
+                    wait=False,
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                )
+                self._teleop_staging = values
+                self._track("teleop alignment", result)
+                return
             follower_origin = dict(arm.get_joint_positions().positions)
             follower_gripper = float(arm.tool.get_position())
+            stream_joint_limits = arm.get_joint_limits()
+            for name in ARM_JOINTS:
+                lower, upper = stream_joint_limits[name]
+                stream_joint_limits[name] = (
+                    min(lower, follower_origin[name]),
+                    max(upper, follower_origin[name]),
+                )
             period_s = 1.0 / frequency
             self._teleop = {
                 "mode": mode,
@@ -366,14 +626,22 @@ class RobotWorker(QObject):
                 # slower GUI snapshot used only to verify leader availability.
                 "leader_origin": None if mode == "relative" else leader_origin,
                 "follower_origin": follower_origin,
-                "leader_gripper_origin": None,
-                "follower_gripper_origin": follower_gripper,
+                "joint_limits": stream_joint_limits,
+                "last_command": dict(follower_origin),
+                "last_velocity": {name: 0.0 for name in ARM_JOINTS},
+                "gripper_contact": GripperContactLatch(
+                    last_command=follower_gripper,
+                    last_actual=follower_gripper,
+                ),
                 "mirror_gripper": bool(values.get("mirror_gripper", True)),
                 "samples": 0,
+                "limited_samples": 0,
                 "frequency_hz": frequency,
                 "period_s": period_s,
                 "overruns": 0,
                 "last_processing_s": 0.0,
+                "last_sample_timestamp": None,
+                "last_frame": None,
             }
             arm.start_joint_stream(frequency_hz=frequency)
             self.teleop_changed.emit(True)
@@ -381,7 +649,20 @@ class RobotWorker(QObject):
             self.log_message.emit(
                 f"Live teleoperation started in {mode} mapping mode at {frequency:.1f} Hz."
             )
+            record_session("teleop_started", worker=self._robot_id, mode=mode, frequency_hz=frequency)
+            record_session(
+                "teleop_settings",
+                worker=self._robot_id,
+                max_joint_speed_rad_s=arm.config.stream_joint_speed_limit,
+                max_joint_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
+                gripper_speed_per_s=TELEOP_GRIPPER_SPEED_PER_S,
+                max_command_step_rad=arm.config.max_command_step_radians,
+                following_error_limit_rad=arm.config.following_error_limit_rad,
+                teleop_servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                teleop_servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+            )
         except BaseException as exc:
+            self._teleop_staging = None
             self._teleop = None
             try:
                 arm = self.arm
@@ -398,6 +679,7 @@ class RobotWorker(QObject):
         teleop = self._teleop
         if teleop is None:
             return
+        teleop["last_frame"] = None
         try:
             started = time.perf_counter()
             values = dict(sample)  # type: ignore[arg-type]
@@ -416,32 +698,113 @@ class RobotWorker(QObject):
             if teleop["mode"] == "relative":
                 if teleop["leader_origin"] is None:
                     teleop["leader_origin"] = dict(leader)
-                    teleop["leader_gripper_origin"] = float(values["gripper"])
                 target = {
                     name: teleop["follower_origin"][name]
-                    + leader[name]
-                    - teleop["leader_origin"][name]
+                    + (leader[name] - teleop["leader_origin"][name])
                     for name in ARM_JOINTS
                 }
-                gripper = None
-                if teleop["mirror_gripper"]:
-                    leader_gripper_origin = float(teleop["leader_gripper_origin"])
-                    gripper = max(
-                        0.0,
-                        min(
-                            1.0,
-                            teleop["follower_gripper_origin"]
-                            + float(values["gripper"])
-                            - leader_gripper_origin,
-                        ),
-                    )
             else:
                 target = leader
-                gripper = (
-                    float(values["gripper"]) if teleop["mirror_gripper"] else None
+            gripper = float(values["gripper"]) if teleop["mirror_gripper"] else None
+            arm = self._require_arm()
+            command, velocity, limited = limit_joint_target(
+                target,
+                teleop["last_command"],
+                teleop["last_velocity"],
+                joint_limits=teleop["joint_limits"],
+                period_s=float(teleop["period_s"]),
+                max_speed_rad_s=arm.config.stream_joint_speed_limit,
+                max_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
+                max_step_rad=arm.config.max_command_step_radians,
+            )
+            gripper_actual = None
+            gripper_desired = gripper
+            gripper_contact_latched = False
+            if gripper is not None:
+                gripper_desired = gripper
+                gripper_actual = float(arm.tool.get_position())
+                (
+                    gripper,
+                    gripper_contact_latched,
+                    newly_latched,
+                    latch_released,
+                ) = update_gripper_contact_latch(
+                    teleop["gripper_contact"],
+                    gripper_desired,
+                    gripper_actual,
+                    period_s=float(teleop["period_s"]),
+                    max_speed_per_s=TELEOP_GRIPPER_SPEED_PER_S,
                 )
-            result = self._require_arm().stream_joint_target(target, gripper=gripper)
+                contact_hook = getattr(
+                    getattr(arm, "backend", None),
+                    "set_gripper_contact_latched",
+                    None,
+                )
+                if newly_latched:
+                    if callable(contact_hook):
+                        contact_hook(True)
+                    self.log_message.emit(
+                        f"Gripper contact detected at {gripper_actual:.3f}; "
+                        f"easing to {gripper:.3f} and holding. "
+                        "Open the leader gripper to release."
+                    )
+                    record_session(
+                        "teleop_gripper_contact_latched",
+                        worker=self._robot_id,
+                        aperture=gripper_actual,
+                        hold_aperture=gripper,
+                        leader_target=gripper_desired,
+                    )
+                elif latch_released:
+                    if callable(contact_hook):
+                        contact_hook(False)
+                    self.log_message.emit("Leader gripper opened; contact hold released.")
+                    record_session(
+                        "teleop_gripper_contact_released",
+                        worker=self._robot_id,
+                        aperture=gripper_actual,
+                        leader_target=gripper_desired,
+                    )
+            prior_timestamp = teleop["last_sample_timestamp"]
+            frame = {
+                "worker": self._robot_id,
+                "sample": teleop["samples"] + 1,
+                "leader_timestamp": sample_timestamp,
+                "interval_ms": None if prior_timestamp is None else (sample_timestamp - prior_timestamp) * 1000.0,
+                "sample_age_ms": sample_age_s * 1000.0,
+                "leader_joints_rad": leader,
+                "desired_joints_rad": target,
+                "command_joints_rad": command,
+                "command_velocity_rad_s": velocity,
+                "gripper_command": gripper,
+                "leader_gripper": float(values["gripper"]),
+                "gripper_desired": gripper_desired,
+                "gripper_actual": gripper_actual,
+                "gripper_contact_latched": gripper_contact_latched,
+                "limited": limited,
+            }
+            teleop["last_frame"] = frame
+            result = arm.stream_joint_target(command, gripper=gripper)
+            self.joint_measurements.emit({
+                name: degrees(float(result.final_positions[name])) for name in ARM_JOINTS
+            })
+            teleop["last_sample_timestamp"] = sample_timestamp
+            teleop["last_command"] = command
+            teleop["last_velocity"] = velocity
+            if limited:
+                teleop["limited_samples"] += 1
             processing_s = time.perf_counter() - started
+            if self._detailed_logging:
+                actual = dict(result.final_positions)
+                record_session(
+                    "teleop_frame",
+                    **frame,
+                    actual_joints_rad=actual,
+                    following_error_rad={
+                        name: actual[name] - command[name] for name in ARM_JOINTS
+                    },
+                    processing_ms=processing_s * 1000.0,
+                )
             teleop["last_processing_s"] = processing_s
             teleop["samples"] += 1
             if processing_s > float(teleop["period_s"]):
@@ -463,29 +826,63 @@ class RobotWorker(QObject):
                         "processing_ms": processing_s * 1000.0,
                         "sample_age_ms": sample_age_s * 1000.0,
                         "overruns": teleop["overruns"],
+                        "limited_samples": teleop["limited_samples"],
+                        "gripper_contact_latched": gripper_contact_latched,
                     }
                 )
+                record_session(
+                    "teleop_sample",
+                    worker=self._robot_id,
+                    samples=teleop["samples"],
+                    processing_ms=processing_s * 1000.0,
+                    sample_age_ms=sample_age_s * 1000.0,
+                    limited_samples=teleop["limited_samples"],
+                )
         except BaseException as exc:
+            if self._detailed_logging and teleop.get("last_frame") is not None:
+                record_session(
+                    "teleop_fault_context",
+                    **teleop["last_frame"],
+                    error=str(exc),
+                )
+            record_session("teleop_stopped_on_error", worker=self._robot_id, message=str(exc))
             self._stop_teleop_internal(hold=True)
             self._report_error("live teleoperation", exc)
 
     @Slot()
     def stop_teleop(self) -> None:
+        if self._teleop_staging is not None:
+            self._teleop_staging = None
+            for label, handle in self._handles:
+                if label in {"teleop alignment", "teleop gripper alignment"}:
+                    handle.cancel()
+            self.teleop_changed.emit(False)
+            self.log_message.emit("Teleoperation alignment cancelled; follower holding.")
+            return
         self._stop_teleop_internal(hold=True)
 
     def _stop_teleop_internal(self, *, hold: bool) -> None:
         arm = self.arm
         was_active = self._teleop is not None
         self._teleop = None
-        if arm is not None and arm.is_connected and arm.motion.is_streaming:
+        if arm is not None and arm.is_connected and (was_active or arm.motion.is_streaming):
             try:
                 arm.stop_joint_stream(hold=hold)
             except BaseException as exc:
                 self._report_error("stop teleoperation", exc)
+            finally:
+                contact_hook = getattr(
+                    getattr(arm, "backend", None),
+                    "set_gripper_contact_latched",
+                    None,
+                )
+                if callable(contact_hook):
+                    contact_hook(False)
         if was_active:
             self.teleop_changed.emit(False)
             self.busy_changed.emit(bool(self._handles))
             self.log_message.emit("Live teleoperation stopped.")
+            record_session("teleop_stopped", worker=self._robot_id, hold=hold)
 
     @Slot(object)
     def run_sequence(self, command: object) -> None:
@@ -777,6 +1174,7 @@ class RobotWorker(QObject):
     def move_joints(self, command: object) -> None:
         try:
             values = dict(command)  # type: ignore[arg-type]
+            record_session("move_joints_requested", worker=self._robot_id, command=values)
             positions = {
                 name: radians(float(values["joints_deg"][name])) for name in ARM_JOINTS
             }
@@ -836,6 +1234,7 @@ class RobotWorker(QObject):
     @Slot(float)
     def move_gripper(self, position: float) -> None:
         try:
+            record_session("gripper_requested", worker=self._robot_id, position=float(position))
             result = self._require_motion_available().tool.move(float(position), wait=False)
             self._track("gripper move", result)
         except BaseException as exc:
@@ -843,6 +1242,8 @@ class RobotWorker(QObject):
 
     @Slot(float)
     def run_calibration(self, seconds: float) -> None:
+        last_progress: object | None = None
+        last_progress_log = 0.0
         try:
             arm = self._require_arm()
             if self._simulation:
@@ -854,18 +1255,73 @@ class RobotWorker(QObject):
             save = getattr(backend, "save_calibration", None)
             if not callable(calibrate) or not callable(save):
                 raise RuntimeError("active backend does not support live calibration")
+            previous_motor_calibration = backend.read_calibration_from_motors()
+            previous_runtime_calibration = getattr(backend, "calibration", None)
             duration = float(seconds)
             if duration <= 0:
                 raise ValueError("calibration duration must be positive")
             self.busy_changed.emit(True)
             self.log_message.emit(
-                f"Calibration recording started for {duration:.1f} s; torque is off."
+                "Preparing calibration with torque off; resetting temporary motor ranges."
             )
+            self.calibration_progress.emit({"phase": "preparing", "duration_s": duration})
+            recording_started: float | None = None
+
+            def report_progress(progress: object) -> None:
+                nonlocal recording_started, last_progress, last_progress_log
+                last_progress = progress
+                if recording_started is None:
+                    recording_started = time.monotonic()
+                    self.log_message.emit(
+                        f"Calibration sweep recording started; time limit {duration:.1f} s. "
+                        "It will finish early when all six actuators reach 2/2."
+                    )
+                self.calibration_progress.emit(
+                    {
+                        "phase": "recording",
+                        "progress": progress,
+                        "duration_s": duration,
+                        "remaining_s": max(
+                            0.0, duration - (time.monotonic() - recording_started)
+                        ),
+                    }
+                )
+                now = time.monotonic()
+                if now - last_progress_log >= 1.0:
+                    record_session(
+                        "calibration_progress",
+                        worker=self._robot_id,
+                        elapsed_s=now - recording_started,
+                        motors=progress,
+                    )
+                    last_progress_log = now
+
             calibration = calibrate(
                 record_seconds=duration,
-                progress_callback=lambda progress: self.calibration_progress.emit(progress),
+                progress_callback=report_progress,
+                cancel_event=self._calibration_cancel,
             )
-            path = save(calibration)
+            try:
+                path = save(calibration)
+            except BaseException as save_exc:
+                try:
+                    backend.apply_calibration(previous_motor_calibration)
+                    restored = backend.read_calibration_from_motors()
+                    backend._verify_calibration_matches_motors(
+                        previous_motor_calibration, restored
+                    )
+                    backend.calibration = (
+                        previous_runtime_calibration or previous_motor_calibration
+                    )
+                except BaseException as rollback_exc:
+                    raise CalibrationError(
+                        "calibration save failed and EEPROM rollback also failed; "
+                        "do not enable torque"
+                    ) from rollback_exc
+                raise CalibrationError(
+                    "calibration save failed; previous motor calibration restored "
+                    "and saved calibration file kept"
+                ) from save_exc
             limits = arm.get_joint_limits()
             payload = {
                 "path": str(path),
@@ -880,10 +1336,38 @@ class RobotWorker(QObject):
             self.calibration_completed.emit(payload)
             self.log_message.emit(f"Calibration saved to {path}.")
             self.poll()
+        except CalibrationCancelledError:
+            self.calibration_cancelled.emit()
+            self.log_message.emit("Calibration cancelled; previous motor calibration restored.")
         except BaseException as exc:
+            restored = "rollback also failed" not in str(exc)
+            if last_progress is not None:
+                record_session(
+                    "calibration_failed_context",
+                    worker=self._robot_id,
+                    motors=last_progress,
+                    error=str(exc),
+                    previous_calibration_restored=restored,
+                )
+            if restored:
+                self.log_message.emit(
+                    "Calibration did not replace the saved file; previous motor settings restored."
+                )
             self._report_error("calibration", exc)
         finally:
             self.busy_changed.emit(False)
+
+    def prepare_calibration(self) -> None:
+        """Reset cancellation before queuing a new sweep."""
+        self._calibration_cancel.clear()
+
+    def request_calibration_cancel(self) -> None:
+        """Signal the active sweep directly; its worker event loop is blocked."""
+        self._calibration_cancel.set()
+
+    @Slot(bool)
+    def set_detailed_logging(self, enabled: bool) -> None:
+        self._detailed_logging = bool(enabled)
 
     def _emit_effort_status(self, *, refresh: bool = False) -> None:
         if self.arm is None or not self.arm.is_connected:
@@ -992,5 +1476,9 @@ class RobotWorker(QObject):
             }
             self.state_changed.emit(payload)
             self._emit_effort_status(refresh=False)
+            self._last_poll_error = None
         except BaseException as exc:
-            self._report_error("read state", exc)
+            message = str(exc)
+            if message != self._last_poll_error:
+                self._last_poll_error = message
+                self._report_error("read state", exc)

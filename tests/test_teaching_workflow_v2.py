@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from soarm101_motion import SOARM101, SOARM101Config
+from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.exceptions import InvalidCommandError, SafetyViolationError
 from soarm101_motion.hardware import SimulationBackend
 from soarm101_motion.poses import PoseLibrary, SavedPose
@@ -119,6 +120,69 @@ def test_stream_rate_changes_velocity_validation() -> None:
                 }
             )
         arm.stop_joint_stream()
+    finally:
+        arm.disconnect()
+
+
+def test_teleop_stream_can_use_higher_limits_than_planned_motion() -> None:
+    config = SOARM101Config(
+        enable_workspace_checks=False,
+        effort_safety_enabled=False,
+        max_joint_speed=1.0,
+        max_joint_acceleration=5.0,
+        teleop_max_joint_speed=1.2,
+        teleop_max_joint_acceleration=6.0,
+    )
+    arm = SOARM101(config, backend=SimulationBackend(realtime=False))
+    arm.connect()
+    arm.enable()
+    try:
+        with pytest.raises(SafetyViolationError, match="joint speed"):
+            arm.move_joints([0.01, 0, 0, 0, 0], speed=1.1)
+        arm.start_joint_stream(frequency_hz=20.0)
+        baseline = arm.get_joint_positions().positions
+        first = dict(baseline, shoulder_pan=baseline["shoulder_pan"] + 0.045)
+        second = dict(first, shoulder_pan=first["shoulder_pan"] + 0.06)
+        assert arm.stream_joint_target(first).accepted
+        assert arm.stream_joint_target(second).accepted
+        arm.stop_joint_stream()
+    finally:
+        arm.disconnect()
+
+
+def test_joint_stream_stop_reissues_hold_after_stream_state_was_cleared() -> None:
+    config = SOARM101Config(
+        enable_workspace_checks=False,
+        effort_safety_enabled=False,
+        command_frequency_hz=20.0,
+        max_joint_speed=10.0,
+        max_joint_acceleration=100.0,
+    )
+    backend = SimulationBackend(realtime=False)
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(frequency_hz=10.0)
+        first = {name: 0.0 for name in ARM_JOINTS}
+        first["shoulder_pan"] = 0.02
+        assert arm.stream_joint_target(first).accepted
+
+        def fail_write(_positions, **_kwargs) -> None:
+            raise RuntimeError("simulated transport write failure")
+
+        backend.write_joint_positions = fail_write  # type: ignore[method-assign]
+        second = dict(first, shoulder_pan=0.04)
+        with pytest.raises(RuntimeError, match="transport write failure"):
+            arm.stream_joint_target(second)
+        assert not arm.motion.is_streaming
+        calls_after_failed_sample = backend.stop_count
+        assert calls_after_failed_sample == 1
+
+        # Worker shutdown must be able to issue a second hold even though the
+        # failed sample already cleared the controller's streaming state.
+        arm.stop_joint_stream(hold=True)
+        assert backend.stop_count == calls_after_failed_sample + 1
     finally:
         arm.disconnect()
 
@@ -284,5 +348,48 @@ def test_sequence_pause_resume_during_wait(tmp_path: Path) -> None:
         result = handle.wait(1.0)
         assert result.completed
         assert arm.tool.get_position() == pytest.approx(0.4)
+    finally:
+        arm.disconnect()
+
+
+def test_stream_accepts_calibrated_rest_but_rejects_farther_out():
+    from soarm101_motion.calibration import MotorCalibration, SO101Calibration
+    from soarm101_motion.constants import MOTOR_IDS
+    backend = SimulationBackend(initial_positions={"shoulder_lift": -1.798265})
+    backend.calibration = SO101Calibration(motors={
+        name: MotorCalibration(motor_id, 0, 0, 862, 3232)
+        for name, motor_id in MOTOR_IDS.items()
+    })
+    arm = SOARM101(SOARM101Config(), backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(frequency_hz=5)
+        baseline = backend.read_joint_positions()
+        arm.stream_joint_target(baseline)
+        before = len(backend.command_history)
+        with pytest.raises(SafetyViolationError, match="outside"):
+            arm.stream_joint_target(dict(baseline, shoulder_lift=-1.80))
+        assert len(backend.command_history) == before
+        arm.stream_joint_target(dict(baseline, shoulder_lift=-1.79))
+    finally:
+        arm.disconnect()
+
+
+def test_stream_cannot_extend_past_calibration_from_invalid_start():
+    from soarm101_motion.calibration import MotorCalibration, SO101Calibration
+    from soarm101_motion.constants import MOTOR_IDS
+    backend = SimulationBackend(initial_positions={"shoulder_lift": -2.0})
+    backend.calibration = SO101Calibration(motors={
+        name: MotorCalibration(motor_id, 0, 0, 862, 3232)
+        for name, motor_id in MOTOR_IDS.items()
+    })
+    arm = SOARM101(SOARM101Config(), backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        with pytest.raises(SafetyViolationError, match="outside"):
+            arm.start_joint_stream()
+        assert not backend.command_history
     finally:
         arm.disconnect()

@@ -209,7 +209,11 @@ class SOARM101:
                 name: current[name] + value if relative else value
                 for name, value in zip(ARM_JOINTS, values, strict=True)
             }
-        validate_joint_targets(target)
+        limits = self.get_joint_limits()
+        for name in ARM_JOINTS:
+            lower, upper = limits[name]
+            limits[name] = (min(lower, current[name]), max(upper, current[name]))
+        validate_joint_targets(target, limits=limits)
         return current, target
 
     def _validate_joint_workspace_path(
@@ -362,6 +366,8 @@ class SOARM101:
         acceleration: float | None = None,
         relative: bool = False,
         wait: bool = True,
+        servo_speed_raw: int | None = None,
+        servo_acceleration_raw: int | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         self._validate_joint_workspace_path(positions, relative=relative)
         return self.motion.move_joints(
@@ -370,6 +376,8 @@ class SOARM101:
             acceleration=acceleration,
             relative=relative,
             wait=wait,
+            servo_speed_raw=servo_speed_raw,
+            servo_acceleration_raw=servo_acceleration_raw,
         )
 
     def move_home(

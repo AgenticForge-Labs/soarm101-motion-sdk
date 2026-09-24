@@ -33,7 +33,7 @@ class SO101Gripper(RobotTool):
     name: str = STOCK_GRIPPER
     open_position: float = 1.0
     closed_position: float = 0.0
-    default_timeout_s: float = 3.0
+    default_timeout_s: float = 10.0
     _state_lock: threading.RLock = field(
         default_factory=threading.RLock, init=False, repr=False
     )
@@ -87,6 +87,8 @@ class SO101Gripper(RobotTool):
                 acceleration_raw=acceleration_raw,
             )
             deadline = time.monotonic() + timeout
+            last_progress = time.monotonic()
+            best_error = float("inf")
             while time.monotonic() < deadline:
                 if cancel_event.is_set():
                     raise MotionCancelledError("gripper motion cancelled")
@@ -94,8 +96,17 @@ class SO101Gripper(RobotTool):
                 if state.faulted:
                     raise HardwareFaultError(state.fault_message or "robot faulted during gripper move")
                 actual = backend.read_tool_position(STOCK_GRIPPER)
-                if abs(actual - target) <= tolerance:
+                error = abs(actual - target)
+                if error <= tolerance:
                     return MotionResult(True, True, final_positions={STOCK_GRIPPER: actual})
+                if error < best_error - 0.005:
+                    best_error = error
+                    last_progress = time.monotonic()
+                elif getattr(backend, "realtime", True) and time.monotonic() - last_progress > 1.5:
+                    raise MotionTimeoutError(
+                        f"gripper stopped making progress toward {target:.3f}; "
+                        f"actual position is {actual:.3f}"
+                    )
                 if not getattr(backend, "realtime", True):
                     break
                 time.sleep(0.02)

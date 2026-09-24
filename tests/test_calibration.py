@@ -15,6 +15,22 @@ def sample_calibration() -> SO101Calibration:
     )
 
 
+def test_failed_calibration_replace_keeps_previous_file(tmp_path, monkeypatch) -> None:
+    import soarm101_motion.calibration as storage
+
+    path = tmp_path / "so101.json"
+    path.write_text("old calibration\n", encoding="utf-8")
+
+    def fail_replace(_source, _target):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(storage.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        sample_calibration().save(path)
+    assert path.read_text(encoding="utf-8") == "old calibration\n"
+    assert sorted(tmp_path.iterdir()) == [path]
+
+
 def test_joint_calibration_round_trip() -> None:
     calibration = MotorCalibration(1, 0, 0, 100, 3995)
     for radians in (-1.0, 0.0, 1.0):

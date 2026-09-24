@@ -1,6 +1,6 @@
 # Direct control API
 
-The SDK is designed for direct programmatic control of SO-ARM101 without ROS or LeRobot. `SOArmAPI` provides an xArm-inspired convenience layer while still using the native SO-ARM101 motion planner, IK, calibration, workspace checks, following-error monitoring, motor-effort interlocks, and cancellation behavior.
+The SDK is designed for direct programmatic control of SO-ARM101 without ROS or LeRobot. `SOArmAPI` provides an xArm-inspired convenience layer while still using the native SO-ARM101 motion planner, IK, calibration, workspace checks, following-error monitoring, motor-effort interlocks, and cancellation behavior. Live joint streaming keeps calibrated joint, step, rate, acceleration, following-error, fault, and effort checks active; coarse workspace checks are opt-in until the table frame and tool geometry are calibrated.
 
 ```python
 from soarm101_motion import SOArmAPI

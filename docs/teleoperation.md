@@ -1,9 +1,11 @@
 # Leader → follower teleoperation
 
 Live teleoperation is implemented through the same guarded motion stack used by the rest
-of the SDK, but it is deliberately rate-limited during initial hardware validation.
+of the SDK. Its host-side target limiter remains active while streamed Feetech position
+commands use the same unrestricted servo speed and maximum acceleration settings as
+LeRobot.
 
-## Current conservative design
+## Streaming design
 
 The normal planned-trajectory command clock remains **50 Hz**. Live teleoperation has a
 separate explicit stream rate because the current Feetech safety path performs synchronous
@@ -11,23 +13,78 @@ serial feedback work for every accepted follower sample.
 
 The GUI offers:
 
-- **5 Hz — first hardware tests**
-- **10 Hz — conservative default**
-- **20 Hz — experimental**
+- **5 Hz — slow check**
+- **10 Hz**
+- **20 Hz — default**
 - **50 Hz — experimental**
 
-The SDK default is 10 Hz. Rates above 10 Hz require an explicit GUI confirmation on
-hardware and are not considered physically validated.
+After both arms are connected, **Align follower and start** reads a fresh leader
+pose, latches the follower's current positions before enabling torque, and moves
+the follower's five pose joints to those leader angles with a guarded planned
+move. With gripper mirroring selected, it then opens the follower gripper to
+the leader's measured normalized opening if needed. Any closing difference is
+handled by the live contact guard after joint alignment. Keep the leader still
+during alignment. The button can cancel alignment, and STOP/HOLD also stops it.
+Joint alignment uses a 25°/s planned speed and the responsive servo profile
+used for live following; completion checks the five measured pose joints.
+Absolute calibrated mapping is the GUI default; relative mapping remains available.
+The gripper always uses the leader's normalized opening, even when pose joints
+use relative mapping.
+If a leader joint exceeds the conservative model motion limit but remains inside
+the follower's recorded calibration range, alignment stages 0.5° inside the
+model limit and switches to relative mapping. The GUI and session log name the
+resulting offset. A leader joint outside the follower's calibrated travel is
+rejected before torque enable or motion.
+The Setup **Enable hold** control remains useful for Manual motion. Manual joint
+targets follow the measured follower until **Edit joint targets** is selected.
+
+The SDK default is 20 Hz. Rates above 20 Hz require an explicit GUI confirmation on
+hardware and are not considered physically validated. The 20 Hz default has not yet
+been physically validated on this arm.
 
 Each streamed follower sample still performs the normal safety work:
 
 - calibrated/model joint-limit validation;
 - maximum command-step validation;
 - rate-aware joint speed and acceleration validation;
-- workspace path validation;
+- optional workspace path validation (disabled by default for live streaming until the
+  robot-specific table frame and tool geometry are calibrated);
 - hardware connected/torque/fault checks;
 - measured following-error and opposite-direction checks; and
 - managed-backend motor effort/current checks.
+
+The GUI smooths leader samples to fit the configured joint step, speed, and
+acceleration limits before sending them to the guarded stream. Servo speed is no longer
+additionally capped at the generic 250 ticks/s hardware setting, which had limited
+follower motion below the host-side rate. The Teleoperation
+tab reports how many samples were smoothed. Abrupt leader motion can therefore
+make the follower lag briefly; the controller still rejects any command that
+violates its limits.
+GUI live teleoperation allows up to 1.2 rad/s joint speed and 6.0 rad/s²
+acceleration; planned moves retain their configured limits. Gripper targets
+ramp at 1.2 normalized units per second and stop 2.5% short of the
+calibrated hard-close endpoint. When the follower stops moving while closing
+toward the leader target, teleoperation eases open 0.5% and holds that opening
+while the arm stream continues. Opening the leader gripper from the position where
+contact was detected releases the latch. During the latch, the managed software effort threshold exempts
+only gripper current/load; arm-joint effort checks remain active, and servo-reported
+hardware faults still stop the stream.
+When the measured starting pose sits just beyond a model limit, mapped targets are
+clipped at that stream boundary so an outward leader twitch holds position instead of
+raising a joint-limit error. Motion back into the legal range remains available.
+
+The GUI records detailed JSONL diagnostics by default. Setup shows the session
+file path and has a checkbox to turn per-sample records off. Each `teleop_frame`
+contains the leader, desired, commanded, and measured five-joint positions;
+per-joint following error; leader sample interval and age; and follower processing
+time. This distinguishes irregular leader reads, host command pacing, and motor
+tracking lag before changing rates or servo settings. File writes run on a
+separate logging thread so serial command timing is not held up by disk flushes.
+Every servo read also returns a packet error/status byte. A gripper position read can
+therefore report an input-voltage fault even when no voltage register was requested.
+The GUI now logs a leader gripper voltage sample about once per second during live
+readout and captures a read-only voltage, configured limits, and status snapshot
+immediately after a voltage fault. That snapshot may miss a brief voltage dip.
 
 The selected stream frequency is used in the velocity/acceleration math. Lowering the
 stream timer without changing this clock would be incorrect because the same angular
@@ -37,7 +94,7 @@ delta represents a lower physical velocity at 5 or 10 Hz than at 50 Hz.
 
 Serial latency must not silently turn live teleoperation into delayed playback.
 
-The GUI worker therefore measures each leader sample's age before execution. A sample is
+The GUI worker measures each leader sample's age before execution. A sample is
 rejected and the follower is held if it is older than the larger of 150 ms or three
 selected stream periods.
 
@@ -46,7 +103,7 @@ period for three consecutive samples, teleoperation is terminated and the follow
 held. The Teach status line reports approximately:
 
 ```text
-Live teleop 10 Hz — 25 samples; follower cycle 42 ms; queued age 3 ms.
+Live teleop 20 Hz — 25 samples; follower cycle 28 ms; queued age 3 ms.
 ```
 
 These are guardrails, not proof that a rate is suitable for a particular USB adapter,
@@ -68,7 +125,7 @@ Validate:
 4. queued sample age remains low and does not trend upward;
 5. STOP/HOLD terminates the stream immediately enough for the bench test;
 6. disconnecting/stopping leader readout terminates follower teleoperation;
-7. joint-limit, command-step, speed/acceleration, workspace, following-error, and effort
+7. joint-limit, command-step, speed/acceleration, following-error, and effort
    trips fail closed.
 
 ### 2. 10 Hz
