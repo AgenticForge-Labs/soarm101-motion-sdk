@@ -41,13 +41,13 @@ rather than importing an old external calibration.
 
 In the GUI:
 
-1. Connect with **Follower setup: allow uncalibrated connection** only if needed.
-2. Keep torque OFF.
-3. Setup → Mechanical-stop calibration → **Follower**.
-4. Sweep all five joints and the gripper repeatedly between their real printed stops.
+1. Open **Setup → Calibrate arm — mechanical stops** and click **Find Arms**.
+2. Select **Follower**, confirm the discovered port/robot ID, and click **Connect for calibration (torque off)**. Do not press Enable.
+3. Click **Start calibration sweep**.
+4. Move all five pose joints and the gripper from one printed stop to the other and back until every gauge reaches **2/2** and **DONE**.
 5. Do not force or hold an actuator against a stop.
-6. Every pose-joint circle must reach PASS; current provisional minimum is 2048 ticks.
-7. Let calibration finish and save.
+6. Each pose joint must span at least 2048 ticks; the gripper must span at least 900 ticks. The displayed gauge scale may use that arm's prior calibration and is not the pass threshold.
+7. Recording stops automatically when all six reach 2/2, otherwise the selected time limit applies. Wait for **CALIBRATION SAVED** before disconnecting.
 
 Record:
 
@@ -69,8 +69,7 @@ Verify both exist:
 ~/.config/soarm101/calibration/history/<robot_id>/<fingerprint>.json
 ```
 
-Disconnect the setup session and reconnect normally. Do not leave
-**allow uncalibrated** enabled for powered testing.
+Disconnect the calibration session and reconnect the follower normally before powered testing.
 
 The backend independently refuses torque enable if a selected motor still has the
 factory 0..4095 calibration range.
@@ -187,7 +186,8 @@ measured FK/TCP
 → sequences/primitives
 → relative teleop at 5 Hz
 → 10 Hz
-→ experimental 20/50 Hz only after timing evidence
+→ validate the 20 Hz software default with timing evidence
+→ experimental 50 Hz only after timing evidence
 ```
 
 Calibration changes after any of those recordings invalidate their target binding.
