@@ -14,3 +14,6 @@ Rules:
 - No LeRobot import exists in the runtime package.
 - Hardware and simulation implement the same backend contract.
 - Cartesian paths are validated before execution.
+- GUI and CLI features call the same SDK operations and saved libraries; the GUI owns persistent hardware sessions rather than launching CLI subprocesses.
+- Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
+- Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
