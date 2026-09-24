@@ -9,3 +9,6 @@
 7. Add simulator tests and fake-transport tests before physical hardware tests.
 8. Preserve calibration and third-party attribution compatibility.
 9. Do not claim physical validation until a real-arm smoke test passes.
+10. Treat calibration IDs as motion provenance; physical replay must fail closed on missing or mismatched provenance.
+11. Keep GUI and CLI features on shared SDK operations and saved libraries; the GUI must not shell out to CLI subprocesses for robot behavior.
+12. When user-visible behavior, UI names, defaults, calibration rules, or safety gates change, update `README.md`, `CHANGELOG.md`, `TESTING.md`, and the relevant `docs/` files in the same change.
