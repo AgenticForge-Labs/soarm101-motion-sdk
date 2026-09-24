@@ -37,7 +37,7 @@ after any failed gate rather than continuing into later capabilities.
    `pip install -e ".[gui]"`
 2. Run:
    `soarm101-gui --simulation`
-3. Confirm the window opens with Setup, Control, and Teach areas.
+3. Confirm the window opens with Setup, Manual, Teleoperation, Record / Teach, Edit recordings, Run, and Log tabs.
 4. Connect the follower simulation.
 5. Enable it, jog joints/Cartesian axes, move the gripper, and confirm STOP/HOLD and
    Relax still work.
@@ -168,13 +168,11 @@ force.
 ### 5. Leader readout — DO LATER
 
 1. Connect the already-calibrated follower and leader on separate USB serial adapters.
-2. In Teach, select the leader port and its distinct leader robot ID.
-3. Connect the leader with torque OFF. If it still needs calibration, return to Setup;
-   calibration is no longer a Teach workflow.
+2. In Setup, select the leader port and its distinct leader robot ID.
+3. Connect the leader with torque OFF. If it still needs calibration, use the shared Setup calibration workflow before returning to teaching.
 4. Move each leader joint by hand and confirm the displayed angles and gripper position
    update independently of the follower.
-5. Switch Teaching source between Follower and Leader and confirm the current-source
-   readout follows the selected arm.
+5. In Record / Teach, switch the teaching source between Follower and Leader and confirm the current-source readout follows the selected arm.
 6. Do not enable live teleoperation yet. That is a later implementation/testing stage.
 
 ## Implemented after Batch 1
@@ -204,7 +202,7 @@ These checks can wait until the Batch 1 hardware checks pass.
 
 1. Run `soarm101-gui --simulation`.
 2. Connect and enable the follower simulation.
-3. In Teach, leave Follower selected as the teaching source.
+3. In Record / Teach, leave Follower selected as the teaching source.
 4. Move the simulated follower to a non-home joint pose.
 5. Save it as a named taught point such as `test_point_1`.
 6. Move away from the point.
@@ -220,7 +218,7 @@ These checks can wait until the Batch 1 hardware checks pass.
 3. Enter a unique raw trajectory name such as `sim_wave_raw_01`.
 4. Leave effort/current recording off for the first test.
 5. Start recording, allow it to run for several seconds, then stop.
-6. Confirm the Trajectories tab opens with a six-lane timeline (five joints + gripper).
+6. Confirm the Edit recordings tab opens with a six-lane timeline (five joints + gripper).
 7. Confirm the raw file appears under the library as `raw`.
 8. Try to reuse the same raw name and confirm the GUI refuses to overwrite it.
 9. Enable the follower simulation and replay the raw trajectory.
@@ -300,7 +298,7 @@ Only continue after Batch 1 first-motion validation passes.
 
 ### 13. Software-only advanced trajectory editing and primitives
 
-1. Load a known trajectory in Trajectories.
+1. Load a known trajectory in Edit recordings.
 2. Apply a 5-sample smoothing window. Confirm the displayed shape changes while the
    first and last poses remain unchanged.
 3. Select an interior region and use Delete. Save As a new edited trajectory.
@@ -323,15 +321,14 @@ The automated tests exercise moving streaming targets directly. The GUI simulati
 mainly a lifecycle/UI check because the simulated leader has no physical hand input.
 
 1. Connect follower simulation and leader simulation.
-2. Enable only the follower simulation.
-3. In Teach choose **Relative / clutch-safe** and leave Mirror gripper enabled.
-4. Select 10 Hz and start live teleoperation. Confirm the UI reports the selected guarded
-   stream rate and ordinary follower jog/sequence controls are disabled while teleop is active.
+2. Leave the follower connected with torque off; starting teleoperation should latch its measured pose, enable hold, and run the alignment step.
+3. In Teleoperation choose **Relative / clutch-safe** and leave Mirror gripper enabled.
+4. Confirm **20 Hz — default** is selected, then click **Align follower and start**. Confirm the status reports alignment before live following and ordinary follower jog/sequence controls are disabled while teleop is active.
 5. Stop live teleoperation and confirm the follower returns to holding state.
 6. Start it again and press the global **STOP / HOLD**. Confirm teleop ends.
 7. Disconnect the leader while teleop is active. Confirm follower teleop terminates and
    holds rather than continuing with stale targets.
-8. Repeat the lifecycle with Absolute mode only as a software check; on hardware,
+8. Repeat the lifecycle with **Absolute calibrated angles** as a software check; on hardware,
    Absolute mode is deferred until calibration/alignment validation below.
 
 ### 15. Physical sequence execution — DO LATER
@@ -356,12 +353,12 @@ This is a new continuous-control path and has not yet been physically validated.
 1. Complete calibration, joint-direction, FK, low-speed joint, and STOP checks first.
 2. Secure both bases, clear the follower workspace, remove payloads, and keep physical
    follower power immediately accessible.
-3. Connect both arms. Keep the leader torque OFF; enable the follower.
-4. Put both arms in comfortable poses. They do not need identical poses for Relative mode.
+3. Connect both arms. Keep the leader torque OFF and leave the follower torque OFF before starting teleoperation.
+4. Put both arms in comfortable poses with the leader inside the follower's calibrated travel. Keep the leader still during startup and keep the follower in a clear nearby pose so the guarded alignment move is small.
 5. Select **Relative / clutch-safe**, initially disable gripper mirroring, select
-   **5 Hz — first hardware tests**, and start teleop.
+   **5 Hz — slow check**, and click **Align follower and start**. Confirm torque enable does not cause a jump and the guarded alignment completes (or reports a staged offset near a model limit) before live following begins.
 6. Move only one leader joint a few degrees, slowly. Confirm the follower moves the same
-   signed delta and does not jump when teleop starts.
+   signed delta after alignment.
 7. Watch the live follower-cycle and queued-age values. At 5 Hz the period is 200 ms;
    processing should remain comfortably below that and queued age should stay low rather
    than increasing over time.
@@ -372,10 +369,7 @@ This is a new continuous-control path and has not yet been physically validated.
     stop receiving stream targets and hold.
 11. Re-enable gripper mirroring and test a small leader gripper delta.
 12. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
-13. Treat 20 Hz (50 ms period) and 50 Hz (20 ms period) as separate experimental
-    validation stages. Do not increase merely because motion looks smooth; record cycle
-    time, queued sample age, overruns, communication errors, STOP response, following
-    errors, and effort trips as described in `docs/teleoperation.md`.
+13. Validate 20 Hz (50 ms period) next even though it is the current software default, then treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely because motion looks smooth; record cycle time, queued sample age, overruns, communication errors, STOP response, following errors, and effort trips as described in `docs/teleoperation.md`.
 14. If follower processing exceeds the selected period repeatedly or queued sample age
     grows, the software should terminate teleop and hold. Reduce the rate before retrying.
 15. Deliberately move the leader faster only enough to verify configured step/speed/
@@ -386,8 +380,8 @@ This is a new continuous-control path and has not yet been physically validated.
 ### 17. Physical absolute teleoperation — DO LATER, AFTER RELATIVE PASSES
 
 1. Verify leader and follower use compatible calibrated joint signs and zero conventions.
-2. Manually place the follower very near the leader's measured joint pose before starting.
-3. Start Absolute mode at low speed. If the initial difference exceeds command-step or
+2. Place the follower in a clear pose reasonably near the leader to keep automatic alignment travel small, and keep the leader still during startup.
+3. Select **Absolute calibrated angles** at 5 Hz and click **Align follower and start**. The start sequence should latch the follower before torque enable and perform a guarded alignment; if the leader pose is outside the follower's calibrated travel it must refuse before live following. If the initial difference exceeds command-step or
    other stream limits, rejection is expected and preferable to a jump.
 4. Test only a few degrees on one joint at a time before coordinated motion.
 5. Repeat the STOP and leader-readout-loss tests from Relative mode.
