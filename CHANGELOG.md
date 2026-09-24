@@ -33,19 +33,24 @@
   encoder tick 2047. Asymmetric imported LeRobot calibrations therefore preserve
   their recorded midpoint as 0 rad, while native symmetric mechanical-stop
   calibrations remain effectively unchanged.
-- Made leader→follower streaming rate explicit and conservative: 10 Hz default, with
-  5/10/20/50 Hz GUI choices and a warning before unvalidated >10 Hz hardware use.
+- Made leader→follower streaming rate explicit: the software now defaults to 20 Hz with
+  5/10/20/50 Hz GUI choices. First hardware validation still proceeds 5→10→20 Hz, and
+  50 Hz remains experimental with an explicit confirmation.
 - Stream speed/acceleration checks now use the selected teleop rate rather than the
   separate 50 Hz planned-trajectory clock.
 - Added stale-sample and repeated-cycle-overrun guards so serial backlog terminates
   teleoperation and holds the follower instead of executing increasingly delayed commands.
 - Added live teleop cycle-time/sample-age reporting and a documented 5→10→20→50 Hz
   hardware validation/optimization ladder.
-- Strengthened live mechanical-stop calibration with per-motor sweep thresholds:
-  all five pose joints now require at least 2048 encoder ticks (180°) of observed
-  stop-to-stop travel; the shorter gripper keeps a separate provisional threshold.
-- Added six live pie-style calibration gauges showing observed span, provisional target,
-  percent coverage, and PASS state while encoder extrema are recorded.
+- Strengthened live mechanical-stop calibration: all five pose joints require at least
+  2048 encoder ticks (180°), the gripper requires 900 ticks, and every actuator must
+  complete two full end-to-end traversals before a calibration can be saved.
+- Updated the six live calibration gauges to show two-traversal progress, use realistic
+  display spans (including the larger wrist-roll travel), and reuse the selected arm's
+  prior gripper range for display scaling without changing pass/fail thresholds.
+- Calibration now defaults to a 90-second time limit, ends early when all six actuators
+  reach 2/2, and aborts on servo input-voltage faults while preserving the previous
+  calibration on cancel or failure.
 - Hardened Feetech torque enable: every selected motor's measured Present_Position is
   checked against its active EEPROM Min/Max Position Limits before any Goal_Position,
   EEPROM lock, or Torque_Enable write. Out-of-range or invalid limits now fail closed
@@ -53,8 +58,9 @@
 - Added a persistent sequence editor/runner with point, Home/Rest, gripper, wait,
   trajectory, and semantic primitive steps; supports Run Step, repeat, speed scaling,
   step-boundary pause/resume, cancellation, and STOP/HOLD.
-- Added guarded 50 Hz joint streaming and leader-to-follower teleoperation with
-  relative/clutch-safe and absolute calibrated mappings plus optional gripper mirroring.
+- Added guarded leader-to-follower joint streaming with 5/10/20/50 Hz selection,
+  relative/clutch-safe and absolute calibrated mappings, guarded startup alignment,
+  host-side target smoothing, and optional contact-aware gripper mirroring.
 - Added advanced non-destructive trajectory editing for smoothing, delete/splice, holds,
   keyframes, markers, repeated clips, and semantic motion primitives.
 - Added named taught points captured from follower or leader, with joint or Cartesian replay.
@@ -62,7 +68,7 @@
   validated exact replay, and non-destructive raw/edited trajectory libraries.
 - Added a PySide6 trajectory timeline/editor with scrub, crop selection, speed scaling,
   Save As, and replay of full or selected clips.
-- Added Setup/Control/Teach GUI workspaces, persistent Home/Rest poses, calibrated joint-slider ranges, and independent leader-arm readout.
+- Evolved the GUI into Setup, Manual, Teleoperation, Record / Teach, Edit recordings, Run, and Log workspaces, with persistent Home/Rest poses, calibrated joint-slider ranges, independent leader-arm readout, and persistent session logging.
 - Unified GUI and CLI calibration on the mechanical-extrema midpoint method with encoder seam unwrapping.
 - Added TESTING.md as the staged handoff checklist for deferred physical validation.
 
@@ -90,4 +96,6 @@
 - Separated ordinary torque control from EEPROM locking so relax, disconnect, and rollback never leave persistent motor settings unlocked.
 - Added an optional PySide6 controller with joint sliders, world/tool Cartesian linear jogs, absolute world poses, responsive stop, simulation, and gripper controls.
 - Added matching `soarm101 jog` and `soarm101 gripper` CLI actions using shared frame-transform semantics.
+- Expanded CLI/GUI parity with arm discovery, absolute Cartesian moves, named pose capture/replay, trajectory replay, sequence execution, and effort-status inspection through shared SDK operations.
+- Added read-only TCP/table repeated-point calibration support in `examples/tcp_table_calibration.py` for separating base/table offsets from pose-dependent TCP or kinematic error.
 - Reused the workspace-validated Cartesian plan for execution so GUI and CLI linear moves run IK and time-parameterization only once.
