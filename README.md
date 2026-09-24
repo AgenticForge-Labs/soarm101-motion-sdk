@@ -1,22 +1,50 @@
 # SO-ARM101 Motion SDK
 
-**A practical way to learn, move, teach, and replay motions with the SO-ARM101.**
+**A Python-first way to learn, teach, program, and automate the SO-ARM101.**
 
-This project gives the SO-ARM101 a clear desktop interface and a matching Python/CLI foundation. It focuses on the fundamentals of working with a robot arm: connecting and checking the hardware, calibrating its real range of motion, moving it safely, teaching positions, recording trajectories, and arranging those motions into sequences.
+Low-cost arms make robotics hardware much more accessible, but there is still a gap between assembling an arm and programming it to do useful work. The SO-ARM101 Motion SDK is intended to fill that gap with a lighter, fundamentals-first environment built around a shared Python motion system, desktop GUI, and CLI.
 
-It is intended for builders, educators, and developers who want to understand and control the arm. It is not centered on collecting AI training datasets. Recording is here to help you teach and replay useful movements.
+The project follows a simple progression:
+
+**connect → calibrate → move → teach → record → edit → sequence → automate**
+
+You can begin visually, learn how the robot actually moves, teach useful positions and trajectories, and then reuse those same capabilities from Python, scripts, services, or higher-level agents. Recording is useful for deterministic automation as well as future robot-learning workflows; this is not a dataset-collection-first project.
 
 ![SO-ARM101 Motion SDK Setup tab, showing arm connections and live mechanical-stop calibration](docs/Screenshot%20From%202026-09-24%2017-34-28.png)
 
 ## What makes it different
 
-- **Calibration you can see and understand.** The guided mechanical-stop calibration visualizes each joint and the gripper as you move them through two complete sweeps. The inner ring tracks the outward sweep, the outer ring tracks the return, and each joint shows its measured range and completion state. Recording finishes automatically when all six actuators complete both traversals; you can cancel, and the previous calibration is kept if a sweep fails.
-- **Automatic help identifying the arms.** Discovery checks candidate serial ports, verifies the SO-101 servo bus, and reads motor voltage. The GUI uses the measured voltage as a clue to identify the low-voltage leader and powered follower, then lets you confirm or change the port before connecting.
-- **A workflow built around learning motion.** Use Manual to try joint and tool movements, Teleoperation to mirror the leader, Record / Teach to capture positions and trajectories, Edit recordings to shape a motion, and Run to combine taught actions into repeatable sequences.
-- **Safety checks stay visible.** The SDK checks calibration and joint limits, motion speed and acceleration, servo faults, and following error. Voltage and motor status are available for troubleshooting. Software stop is a hold command; keep the physical power switch accessible.
-- **CLI and Python access.** Script supported controls and reuse the same motion and saved-pose libraries without making the desktop app a requirement.
+- **Learn robotics without hiding the robotics.** The GUI separates Setup, Manual motion, Teleoperation, Record / Teach, editing, and Run workflows so concepts such as calibration, joint coordinates, tool position, trajectories, and sequencing stay visible rather than being buried behind a single automation button.
+- **Teach once, replay many times.** Named poses, Home/Rest positions, trajectories, gripper actions, waits, and reusable motion primitives can be combined into deterministic sequences. This follows the same basic idea as traditional teach-pendant robot programming: demonstrate or define useful motion once, then execute it consistently.
+- **Go beyond servo angles.** The SDK includes forward and inverse kinematics plus Cartesian motion planning, providing a natural path from understanding individual joints to working in terms of tool position and linear movement in space.
+- **Calibration you can see and understand.** Guided mechanical-stop calibration visualizes two complete traversals for every joint and the gripper. Discovery verifies the SO-101 servo bus and uses measured voltage as a clue for distinguishing a typical low-voltage leader from the powered follower, while still requiring the user to confirm the hardware.
+- **Safety and provenance live below the application layer.** Motion requests remain subject to calibration, joint, rate, acceleration, following-error, fault, effort, and other guards. Calibrations are versioned, and saved physical motion artifacts can be bound to the calibration under which they were created so stale motion can fail closed after a hardware or calibration change.
+- **GUI, CLI, and Python share the same foundation.** The desktop application is not a separate toy controller. The interfaces reuse the same SDK operations and saved libraries, making it possible to start visually and transition naturally to scripting and automation.
+- **Useful before AI, ready for AI.** Many automation tasks are deterministic: move to a known position, operate a tool, wait, move somewhere else, and repeat. The SDK makes those reliable capabilities useful on their own while also providing a constrained layer that higher-level AI systems can call.
+- **A small platform for serious robotics concepts.** Calibration, coordinate systems, FK/IK, Cartesian motion, trajectory generation, teleoperation, motion recording, and sequence programming can all be explored on an inexpensive desktop arm. That makes the project useful for education, research prototyping, laboratories, small-business automation, and agentic robotics experiments.
 
-LeRobot helped inspire this project’s approach to SO-ARM101 hardware and operation. Thank you to the LeRobot contributors and community. The approachable developer experience of the UFactory xArm SDK also helped shape the goal of making arm control easier to discover and use. This SDK is an independent implementation: LeRobot is optional and is not imported by the runtime. The goal here is a smaller, fundamentals-first motion tool rather than a LeRobot training-data workflow.
+The goal is not to replace ROS or MoveIt. Those ecosystems are valuable when a project needs broader middleware, distributed systems, sophisticated planning, or large sensor/robot integrations. This project is a lower-overhead path for people who want to begin with Python and the motion fundamentals, while leaving room to integrate into larger systems later.
+
+LeRobot helped inspire this project’s approach to SO-ARM101 hardware and operation. Thank you to the LeRobot contributors and community. The approachable developer experience of the UFactory xArm SDK also helped shape the goal of making arm control easier to discover and use. This SDK is an independent implementation: LeRobot is optional and is not imported by the runtime.
+
+## Programming model
+
+The important separation is between **reasoning about what should happen** and the deterministic robot layer responsible for deciding whether and how motion can happen.
+
+```text
+person             -> GUI               -> SDK -> hardware
+script             -> Python SDK        -> hardware
+automation service -> SDK               -> hardware
+agent              -> constrained tools -> SDK -> hardware
+```
+
+For agentic robotics, the intended architecture is:
+
+```text
+AI reasoning -> constrained robot capabilities -> motion SDK -> hardware
+```
+
+An agent can choose a validated capability such as moving to a taught point or executing a known sequence, but it should not need unrestricted raw motor access. The SDK remains responsible for motion validation, calibration context, and hardware safety checks.
 
 ## Get started
 
@@ -138,7 +166,7 @@ This is experimental software for a low-cost educational and hobby arm, not a ce
 
 Simulation and fake-transport tests cover the motion and hardware interfaces. Physical behavior depends on the specific arm, assembly, calibration, power supply, and payload; test cautiously before relying on a movement or saved trajectory.
 
-The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, simulation, and an optional PySide6 GUI. ROS, camera capture, tracking, and show orchestration are outside this project. See [Architecture](docs/architecture.md) for the boundaries.
+The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, deterministic sequence programming, simulation, and an optional PySide6 GUI. ROS, camera capture, tracking, and show orchestration are outside this project. The SDK is intended to remain the constrained motion layer beneath those higher-level systems. See [Architecture](docs/architecture.md) for the boundaries.
 
 ### Where we want to go
 
