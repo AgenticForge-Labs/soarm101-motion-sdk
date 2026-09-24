@@ -100,7 +100,7 @@ selected stream periods.
 
 Follower processing time is also measured. If processing takes longer than the selected
 period for three consecutive samples, teleoperation is terminated and the follower is
-held. The Teach status line reports approximately:
+held. The Teleoperation status line reports approximately:
 
 ```text
 Live teleop 20 Hz — 25 samples; follower cycle 28 ms; queued age 3 ms.
