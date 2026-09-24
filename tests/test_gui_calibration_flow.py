@@ -156,7 +156,7 @@ def test_worker_reports_preparation_then_recording() -> None:
             assert record_seconds == 30.0
             assert not cancel_event.is_set()
             progress_callback({})
-            return SimpleNamespace(source="fake-sweep")
+            return SimpleNamespace(source="fake-sweep", calibration_id="test-calibration-id")
 
         def save_calibration(self, _calibration):
             return Path("/tmp/follower.json")
