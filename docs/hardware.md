@@ -24,7 +24,7 @@ The port is auto-selected when exactly one serial adapter is connected. The wiza
 1. Connects without enabling torque or rewriting configuration.
 2. Verifies all six IDs, models, diagnostics, and status values.
 3. Applies the recommended position/PID and gripper-protection settings.
-4. Keeps a usable EEPROM calibration or guides a new center-and-sweep calibration.
+4. Keeps a usable EEPROM calibration or guides a new mechanical-stop calibration requiring two complete end-to-end traversals of every joint and the gripper.
 5. Saves the current alias at `~/.config/soarm101/calibration/forge-arm.json` and an
    immutable SHA-256 fingerprinted copy under
    `~/.config/soarm101/calibration/history/forge-arm/`.
