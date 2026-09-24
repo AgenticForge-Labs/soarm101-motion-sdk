@@ -147,7 +147,9 @@ def test_worker_reports_preparation_then_recording() -> None:
     from soarm101_motion.gui.worker import RobotWorker
 
     class FakeBackend:
-        calibration = SimpleNamespace(source="old-calibration")
+        calibration = SimpleNamespace(
+            source="old-calibration", calibration_id="sha256:test-calibration", motors={}
+        )
 
         def read_calibration_from_motors(self):
             return self.calibration
@@ -156,7 +158,9 @@ def test_worker_reports_preparation_then_recording() -> None:
             assert record_seconds == 30.0
             assert not cancel_event.is_set()
             progress_callback({})
-            return SimpleNamespace(source="fake-sweep", calibration_id="test-calibration-id")
+            return SimpleNamespace(
+                source="fake-sweep", calibration_id="sha256:fake-sweep", motors={}
+            )
 
         def save_calibration(self, _calibration):
             return Path("/tmp/follower.json")
@@ -182,6 +186,7 @@ def test_worker_reports_preparation_then_recording() -> None:
     assert not errors
     assert [phase["phase"] for phase in phases] == ["preparing", "recording"]
     assert completed[0]["path"] == "/tmp/follower.json"
+    assert completed[0]["calibration_id"] == "sha256:fake-sweep"
 
 
 def test_failed_save_restores_previous_motor_calibration() -> None:
