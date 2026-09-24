@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-import threading
 from math import degrees, isfinite, radians
 from typing import Any
 
