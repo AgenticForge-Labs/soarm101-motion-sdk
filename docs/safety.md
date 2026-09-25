@@ -10,6 +10,23 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
 - Confirm motor voltage, calibration, direction, TCP, and limits on the exact assembly.
 - Inspect voltage, temperature, current, and status using `soarm101 diagnose`.
 
+## Leader parking and handoff
+
+The leader normally connects with torque off so it can be moved by hand. **Park leader**
+is a powered operation: the SDK first latches the measured position as the servo goal and
+then enables torque so the leader holds that pose. **Release leader** turns torque off.
+
+Cross-arm pose matching is also powered motion. The source pose is read fresh when the
+button is pressed, but the destination arm still applies its own calibration, joint,
+workspace, speed, acceleration, fault, effort, and completion guards. Matching one arm to
+the other is not collision-aware with respect to the second physical arm, cameras, tables,
+cables, payloads, or other workspace objects.
+
+Use **Relink here — no motion** when the two arms are intentionally at different poses and
+you want relative teleoperation without moving either into alignment. The follower still
+enables torque by latching its own current measured pose before streaming begins. Starting
+live teleoperation releases a parked leader so it is back-drivable again.
+
 ## Runtime safeguards
 
 - Normal connection and read-only diagnosis do not rewrite motor configuration.
