@@ -2925,21 +2925,32 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _sequence_step_text(step: SequenceStep) -> str:
         params = step.params
+        speed = float(params.get("speed_scale", 1.0))
+        speed_text = f" · {speed:.2f}×" if abs(speed - 1.0) > 1e-9 else ""
         if step.kind == "point":
-            return f"POINT {params.get('name')} [{params.get('mode', 'joint')}]"
+            mode = "linear" if params.get("mode", "joint") == "linear" else "joint"
+            return f"MOVE  {params.get('name')} · {mode}{speed_text}"
         if step.kind in {"home", "rest"}:
-            return step.kind.upper()
+            return f"MOVE  {step.kind.title()}{speed_text}"
         if step.kind == "gripper":
-            return f"GRIPPER {float(params.get('position', 0.0)):.3f}"
+            position = float(params.get("position", 0.0))
+            if position <= 0.001:
+                return "GRIPPER  CLOSE"
+            if position >= 0.999:
+                return "GRIPPER  OPEN"
+            return f"GRIPPER  {position:.3f}"
         if step.kind == "wait":
-            return f"WAIT {float(params.get('seconds', 0.0)):.2f} s"
+            return f"WAIT  {float(params.get('seconds', 0.0)):.2f} s"
         if step.kind == "trajectory":
             return (
-                f"TRAJECTORY {params.get('kind', 'edited')}:{params.get('name')} "
-                f"×{int(params.get('loops', 1))}"
+                f"RECORDED  {params.get('kind', 'edited')}:{params.get('name')} "
+                f"×{int(params.get('loops', 1))}{speed_text}"
             )
         if step.kind == "primitive":
-            return f"PRIMITIVE {params.get('name')} ×{int(params.get('loops', 1))}"
+            return (
+                f"PRIMITIVE  {params.get('name')} ×{int(params.get('loops', 1))}"
+                f"{speed_text}"
+            )
         return step.kind.upper()
 
     def _refresh_sequence_step_list(self) -> None:
@@ -2960,19 +2971,38 @@ class MainWindow(QMainWindow):
         self._refresh_sequence_step_list()
         self.sequence_step_list.setCurrentRow(len(self._sequence_steps) - 1)
 
+    def _current_program_move_speed(self) -> float:
+        return (
+            float(self.program_move_speed_spin.value())
+            if hasattr(self, "program_move_speed_spin")
+            else 1.0
+        )
+
     def _add_point_sequence_step(self) -> None:
         name = self.run_point_combo.currentText().strip()
         if name:
             self._append_sequence_step(
                 SequenceStep(
                     "point",
-                    {"name": name, "mode": self.run_point_mode_combo.currentData()},
+                    {
+                        "name": name,
+                        "mode": self.run_point_mode_combo.currentData(),
+                        "speed_scale": self._current_program_move_speed(),
+                    },
                 )
             )
 
-    def _add_gripper_sequence_step(self) -> None:
+    def _add_named_pose_program_step(self, kind: str) -> None:
+        if kind not in {"home", "rest"}:
+            raise ValueError(f"unknown named program pose {kind!r}")
         self._append_sequence_step(
-            SequenceStep("gripper", {"position": self.sequence_gripper_spin.value()})
+            SequenceStep(kind, {"speed_scale": self._current_program_move_speed()})
+        )
+
+    def _add_gripper_sequence_step(self, position: float | None = None) -> None:
+        target = self.sequence_gripper_spin.value() if position is None else float(position)
+        self._append_sequence_step(
+            SequenceStep("gripper", {"position": target})
         )
 
     def _add_wait_sequence_step(self) -> None:
