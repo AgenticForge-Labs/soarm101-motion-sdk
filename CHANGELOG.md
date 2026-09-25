@@ -6,12 +6,16 @@
   to 2 mm translation steps, accepts up to 32 queued jog clicks while the current jog
   completes, executes them sequentially through the existing guarded motion path, and
   clears the queue on STOP/HOLD, relax, disconnect, or jog failure.
-- Added requested-versus-achieved TCP diagnostics and an interactive 3D kinematic view to
-  the Cartesian tab. The view uses the same native SO-101 FK model as planning and shows
-  the current target separately from measured state.
+- Added requested-versus-achieved TCP diagnostics and a joint-center kinematic view driven
+  by the same native SO-101 FK model as planning. The view now stays visible in the Manual
+  workspace beside the Joints/Cartesian/Gripper controls, starts in an orthographic X/Z
+  side view, can be rotated by dragging, and resets to the side view on double-click.
 - Added full-path 2 mm world-axis regression tests so +X/-X, +Y/-Y, and +Z/-Z must produce
   distinct requested Cartesian displacement in simulation.
 - Added a configurable 0.5 mm Cartesian IK position tolerance for planned linear paths.
+- Torque enable now tolerates only a tiny calibrated-endpoint overshoot: a measured position
+  up to 8 encoder ticks (about 0.7°) outside the active EEPROM limit is clamped inward to
+  the limit and clearly logged before torque is enabled; larger violations still fail closed.
 
 - Added content-addressed calibration provenance: every physical calibration has a
   SHA-256 ID, the current calibration file is retained for compatibility, and immutable

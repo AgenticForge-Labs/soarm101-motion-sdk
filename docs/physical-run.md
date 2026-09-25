@@ -181,7 +181,7 @@ Later stages then proceed in this order:
 
 ```text
 measured FK/TCP
-→ 5 mm Cartesian jogs
+→ default 2 mm Cartesian jogs
 → leader calibration/readout
 → taught point replay
 → trajectory replay

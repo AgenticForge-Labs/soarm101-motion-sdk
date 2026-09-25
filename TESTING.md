@@ -133,7 +133,7 @@ Do not start with Home/Rest or Cartesian moves.
 9. Only after joint-direction, STOP, gripper, Home/Rest, and FK checks pass should you test
    the default 2 mm Cartesian jogs. Start in **World / base** frame with a clear workspace.
 10. Test one axis at a time in this order: X−/X+, Y−/Y+, Z−/Z+. After each click, verify
-    both the orange target marker in the 3D kinematic view and the requested TCP diagnostic
+    both the orange target marker in the Manual joint-center view and the requested TCP diagnostic
     move only along the intended world axis before judging the physical arm motion.
 11. If the model target is correct but the physical arm moves along the wrong axis, stop
     Cartesian testing and treat it as a joint-direction/calibration-to-model mismatch.
