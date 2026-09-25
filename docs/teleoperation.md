@@ -41,6 +41,29 @@ rejected before torque enable or motion.
 The Setup **Enable hold** control remains useful for Manual motion. Manual joint
 targets follow the measured follower until **Edit joint targets** is selected.
 
+## Leader parking and pose handoff
+
+The leader now has an explicit state independent of follower control:
+
+- **FREE** means leader torque is off and the arm is back-drivable for hand teaching.
+- **PARKED** means the SDK latched the leader's freshly measured position and enabled
+  torque so it holds that pose.
+- Starting aligned teleoperation or **Relink here — no motion** releases a parked leader
+  before live readout begins.
+- Disconnect also disables torque through the normal backend disconnect lifecycle.
+
+Manual and Teleoperation both expose the same coordination controls. **Move leader →
+follower pose** captures the follower fresh and performs a guarded joint move on the
+leader. **Move follower → leader pose** does the reverse. Gripper matching is optional.
+These are destination-arm moves: the source arm is not commanded.
+
+**Relink here — no motion** is for intentional divergence. It latches the follower at its
+own current position if needed, uses the current leader and follower configurations as the
+new relative reference, and starts relative teleoperation without first moving either arm
+into the other's pose. **Stop → Manual + park leader** supports a coarse-to-fine workflow:
+use the leader to approach the task, stop following, park the leader, then refine the
+follower with Manual angular/Cartesian controls.
+
 The SDK default is 20 Hz. Rates above 20 Hz require an explicit GUI confirmation on
 hardware and are not considered physically validated. The 20 Hz default has not yet
 been physically validated on this arm.
@@ -72,13 +95,14 @@ while the arm stream continues. Opening the leader gripper from the position whe
 contact was detected releases the latch. During the latch, the managed software effort threshold exempts
 only gripper current/load; arm-joint effort checks remain active, and servo-reported
 hardware faults still stop the stream.
-The Manual and Teleoperation tabs share a gripper motor speed selector: Slow uses
-the original 250 raw ticks/s setting, Normal (the default) uses 500, and Fast
-uses 1250. The selected speed applies to the next manual move or teleoperation
-session. Opening during teleoperation alignment may run slower so it finishes
-near the five joint axes. Closing during alignment still waits for the live
-contact guard. These faster settings have simulator coverage but have not yet
-been verified on a physical arm.
+The GUI shares one gripper motor speed preset across Manual, Teleoperation, Edit
+recordings, and Run: Slow uses the original 250 raw ticks/s setting, Normal (the
+default) uses 500, and Fast uses 1250. The selected speed is propagated to manual
+moves, teleoperation alignment and live mirroring, Home/Rest gripper completion,
+sequence gripper actions, and recorded-trajectory replay. Opening during teleoperation
+alignment may run slower when necessary to coordinate with joint arrival; closing during
+alignment still waits for the live contact guard. These faster settings have simulator
+coverage but have not yet been verified on a physical arm.
 If the follower loses only the status reply to a torque-enable write at
 teleoperation start, the GUI turns torque off and retries up to twice with a
 fresh measured-position latch. Other communication and hardware faults stop
