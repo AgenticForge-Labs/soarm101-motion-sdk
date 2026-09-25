@@ -889,13 +889,20 @@ class MainWindow(QMainWindow):
 
     def _build_teach_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        layout = QHBoxLayout(page)
+        layout.setSpacing(12)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
         note = QLabel(
-            "Save named positions or record movement here. Use Run to arrange saved "
-            "positions and recordings into sequences with pauses and repeats."
+            "Save named positions for deterministic programs, or record continuous "
+            "movement when the path itself matters. Saved positions are usually the "
+            "simplest way to build pick/place and bench automation."
         )
         note.setWordWrap(True)
-        layout.addWidget(note)
+        left_layout.addWidget(note)
 
         source = QGroupBox("Teaching source")
         source_grid = QGridLayout(source)
@@ -923,39 +930,49 @@ class MainWindow(QMainWindow):
         self.teach_pose_label = QLabel("TCP: —")
         self.teach_pose_label.setWordWrap(True)
         source_grid.addWidget(self.teach_pose_label, 2, 3, 2, 3)
-        layout.addWidget(source)
+        left_layout.addWidget(source)
 
-        points = QGroupBox("Taught points")
+        points = QGroupBox("Saved positions")
         point_grid = QGridLayout(points)
-        point_grid.addWidget(QLabel("New point name"), 0, 0)
+        point_grid.addWidget(QLabel("New position name"), 0, 0)
         self.point_name_edit = QLineEdit()
-        self.point_name_edit.setPlaceholderText("pick, above_drop, camera_pose...")
+        self.point_name_edit.setPlaceholderText("pick, above_drop, inspect, park...")
         point_grid.addWidget(self.point_name_edit, 0, 1, 1, 2)
-        self.save_point_button = QPushButton("Save current point")
+        self.save_point_button = QPushButton("Save current position")
         self.save_point_button.setToolTip(
-            "With Follower selected, capture a fresh measured follower pose even during live teleop."
+            "Capture a fresh measured position from the selected teaching source."
         )
         self.save_point_button.clicked.connect(self._save_taught_point)
         point_grid.addWidget(self.save_point_button, 0, 3)
-        point_grid.addWidget(QLabel("Saved point"), 1, 0)
+
+        point_grid.addWidget(QLabel("Saved position"), 1, 0)
         self.point_combo = QComboBox()
+        self.point_combo.currentTextChanged.connect(
+            lambda _text: self._preview_selected_taught_point()
+        )
         point_grid.addWidget(self.point_combo, 1, 1)
         self.point_mode_combo = QComboBox()
         self.point_mode_combo.addItem("Joint / angular", "joint")
         self.point_mode_combo.addItem("Cartesian linear", "linear")
         point_grid.addWidget(self.point_mode_combo, 1, 2)
-        self.move_point_button = QPushButton("Move follower to point")
+        self.move_point_button = QPushButton("Move follower here")
         self.move_point_button.clicked.connect(self._move_taught_point)
         point_grid.addWidget(self.move_point_button, 1, 3)
-        self.delete_point_button = QPushButton("Delete point")
+
+        self.add_point_to_program_button = QPushButton("Add position to current program")
+        self.add_point_to_program_button.setToolTip(
+            "Append a move to this saved position using the current point mode."
+        )
+        self.add_point_to_program_button.clicked.connect(
+            self._add_selected_taught_point_to_program
+        )
+        point_grid.addWidget(self.add_point_to_program_button, 2, 0, 1, 3)
+        self.delete_point_button = QPushButton("Delete position")
         self.delete_point_button.clicked.connect(self._delete_taught_point)
         point_grid.addWidget(self.delete_point_button, 2, 3)
-        compose = QPushButton("Arrange saved positions and recordings in Run")
-        compose.clicked.connect(lambda: self.tabs.setCurrentWidget(self.run_page))
-        point_grid.addWidget(compose, 3, 0, 1, 4)
-        layout.addWidget(points)
+        left_layout.addWidget(points)
 
-        recording = QGroupBox("Exact trajectory recording")
+        recording = QGroupBox("Continuous trajectory recording · optional")
         record_grid = QGridLayout(recording)
         record_grid.addWidget(QLabel("Name"), 0, 0)
         self.recording_name_edit = QLineEdit()
@@ -969,13 +986,25 @@ class MainWindow(QMainWindow):
         self.record_button.clicked.connect(self._toggle_recording)
         record_grid.addWidget(self.record_button, 0, 3, 2, 1)
         self.recording_status = QLabel(
-            "Raw recordings are immutable. Editing always creates a derived trajectory."
+            "Use recording when the path/timing itself matters. Raw recordings are "
+            "immutable; editing creates a derived trajectory."
         )
         self.recording_status.setWordWrap(True)
         record_grid.addWidget(self.recording_status, 2, 0, 1, 4)
-        layout.addWidget(recording)
+        left_layout.addWidget(recording)
 
-        layout.addStretch(1)
+        go_programs = QPushButton("Open Programs")
+        go_programs.clicked.connect(lambda: self.tabs.setCurrentWidget(self.run_page))
+        left_layout.addWidget(go_programs)
+        left_layout.addStretch(1)
+        layout.addWidget(left, 3)
+
+        self.teach_arm_panel = RobotStatusPanel(
+            "Teaching pose",
+            subtitle="Selected source solid · saved position ghost",
+            compact=True,
+        )
+        layout.addWidget(self.teach_arm_panel, 2)
         return page
 
     def _build_trajectory_tab(self) -> QWidget:
