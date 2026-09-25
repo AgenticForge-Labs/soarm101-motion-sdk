@@ -2252,8 +2252,9 @@ class MainWindow(QMainWindow):
                     },
                     "gripper": float(pose.gripper),
                     "include_gripper": self._sync_include_gripper,
-                    "speed_deg_s": self.joint_speed.value(),
-                    "acceleration_deg_s2": self.joint_acceleration.value(),
+                    # Cross-arm synchronization deliberately uses the worker's
+                    # conservative 8°/s, 25°/s² defaults rather than inheriting a
+                    # potentially aggressive Manual joint-speed setting.
                     "gripper_speed_multiplier": self._gripper_speed_multiplier,
                     "source": source,
                 }
