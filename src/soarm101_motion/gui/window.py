@@ -44,6 +44,7 @@ from soarm101_motion.constants import (
     JOINT_LIMITS,
 )
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
+from soarm101_motion.gui.cartesian_view import CartesianArmView
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.hardware import FeetechBackend
@@ -133,6 +134,8 @@ class MainWindow(QMainWindow):
         self._sequence_paused = False
         self._latest_effort_status: dict[str, Any] = {"supported": False}
         self._effort_controls_initialized = False
+        self._cartesian_jog_active = False
+        self._cartesian_jog_queued = 0
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -184,6 +187,8 @@ class MainWindow(QMainWindow):
         self._worker.effort_changed.connect(self._on_effort_status)
         self._worker.arm_discovery_completed.connect(self._on_arm_discovery_completed)
         self._worker.measured_pose_captured.connect(self._on_measured_pose_captured)
+        self._worker.jog_queue_changed.connect(self._on_jog_queue_changed)
+        self._worker.cartesian_jog_diagnostic.connect(self._on_cartesian_jog_diagnostic)
 
         self._leader_thread = QThread(self)
         self._leader_worker = RobotWorker()
@@ -1201,7 +1206,11 @@ class MainWindow(QMainWindow):
 
     def _build_cartesian_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        outer = QHBoxLayout(page)
+
+        controls = QWidget()
+        layout = QVBoxLayout(controls)
+        outer.addWidget(controls, 3)
 
         current_box = QGroupBox("Measured TCP in robot world/base frame")
         current_grid = QGridLayout(current_box)
@@ -1210,7 +1219,7 @@ class MainWindow(QMainWindow):
             current_grid.addWidget(QLabel(label), 0, column)
             value = QLabel("—")
             value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            value.setMinimumWidth(90)
+            value.setMinimumWidth(74)
             self.pose_value_labels.append(value)
             current_grid.addWidget(value, 1, column)
         layout.addWidget(current_box)
@@ -1256,7 +1265,7 @@ class MainWindow(QMainWindow):
         jog_grid.addWidget(self.orientation_combo, 0, 3)
 
         jog_grid.addWidget(QLabel("Linear step"), 1, 0)
-        self.linear_step = self._spin(0.1, 50.0, 5.0, decimals=1, step=1.0, suffix=" mm")
+        self.linear_step = self._spin(0.1, 50.0, 2.0, decimals=1, step=0.5, suffix=" mm")
         jog_grid.addWidget(self.linear_step, 1, 1)
         jog_grid.addWidget(QLabel("Angular step"), 1, 2)
         self.angular_step = self._spin(0.1, 30.0, 2.0, decimals=1, step=1.0, suffix="°")
@@ -1285,13 +1294,35 @@ class MainWindow(QMainWindow):
             jog_grid.addWidget(plus, row, column + 1)
 
         help_label = QLabel(
-            "Tool-frame XYZ follows the current gripper axes. Every jog is planned as a "
-            "Cartesian linear path; it is not a raw servo jump."
+            "Each click is a guarded Cartesian path. Repeated clicks are queued and run "
+            "sequentially; STOP / HOLD cancels the active move and clears the queue. "
+            "Tool-frame XYZ follows the current gripper axes."
         )
         help_label.setWordWrap(True)
         jog_grid.addWidget(help_label, 5, 0, 1, 6)
+
+        self.jog_queue_label = QLabel("Jog queue: idle")
+        self.jog_queue_label.setStyleSheet("font-weight: 600;")
+        jog_grid.addWidget(self.jog_queue_label, 6, 0, 1, 2)
+        self.cartesian_diag_label = QLabel(
+            "Jog diagnostics: requested and achieved TCP will appear here."
+        )
+        self.cartesian_diag_label.setWordWrap(True)
+        jog_grid.addWidget(self.cartesian_diag_label, 6, 2, 1, 4)
         layout.addWidget(jog_box)
         layout.addStretch(1)
+
+        view_box = QGroupBox("3D kinematic view")
+        view_layout = QVBoxLayout(view_box)
+        self.cartesian_view = CartesianArmView()
+        view_layout.addWidget(self.cartesian_view, 1)
+        view_note = QLabel(
+            "Measured model state is shown when the arm is idle; the orange cross is the "
+            "currently requested TCP target. Drag to rotate and use the wheel to zoom."
+        )
+        view_note.setWordWrap(True)
+        view_layout.addWidget(view_note)
+        outer.addWidget(view_box, 2)
         return page
 
     def _build_gripper_tab(self) -> QWidget:
@@ -2988,6 +3019,61 @@ class MainWindow(QMainWindow):
             }
         )
 
+    @Slot(object)
+    def _on_jog_queue_changed(self, state: object) -> None:
+        values = dict(state)  # type: ignore[arg-type]
+        self._cartesian_jog_active = bool(values.get("active", False))
+        self._cartesian_jog_queued = int(values.get("queued", 0))
+        if hasattr(self, "jog_queue_label"):
+            if self._cartesian_jog_active:
+                self.jog_queue_label.setText(
+                    f"Jog queue: {self._cartesian_jog_queued} waiting"
+                )
+            else:
+                self.jog_queue_label.setText("Jog queue: idle")
+        if hasattr(self, "cartesian_view"):
+            self.cartesian_view.set_queue_state(
+                active=self._cartesian_jog_active,
+                queued=self._cartesian_jog_queued,
+            )
+            if not self._cartesian_jog_active:
+                self.cartesian_view.clear_target()
+        self._update_enabled_state()
+
+    @Slot(object)
+    def _on_cartesian_jog_diagnostic(self, diagnostic: object) -> None:
+        values = dict(diagnostic)  # type: ignore[arg-type]
+        phase = str(values.get("phase") or "")
+        target = values.get("target")
+        if phase == "planned" and isinstance(target, dict):
+            xyz = tuple(float(value) for value in target.get("xyz_mm", ()))
+            if len(xyz) == 3 and hasattr(self, "cartesian_view"):
+                self.cartesian_view.set_target_xyz_mm(xyz)
+            start = values.get("start")
+            if isinstance(start, dict) and len(xyz) == 3:
+                start_xyz = tuple(float(value) for value in start.get("xyz_mm", ()))
+                if len(start_xyz) == 3:
+                    self.cartesian_diag_label.setText(
+                        "Requested TCP: "
+                        f"({start_xyz[0]:.1f}, {start_xyz[1]:.1f}, {start_xyz[2]:.1f}) → "
+                        f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm"
+                    )
+        elif phase == "completed":
+            achieved = values.get("achieved")
+            if isinstance(target, dict) and isinstance(achieved, dict):
+                requested_xyz = tuple(float(value) for value in target.get("xyz_mm", ()))
+                achieved_xyz = tuple(float(value) for value in achieved.get("xyz_mm", ()))
+                if len(requested_xyz) == 3 and len(achieved_xyz) == 3:
+                    error = sum(
+                        (requested_xyz[index] - achieved_xyz[index]) ** 2
+                        for index in range(3)
+                    ) ** 0.5
+                    self.cartesian_diag_label.setText(
+                        "Achieved TCP: "
+                        f"({achieved_xyz[0]:.1f}, {achieved_xyz[1]:.1f}, {achieved_xyz[2]:.1f}) mm "
+                        f"· position error {error:.2f} mm"
+                    )
+
     def _move_absolute_pose(self) -> None:
         values = [spin.value() for spin in self.absolute_spins]
         self.absolute_pose_requested.emit(
@@ -3078,6 +3164,10 @@ class MainWindow(QMainWindow):
         pose = tuple(float(value) for value in values["pose_mm_deg"])
         for label, value in zip(self.pose_value_labels, pose, strict=True):
             label.setText(f"{value:.2f}")
+        if hasattr(self, "cartesian_view"):
+            self.cartesian_view.set_joint_degrees(
+                {name: float(values["joints_deg"][name]) for name in ARM_JOINTS}
+            )
         self.pose_summary.setText(
             f"TCP: X {pose[0]:.1f}  Y {pose[1]:.1f}  Z {pose[2]:.1f} mm"
         )
@@ -3277,17 +3367,18 @@ class MainWindow(QMainWindow):
             control.setEnabled(self._connected and self.edit_joint_targets_check.isChecked()
                                and not self._busy)
 
-        can_move = (
+        motion_ready = (
             self._connected
             and self._torque_enabled
-            and not self._busy
             and not self._follower_setup_session
         )
+        can_move = motion_ready and not self._busy
+        can_jog = motion_ready and (not self._busy or self._cartesian_jog_active)
         self.move_joints_button.setEnabled(can_move and self.edit_joint_targets_check.isChecked())
         self.absolute_move_button.setEnabled(can_move)
         self.use_current_pose_button.setEnabled(self._connected and not self._busy)
         for button in self.jog_buttons:
-            button.setEnabled(can_move)
+            button.setEnabled(can_jog)
         self.close_gripper_button.setEnabled(can_move)
         self.move_gripper_button.setEnabled(can_move)
         self.open_gripper_button.setEnabled(can_move)

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Reworked Cartesian jogging around small, repeatable bench motion: the GUI now defaults
+  to 2 mm translation steps, accepts up to 32 queued jog clicks while the current jog
+  completes, executes them sequentially through the existing guarded motion path, and
+  clears the queue on STOP/HOLD, relax, disconnect, or jog failure.
+- Added requested-versus-achieved TCP diagnostics and an interactive 3D kinematic view to
+  the Cartesian tab. The view uses the same native SO-101 FK model as planning and shows
+  the current target separately from measured state.
+- Added full-path 2 mm world-axis regression tests so +X/-X, +Y/-Y, and +Z/-Z must produce
+  distinct requested Cartesian displacement in simulation.
+- Added a configurable 0.5 mm Cartesian IK position tolerance for planned linear paths.
+
 - Added content-addressed calibration provenance: every physical calibration has a
   SHA-256 ID, the current calibration file is retained for compatibility, and immutable
   history snapshots are archived per robot ID.

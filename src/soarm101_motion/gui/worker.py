@@ -18,7 +18,7 @@ from soarm101_motion.constants import (
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
-from soarm101_motion.control import jog_linear_cli_units
+from soarm101_motion.control import relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.exceptions import MotionCancelledError
 from soarm101_motion.motion import MotionHandle
@@ -62,6 +62,8 @@ class RobotWorker(QObject):
     measured_pose_captured = Signal(object)
     teleop_start_pose = Signal(object)
     joint_measurements = Signal(object)
+    jog_queue_changed = Signal(object)
+    cartesian_jog_diagnostic = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -82,6 +84,11 @@ class RobotWorker(QObject):
         self._teleop_staging: dict[str, Any] | None = None
         self._sequence_runner: SequenceRunner | None = None
         self._last_poll_error: str | None = None
+        self._jog_queue: list[dict[str, Any]] = []
+        self._jog_active = False
+        self._active_jog_start: Pose | None = None
+        self._active_jog_target: Pose | None = None
+        self._active_jog_command: dict[str, Any] | None = None
 
     @Slot()
     def start(self) -> None:
@@ -188,6 +195,63 @@ class RobotWorker(QObject):
             raise RuntimeError("stop live teleoperation before commanding this arm")
         return arm
 
+    @staticmethod
+    def _pose_diagnostic_payload(pose: Pose) -> dict[str, tuple[float, ...]]:
+        xyz_rpy = pose.xyz_rpy()
+        return {
+            "xyz_mm": tuple(float(value) * 1000.0 for value in xyz_rpy[:3]),
+            "rpy_deg": tuple(degrees(float(value)) for value in xyz_rpy[3:]),
+        }
+
+    def _emit_jog_queue_state(self) -> None:
+        self.jog_queue_changed.emit(
+            {
+                "active": self._jog_active,
+                "queued": len(self._jog_queue),
+            }
+        )
+
+    def _reset_jog_queue(self) -> None:
+        self._jog_queue.clear()
+        self._jog_active = False
+        self._active_jog_start = None
+        self._active_jog_target = None
+        self._active_jog_command = None
+        self._emit_jog_queue_state()
+
+    def _start_cartesian_jog(self, values: dict[str, Any]) -> None:
+        arm = self._require_motion_available()
+        current = arm.get_position()
+        translation_mm = tuple(float(value) for value in values["translation_mm"])
+        rotation_deg = tuple(float(value) for value in values["rotation_rpy_deg"])
+        target = relative_target_pose(
+            current,
+            translation_m=tuple(value / 1000.0 for value in translation_mm),
+            rotation_rpy_rad=tuple(radians(value) for value in rotation_deg),
+            frame=values["frame"],
+        )
+        self._active_jog_start = current
+        self._active_jog_target = target
+        self._active_jog_command = dict(values)
+        diagnostic = {
+            "phase": "planned",
+            "frame": values["frame"],
+            "command": dict(values),
+            "start": self._pose_diagnostic_payload(current),
+            "target": self._pose_diagnostic_payload(target),
+        }
+        self.cartesian_jog_diagnostic.emit(diagnostic)
+        record_session("cartesian_jog_planned", worker=self._robot_id, **diagnostic)
+        result = arm.move_linear(
+            target,
+            orientation_mode=values["orientation_mode"],
+            speed=float(values["speed_mm_s"]) / 1000.0,
+            acceleration=float(values["acceleration_mm_s2"]) / 1000.0,
+            wait=False,
+        )
+        self._track("cartesian jog", result)
+        self._emit_jog_queue_state()
+
     def _track(self, label: str, result: Any) -> None:
         if isinstance(result, MotionHandle):
             self._handles.append((label, result))
@@ -203,6 +267,7 @@ class RobotWorker(QObject):
         pending: list[tuple[str, MotionHandle[Any]]] = []
         begin_teleop: dict[str, Any] | None = None
         align_gripper: dict[str, Any] | None = None
+        next_jog: dict[str, Any] | None = None
         for label, handle in self._handles:
             if not handle.done:
                 pending.append((label, handle))
@@ -250,8 +315,45 @@ class RobotWorker(QObject):
                         "status": "failed" if exception is not None else "completed",
                     }
                 )
+            if label == "cartesian jog":
+                if exception is None and self.arm is not None:
+                    achieved = self.arm.get_position()
+                    diagnostic = {
+                        "phase": "completed",
+                        "command": dict(self._active_jog_command or {}),
+                        "start": (
+                            self._pose_diagnostic_payload(self._active_jog_start)
+                            if self._active_jog_start is not None
+                            else None
+                        ),
+                        "target": (
+                            self._pose_diagnostic_payload(self._active_jog_target)
+                            if self._active_jog_target is not None
+                            else None
+                        ),
+                        "achieved": self._pose_diagnostic_payload(achieved),
+                    }
+                    self.cartesian_jog_diagnostic.emit(diagnostic)
+                    record_session("cartesian_jog_completed", worker=self._robot_id, **diagnostic)
+                if exception is not None:
+                    self._reset_jog_queue()
+                elif self._jog_queue:
+                    next_jog = self._jog_queue.pop(0)
+                    self._emit_jog_queue_state()
+                else:
+                    self._jog_active = False
+                    self._active_jog_start = None
+                    self._active_jog_target = None
+                    self._active_jog_command = None
+                    self._emit_jog_queue_state()
         self._handles = pending
-        busy = bool(pending)
+        if next_jog is not None:
+            try:
+                self._start_cartesian_jog(next_jog)
+            except BaseException as exc:
+                self._reset_jog_queue()
+                self._report_error("Cartesian jog", exc)
+        busy = bool(self._handles)
         self.busy_changed.emit(busy)
         if align_gripper is not None:
             try:
@@ -345,6 +447,7 @@ class RobotWorker(QObject):
         for _label, handle in self._handles:
             handle.cancel()
         self._handles.clear()
+        self._reset_jog_queue()
         self._cancel_recording("recording cancelled by disconnect")
         self._stop_stream_readout()
         self._teleop = None
@@ -394,6 +497,7 @@ class RobotWorker(QObject):
             self.teleop_changed.emit(False)
             arm.relax()
             self._handles.clear()
+            self._reset_jog_queue()
             self.log_message.emit("Torque disabled; arm relaxed.")
             self.poll()
         except BaseException as exc:
@@ -410,8 +514,11 @@ class RobotWorker(QObject):
             self.teleop_changed.emit(False)
             arm.stop()
             self._handles.clear()
+            self._reset_jog_queue()
             self.busy_changed.emit(False)
-            self.log_message.emit("Software stop: current arm and gripper positions held.")
+            self.log_message.emit(
+                "Software stop: current arm and gripper positions held; Cartesian jog queue cleared."
+            )
             self.poll()
         except BaseException as exc:
             self._report_error("stop", exc)
@@ -1191,18 +1298,29 @@ class RobotWorker(QObject):
     def jog_cartesian(self, command: object) -> None:
         try:
             values = dict(command)  # type: ignore[arg-type]
-            result = jog_linear_cli_units(
-                self._require_motion_available(),
-                frame=values["frame"],
-                translation_mm=values["translation_mm"],
-                rotation_rpy_deg=values["rotation_rpy_deg"],
-                orientation_mode=values["orientation_mode"],
-                speed_mm_s=float(values["speed_mm_s"]),
-                acceleration_mm_s2=float(values["acceleration_mm_s2"]),
-                wait=False,
-            )
-            self._track(f"{values['frame']} linear jog", result)
+            if self._jog_active:
+                if len(self._jog_queue) >= 32:
+                    raise RuntimeError("Cartesian jog queue is full (32 waiting commands)")
+                self._jog_queue.append(values)
+                self._emit_jog_queue_state()
+                self.log_message.emit(
+                    f"Queued Cartesian jog; {len(self._jog_queue)} waiting."
+                )
+                record_session(
+                    "cartesian_jog_queued",
+                    worker=self._robot_id,
+                    queued=len(self._jog_queue),
+                    command=values,
+                )
+                return
+            if self._handles:
+                raise RuntimeError("another motion is active; wait before starting Cartesian jogs")
+            self._jog_active = True
+            self._emit_jog_queue_state()
+            self._start_cartesian_jog(values)
         except BaseException as exc:
+            if not self._handles:
+                self._reset_jog_queue()
             self._report_error("Cartesian jog", exc)
 
     @Slot(object)

@@ -131,7 +131,16 @@ Do not start with Home/Rest or Cartesian moves.
 8. Only after all five joints and the small gripper test pass should you save fresh
    Home/Rest positions under the current calibration and replay them at low speed.
 9. Only after joint-direction, STOP, gripper, Home/Rest, and FK checks pass should you test
-   5 mm Cartesian jogs.
+   the default 2 mm Cartesian jogs. Start in **World / base** frame with a clear workspace.
+10. Test one axis at a time in this order: X−/X+, Y−/Y+, Z−/Z+. After each click, verify
+    both the orange target marker in the 3D kinematic view and the requested TCP diagnostic
+    move only along the intended world axis before judging the physical arm motion.
+11. If the model target is correct but the physical arm moves along the wrong axis, stop
+    Cartesian testing and treat it as a joint-direction/calibration-to-model mismatch.
+    Capture the GUI session log plus the five one-joint positive-direction observations.
+12. After all six directions agree, click the same jog button three times rapidly. Confirm
+    the queue reports two waiting commands after the first starts, executes all three
+    sequentially, and STOP/HOLD immediately cancels the active jog and clears the remainder.
 
 ### 4a. Motor effort/current characterization — DO LATER
 
