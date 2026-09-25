@@ -79,3 +79,40 @@ def test_recorded_trajectory_replay_in_simulation() -> None:
         assert arm.tool.get_position() == pytest.approx(0.4)
     finally:
         arm.disconnect()
+
+
+def test_recorded_trajectory_honors_selected_gripper_speed() -> None:
+    config = SOARM101Config(
+        enable_workspace_checks=False,
+        effort_safety_enabled=False,
+        max_joint_speed=2.0,
+        max_joint_acceleration=10.0,
+    )
+    backend = SimulationBackend(realtime=False)
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    writes: list[tuple[str, float, int | None]] = []
+    original_write = backend.write_tool_position
+
+    def capture_write(actuator, position, *, speed_raw=None, acceleration_raw=None):
+        writes.append((actuator, float(position), speed_raw))
+        original_write(
+            actuator,
+            position,
+            speed_raw=speed_raw,
+            acceleration_raw=acceleration_raw,
+        )
+
+    backend.write_tool_position = capture_write  # type: ignore[method-assign]
+    try:
+        result = arm.play_trajectory(
+            demo_trajectory(),
+            speed_scale=1.0,
+            gripper_speed_raw=700,
+        )
+        assert result.completed
+        assert writes
+        assert {speed for _actuator, _position, speed in writes} == {700}
+    finally:
+        arm.disconnect()
