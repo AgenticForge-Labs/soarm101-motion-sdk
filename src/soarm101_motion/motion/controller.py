@@ -666,12 +666,18 @@ class MotionController:
         self,
         plan: RecordedPlan,
         cancel_event: threading.Event,
+        *,
+        gripper_speed_raw: int | None = None,
     ) -> MotionResult:
         samples = plan.command_samples
         gripper_samples = plan.gripper_samples
         try:
             self._check_cancelled(cancel_event, "recorded trajectory cancelled")
-            self.backend.write_tool_position(STOCK_GRIPPER, gripper_samples[0])
+            self.backend.write_tool_position(
+                STOCK_GRIPPER,
+                gripper_samples[0],
+                speed_raw=gripper_speed_raw,
+            )
             if plan.pre_roll is not None:
                 self._execute_plan(
                     plan.pre_roll,
@@ -696,7 +702,11 @@ class MotionController:
                     )
                 self._check_cancelled(cancel_event, "recorded trajectory cancelled")
                 self.backend.write_joint_positions(command)
-                self.backend.write_tool_position(STOCK_GRIPPER, gripper_samples[index])
+                self.backend.write_tool_position(
+                    STOCK_GRIPPER,
+                    gripper_samples[index],
+                    speed_raw=gripper_speed_raw,
+                )
                 if index % monitor_every == 0 or index == len(samples) - 1:
                     previous_actual = self._monitor_motion(
                         command,
@@ -1028,6 +1038,7 @@ class MotionController:
         speed_scale: float = 1.0,
         move_to_start: bool = True,
         tcp: Pose | None = None,
+        gripper_speed_raw: int | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
         with self._state_lock:
@@ -1039,7 +1050,11 @@ class MotionController:
                 tcp=tcp,
             )
             handle = self._start_locked(
-                lambda event: self._execute_recorded(plan, event)
+                lambda event: self._execute_recorded(
+                    plan,
+                    event,
+                    gripper_speed_raw=gripper_speed_raw,
+                )
             )
         return handle.wait() if wait else handle
 

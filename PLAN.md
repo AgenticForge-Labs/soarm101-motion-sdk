@@ -27,6 +27,10 @@ Robo Director is the primary source of cross-repository integration requirements
   absolute calibrated modes, with optional gripper mirroring.
 - [x] Advanced non-destructive trajectory editing: smoothing, delete/splice, holds,
   keyframes, markers, repeated clips, and semantic motion primitives.
+- [x] Leader FREE/PARKED state, cross-arm pose matching, no-motion relative relink, and
+  coarse leader → fine Manual transfer workflow.
+- [x] Persistent Manual gripper panel and one synchronized GUI gripper-speed preset across
+  manual, teleoperation, saved-pose, sequence, and trajectory-replay paths.
 
 ## Director ecosystem integration 0.2
 
@@ -70,6 +74,9 @@ its own persistent connection for live controls; it must not launch CLI subproce
 
 ## Later
 
+- [ ] Investigate true leader gravity compensation as a separate feature. Compare the
+  Trossen leader/SDK approach before selecting a control strategy; do not couple this to
+  the current position-hold parking implementation.
 - [ ] Parallel gripper implementation.
 - [ ] Tool assemblies with camera and gripper TCPs.
 - [ ] Optional collision geometry and self-collision checks.

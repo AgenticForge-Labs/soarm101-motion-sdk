@@ -40,10 +40,13 @@ after any failed gate rather than continuing into later capabilities.
 3. Confirm the window opens with Setup, Manual, Teleoperation, Record / Teach, Edit recordings, Run, and Log tabs.
 4. Connect the follower simulation.
 5. Enable it, jog joints/Cartesian axes, move the gripper, and confirm STOP/HOLD and
-   Relax still work.
-6. Save the current simulated follower position as Home and Rest.
-7. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
-8. Close and reopen the GUI and confirm Home and Rest are still present.
+   Relax still work. Confirm Manual has only **Joint / angular** and **Cartesian** arm
+   mode tabs and that the gripper tool panel remains visible in both.
+6. Change the gripper speed preset in Manual and confirm the same preset appears in
+   Teleoperation, Edit recordings, and Run.
+7. Save the current simulated follower position as Home and Rest.
+8. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
+9. Close and reopen the GUI and confirm Home and Rest are still present.
 
 ### 2. Physical follower connection — DO LATER
 
@@ -339,6 +342,18 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
    holds rather than continuing with stale targets.
 8. Repeat the lifecycle with **Absolute calibrated angles** as a software check; on hardware,
    Absolute mode is deferred until calibration/alignment validation below.
+9. Stop teleoperation. Click **Park leader here** and confirm leader simulation reports
+   PARKED / torque on; click **Release leader** and confirm FREE / torque off.
+10. Put the simulated leader and follower at different poses. With gripper matching
+    unchecked, use **Move leader → follower pose** and then the reverse direction; confirm
+    each destination converges while the source remains unchanged.
+11. Diverge the two simulations again and use **Relink here — no motion**. Confirm neither
+    arm performs an alignment move before relative teleoperation begins.
+12. While teleoperation is active, click **Stop → Manual + park leader**. Confirm the
+    follower remains holding, Manual opens, and the leader reports PARKED.
+13. Exercise Slow, Normal, and Fast gripper presets through a manual move, a sequence
+    gripper step, and recorded-trajectory replay; inspect simulator/backend tests for the
+    raw speed propagation because simulation itself has no motor-speed dynamics.
 
 ### 15. Physical sequence execution — DO LATER
 
@@ -363,27 +378,38 @@ This is a new continuous-control path and has not yet been physically validated.
 2. Secure both bases, clear the follower workspace, remove payloads, and keep physical
    follower power immediately accessible.
 3. Connect both arms. Keep the leader torque OFF and leave the follower torque OFF before starting teleoperation.
-4. Put both arms in comfortable poses with the leader inside the follower's calibrated travel. Keep the leader still during startup and keep the follower in a clear nearby pose so the guarded alignment move is small.
-5. Select **Relative / clutch-safe**, initially disable gripper mirroring, select
+4. Before live teleoperation, validate parking by holding the leader near a safe supported
+   pose, clicking **Park leader here**, and confirming it does not jump when torque enables.
+   Click **Release leader** and confirm it becomes back-drivable again. Do not continue if
+   parking causes unexpected motion.
+5. With both arms already close to one another and the gripper-match box unchecked, test
+   **Move leader → follower pose** at the conservative default synchronization speed, then
+   test the reverse direction. Keep physical power accessible and validate each destination
+   joint direction before increasing pose differences.
+6. Deliberately leave the arms at slightly different safe poses and test **Relink here —
+   no motion** in Relative mode. Confirm the follower only latches its own measured pose;
+   there must be no alignment move before leader motion begins.
+7. Put both arms in comfortable poses with the leader inside the follower's calibrated travel. Keep the leader still during startup and keep the follower in a clear nearby pose so the guarded alignment move is small.
+8. Select **Relative / clutch-safe**, initially disable gripper mirroring, select
    **5 Hz — slow check**, and click **Align follower and start**. Confirm torque enable does not cause a jump and the guarded alignment completes (or reports a staged offset near a model limit) before live following begins.
-6. Move only one leader joint a few degrees, slowly. Confirm the follower moves the same
+9. Move only one leader joint a few degrees, slowly. Confirm the follower moves the same
    signed delta after alignment.
-7. Watch the live follower-cycle and queued-age values. At 5 Hz the period is 200 ms;
-   processing should remain comfortably below that and queued age should stay low rather
-   than increasing over time.
-8. Return that joint and repeat for the other four joints one at a time.
-9. Test STOP/HOLD while making a slow motion. The follower must stop/hold and teleop must
-   terminate.
-10. Restart teleop, then disconnect/unplug the leader data connection. The follower must
+10. Watch the live follower-cycle and queued-age values. At 5 Hz the period is 200 ms;
+    processing should remain comfortably below that and queued age should stay low rather
+    than increasing over time.
+11. Return that joint and repeat for the other four joints one at a time.
+12. Test STOP/HOLD while making a slow motion. The follower must stop/hold and teleop must
+    terminate.
+13. Restart teleop, then disconnect/unplug the leader data connection. The follower must
     stop receiving stream targets and hold.
-11. Re-enable gripper mirroring and test a small leader gripper delta.
-12. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
-13. Validate 20 Hz (50 ms period) next even though it is the current software default, then treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely because motion looks smooth; record cycle time, queued sample age, overruns, communication errors, STOP response, following errors, and effort trips as described in `docs/teleoperation.md`.
-14. If follower processing exceeds the selected period repeatedly or queued sample age
+14. Re-enable gripper mirroring and test a small leader gripper delta.
+15. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
+16. Validate 20 Hz (50 ms period) next even though it is the current software default, then treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely because motion looks smooth; record cycle time, queued sample age, overruns, communication errors, STOP response, following errors, and effort trips as described in `docs/teleoperation.md`.
+17. If follower processing exceeds the selected period repeatedly or queued sample age
     grows, the software should terminate teleop and hold. Reduce the rate before retrying.
-15. Deliberately move the leader faster only enough to verify configured step/speed/
+18. Deliberately move the leader faster only enough to verify configured step/speed/
     acceleration guards reject unsafe streaming rather than following it.
-16. Do not treat software STOP as an emergency stop; physical power remains the ultimate
+19. Do not treat software STOP as an emergency stop; physical power remains the ultimate
     intervention during these tests.
 
 ### 17. Physical absolute teleoperation — DO LATER, AFTER RELATIVE PASSES

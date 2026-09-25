@@ -152,11 +152,13 @@ class SequenceRunner:
         pose_library: PoseLibrary,
         trajectory_library: TrajectoryLibrary,
         primitive_library: MotionPrimitiveLibrary | None = None,
+        gripper_speed_raw: int | None = None,
     ) -> None:
         self.arm = arm
         self.pose_library = pose_library
         self.trajectory_library = trajectory_library
         self.primitive_library = primitive_library
+        self.gripper_speed_raw = gripper_speed_raw
         self._pause_event = threading.Event()
 
     @property
@@ -197,7 +199,14 @@ class SequenceRunner:
             raise ValueError("sequence speed scale must be positive and finite")
         return result
 
-    def _move_pose(self, name: str, mode: str, speed_scale: float) -> MotionResult:
+    def _move_pose(
+        self,
+        name: str,
+        mode: str,
+        speed_scale: float,
+        *,
+        move_gripper: bool = False,
+    ) -> MotionResult:
         pose = self.pose_library.require(name)
         self.arm.require_artifact_calibration(
             {
@@ -210,7 +219,7 @@ class SequenceRunner:
         )
         if mode == "linear":
             target = Pose.from_xyz_rpy(*pose.tcp_xyz_rpy)
-            return self.arm.move_linear(
+            result = self.arm.move_linear(
                 target,
                 speed=self._scaled(self.arm.config.default_linear_speed, speed_scale),
                 acceleration=self._scaled(
@@ -218,14 +227,22 @@ class SequenceRunner:
                 ),
                 wait=True,
             )
-        return self.arm.move_joints(
-            pose.joints,
-            speed=self._scaled(self.arm.config.default_joint_speed, speed_scale),
-            acceleration=self._scaled(
-                self.arm.config.default_joint_acceleration, speed_scale
-            ),
-            wait=True,
-        )
+        else:
+            result = self.arm.move_joints(
+                pose.joints,
+                speed=self._scaled(self.arm.config.default_joint_speed, speed_scale),
+                acceleration=self._scaled(
+                    self.arm.config.default_joint_acceleration, speed_scale
+                ),
+                wait=True,
+            )
+        if move_gripper:
+            self.arm.tool.move(
+                pose.gripper,
+                speed_raw=self.gripper_speed_raw,
+                wait=True,
+            )
+        return result
 
     def _execute_step(
         self,
@@ -245,11 +262,25 @@ class SequenceRunner:
                 scale,
             )
         if step.kind == "home":
-            return self._move_pose(HOME_POSE_NAME, str(params.get("mode", "joint")), scale)
+            return self._move_pose(
+                HOME_POSE_NAME,
+                str(params.get("mode", "joint")),
+                scale,
+                move_gripper=True,
+            )
         if step.kind == "rest":
-            return self._move_pose(REST_POSE_NAME, str(params.get("mode", "joint")), scale)
+            return self._move_pose(
+                REST_POSE_NAME,
+                str(params.get("mode", "joint")),
+                scale,
+                move_gripper=True,
+            )
         if step.kind == "gripper":
-            return self.arm.tool.move(float(params["position"]), wait=True)
+            return self.arm.tool.move(
+                float(params["position"]),
+                speed_raw=self.gripper_speed_raw,
+                wait=True,
+            )
         if step.kind == "wait":
             seconds = float(params["seconds"])
             if not math.isfinite(seconds) or seconds < 0:
@@ -276,6 +307,7 @@ class SequenceRunner:
                     trajectory,
                     speed_scale=scale,
                     move_to_start=True,
+                    gripper_speed_raw=self.gripper_speed_raw,
                     wait=True,
                 )
             return result
@@ -303,6 +335,7 @@ class SequenceRunner:
                     trajectory,
                     speed_scale=primitive_scale,
                     move_to_start=True,
+                    gripper_speed_raw=self.gripper_speed_raw,
                     wait=True,
                 )
             return result

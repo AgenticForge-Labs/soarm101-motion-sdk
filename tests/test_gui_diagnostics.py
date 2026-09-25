@@ -267,8 +267,10 @@ def test_teleop_stages_opening_and_guards_closing(
             if opening_arrives:
                 self.position = target
 
-        def move(self, target, *, wait, timeout):
+        def move(self, target, *, speed_raw=None, wait, timeout):
             assert not wait
+            assert speed_raw == 500
+            events.append(("move_gripper", target, speed_raw))
             handle = MotionHandle(lambda _cancel: setattr(self, "position", target) or target)
             handle.start()
             return handle

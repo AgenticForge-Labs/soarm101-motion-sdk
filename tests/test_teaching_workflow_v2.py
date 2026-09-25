@@ -287,9 +287,50 @@ def test_sequence_library_and_runner(tmp_path: Path) -> None:
         )
         assert result.completed
         assert arm.get_joint_positions().positions["shoulder_pan"] == pytest.approx(0.0)
-        assert arm.tool.get_position() == pytest.approx(0.25)
+        # The final Home step restores Home's stored gripper state after the
+        # explicit 0.25 gripper step.
+        assert arm.tool.get_position() == pytest.approx(1.0)
         assert (0, "started") in progress
         assert (3, "completed") in progress
+    finally:
+        arm.disconnect()
+
+
+def test_sequence_runner_honors_gripper_speed_for_gripper_steps(tmp_path: Path) -> None:
+    poses = PoseLibrary("speed-test", path=tmp_path / "poses.json")
+    trajectories = TrajectoryLibrary("speed-test", root=tmp_path / "trajectories")
+    backend = SimulationBackend(realtime=False)
+    arm = SOARM101(
+        SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False),
+        backend=backend,
+    )
+    arm.connect()
+    arm.enable()
+    writes = []
+    original_write = backend.write_tool_position
+
+    def capture_write(actuator, position, *, speed_raw=None, acceleration_raw=None):
+        writes.append((actuator, float(position), speed_raw))
+        original_write(
+            actuator,
+            position,
+            speed_raw=speed_raw,
+            acceleration_raw=acceleration_raw,
+        )
+
+    backend.write_tool_position = capture_write  # type: ignore[method-assign]
+    try:
+        runner = SequenceRunner(
+            arm,
+            pose_library=poses,
+            trajectory_library=trajectories,
+            gripper_speed_raw=600,
+        )
+        result = runner.run(
+            MotionSequence("grip_speed", (SequenceStep("gripper", {"position": 0.35}),))
+        )
+        assert result.completed
+        assert writes[-1] == ("so101_gripper", 0.35, 600)
     finally:
         arm.disconnect()
 

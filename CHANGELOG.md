@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Added explicit leader **FREE / PARKED** states in Manual and Teleoperation. Parking
+  latches the leader's freshly measured pose and enables torque; release returns it to
+  back-drivable teaching. Starting or relinking live teleoperation releases a parked leader.
+- Added guarded cross-arm handoff controls: capture a fresh follower pose and move the
+  leader to it, capture a fresh leader pose and move the follower to it, optionally include
+  the gripper, or **Relink here — no motion** to establish a new relative teleoperation
+  reference without forcing either arm into the other's pose.
+- Added **Stop → Manual + park leader** for the coarse leader → fine Manual teaching
+  workflow while the follower holds its current position.
+- Reorganized Manual into Joint / angular and Cartesian arm modes with one persistent
+  gripper tool panel. The kinematic view now stops the arm centerline at wrist roll and
+  renders a schematic two-jaw gripper from the actual modeled gripper-link frame instead
+  of drawing wrist-roll → TCP as a fake arm link.
+- Made the GUI gripper-speed preset consistent across manual gripper moves, teleoperation
+  alignment/live mirroring, Home/Rest gripper completion, sequence gripper actions, and
+  recorded trajectory replay. Edit and Run surfaces now expose the same synchronized preset.
+
 - Reworked Cartesian jogging around small, repeatable bench motion: the GUI now defaults
   to 2 mm translation steps, accepts up to 32 queued jog clicks while the current jog
   completes, executes them sequentially through the existing guarded motion path, and

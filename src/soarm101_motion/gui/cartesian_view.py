@@ -1,8 +1,8 @@
-"""Interactive kinematic view for Cartesian control.
+"""Interactive SO-101 kinematic view used by the Manual workspace.
 
-This intentionally uses the SDK's native FK model rather than a second renderer-specific
-robot model. It gives the GUI a lightweight 3D view with no dependency beyond PySide6
-and NumPy, while keeping the displayed joint/TCP geometry aligned with planning.
+The arm centerline comes from the same native FK model used for planning.  The gripper
+is a lightweight schematic anchored to the model's gripper-link frame; it is intentionally
+not a second mesh/physics model.
 """
 
 from __future__ import annotations
@@ -18,20 +18,22 @@ from PySide6.QtWidgets import QWidget
 
 from soarm101_motion.constants import HOME_JOINTS
 from soarm101_motion.kinematics import SO101KinematicModel
+from soarm101_motion.types import Pose
 
 
 class CartesianArmView(QWidget):
-    """Small interactive 3D projection of the SDK kinematic model."""
+    """Interactive orthographic projection of the SDK kinematic model."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._model = SO101KinematicModel()
         self._joints = dict(HOME_JOINTS)
+        self._gripper_position = 1.0
         self._target_position_m: np.ndarray | None = None
         self._queue_active = False
         self._queue_depth = 0
-        # Start orthographic in the arm's X/Z plane so the main link spans are
-        # comparable to a physical side view without perspective shortening.
+        # Start in the arm's X/Z plane.  This avoids perspective shortening and
+        # makes the link-center geometry directly comparable to a physical side view.
         self._yaw = 0.0
         self._pitch = 0.0
         self._zoom = 1.0
@@ -40,7 +42,7 @@ class CartesianArmView(QWidget):
         self._last_mouse: QPointF | None = None
         self.setMinimumSize(300, 300)
         self.setToolTip(
-            "Joint-center diagram from the SO-101 kinematic model. Drag to rotate, "
+            "SO-101 joint-center diagram plus schematic gripper. Drag to rotate, "
             "use the wheel to zoom, or double-click for the side view."
         )
 
@@ -54,11 +56,17 @@ class CartesianArmView(QWidget):
         }
         self.update()
 
+    def set_gripper_position(self, position: float) -> None:
+        self._gripper_position = min(1.0, max(0.0, float(position)))
+        self.update()
+
     def set_target_xyz_mm(self, xyz_mm: Sequence[float] | None) -> None:
         if xyz_mm is None:
             self._target_position_m = None
         else:
-            self._target_position_m = np.asarray(tuple(xyz_mm), dtype=float).reshape(3) / 1000.0
+            self._target_position_m = (
+                np.asarray(tuple(xyz_mm), dtype=float).reshape(3) / 1000.0
+            )
         self.update()
 
     def set_queue_state(self, *, active: bool, queued: int) -> None:
@@ -68,6 +76,36 @@ class CartesianArmView(QWidget):
 
     def clear_target(self) -> None:
         self.set_target_xyz_mm(None)
+
+    def gripper_geometry(self) -> dict[str, np.ndarray]:
+        """Return schematic gripper points in world coordinates.
+
+        The frame itself is exact FK: identity TCP gives the gripper-link frame after
+        wrist-roll.  Jaw spacing is only a visual aperture mapping because the stock
+        gripper calibration stores normalized travel rather than a geometric jaw model.
+        """
+
+        flange = self._model.forward_matrix(self._joints, tcp=Pose.identity())
+        origin = flange[:3, 3]
+        rotation = flange[:3, :3]
+
+        def world(local: Sequence[float]) -> np.ndarray:
+            return origin + rotation @ np.asarray(local, dtype=float)
+
+        # The packaged URDF's gripper body is approximately 100 mm long along -Z.
+        # Render a central body, a crossbar, and two parallel fingers.  The normalized
+        # aperture controls only the lateral jaw spacing.
+        half_gap = 0.006 + 0.018 * self._gripper_position
+        return {
+            "origin": origin.copy(),
+            "body_end": world((0.0, 0.0, -0.070)),
+            "crossbar_left": world((0.0, -0.028, -0.050)),
+            "crossbar_right": world((0.0, 0.028, -0.050)),
+            "left_root": world((0.0, -half_gap, -0.052)),
+            "left_tip": world((0.0, -half_gap, -0.115)),
+            "right_root": world((0.0, half_gap, -0.052)),
+            "right_tip": world((0.0, half_gap, -0.115)),
+        }
 
     def _view_coordinates(self, point: np.ndarray) -> tuple[float, float, float]:
         x, y, z = (float(value) for value in point)
@@ -122,52 +160,90 @@ class CartesianArmView(QWidget):
     def paintEvent(self, _event: object) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(
-            self.rect(),
-            self.palette().brush(QPalette.ColorRole.Base),
-        )
+        painter.fillRect(self.rect(), self.palette().brush(QPalette.ColorRole.Base))
 
         text_color = self.palette().color(QPalette.ColorRole.Text)
         muted = self.palette().color(QPalette.ColorRole.Mid)
 
         points = self._model.link_points(self._joints)
-        ordered_names = (
+        joint_names = (
             "base",
             "shoulder_pan",
             "shoulder_lift",
             "elbow_flex",
             "wrist_flex",
             "wrist_roll",
-            "tcp",
         )
-        ordered = [points[name] for name in ordered_names]
+        joint_points = [points[name] for name in joint_names]
         tcp_pose = self._model.forward(self._joints)
         tcp = tcp_pose.position
+        gripper = self.gripper_geometry()
         frame_length = 0.035
-        fit_points = [*ordered, np.zeros(3, dtype=float)]
+
+        fit_points = [*joint_points, tcp, *gripper.values(), np.zeros(3, dtype=float)]
         fit_points.extend(np.eye(3) * 0.10)
-        fit_points.extend(tcp + tcp_pose.rotation[:, index] * frame_length for index in range(3))
+        fit_points.extend(
+            tcp + tcp_pose.rotation[:, index] * frame_length for index in range(3)
+        )
         if self._target_position_m is not None:
             fit_points.append(self._target_position_m)
         self._fit_projection(fit_points)
 
         origin = np.zeros(3, dtype=float)
-        self._draw_axis(painter, origin, np.array([0.10, 0.0, 0.0]), "X", QColor("#d95c5c"))
-        self._draw_axis(painter, origin, np.array([0.0, 0.10, 0.0]), "Y", QColor("#55a868"))
-        self._draw_axis(painter, origin, np.array([0.0, 0.0, 0.10]), "Z", QColor("#4c78a8"))
+        self._draw_axis(
+            painter, origin, np.array([0.10, 0.0, 0.0]), "X", QColor("#d95c5c")
+        )
+        self._draw_axis(
+            painter, origin, np.array([0.0, 0.10, 0.0]), "Y", QColor("#55a868")
+        )
+        self._draw_axis(
+            painter, origin, np.array([0.0, 0.0, 0.10]), "Z", QColor("#4c78a8")
+        )
 
-        painter.setPen(QPen(text_color, 6.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        for first, second in pairwise(ordered):
+        painter.setPen(
+            QPen(text_color, 6.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        )
+        for first, second in pairwise(joint_points):
             painter.drawLine(self._project(first), self._project(second))
+
+        # Draw the gripper from the true wrist-roll/gripper-link frame instead of
+        # pretending that wrist_roll -> TCP is another rigid arm link.
+        painter.setPen(
+            QPen(text_color, 5.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        )
+        painter.drawLine(
+            self._project(gripper["origin"]), self._project(gripper["body_end"])
+        )
+        painter.drawLine(
+            self._project(gripper["crossbar_left"]),
+            self._project(gripper["crossbar_right"]),
+        )
+        painter.setPen(
+            QPen(text_color, 4.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        )
+        painter.drawLine(
+            self._project(gripper["left_root"]), self._project(gripper["left_tip"])
+        )
+        painter.drawLine(
+            self._project(gripper["right_root"]), self._project(gripper["right_tip"])
+        )
 
         painter.setPen(QPen(muted, 1.5))
         painter.setBrush(text_color)
-        for name, point in zip(ordered_names, ordered, strict=True):
+        for name, point in zip(joint_names, joint_points, strict=True):
             projected = self._project(point)
-            radius = 4.5 if name != "tcp" else 6.0
-            painter.drawEllipse(projected, radius, radius)
+            painter.drawEllipse(projected, 4.5, 4.5)
 
-        frame_colors = (QColor("#d95c5c"), QColor("#55a868"), QColor("#4c78a8"))
+        tcp_projected = self._project(tcp)
+        painter.setBrush(QColor("#d08b28"))
+        painter.drawEllipse(tcp_projected, 5.5, 5.5)
+        painter.drawText(tcp_projected + QPointF(8.0, -7.0), "TCP")
+
+        frame_colors = (
+            QColor("#d95c5c"),
+            QColor("#55a868"),
+            QColor("#4c78a8"),
+        )
         for index, color in enumerate(frame_colors):
             endpoint = tcp + tcp_pose.rotation[:, index] * frame_length
             painter.setPen(QPen(color, 1.6))
@@ -187,10 +263,15 @@ class CartesianArmView(QWidget):
             if self._queue_active
             else "Cartesian queue: idle"
         )
-        painter.drawText(10, 20, queue_text)
+        painter.drawText(
+            10,
+            20,
+            f"{queue_text} · gripper {self._gripper_position:.3f}",
+        )
         painter.setPen(muted)
         painter.drawText(
-            10, self.height() - 10,
+            10,
+            self.height() - 10,
             "Drag: rotate · Wheel: zoom · Double-click: side view · world/base XYZ",
         )
         painter.end()
@@ -213,10 +294,7 @@ class CartesianArmView(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if (
-            self._last_mouse is not None
-            and event.buttons() & Qt.MouseButton.LeftButton
-        ):
+        if self._last_mouse is not None and event.buttons() & Qt.MouseButton.LeftButton:
             delta = event.position() - self._last_mouse
             self._last_mouse = event.position()
             self._yaw += float(delta.x()) * 0.010
