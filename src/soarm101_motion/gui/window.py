@@ -811,8 +811,14 @@ class MainWindow(QMainWindow):
 
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(self._build_coordination_panel())
+        layout = QHBoxLayout(page)
+        layout.setSpacing(12)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self._build_coordination_panel())
+
         teleop = QGroupBox("Live leader → follower teleoperation")
         teleop_grid = QGridLayout(teleop)
         teleop_grid.addWidget(QLabel("Mapping"), 0, 0)
@@ -861,13 +867,24 @@ class MainWindow(QMainWindow):
         )
         self.teleop_status.setWordWrap(True)
         teleop_grid.addWidget(self.teleop_status, 2, 0, 1, 6)
-        layout.addWidget(teleop)
+        left_layout.addWidget(teleop)
 
         self.teleop_readout = QLabel("Connect both arms to see live measurements.")
         self.teleop_readout.setTextFormat(Qt.TextFormat.PlainText)
-        self.teleop_readout.setStyleSheet("font-family: monospace; padding: 12px;")
+        self.teleop_readout.setStyleSheet(
+            "font-family: monospace; padding: 12px; border-radius: 10px; "
+            "background: palette(alternate-base);"
+        )
         self.teleop_readout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.teleop_readout, 1)
+        left_layout.addWidget(self.teleop_readout, 1)
+        layout.addWidget(left, 3)
+
+        self.teleop_arm_panel = self._new_follower_status_panel(
+            "Teleoperation",
+            subtitle="Follower solid · leader ghost",
+            compact=True,
+        )
+        layout.addWidget(self.teleop_arm_panel, 2)
         return page
 
     def _build_teach_tab(self) -> QWidget:
