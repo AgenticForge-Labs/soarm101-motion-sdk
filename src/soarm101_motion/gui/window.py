@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
     effort_configure_requested = Signal(object)
     discover_arms_requested = Signal()
     capture_follower_pose_requested = Signal(object)
+    capture_leader_pose_requested = Signal(object)
     diagnostic_logging_requested = Signal(bool)
 
     def __init__(
@@ -151,6 +152,7 @@ class MainWindow(QMainWindow):
         self._coordination_relink_buttons: list[QPushButton] = []
         self._coordination_gripper_checks: list[QCheckBox] = []
         self._sync_include_gripper = True
+        self._sync_capture_pending: str | None = None
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -223,6 +225,7 @@ class MainWindow(QMainWindow):
         self.leader_stream_start_requested.connect(self._leader_worker.start_stream_readout)
         self.leader_stream_stop_requested.connect(self._leader_worker.stop_stream_readout)
         self.leader_teleop_pose_requested.connect(self._leader_worker.read_teleop_start_pose)
+        self.capture_leader_pose_requested.connect(self._leader_worker.capture_measured_pose)
         self._leader_worker.teleop_start_pose.connect(self._on_leader_teleop_start_pose)
         self._leader_worker.stream_sample.connect(self._worker.apply_teleop_sample)
         self._leader_worker.stream_readout_changed.connect(
@@ -238,6 +241,7 @@ class MainWindow(QMainWindow):
         self._leader_worker.error_message.connect(self._on_leader_error_message)
         self._leader_worker.recording_completed.connect(self._on_recording_completed)
         self._leader_worker.recording_changed.connect(self._on_leader_recording_changed)
+        self._leader_worker.measured_pose_captured.connect(self._on_measured_pose_captured)
 
         self._build_ui(port=port, robot_id=robot_id, simulation=simulation)
         self._thread.start()
@@ -1624,6 +1628,7 @@ class MainWindow(QMainWindow):
         if self._connected:
             self.disconnect_requested.emit()
             return
+        self._update_coordination_panels()
         simulation = self.simulation_check.isChecked()
         port = self.port_combo.currentText().strip()
         if not simulation and not port:
@@ -2208,37 +2213,68 @@ class MainWindow(QMainWindow):
         if state is None:
             self._on_error(f"Cannot save point: {source} state is unavailable.")
             return
-        try:
-            pose = self._bind_pose_to_follower(
-                self._saved_pose_from_state(state, source=source)
-            )
-            path = self._get_pose_library().save(name, pose)
-            self._log(f"Saved taught point {name!r} from {source} to {path}.")
-            self.point_name_edit.clear()
-            self._refresh_point_list()
-            self.point_combo.setCurrentText(name)
-        except Exception as exc:
-            self._on_error(f"Save taught point: {exc}")
+        self.capture_leader_pose_requested.emit(
+            {
+                "kind": "point",
+                "name": name,
+                "source": "leader",
+            }
+        )
+        self._log(f"Capturing fresh measured leader pose for taught point {name!r}…")
 
     def _on_measured_pose_captured(self, result: object) -> None:
         values = dict(result)  # type: ignore[arg-type]
         request = dict(values.get("request") or {})
+        source = str(request.get("source") or "follower")
         error = values.get("error")
         if error:
+            if str(request.get("kind") or "") == "sync":
+                self._sync_capture_pending = None
+                self._update_enabled_state()
             return
 
         pose = values.get("pose")
         if not isinstance(pose, SavedPose):
-            self._on_error("Save measured follower pose: worker returned no valid pose.")
+            self._on_error(f"Capture measured {source} pose: worker returned no valid pose.")
+            self._sync_capture_pending = None
+            self._update_enabled_state()
             return
 
         kind = str(request.get("kind") or "")
         name = str(request.get("name") or "").strip()
         try:
+            if kind == "sync":
+                destination = str(request.get("destination") or "")
+                if destination not in {"leader", "follower"}:
+                    raise ValueError("pose synchronization destination is invalid")
+                payload = {
+                    "joints_deg": {
+                        joint: degrees(float(value)) for joint, value in pose.joints.items()
+                    },
+                    "gripper": float(pose.gripper),
+                    "include_gripper": self._sync_include_gripper,
+                    "speed_deg_s": self.joint_speed.value(),
+                    "acceleration_deg_s2": self.joint_acceleration.value(),
+                    "gripper_speed_multiplier": self._gripper_speed_multiplier,
+                    "source": source,
+                }
+                if destination == "leader":
+                    self.leader_sync_requested.emit(payload)
+                else:
+                    self.follower_sync_requested.emit(payload)
+                self._log(
+                    f"Fresh {source} pose captured; moving {destination} to match "
+                    f"{'including' if self._sync_include_gripper else 'without'} gripper."
+                )
+                self._sync_capture_pending = None
+                self._update_enabled_state()
+                return
+
             if kind == "named":
+                if source != "follower":
+                    raise ValueError("standard Home/Rest poses must be captured from the follower")
                 if name not in {HOME_POSE_NAME, REST_POSE_NAME}:
                     raise ValueError(f"unknown standard pose {name!r}")
-                pose = self._bind_pose_to_follower(pose)
                 pose = self._bind_pose_to_follower(pose)
                 path = self._get_pose_library().save(name, pose)
                 self._log(f"Saved {name} from fresh measured follower pose to {path}.")
@@ -2249,18 +2285,22 @@ class MainWindow(QMainWindow):
             if kind == "point":
                 if not name:
                     raise ValueError("point name is empty")
+                if source == "leader":
+                    pose = self._bind_pose_to_follower(pose)
                 path = self._get_pose_library().save(name, pose)
                 self._log(
-                    f"Saved taught point {name!r} from fresh measured follower pose to {path}."
+                    f"Saved taught point {name!r} from fresh measured {source} pose to {path}."
                 )
                 self.point_name_edit.clear()
                 self._refresh_point_list()
                 self.point_combo.setCurrentText(name)
                 return
 
-            raise ValueError(f"unknown measured-pose save request {kind!r}")
+            raise ValueError(f"unknown measured-pose request {kind!r}")
         except Exception as exc:
-            self._on_error(f"Save measured follower pose: {exc}")
+            self._sync_capture_pending = None
+            self._on_error(f"Use measured {source} pose: {exc}")
+            self._update_enabled_state()
 
     def _delete_taught_point(self) -> None:
         name = self.point_combo.currentText().strip()
@@ -2957,12 +2997,168 @@ class MainWindow(QMainWindow):
         if normalized:
             self._last_joint_limits = normalized
 
-    def _toggle_teleop(self) -> None:
+    def _set_sync_include_gripper(
+        self,
+        checked: bool,
+        source: QCheckBox | None = None,
+    ) -> None:
+        self._sync_include_gripper = bool(checked)
+        for checkbox in self._coordination_gripper_checks:
+            if checkbox is source:
+                continue
+            checkbox.blockSignals(True)
+            checkbox.setChecked(self._sync_include_gripper)
+            checkbox.blockSignals(False)
+        self._update_coordination_panels()
+
+    def _coordination_relation_text(self) -> str:
+        if not self._connected or not self._leader_connected:
+            return "Pose relationship: connect both arms"
+        if self._latest_state is None or self._latest_leader_state is None:
+            return "Pose relationship: waiting for measurements"
+
+        joint_delta = max(
+            abs(
+                float(self._latest_state["joints_deg"][name])
+                - float(self._latest_leader_state["joints_deg"][name])
+            )
+            for name in ARM_JOINTS
+        )
+        follower_xyz = tuple(float(v) for v in self._latest_state["pose_mm_deg"][:3])
+        leader_xyz = tuple(float(v) for v in self._latest_leader_state["pose_mm_deg"][:3])
+        tcp_delta = sum(
+            (follower_xyz[index] - leader_xyz[index]) ** 2 for index in range(3)
+        ) ** 0.5
+        gripper_delta = abs(
+            float(self._latest_state["gripper"])
+            - float(self._latest_leader_state["gripper"])
+        )
+        aligned = (
+            joint_delta <= 2.0
+            and tcp_delta <= 5.0
+            and (not self._sync_include_gripper or gripper_delta <= 0.03)
+        )
+        state = "ALIGNED" if aligned else "DIFFERENT"
+        gripper_note = (
+            f" · gripper Δ {gripper_delta:.3f}"
+            if self._sync_include_gripper
+            else " · gripper ignored"
+        )
+        return (
+            f"Pose relationship: {state} · max joint Δ {joint_delta:.1f}° "
+            f"· TCP Δ {tcp_delta:.1f} mm{gripper_note}"
+        )
+
+    def _update_coordination_panels(self) -> None:
+        if self._leader_connected:
+            leader_text = (
+                "Leader: PARKED · torque on"
+                if self._leader_torque_enabled
+                else "Leader: FREE · torque off"
+            )
+        else:
+            leader_text = "Leader: disconnected"
+        relation = self._coordination_relation_text()
+        for label in self._coordination_leader_labels:
+            label.setText(leader_text)
+        for label in self._coordination_relation_labels:
+            label.setText(relation)
+
+        calibration_leader = (
+            hasattr(self, "leader_allow_uncalibrated_check")
+            and self.leader_allow_uncalibrated_check.isChecked()
+        )
+        idle_pair = (
+            self._connected
+            and self._leader_connected
+            and self._latest_state is not None
+            and self._latest_leader_state is not None
+            and not self._busy
+            and not self._leader_busy
+            and not self._teleop_active
+            and not self._teleop_starting
+            and self._recording_source is None
+            and self._sync_capture_pending is None
+        )
+        can_park = (
+            self._leader_connected
+            and not self._leader_busy
+            and not self._teleop_active
+            and not self._teleop_starting
+            and self._recording_source != "leader"
+            and not calibration_leader
+        )
+        for button in self._coordination_park_buttons:
+            button.setText(
+                "Release leader" if self._leader_torque_enabled else "Park leader here"
+            )
+            button.setEnabled(can_park)
+        for button in self._coordination_move_leader_buttons:
+            button.setEnabled(idle_pair and not calibration_leader)
+        for button in self._coordination_move_follower_buttons:
+            button.setEnabled(idle_pair and not self._follower_setup_session)
+        for button in self._coordination_relink_buttons:
+            button.setEnabled(
+                idle_pair
+                and not calibration_leader
+                and not self._follower_setup_session
+            )
+        for checkbox in self._coordination_gripper_checks:
+            checkbox.setEnabled(not self._teleop_active and not self._teleop_starting)
+
+    def _toggle_leader_park(self) -> None:
+        if not self._leader_connected:
+            return
+        if self._leader_torque_enabled:
+            self.leader_release_requested.emit()
+            self._log("Releasing leader torque; leader will be FREE for hand movement.")
+        else:
+            self.leader_park_requested.emit()
+            self._log("Parking leader at its freshly latched measured pose.")
+
+    def _capture_pose_for_sync(self, *, source: str, destination: str) -> None:
+        if self._sync_capture_pending is not None:
+            return
+        self._sync_capture_pending = f"{source}_to_{destination}"
+        request = {
+            "kind": "sync",
+            "source": source,
+            "destination": destination,
+        }
+        if source == "leader":
+            self.capture_leader_pose_requested.emit(request)
+        else:
+            self.capture_follower_pose_requested.emit(request)
+        self._log(f"Reading fresh {source} pose before moving {destination}…")
+        self._update_enabled_state()
+
+    def _move_leader_to_follower(self) -> None:
+        self._capture_pose_for_sync(source="follower", destination="leader")
+
+    def _move_follower_to_leader(self) -> None:
+        self._capture_pose_for_sync(source="leader", destination="follower")
+
+    def _relink_here(self) -> None:
+        self._begin_teleop(align_follower=False, force_relative=True)
+
+    def _transfer_to_manual_and_park(self) -> None:
         if self._teleop_active or self._teleop_starting:
             self._teleop_starting = False
             self.teleop_stop_requested.emit()
-            self.teleop_button.setText("Align follower and start")
-            return
+        self.leader_stream_stop_requested.emit()
+        if self._leader_connected:
+            self.leader_park_requested.emit()
+        self.tabs.setCurrentWidget(self.manual_page)
+        self._log(
+            "Transferred to Manual: follower holds its current pose and leader is parking."
+        )
+
+    def _begin_teleop(
+        self,
+        *,
+        align_follower: bool,
+        force_relative: bool = False,
+    ) -> None:
         self._teleop_error = None
         self._teleop_alignment_note = None
         if not self._connected:
@@ -2992,20 +3188,44 @@ class MainWindow(QMainWindow):
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
+
+        # A parked leader must become back-drivable before live teaching. These
+        # queued calls target the same worker, so release is processed before the
+        # fresh pose read that seeds teleoperation.
+        if self._leader_torque_enabled:
+            self.leader_release_requested.emit()
+
+        mode = "relative" if force_relative else self.teleop_mode_combo.currentData()
+        if force_relative:
+            self.teleop_mode_combo.setCurrentIndex(
+                self.teleop_mode_combo.findData("relative")
+            )
         self._teleop_starting = True
-        self._teleop_start_options = (
-            {
-                "mode": self.teleop_mode_combo.currentData(),
-                "frequency_hz": frequency_hz,
-                "mirror_gripper": self.teleop_gripper_check.isChecked(),
-                "gripper_speed_multiplier": self._gripper_speed_multiplier,
-                "align_follower": True,
-            }
+        self._teleop_start_options = {
+            "mode": mode,
+            "frequency_hz": frequency_hz,
+            "mirror_gripper": self.teleop_gripper_check.isChecked(),
+            "gripper_speed_multiplier": self._gripper_speed_multiplier,
+            "align_follower": align_follower,
+        }
+        self.teleop_button.setText(
+            "Cancel alignment" if align_follower else "Cancel relink"
         )
-        self.teleop_button.setText("Cancel alignment")
-        self.teleop_status.setText("Reading the leader's current pose…")
+        self.teleop_status.setText(
+            "Reading the leader's current pose for alignment…"
+            if align_follower
+            else "Reading both current poses for no-motion relative relink…"
+        )
         self._update_enabled_state()
         self.leader_teleop_pose_requested.emit()
+
+    def _toggle_teleop(self) -> None:
+        if self._teleop_active or self._teleop_starting:
+            self._teleop_starting = False
+            self.teleop_stop_requested.emit()
+            self.teleop_button.setText("Align follower and start")
+            return
+        self._begin_teleop(align_follower=True)
 
     @Slot(object)
     def _on_leader_teleop_start_pose(self, result: object) -> None:
@@ -3018,10 +3238,16 @@ class MainWindow(QMainWindow):
             self.teleop_status.setText(f"Could not read leader: {values['error']}")
             self._update_enabled_state()
             return
-        self.teleop_status.setText(
-            "Aligning follower with leader. Keep leader still until live following starts. "
-            "STOP/HOLD or Cancel alignment stops this move."
-        )
+        if bool(self._teleop_start_options.get("align_follower", True)):
+            self.teleop_status.setText(
+                "Aligning follower with leader. Keep leader still until live following starts. "
+                "STOP/HOLD or Cancel alignment stops this move."
+            )
+        else:
+            self.teleop_status.setText(
+                "Relinking current leader/follower poses with no alignment move. "
+                "Keep the leader still until live following starts."
+            )
         self.teleop_start_requested.emit({
             **self._teleop_start_options,
             "leader_joints_rad": values["joints_rad"],
@@ -3104,10 +3330,28 @@ class MainWindow(QMainWindow):
             lines = [f"{'Joint':<20} {'Follower':>12} {'Leader':>12}"]
             for name in ARM_JOINTS:
                 measured = []
-                for state in (self._latest_state if self._connected else None,
-                              self._latest_leader_state if self._leader_connected else None):
-                    measured.append(f"{float(state['joints_deg'][name]):.1f}°" if state else "—")
-                lines.append(f"{name.replace('_', ' ').title():<20} {measured[0]:>12} {measured[1]:>12}")
+                for state in (
+                    self._latest_state if self._connected else None,
+                    self._latest_leader_state if self._leader_connected else None,
+                ):
+                    measured.append(
+                        f"{float(state['joints_deg'][name]):.1f}°" if state else "—"
+                    )
+                lines.append(
+                    f"{name.replace('_', ' ').title():<20} "
+                    f"{measured[0]:>12} {measured[1]:>12}"
+                )
+            follower_gripper = (
+                f"{float(self._latest_state['gripper']):.3f}"
+                if self._connected and self._latest_state else "—"
+            )
+            leader_gripper = (
+                f"{float(self._latest_leader_state['gripper']):.3f}"
+                if self._leader_connected and self._latest_leader_state else "—"
+            )
+            lines.append(
+                f"{'Gripper':<20} {follower_gripper:>12} {leader_gripper:>12}"
+            )
             self.teleop_readout.setText("\n".join(lines))
         if not hasattr(self, "teaching_source_combo"):
             return
@@ -3648,7 +3892,15 @@ class MainWindow(QMainWindow):
             and self._recording_source is None
             and not self._busy
         )
-        self.teleop_button.setEnabled(self._teleop_active or self._teleop_starting or can_start_teleop)
+        self.teleop_button.setEnabled(
+            self._teleop_active or self._teleop_starting or can_start_teleop
+        )
+        self.transfer_manual_button.setEnabled(
+            self._connected
+            and self._leader_connected
+            and not self._leader_busy
+            and self._recording_source is None
+        )
         self.teleop_mode_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_rate_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_gripper_check.setEnabled(not self._teleop_active and not self._teleop_starting)
