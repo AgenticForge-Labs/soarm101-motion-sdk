@@ -20,10 +20,51 @@ def test_roles_are_in_setup_tab(window):
     assert window.calibration_page.isAncestorOf(window.leader_port_combo)
     assert not window.tabs.isAncestorOf(window.stop_button)
     labels = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert labels == ["Setup", "Manual", "Teleoperation", "Record / Teach", "Edit recordings", "Run", "Log"]
+    assert labels == ["Setup", "Manual", "Teleoperation", "Teach / Record", "Edit recordings", "Programs", "Log"]
     assert window.teleop_page.isAncestorOf(window.teleop_button)
     assert window.record_page.isAncestorOf(window.save_point_button)
     assert window.record_page.isAncestorOf(window.record_button)
+
+
+def test_motion_tabs_show_contextual_arm_views(window):
+    assert window.manual_page.isAncestorOf(window.manual_arm_panel)
+    assert window.teleop_page.isAncestorOf(window.teleop_arm_panel)
+    assert window.record_page.isAncestorOf(window.teach_arm_panel)
+    assert window.trajectory_page.isAncestorOf(window.trajectory_arm_panel)
+    assert window.run_page.isAncestorOf(window.program_arm_panel)
+    assert len(window._follower_status_panels) == 4
+
+
+def test_position_program_builder_creates_readable_linear_steps(window):
+    window.run_point_combo.addItem("pick")
+    window.run_point_combo.setCurrentText("pick")
+    window.program_move_speed_spin.setValue(0.5)
+    window.run_point_mode_combo.setCurrentIndex(
+        window.run_point_mode_combo.findData("joint")
+    )
+
+    window._add_point_sequence_step()
+    window._add_gripper_sequence_step(0.0)
+    window.sequence_wait_spin.setValue(0.25)
+    window._add_wait_sequence_step()
+    window._add_gripper_sequence_step(1.0)
+
+    assert [step.kind for step in window._sequence_steps] == [
+        "point", "gripper", "wait", "gripper"
+    ]
+    assert window._sequence_steps[0].params == {
+        "name": "pick",
+        "mode": "joint",
+        "speed_scale": 0.5,
+    }
+    rows = [
+        window.sequence_step_list.item(index).text()
+        for index in range(window.sequence_step_list.count())
+    ]
+    assert "MOVE  pick · joint · 0.50×" in rows[0]
+    assert "GRIPPER  CLOSE" in rows[1]
+    assert "WAIT  0.25 s" in rows[2]
+    assert "GRIPPER  OPEN" in rows[3]
 
 
 def test_manual_workspace_keeps_gripper_visible_across_arm_modes(window):
@@ -97,6 +138,14 @@ def test_kinematic_view_gripper_uses_wrist_frame_and_changes_aperture(window):
     closed = view.gripper_geometry()
     view.set_gripper_position(1.0)
     opened = view.gripper_geometry()
+    view.set_secondary_joint_degrees(
+        {name: 5.0 for name in view._model.joint_names},
+        gripper=0.5,
+        label="preview",
+    )
+    assert view._secondary_joints is not None
+    view.clear_secondary()
+    assert view._secondary_joints is None
 
     expected_origin = view._model.forward_matrix(
         {name: 0.0 for name in view._model.joint_names},

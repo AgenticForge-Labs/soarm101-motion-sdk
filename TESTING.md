@@ -37,13 +37,17 @@ after any failed gate rather than continuing into later capabilities.
    `pip install -e ".[gui]"`
 2. Run:
    `soarm101-gui --simulation`
-3. Confirm the window opens with Setup, Manual, Teleoperation, Record / Teach, Edit recordings, Run, and Log tabs.
+3. Confirm the window opens with Setup, Manual, Teleoperation, Teach / Record, Edit recordings, Programs, and Log tabs.
 4. Connect the follower simulation.
 5. Enable it, jog joints/Cartesian axes, move the gripper, and confirm STOP/HOLD and
    Relax still work. Confirm Manual has only **Joint / angular** and **Cartesian** arm
    mode tabs and that the gripper tool panel remains visible in both.
-6. Change the gripper speed preset in Manual and confirm the same preset appears in
-   Teleoperation, Edit recordings, and Run.
+6. Confirm the modern kinematic card is visible in Manual, Teleoperation, Teach / Record,
+   Edit recordings, and Programs. Teleoperation should show a leader ghost when leader
+   state is available; Teach / Record and Programs should show saved-position ghosts;
+   Edit recordings should show the scrubbed recording pose as a ghost.
+7. Change the gripper speed preset in Manual and confirm the same preset appears in
+   Teleoperation, Edit recordings, and Programs.
 7. Save the current simulated follower position as Home and Rest.
 8. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
 9. Close and reopen the GUI and confirm Home and Rest are still present.
@@ -184,7 +188,7 @@ force.
 3. Connect the leader with torque OFF. If it still needs calibration, use the shared Setup calibration workflow before returning to teaching.
 4. Move each leader joint by hand and confirm the displayed angles and gripper position
    update independently of the follower.
-5. In Record / Teach, switch the teaching source between Follower and Leader and confirm the current-source readout follows the selected arm.
+5. In Teach / Record, switch the teaching source between Follower and Leader and confirm the current-source readout and solid kinematic arm follow the selected source.
 6. Do not enable live teleoperation yet. That is a later implementation/testing stage.
 
 ## Implemented after Batch 1
@@ -214,7 +218,7 @@ These checks can wait until the Batch 1 hardware checks pass.
 
 1. Run `soarm101-gui --simulation`.
 2. Connect and enable the follower simulation.
-3. In Record / Teach, leave Follower selected as the teaching source.
+3. In Teach / Record, leave Follower selected as the teaching source.
 4. Move the simulated follower to a non-home joint pose.
 5. Save it as a named taught point such as `test_point_1`.
 6. Move away from the point.
@@ -288,25 +292,31 @@ Only continue after Batch 1 first-motion validation passes.
 5. Treat >1.0x playback as a separate validation: faster timing is allowed only when all
    configured hard limits still pass.
 
-## Batch 3 — Sequences, live teleoperation, and advanced motion primitives
+## Batch 3 — Programs, live teleoperation, and advanced motion primitives
 
-### 12. Software-only sequence editor and runner
+### 12. Software-only saved-position Program editor and runner
 
 1. Run `soarm101-gui --simulation`, connect the follower simulation, and enable it.
-2. Ensure Home/Rest and at least one taught point exist. Keep one saved trajectory from
-   Batch 2 if available.
-3. Open Run and create a short sequence such as:
-   Home → Point → Gripper 0.3 → Wait 0.25 s → Home.
-4. Save the sequence, clear/load it again, and confirm step order is preserved.
-5. Use **Run selected step** on each step individually.
-6. Run the entire sequence once at 0.5× speed, then at 1.0×.
-7. Set Repeat to 2 and confirm the complete sequence runs twice.
-8. Add a WAIT of at least 1 second. Start the sequence, press
+2. Ensure Home/Rest and at least two saved positions exist, for example `above_pick`
+   and `pick`.
+3. Open Programs. In **Position steps**, build a short linear Program such as:
+   Move above_pick → Move pick at 0.5× → Close gripper → Wait 0.25 s →
+   Move above_pick → Open gripper.
+4. Confirm the list reads as explicit MOVE / GRIPPER / WAIT rows and the selected Move
+   destination appears as a ghost in the Program kinematic card.
+5. Save the Program, clear/load it again, and confirm step order, movement mode, and
+   per-Move speed are preserved. Internally this remains a `MotionSequence`.
+6. Use **Run selected step** on each step individually.
+7. Run the entire Program once at 0.5× overall speed, then at 1.0×.
+8. Set Repeat to 2 and confirm the complete Program runs twice.
+9. Add a WAIT of at least 1 second. Start the Program, press
    **Pause after current step**, and confirm it pauses at a step boundary or pauses the
    WAIT timer. Resume and confirm execution continues.
-9. During another run press **STOP / HOLD** and confirm the active sequence is cancelled
-   and the follower holds.
-10. Restart the GUI and confirm saved sequences remain available.
+10. During another run press **STOP / HOLD** and confirm the active Program is cancelled
+    and the follower holds.
+11. Restart the GUI and confirm saved Programs remain available.
+12. If a saved trajectory exists, open **Recorded motion · advanced**, add it as one
+    Program step, and confirm it executes through the same guarded runner.
 
 ### 13. Software-only advanced trajectory editing and primitives
 
@@ -325,7 +335,7 @@ Only continue after Batch 1 first-motion validation passes.
    a discontinuous loop must be rejected by normal motion safety validation.
 9. Save a safe edited trajectory, give it a semantic name such as `wave_gentle`, add
    tags, and promote it to a motion primitive.
-10. In Run, add that primitive as a sequence step and execute it in simulation.
+10. In Programs > **Recorded motion · advanced**, add that primitive as a Program step and execute it in simulation.
 
 ### 14. Software-only live teleoperation lifecycle
 
@@ -351,7 +361,7 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
     arm performs an alignment move before relative teleoperation begins.
 12. While teleoperation is active, click **Stop → Manual + park leader**. Confirm the
     follower remains holding, Manual opens, and the leader reports PARKED.
-13. Exercise Slow, Normal, and Fast gripper presets through a manual move, a sequence
+13. Exercise Slow, Normal, and Fast gripper presets through a manual move, a Program
     gripper step, and recorded-trajectory replay; inspect simulator/backend tests for the
     raw speed propagation because simulation itself has no motor-speed dynamics.
 

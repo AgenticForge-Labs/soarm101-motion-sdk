@@ -43,8 +43,8 @@ from soarm101_motion.constants import (
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     JOINT_LIMITS,
 )
+from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
-from soarm101_motion.gui.cartesian_view import CartesianArmView
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
         self._effort_controls_initialized = False
         self._cartesian_jog_active = False
         self._cartesian_jog_queued = 0
+        self._follower_status_panels: list[RobotStatusPanel] = []
         self._coordination_leader_labels: list[QLabel] = []
         self._coordination_relation_labels: list[QLabel] = []
         self._coordination_park_buttons: list[QPushButton] = []
@@ -281,9 +282,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.calibration_page, "Setup")
         self.tabs.addTab(self.manual_page, "Manual")
         self.tabs.addTab(self.teleop_page, "Teleoperation")
-        self.tabs.addTab(self.record_page, "Record / Teach")
+        self.tabs.addTab(self.record_page, "Teach / Record")
         self.tabs.addTab(self.trajectory_page, "Edit recordings")
-        self.tabs.addTab(self.run_page, "Run")
+        self.tabs.addTab(self.run_page, "Programs")
         self.log_page = QWidget()
         log_layout = QVBoxLayout(self.log_page)
         self.log = QTextEdit()
@@ -627,9 +628,24 @@ class MainWindow(QMainWindow):
         self.diagnostic_logging_requested.emit(enabled)
         self._log(f"Detailed motion diagnostics {'enabled' if enabled else 'disabled'}.")
 
+    def _new_follower_status_panel(
+        self,
+        title: str,
+        *,
+        subtitle: str = "",
+        compact: bool = True,
+    ) -> RobotStatusPanel:
+        panel = RobotStatusPanel(title, subtitle=subtitle, compact=compact)
+        self._follower_status_panels.append(panel)
+        if self._latest_state is not None:
+            panel.update_state(self._latest_state)
+        return panel
+
     def _build_control_tab(self) -> QWidget:
         page = QWidget()
         layout = QHBoxLayout(page)
+        layout.setSpacing(12)
+
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -647,19 +663,14 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self._build_gripper_panel())
         layout.addWidget(controls, 3)
 
-        view_box = QGroupBox("SO-101 kinematic view")
-        view_layout = QVBoxLayout(view_box)
-        self.cartesian_view = CartesianArmView()
-        view_layout.addWidget(self.cartesian_view, 1)
-        view_note = QLabel(
-            "Joint centers and the gripper-link frame come from the SDK SO-101 "
-            "kinematic model. The gripper jaws are a schematic aperture view; the "
-            "orange point/axes mark the modeled TCP. Drag to rotate; double-click "
-            "to return to the side view."
+        self.manual_arm_panel = self._new_follower_status_panel(
+            "Follower",
+            subtitle="Live kinematics · drag to rotate",
+            compact=False,
         )
-        view_note.setWordWrap(True)
-        view_layout.addWidget(view_note)
-        layout.addWidget(view_box, 2)
+        # Preserve the public-ish attribute used by existing tests and diagnostics.
+        self.cartesian_view = self.manual_arm_panel.view
+        layout.addWidget(self.manual_arm_panel, 2)
         return page
 
     def _build_coordination_panel(self) -> QGroupBox:
@@ -800,8 +811,14 @@ class MainWindow(QMainWindow):
 
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(self._build_coordination_panel())
+        layout = QHBoxLayout(page)
+        layout.setSpacing(12)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self._build_coordination_panel())
+
         teleop = QGroupBox("Live leader → follower teleoperation")
         teleop_grid = QGridLayout(teleop)
         teleop_grid.addWidget(QLabel("Mapping"), 0, 0)
@@ -850,24 +867,42 @@ class MainWindow(QMainWindow):
         )
         self.teleop_status.setWordWrap(True)
         teleop_grid.addWidget(self.teleop_status, 2, 0, 1, 6)
-        layout.addWidget(teleop)
+        left_layout.addWidget(teleop)
 
         self.teleop_readout = QLabel("Connect both arms to see live measurements.")
         self.teleop_readout.setTextFormat(Qt.TextFormat.PlainText)
-        self.teleop_readout.setStyleSheet("font-family: monospace; padding: 12px;")
+        self.teleop_readout.setStyleSheet(
+            "font-family: monospace; padding: 12px; border-radius: 10px; "
+            "background: palette(alternate-base);"
+        )
         self.teleop_readout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.teleop_readout, 1)
+        left_layout.addWidget(self.teleop_readout, 1)
+        layout.addWidget(left, 3)
+
+        self.teleop_arm_panel = self._new_follower_status_panel(
+            "Teleoperation",
+            subtitle="Follower solid · leader ghost",
+            compact=True,
+        )
+        layout.addWidget(self.teleop_arm_panel, 2)
         return page
 
     def _build_teach_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        layout = QHBoxLayout(page)
+        layout.setSpacing(12)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
         note = QLabel(
-            "Save named positions or record movement here. Use Run to arrange saved "
-            "positions and recordings into sequences with pauses and repeats."
+            "Save named positions for deterministic programs, or record continuous "
+            "movement when the path itself matters. Saved positions are usually the "
+            "simplest way to build pick/place and bench automation."
         )
         note.setWordWrap(True)
-        layout.addWidget(note)
+        left_layout.addWidget(note)
 
         source = QGroupBox("Teaching source")
         source_grid = QGridLayout(source)
@@ -895,39 +930,49 @@ class MainWindow(QMainWindow):
         self.teach_pose_label = QLabel("TCP: —")
         self.teach_pose_label.setWordWrap(True)
         source_grid.addWidget(self.teach_pose_label, 2, 3, 2, 3)
-        layout.addWidget(source)
+        left_layout.addWidget(source)
 
-        points = QGroupBox("Taught points")
+        points = QGroupBox("Saved positions")
         point_grid = QGridLayout(points)
-        point_grid.addWidget(QLabel("New point name"), 0, 0)
+        point_grid.addWidget(QLabel("New position name"), 0, 0)
         self.point_name_edit = QLineEdit()
-        self.point_name_edit.setPlaceholderText("pick, above_drop, camera_pose...")
+        self.point_name_edit.setPlaceholderText("pick, above_drop, inspect, park...")
         point_grid.addWidget(self.point_name_edit, 0, 1, 1, 2)
-        self.save_point_button = QPushButton("Save current point")
+        self.save_point_button = QPushButton("Save current position")
         self.save_point_button.setToolTip(
-            "With Follower selected, capture a fresh measured follower pose even during live teleop."
+            "Capture a fresh measured position from the selected teaching source."
         )
         self.save_point_button.clicked.connect(self._save_taught_point)
         point_grid.addWidget(self.save_point_button, 0, 3)
-        point_grid.addWidget(QLabel("Saved point"), 1, 0)
+
+        point_grid.addWidget(QLabel("Saved position"), 1, 0)
         self.point_combo = QComboBox()
+        self.point_combo.currentTextChanged.connect(
+            lambda _text: self._preview_selected_taught_point()
+        )
         point_grid.addWidget(self.point_combo, 1, 1)
         self.point_mode_combo = QComboBox()
         self.point_mode_combo.addItem("Joint / angular", "joint")
         self.point_mode_combo.addItem("Cartesian linear", "linear")
         point_grid.addWidget(self.point_mode_combo, 1, 2)
-        self.move_point_button = QPushButton("Move follower to point")
+        self.move_point_button = QPushButton("Move follower here")
         self.move_point_button.clicked.connect(self._move_taught_point)
         point_grid.addWidget(self.move_point_button, 1, 3)
-        self.delete_point_button = QPushButton("Delete point")
+
+        self.add_point_to_program_button = QPushButton("Add position to current program")
+        self.add_point_to_program_button.setToolTip(
+            "Append a move to this saved position using the current point mode."
+        )
+        self.add_point_to_program_button.clicked.connect(
+            self._add_selected_taught_point_to_program
+        )
+        point_grid.addWidget(self.add_point_to_program_button, 2, 0, 1, 3)
+        self.delete_point_button = QPushButton("Delete position")
         self.delete_point_button.clicked.connect(self._delete_taught_point)
         point_grid.addWidget(self.delete_point_button, 2, 3)
-        compose = QPushButton("Arrange saved positions and recordings in Run")
-        compose.clicked.connect(lambda: self.tabs.setCurrentWidget(self.run_page))
-        point_grid.addWidget(compose, 3, 0, 1, 4)
-        layout.addWidget(points)
+        left_layout.addWidget(points)
 
-        recording = QGroupBox("Exact trajectory recording")
+        recording = QGroupBox("Continuous trajectory recording · optional")
         record_grid = QGridLayout(recording)
         record_grid.addWidget(QLabel("Name"), 0, 0)
         self.recording_name_edit = QLineEdit()
@@ -941,13 +986,25 @@ class MainWindow(QMainWindow):
         self.record_button.clicked.connect(self._toggle_recording)
         record_grid.addWidget(self.record_button, 0, 3, 2, 1)
         self.recording_status = QLabel(
-            "Raw recordings are immutable. Editing always creates a derived trajectory."
+            "Use recording when the path/timing itself matters. Raw recordings are "
+            "immutable; editing creates a derived trajectory."
         )
         self.recording_status.setWordWrap(True)
         record_grid.addWidget(self.recording_status, 2, 0, 1, 4)
-        layout.addWidget(recording)
+        left_layout.addWidget(recording)
 
-        layout.addStretch(1)
+        go_programs = QPushButton("Open Programs")
+        go_programs.clicked.connect(lambda: self.tabs.setCurrentWidget(self.run_page))
+        left_layout.addWidget(go_programs)
+        left_layout.addStretch(1)
+        layout.addWidget(left, 3)
+
+        self.teach_arm_panel = RobotStatusPanel(
+            "Teaching pose",
+            subtitle="Selected source solid · saved position ghost",
+            compact=True,
+        )
+        layout.addWidget(self.teach_arm_panel, 2)
         return page
 
     def _build_trajectory_tab(self) -> QWidget:
@@ -969,8 +1026,16 @@ class MainWindow(QMainWindow):
         library_grid.addWidget(self.trajectory_stats, 1, 0, 1, 4)
         layout.addWidget(library_box)
 
+        preview_row = QHBoxLayout()
         self.trajectory_timeline = TrajectoryTimeline()
-        layout.addWidget(self.trajectory_timeline, 1)
+        preview_row.addWidget(self.trajectory_timeline, 3)
+        self.trajectory_arm_panel = self._new_follower_status_panel(
+            "Recording preview",
+            subtitle="Live follower solid · scrubbed recording ghost",
+            compact=True,
+        )
+        preview_row.addWidget(self.trajectory_arm_panel, 2)
+        layout.addLayout(preview_row, 1)
 
         edit_box = QGroupBox("Selection and playback")
         edit_grid = QGridLayout(edit_box)
@@ -1113,11 +1178,24 @@ class MainWindow(QMainWindow):
 
     def _build_run_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        outer = QHBoxLayout(page)
+        outer.setSpacing(12)
 
-        library_box = QGroupBox("Sequence library")
+        left = QWidget()
+        layout = QVBoxLayout(left)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        intro = QLabel(
+            "Build a deterministic program by arranging saved positions and simple "
+            "actions. The rows execute from top to bottom; recorded trajectories remain "
+            "available as an advanced step when a continuous path matters."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        library_box = QGroupBox("Program library")
         library_grid = QGridLayout(library_box)
-        library_grid.addWidget(QLabel("Saved sequence"), 0, 0)
+        library_grid.addWidget(QLabel("Saved program"), 0, 0)
         self.sequence_combo = QComboBox()
         library_grid.addWidget(self.sequence_combo, 0, 1)
         self.load_sequence_button = QPushButton("Load")
@@ -1126,92 +1204,155 @@ class MainWindow(QMainWindow):
         self.delete_sequence_button = QPushButton("Delete")
         self.delete_sequence_button.clicked.connect(self._delete_sequence)
         library_grid.addWidget(self.delete_sequence_button, 0, 3)
-        library_grid.addWidget(QLabel("Name"), 1, 0)
+        library_grid.addWidget(QLabel("Program name"), 1, 0)
         self.sequence_name_edit = QLineEdit()
         self.sequence_name_edit.setPlaceholderText("pick_and_place")
         library_grid.addWidget(self.sequence_name_edit, 1, 1, 1, 2)
-        self.save_sequence_button = QPushButton("Save / replace sequence")
+        self.save_sequence_button = QPushButton("Save / replace program")
         self.save_sequence_button.clicked.connect(self._save_sequence)
         library_grid.addWidget(self.save_sequence_button, 1, 3)
         layout.addWidget(library_box)
 
-        builder = QGroupBox("Add steps")
-        builder_grid = QGridLayout(builder)
-        builder_grid.addWidget(QLabel("Point"), 0, 0)
+        step_tabs = QTabWidget()
+
+        simple = QWidget()
+        simple_grid = QGridLayout(simple)
+        simple_grid.addWidget(QLabel("Saved position"), 0, 0)
         self.run_point_combo = QComboBox()
-        builder_grid.addWidget(self.run_point_combo, 0, 1)
+        self.run_point_combo.currentTextChanged.connect(
+            lambda _text: self._preview_program_position()
+        )
+        simple_grid.addWidget(self.run_point_combo, 0, 1)
         self.run_point_mode_combo = QComboBox()
-        self.run_point_mode_combo.addItem("Joint", "joint")
-        self.run_point_mode_combo.addItem("Linear", "linear")
-        builder_grid.addWidget(self.run_point_mode_combo, 0, 2)
-        self.add_point_step_button = QPushButton("+ Point")
+        self.run_point_mode_combo.addItem("Joint / angular", "joint")
+        self.run_point_mode_combo.addItem("Cartesian linear", "linear")
+        simple_grid.addWidget(self.run_point_mode_combo, 0, 2)
+
+        simple_grid.addWidget(QLabel("Move speed"), 0, 3)
+        self.program_move_speed_spin = self._spin(
+            0.1, 3.0, 1.0, decimals=2, step=0.1, suffix="×"
+        )
+        self.program_move_speed_spin.setToolTip(
+            "Per-move speed multiplier. This is multiplied by the program's overall speed."
+        )
+        simple_grid.addWidget(self.program_move_speed_spin, 0, 4)
+        self.add_point_step_button = QPushButton("+ Move to position")
         self.add_point_step_button.clicked.connect(self._add_point_sequence_step)
-        builder_grid.addWidget(self.add_point_step_button, 0, 3)
+        simple_grid.addWidget(self.add_point_step_button, 0, 5)
 
         self.add_home_step_button = QPushButton("+ Home")
         self.add_home_step_button.clicked.connect(
-            lambda _checked=False: self._append_sequence_step(SequenceStep("home"))
+            lambda _checked=False: self._add_named_pose_program_step("home")
         )
-        builder_grid.addWidget(self.add_home_step_button, 1, 0)
+        simple_grid.addWidget(self.add_home_step_button, 1, 0)
         self.add_rest_step_button = QPushButton("+ Rest")
         self.add_rest_step_button.clicked.connect(
-            lambda _checked=False: self._append_sequence_step(SequenceStep("rest"))
+            lambda _checked=False: self._add_named_pose_program_step("rest")
         )
-        builder_grid.addWidget(self.add_rest_step_button, 1, 1)
+        simple_grid.addWidget(self.add_rest_step_button, 1, 1)
+
+        self.program_close_gripper_button = QPushButton("+ Close gripper")
+        self.program_close_gripper_button.clicked.connect(
+            lambda _checked=False: self._add_gripper_sequence_step(0.0)
+        )
+        simple_grid.addWidget(self.program_close_gripper_button, 1, 2)
+        self.program_open_gripper_button = QPushButton("+ Open gripper")
+        self.program_open_gripper_button.clicked.connect(
+            lambda _checked=False: self._add_gripper_sequence_step(1.0)
+        )
+        simple_grid.addWidget(self.program_open_gripper_button, 1, 3)
 
         self.sequence_gripper_spin = self._spin(
-            0.0, 1.0, 0.0, decimals=3, step=0.05
+            0.0, 1.0, 0.5, decimals=3, step=0.05
         )
-        builder_grid.addWidget(self.sequence_gripper_spin, 1, 2)
-        self.add_gripper_step_button = QPushButton("+ Gripper")
-        self.add_gripper_step_button.clicked.connect(self._add_gripper_sequence_step)
-        builder_grid.addWidget(self.add_gripper_step_button, 1, 3)
+        self.sequence_gripper_spin.setToolTip(
+            "Custom normalized gripper position: 0 closed, 1 open."
+        )
+        simple_grid.addWidget(self.sequence_gripper_spin, 1, 4)
+        self.add_gripper_step_button = QPushButton("+ Custom gripper")
+        self.add_gripper_step_button.clicked.connect(
+            lambda _checked=False: self._add_gripper_sequence_step()
+        )
+        simple_grid.addWidget(self.add_gripper_step_button, 1, 5)
 
+        simple_grid.addWidget(QLabel("Wait"), 2, 0)
         self.sequence_wait_spin = self._spin(
             0.0, 60.0, 0.25, decimals=2, step=0.25, suffix=" s"
         )
-        builder_grid.addWidget(self.sequence_wait_spin, 2, 0)
+        simple_grid.addWidget(self.sequence_wait_spin, 2, 1)
         self.add_wait_step_button = QPushButton("+ Wait")
         self.add_wait_step_button.clicked.connect(self._add_wait_sequence_step)
-        builder_grid.addWidget(self.add_wait_step_button, 2, 1)
+        simple_grid.addWidget(self.add_wait_step_button, 2, 2)
 
+        simple_hint = QLabel(
+            "Typical program: MOVE above_pick → MOVE pick → CLOSE → MOVE above_pick "
+            "→ MOVE above_drop → MOVE drop → OPEN."
+        )
+        simple_hint.setWordWrap(True)
+        simple_hint.setStyleSheet("color: palette(mid); padding-top: 4px;")
+        simple_grid.addWidget(simple_hint, 3, 0, 1, 6)
+        step_tabs.addTab(simple, "Position steps")
+
+        advanced = QWidget()
+        advanced_grid = QGridLayout(advanced)
+        advanced_grid.addWidget(
+            QLabel(
+                "Use these only when a prerecorded path or reusable motion primitive "
+                "is more appropriate than moving between saved positions."
+            ),
+            0,
+            0,
+            1,
+            4,
+        )
         self.run_trajectory_combo = QComboBox()
-        builder_grid.addWidget(self.run_trajectory_combo, 2, 2)
-        self.add_trajectory_step_button = QPushButton("+ Trajectory")
+        advanced_grid.addWidget(self.run_trajectory_combo, 1, 0, 1, 2)
+        self.add_trajectory_step_button = QPushButton("+ Recorded trajectory")
         self.add_trajectory_step_button.clicked.connect(self._add_trajectory_sequence_step)
-        builder_grid.addWidget(self.add_trajectory_step_button, 2, 3)
+        advanced_grid.addWidget(self.add_trajectory_step_button, 1, 2)
 
         self.run_primitive_combo = QComboBox()
-        builder_grid.addWidget(self.run_primitive_combo, 3, 2)
-        self.add_primitive_step_button = QPushButton("+ Primitive")
+        advanced_grid.addWidget(self.run_primitive_combo, 2, 0, 1, 2)
+        self.add_primitive_step_button = QPushButton("+ Motion primitive")
         self.add_primitive_step_button.clicked.connect(self._add_primitive_sequence_step)
-        builder_grid.addWidget(self.add_primitive_step_button, 3, 3)
-        layout.addWidget(builder)
+        advanced_grid.addWidget(self.add_primitive_step_button, 2, 2)
+        step_tabs.addTab(advanced, "Recorded motion · advanced")
+        layout.addWidget(step_tabs)
 
+        program_box = QGroupBox("Program steps · top to bottom")
+        program_layout = QVBoxLayout(program_box)
         self.sequence_step_list = QListWidget()
-        layout.addWidget(self.sequence_step_list, 1)
+        self.sequence_step_list.setAlternatingRowColors(True)
+        self.sequence_step_list.itemSelectionChanged.connect(
+            self._preview_selected_program_step
+        )
+        self.sequence_step_list.itemDoubleClicked.connect(
+            lambda _item: self._run_sequence(step_only=True)
+        )
+        program_layout.addWidget(self.sequence_step_list, 1)
 
         edit_row = QHBoxLayout()
-        self.sequence_up_button = QPushButton("Move up")
+        self.sequence_up_button = QPushButton("↑ Move up")
         self.sequence_up_button.clicked.connect(lambda _checked=False: self._move_sequence_step(-1))
         edit_row.addWidget(self.sequence_up_button)
-        self.sequence_down_button = QPushButton("Move down")
+        self.sequence_down_button = QPushButton("↓ Move down")
         self.sequence_down_button.clicked.connect(lambda _checked=False: self._move_sequence_step(1))
         edit_row.addWidget(self.sequence_down_button)
         self.sequence_delete_step_button = QPushButton("Delete step")
         self.sequence_delete_step_button.clicked.connect(self._delete_sequence_step)
         edit_row.addWidget(self.sequence_delete_step_button)
         edit_row.addStretch(1)
-        layout.addLayout(edit_row)
+        program_layout.addLayout(edit_row)
+        layout.addWidget(program_box, 1)
 
-        run_box = QGroupBox("Execute")
+        run_box = QGroupBox("Run program")
         run_grid = QGridLayout(run_box)
         run_grid.addWidget(QLabel("Repeat"), 0, 0)
         self.sequence_repeat_spin = QSpinBox()
         self.sequence_repeat_spin.setRange(1, 1000)
         self.sequence_repeat_spin.setValue(1)
         run_grid.addWidget(self.sequence_repeat_spin, 0, 1)
-        run_grid.addWidget(QLabel("Speed"), 0, 2)
+        run_grid.addWidget(QLabel("Overall speed"), 0, 2)
         self.sequence_speed_spin = self._spin(
             0.1, 3.0, 1.0, decimals=2, step=0.1, suffix="×"
         )
@@ -1219,21 +1360,38 @@ class MainWindow(QMainWindow):
         run_grid.addWidget(QLabel("Gripper speed"), 0, 4)
         self.run_gripper_speed_combo = self._new_gripper_speed_combo()
         run_grid.addWidget(self.run_gripper_speed_combo, 0, 5)
+
         self.run_step_button = QPushButton("Run selected step")
-        self.run_step_button.clicked.connect(lambda _checked=False: self._run_sequence(step_only=True))
+        self.run_step_button.clicked.connect(
+            lambda _checked=False: self._run_sequence(step_only=True)
+        )
         run_grid.addWidget(self.run_step_button, 1, 0, 1, 2)
-        self.run_sequence_button = QPushButton("Run sequence")
-        self.run_sequence_button.clicked.connect(lambda _checked=False: self._run_sequence(step_only=False))
-        run_grid.addWidget(self.run_sequence_button, 1, 2)
+        self.run_sequence_button = QPushButton("Run full program")
+        self.run_sequence_button.clicked.connect(
+            lambda _checked=False: self._run_sequence(step_only=False)
+        )
+        run_grid.addWidget(self.run_sequence_button, 1, 2, 1, 2)
         self.pause_sequence_button = QPushButton("Pause after current step")
         self.pause_sequence_button.clicked.connect(self._toggle_sequence_pause)
-        run_grid.addWidget(self.pause_sequence_button, 1, 3)
+        run_grid.addWidget(self.pause_sequence_button, 1, 4)
         self.stop_sequence_button = QPushButton("STOP / HOLD")
-        self.stop_sequence_button.clicked.connect(lambda _checked=False: self.stop_requested.emit())
-        run_grid.addWidget(self.stop_sequence_button, 2, 3)
-        self.sequence_status = QLabel("No sequence running")
-        run_grid.addWidget(self.sequence_status, 2, 0, 1, 3)
+        self.stop_sequence_button.clicked.connect(
+            lambda _checked=False: self.stop_requested.emit()
+        )
+        run_grid.addWidget(self.stop_sequence_button, 1, 5)
+        self.sequence_status = QLabel("No program running")
+        self.sequence_status.setWordWrap(True)
+        run_grid.addWidget(self.sequence_status, 2, 0, 1, 6)
         layout.addWidget(run_box)
+
+        outer.addWidget(left, 3)
+
+        self.program_arm_panel = self._new_follower_status_panel(
+            "Program preview",
+            subtitle="Live follower solid · selected position ghost",
+            compact=True,
+        )
+        outer.addWidget(self.program_arm_panel, 2)
         return page
 
     def _build_joint_tab(self) -> QWidget:
@@ -2181,7 +2339,85 @@ class MainWindow(QMainWindow):
             self.point_combo.setCurrentText(current)
         self.point_combo.blockSignals(False)
         self._refresh_sequence_resources()
+        self._preview_selected_taught_point()
         self._update_enabled_state()
+
+    def _show_saved_pose_preview(
+        self,
+        panel: RobotStatusPanel,
+        name: str,
+        *,
+        label: str | None = None,
+    ) -> None:
+        key = str(name).strip()
+        if not key:
+            panel.clear_secondary()
+            return
+        try:
+            pose = self._get_pose_library().require(key)
+        except Exception:
+            panel.clear_secondary()
+            return
+        panel.show_saved_pose(
+            joints_rad=pose.joints,
+            gripper=pose.gripper,
+            label=label or key,
+        )
+
+    def _preview_selected_taught_point(self) -> None:
+        if not hasattr(self, "teach_arm_panel"):
+            return
+        self._show_saved_pose_preview(
+            self.teach_arm_panel,
+            self.point_combo.currentText(),
+            label="saved position",
+        )
+
+    def _preview_program_position(self) -> None:
+        if not hasattr(self, "program_arm_panel"):
+            return
+        self._show_saved_pose_preview(
+            self.program_arm_panel,
+            self.run_point_combo.currentText(),
+            label="selected position",
+        )
+
+    def _preview_selected_program_step(self) -> None:
+        if not hasattr(self, "program_arm_panel"):
+            return
+        row = self.sequence_step_list.currentRow()
+        if not 0 <= row < len(self._sequence_steps):
+            self._preview_program_position()
+            return
+        step = self._sequence_steps[row]
+        if step.kind == "point":
+            self._show_saved_pose_preview(
+                self.program_arm_panel,
+                str(step.params.get("name") or ""),
+                label=f"step {row + 1}",
+            )
+            return
+        if step.kind in {"home", "rest"}:
+            self._show_saved_pose_preview(
+                self.program_arm_panel,
+                step.kind,
+                label=f"step {row + 1}",
+            )
+            return
+        self.program_arm_panel.clear_secondary()
+
+    def _add_selected_taught_point_to_program(self) -> None:
+        name = self.point_combo.currentText().strip()
+        if not name:
+            return
+        if self.run_point_combo.findText(name) < 0:
+            self._refresh_sequence_resources()
+        self.run_point_combo.setCurrentText(name)
+        mode_index = self.run_point_mode_combo.findData(self.point_mode_combo.currentData())
+        if mode_index >= 0:
+            self.run_point_mode_combo.setCurrentIndex(mode_index)
+        self._add_point_sequence_step()
+        self._log(f"Added saved position {name!r} to the current program.")
 
     def _save_taught_point(self) -> None:
         name = self.point_name_edit.text().strip()
@@ -2529,6 +2765,7 @@ class MainWindow(QMainWindow):
         self.selection_start.blockSignals(False)
         self.selection_end.blockSignals(False)
         self.trajectory_scrub.setValue(0)
+        self._update_trajectory_arm_preview(0.0)
         diagnostics = " + effort" if trajectory.effort_current_raw is not None else ""
         self.trajectory_stats.setText(
             f"{trajectory.metadata.get('kind', 'unsaved')} / "
@@ -2539,6 +2776,24 @@ class MainWindow(QMainWindow):
         self._selection_changed()
         self._update_enabled_state()
 
+    def _update_trajectory_arm_preview(self, cursor_s: float) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None or not hasattr(self, "trajectory_arm_panel"):
+            return
+        index = min(
+            range(trajectory.sample_count),
+            key=lambda item: abs(float(trajectory.timestamps_s[item]) - float(cursor_s)),
+        )
+        joints = {
+            name: float(trajectory.joints_rad[index, joint_index])
+            for joint_index, name in enumerate(ARM_JOINTS)
+        }
+        self.trajectory_arm_panel.show_saved_pose(
+            joints_rad=joints,
+            gripper=float(trajectory.gripper[index]),
+            label=f"recorded {float(trajectory.timestamps_s[index]):.2f} s",
+        )
+
     def _trajectory_scrub_changed(self, value: int) -> None:
         trajectory = self._active_trajectory
         if trajectory is None:
@@ -2546,6 +2801,7 @@ class MainWindow(QMainWindow):
         cursor = trajectory.duration_s * float(value) / 10000.0
         self.trajectory_timeline.set_cursor(cursor)
         self.trajectory_cursor_label.setText(f"{cursor:.3f} s")
+        self._update_trajectory_arm_preview(cursor)
 
     def _cursor_seconds(self) -> float:
         trajectory = self._active_trajectory
@@ -2769,21 +3025,32 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _sequence_step_text(step: SequenceStep) -> str:
         params = step.params
+        speed = float(params.get("speed_scale", 1.0))
+        speed_text = f" · {speed:.2f}×" if abs(speed - 1.0) > 1e-9 else ""
         if step.kind == "point":
-            return f"POINT {params.get('name')} [{params.get('mode', 'joint')}]"
+            mode = "linear" if params.get("mode", "joint") == "linear" else "joint"
+            return f"MOVE  {params.get('name')} · {mode}{speed_text}"
         if step.kind in {"home", "rest"}:
-            return step.kind.upper()
+            return f"MOVE  {step.kind.title()}{speed_text}"
         if step.kind == "gripper":
-            return f"GRIPPER {float(params.get('position', 0.0)):.3f}"
+            position = float(params.get("position", 0.0))
+            if position <= 0.001:
+                return "GRIPPER  CLOSE"
+            if position >= 0.999:
+                return "GRIPPER  OPEN"
+            return f"GRIPPER  {position:.3f}"
         if step.kind == "wait":
-            return f"WAIT {float(params.get('seconds', 0.0)):.2f} s"
+            return f"WAIT  {float(params.get('seconds', 0.0)):.2f} s"
         if step.kind == "trajectory":
             return (
-                f"TRAJECTORY {params.get('kind', 'edited')}:{params.get('name')} "
-                f"×{int(params.get('loops', 1))}"
+                f"RECORDED  {params.get('kind', 'edited')}:{params.get('name')} "
+                f"×{int(params.get('loops', 1))}{speed_text}"
             )
         if step.kind == "primitive":
-            return f"PRIMITIVE {params.get('name')} ×{int(params.get('loops', 1))}"
+            return (
+                f"PRIMITIVE  {params.get('name')} ×{int(params.get('loops', 1))}"
+                f"{speed_text}"
+            )
         return step.kind.upper()
 
     def _refresh_sequence_step_list(self) -> None:
@@ -2797,6 +3064,10 @@ class MainWindow(QMainWindow):
             self.sequence_step_list.setCurrentRow(
                 min(max(current, 0), len(self._sequence_steps) - 1)
             )
+        else:
+            if hasattr(self, "program_arm_panel"):
+                self.program_arm_panel.clear_secondary()
+        self._preview_selected_program_step()
         self._update_enabled_state()
 
     def _append_sequence_step(self, step: SequenceStep) -> None:
@@ -2804,19 +3075,38 @@ class MainWindow(QMainWindow):
         self._refresh_sequence_step_list()
         self.sequence_step_list.setCurrentRow(len(self._sequence_steps) - 1)
 
+    def _current_program_move_speed(self) -> float:
+        return (
+            float(self.program_move_speed_spin.value())
+            if hasattr(self, "program_move_speed_spin")
+            else 1.0
+        )
+
     def _add_point_sequence_step(self) -> None:
         name = self.run_point_combo.currentText().strip()
         if name:
             self._append_sequence_step(
                 SequenceStep(
                     "point",
-                    {"name": name, "mode": self.run_point_mode_combo.currentData()},
+                    {
+                        "name": name,
+                        "mode": self.run_point_mode_combo.currentData(),
+                        "speed_scale": self._current_program_move_speed(),
+                    },
                 )
             )
 
-    def _add_gripper_sequence_step(self) -> None:
+    def _add_named_pose_program_step(self, kind: str) -> None:
+        if kind not in {"home", "rest"}:
+            raise ValueError(f"unknown named program pose {kind!r}")
         self._append_sequence_step(
-            SequenceStep("gripper", {"position": self.sequence_gripper_spin.value()})
+            SequenceStep(kind, {"speed_scale": self._current_program_move_speed()})
+        )
+
+    def _add_gripper_sequence_step(self, position: float | None = None) -> None:
+        target = self.sequence_gripper_spin.value() if position is None else float(position)
+        self._append_sequence_step(
+            SequenceStep("gripper", {"position": target})
         )
 
     def _add_wait_sequence_step(self) -> None:
@@ -2829,14 +3119,29 @@ class MainWindow(QMainWindow):
         if data:
             kind, name = data
             self._append_sequence_step(
-                SequenceStep("trajectory", {"kind": kind, "name": name, "loops": 1})
+                SequenceStep(
+                    "trajectory",
+                    {
+                        "kind": kind,
+                        "name": name,
+                        "loops": 1,
+                        "speed_scale": self._current_program_move_speed(),
+                    },
+                )
             )
 
     def _add_primitive_sequence_step(self) -> None:
         name = self.run_primitive_combo.currentText().strip()
         if name:
             self._append_sequence_step(
-                SequenceStep("primitive", {"name": name, "loops": 1})
+                SequenceStep(
+                    "primitive",
+                    {
+                        "name": name,
+                        "loops": 1,
+                        "speed_scale": self._current_program_move_speed(),
+                    },
+                )
             )
 
     def _move_sequence_step(self, delta: int) -> None:
@@ -2860,10 +3165,10 @@ class MainWindow(QMainWindow):
     def _save_sequence(self) -> None:
         name = self.sequence_name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "Sequence name required", "Enter a sequence name.")
+            QMessageBox.warning(self, "Program name required", "Enter a program name.")
             return
         if not self._sequence_steps:
-            QMessageBox.warning(self, "No steps", "Add at least one sequence step.")
+            QMessageBox.warning(self, "No steps", "Add at least one program step.")
             return
         try:
             binding = self._follower_calibration_binding()
@@ -2879,11 +3184,11 @@ class MainWindow(QMainWindow):
                 metadata=sequence_metadata,
             )
             path = self._get_sequence_library().save(sequence)
-            self._log(f"Saved sequence {name!r} to {path}.")
+            self._log(f"Saved program {name!r} to {path}.")
             self._refresh_sequence_list()
             self.sequence_combo.setCurrentText(name)
         except Exception as exc:
-            self._on_error(f"Save sequence: {exc}")
+            self._on_error(f"Save program: {exc}")
 
     def _load_sequence(self) -> None:
         name = self.sequence_combo.currentText().strip()
@@ -2894,9 +3199,9 @@ class MainWindow(QMainWindow):
             self._sequence_steps = list(sequence.steps)
             self.sequence_name_edit.setText(sequence.name)
             self._refresh_sequence_step_list()
-            self._log(f"Loaded sequence {name!r}.")
+            self._log(f"Loaded program {name!r}.")
         except Exception as exc:
-            self._on_error(f"Load sequence: {exc}")
+            self._on_error(f"Load program: {exc}")
 
     def _delete_sequence(self) -> None:
         name = self.sequence_combo.currentText().strip()
@@ -2904,10 +3209,10 @@ class MainWindow(QMainWindow):
             return
         try:
             self._get_sequence_library().delete(name)
-            self._log(f"Deleted sequence {name!r}.")
+            self._log(f"Deleted program {name!r}.")
             self._refresh_sequence_list()
         except Exception as exc:
-            self._on_error(f"Delete sequence: {exc}")
+            self._on_error(f"Delete program: {exc}")
 
     def _run_sequence(self, *, step_only: bool) -> None:
         if not self._sequence_steps:
@@ -2932,7 +3237,7 @@ class MainWindow(QMainWindow):
                 f"Running {'step ' + str(start_index + 1) if step_only else sequence.name}…"
             )
         except Exception as exc:
-            self._on_error(f"Run sequence: {exc}")
+            self._on_error(f"Run program: {exc}")
 
     def _toggle_sequence_pause(self) -> None:
         if self._sequence_paused:
@@ -2949,12 +3254,12 @@ class MainWindow(QMainWindow):
                 "Resume sequence" if self._sequence_paused else "Pause after current step"
             )
             labels = {
-                "paused": "Sequence paused",
-                "running": "Sequence running",
-                "completed": "Sequence complete",
-                "failed": "Sequence stopped with an error",
+                "paused": "Program paused",
+                "running": "Program running",
+                "completed": "Program complete",
+                "failed": "Program stopped with an error",
             }
-            self.sequence_status.setText(labels.get(status, f"Sequence {status}"))
+            self.sequence_status.setText(labels.get(status, f"Program {status}"))
             return
         if values.get("type") == "teleop":
             if self._teleop_active:
@@ -3316,6 +3621,8 @@ class MainWindow(QMainWindow):
             self._latest_leader_state = None
             self._leader_busy = False
             self._leader_torque_enabled = False
+            if hasattr(self, "teleop_arm_panel"):
+                self.teleop_arm_panel.clear_secondary()
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
         self._update_enabled_state()
@@ -3323,6 +3630,11 @@ class MainWindow(QMainWindow):
     def _on_leader_state(self, state: object) -> None:
         self._latest_leader_state = dict(state)  # type: ignore[arg-type]
         self._leader_torque_enabled = bool(self._latest_leader_state.get("torque_enabled"))
+        if hasattr(self, "teleop_arm_panel"):
+            self.teleop_arm_panel.show_secondary_state(
+                self._latest_leader_state,
+                label="leader",
+            )
         self._update_teach_readout()
         self._update_enabled_state()
 
@@ -3358,13 +3670,24 @@ class MainWindow(QMainWindow):
             return
         source = str(self.teaching_source_combo.currentData())
         state = self._latest_state if source == "follower" else self._latest_leader_state
+        if hasattr(self, "teach_arm_panel"):
+            self.teach_arm_panel.set_title(
+                f"{source.title()} teaching pose",
+                "Selected source solid · saved position ghost",
+            )
         if not state:
             self.teach_source_status.setText(f"{source.title()} state unavailable")
             for label in self.teach_joint_labels.values():
                 label.setText("—")
             self.teach_gripper_label.setText("—")
             self.teach_pose_label.setText("TCP: —")
+            if hasattr(self, "teach_arm_panel"):
+                self.teach_arm_panel.clear_state(label="NO SOURCE")
+                self._preview_selected_taught_point()
             return
+        if hasattr(self, "teach_arm_panel"):
+            self.teach_arm_panel.update_state(state)
+            self._preview_selected_taught_point()
         self.teach_source_status.setText(
             f"{source.title()} connected"
             + (" — simulation" if state.get("simulation") else "")
@@ -3506,6 +3829,8 @@ class MainWindow(QMainWindow):
             self.edit_joint_targets_check.setChecked(False)
             self._latest_effort_status = {"supported": False}
             self._effort_controls_initialized = False
+            for panel in self._follower_status_panels:
+                panel.clear_state()
         elif self._follower_setup_session:
             self.calibration_status.setText(
                 "Follower connected for calibration with torque off. Start the sweep when ready."
@@ -3555,17 +3880,13 @@ class MainWindow(QMainWindow):
         pose = tuple(float(value) for value in values["pose_mm_deg"])
         for label, value in zip(self.pose_value_labels, pose, strict=True):
             label.setText(f"{value:.2f}")
-        if hasattr(self, "cartesian_view"):
-            self.cartesian_view.set_joint_degrees(
-                {name: float(values["joints_deg"][name]) for name in ARM_JOINTS}
-            )
+        for panel in self._follower_status_panels:
+            panel.update_state(values)
         self.pose_summary.setText(
             f"TCP: X {pose[0]:.1f}  Y {pose[1]:.1f}  Z {pose[2]:.1f} mm"
         )
         gripper = float(values["gripper"])
         self.gripper_measured.setText(f"Measured: {gripper:.3f}")
-        if hasattr(self, "cartesian_view"):
-            self.cartesian_view.set_gripper_position(gripper)
 
         if not self.edit_joint_targets_check.isChecked():
             self._load_current_targets()
@@ -3878,6 +4199,7 @@ class MainWindow(QMainWindow):
         self.save_point_button.setEnabled(can_save_point)
         has_point = bool(self.point_combo.currentText())
         self.move_point_button.setEnabled(can_move and has_point)
+        self.add_point_to_program_button.setEnabled(has_point and not self._busy)
         self.delete_point_button.setEnabled(has_point and self._recording_source is None)
 
         source_available = source_state is not None
@@ -3973,6 +4295,10 @@ class MainWindow(QMainWindow):
         self.add_home_step_button.setEnabled(has_home and not self._busy)
         self.add_rest_step_button.setEnabled(has_rest and not self._busy)
         self.add_gripper_step_button.setEnabled(not self._busy)
+        self.program_open_gripper_button.setEnabled(not self._busy)
+        self.program_close_gripper_button.setEnabled(not self._busy)
+        self.program_move_speed_spin.setEnabled(not self._busy)
+        self.run_point_mode_combo.setEnabled(not self._busy)
         self.add_wait_step_button.setEnabled(not self._busy)
         self.add_trajectory_step_button.setEnabled(
             self.run_trajectory_combo.count() > 0 and not self._busy
