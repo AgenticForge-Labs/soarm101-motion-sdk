@@ -389,27 +389,27 @@ This is a new continuous-control path and has not yet been physically validated.
 6. Deliberately leave the arms at slightly different safe poses and test **Relink here —
    no motion** in Relative mode. Confirm the follower only latches its own measured pose;
    there must be no alignment move before leader motion begins.
-4. Put both arms in comfortable poses with the leader inside the follower's calibrated travel. Keep the leader still during startup and keep the follower in a clear nearby pose so the guarded alignment move is small.
-5. Select **Relative / clutch-safe**, initially disable gripper mirroring, select
+7. Put both arms in comfortable poses with the leader inside the follower's calibrated travel. Keep the leader still during startup and keep the follower in a clear nearby pose so the guarded alignment move is small.
+8. Select **Relative / clutch-safe**, initially disable gripper mirroring, select
    **5 Hz — slow check**, and click **Align follower and start**. Confirm torque enable does not cause a jump and the guarded alignment completes (or reports a staged offset near a model limit) before live following begins.
-6. Move only one leader joint a few degrees, slowly. Confirm the follower moves the same
+9. Move only one leader joint a few degrees, slowly. Confirm the follower moves the same
    signed delta after alignment.
-7. Watch the live follower-cycle and queued-age values. At 5 Hz the period is 200 ms;
-   processing should remain comfortably below that and queued age should stay low rather
-   than increasing over time.
-8. Return that joint and repeat for the other four joints one at a time.
-9. Test STOP/HOLD while making a slow motion. The follower must stop/hold and teleop must
-   terminate.
-10. Restart teleop, then disconnect/unplug the leader data connection. The follower must
+10. Watch the live follower-cycle and queued-age values. At 5 Hz the period is 200 ms;
+    processing should remain comfortably below that and queued age should stay low rather
+    than increasing over time.
+11. Return that joint and repeat for the other four joints one at a time.
+12. Test STOP/HOLD while making a slow motion. The follower must stop/hold and teleop must
+    terminate.
+13. Restart teleop, then disconnect/unplug the leader data connection. The follower must
     stop receiving stream targets and hold.
-11. Re-enable gripper mirroring and test a small leader gripper delta.
-12. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
-13. Validate 20 Hz (50 ms period) next even though it is the current software default, then treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely because motion looks smooth; record cycle time, queued sample age, overruns, communication errors, STOP response, following errors, and effort trips as described in `docs/teleoperation.md`.
-14. If follower processing exceeds the selected period repeatedly or queued sample age
+14. Re-enable gripper mirroring and test a small leader gripper delta.
+15. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
+16. Validate 20 Hz (50 ms period) next even though it is the current software default, then treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely because motion looks smooth; record cycle time, queued sample age, overruns, communication errors, STOP response, following errors, and effort trips as described in `docs/teleoperation.md`.
+17. If follower processing exceeds the selected period repeatedly or queued sample age
     grows, the software should terminate teleop and hold. Reduce the rate before retrying.
-15. Deliberately move the leader faster only enough to verify configured step/speed/
+18. Deliberately move the leader faster only enough to verify configured step/speed/
     acceleration guards reject unsafe streaming rather than following it.
-16. Do not treat software STOP as an emergency stop; physical power remains the ultimate
+19. Do not treat software STOP as an emergency stop; physical power remains the ultimate
     intervention during these tests.
 
 ### 17. Physical absolute teleoperation — DO LATER, AFTER RELATIVE PASSES
