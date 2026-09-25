@@ -421,6 +421,7 @@ class MotionController:
                 options=IKOptions(
                     orientation_mode=orientation_mode,
                     look_at=look_at,
+                    position_tolerance_m=self.config.cartesian_position_tolerance_m,
                     multi_start=index == 1,
                 ),
             )
