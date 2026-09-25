@@ -2763,6 +2763,7 @@ class MainWindow(QMainWindow):
         self.selection_start.blockSignals(False)
         self.selection_end.blockSignals(False)
         self.trajectory_scrub.setValue(0)
+        self._update_trajectory_arm_preview(0.0)
         diagnostics = " + effort" if trajectory.effort_current_raw is not None else ""
         self.trajectory_stats.setText(
             f"{trajectory.metadata.get('kind', 'unsaved')} / "
@@ -2773,6 +2774,24 @@ class MainWindow(QMainWindow):
         self._selection_changed()
         self._update_enabled_state()
 
+    def _update_trajectory_arm_preview(self, cursor_s: float) -> None:
+        trajectory = self._active_trajectory
+        if trajectory is None or not hasattr(self, "trajectory_arm_panel"):
+            return
+        index = min(
+            range(trajectory.sample_count),
+            key=lambda item: abs(float(trajectory.timestamps_s[item]) - float(cursor_s)),
+        )
+        joints = {
+            name: float(trajectory.joints_rad[index, joint_index])
+            for joint_index, name in enumerate(ARM_JOINTS)
+        }
+        self.trajectory_arm_panel.show_saved_pose(
+            joints_rad=joints,
+            gripper=float(trajectory.gripper[index]),
+            label=f"recorded {float(trajectory.timestamps_s[index]):.2f} s",
+        )
+
     def _trajectory_scrub_changed(self, value: int) -> None:
         trajectory = self._active_trajectory
         if trajectory is None:
@@ -2780,6 +2799,7 @@ class MainWindow(QMainWindow):
         cursor = trajectory.duration_s * float(value) / 10000.0
         self.trajectory_timeline.set_cursor(cursor)
         self.trajectory_cursor_label.setText(f"{cursor:.3f} s")
+        self._update_trajectory_arm_preview(cursor)
 
     def _cursor_seconds(self) -> float:
         trajectory = self._active_trajectory
