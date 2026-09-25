@@ -31,6 +31,11 @@ Robo Director is the primary source of cross-repository integration requirements
   coarse leader → fine Manual transfer workflow.
 - [x] Persistent Manual gripper panel and one synchronized GUI gripper-speed preset across
   manual, teleoperation, saved-pose, sequence, and trajectory-replay paths.
+- [x] Position-first GUI Programs workflow over the existing MotionSequence engine, with
+  saved-position Move steps, Open/Close/custom gripper actions, waits, per-Move speed,
+  and advanced recorded-motion steps.
+- [x] Shared modern kinematic status/preview cards across Manual, Teleoperation,
+  Teach / Record, Edit recordings, and Programs.
 
 ## Director ecosystem integration 0.2
 
