@@ -152,11 +152,13 @@ class SequenceRunner:
         pose_library: PoseLibrary,
         trajectory_library: TrajectoryLibrary,
         primitive_library: MotionPrimitiveLibrary | None = None,
+        gripper_speed_raw: int | None = None,
     ) -> None:
         self.arm = arm
         self.pose_library = pose_library
         self.trajectory_library = trajectory_library
         self.primitive_library = primitive_library
+        self.gripper_speed_raw = gripper_speed_raw
         self._pause_event = threading.Event()
 
     @property
@@ -249,7 +251,11 @@ class SequenceRunner:
         if step.kind == "rest":
             return self._move_pose(REST_POSE_NAME, str(params.get("mode", "joint")), scale)
         if step.kind == "gripper":
-            return self.arm.tool.move(float(params["position"]), wait=True)
+            return self.arm.tool.move(
+                float(params["position"]),
+                speed_raw=self.gripper_speed_raw,
+                wait=True,
+            )
         if step.kind == "wait":
             seconds = float(params["seconds"])
             if not math.isfinite(seconds) or seconds < 0:
@@ -276,6 +282,7 @@ class SequenceRunner:
                     trajectory,
                     speed_scale=scale,
                     move_to_start=True,
+                    gripper_speed_raw=self.gripper_speed_raw,
                     wait=True,
                 )
             return result
@@ -303,6 +310,7 @@ class SequenceRunner:
                     trajectory,
                     speed_scale=primitive_scale,
                     move_to_start=True,
+                    gripper_speed_raw=self.gripper_speed_raw,
                     wait=True,
                 )
             return result
