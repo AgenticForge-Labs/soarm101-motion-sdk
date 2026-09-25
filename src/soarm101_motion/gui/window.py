@@ -3580,6 +3580,8 @@ class MainWindow(QMainWindow):
             self._latest_leader_state = None
             self._leader_busy = False
             self._leader_torque_enabled = False
+            if hasattr(self, "teleop_arm_panel"):
+                self.teleop_arm_panel.clear_secondary()
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
         self._update_enabled_state()
@@ -3587,6 +3589,11 @@ class MainWindow(QMainWindow):
     def _on_leader_state(self, state: object) -> None:
         self._latest_leader_state = dict(state)  # type: ignore[arg-type]
         self._leader_torque_enabled = bool(self._latest_leader_state.get("torque_enabled"))
+        if hasattr(self, "teleop_arm_panel"):
+            self.teleop_arm_panel.show_secondary_state(
+                self._latest_leader_state,
+                label="leader",
+            )
         self._update_teach_readout()
         self._update_enabled_state()
 
@@ -3622,13 +3629,24 @@ class MainWindow(QMainWindow):
             return
         source = str(self.teaching_source_combo.currentData())
         state = self._latest_state if source == "follower" else self._latest_leader_state
+        if hasattr(self, "teach_arm_panel"):
+            self.teach_arm_panel.set_title(
+                f"{source.title()} teaching pose",
+                "Selected source solid · saved position ghost",
+            )
         if not state:
             self.teach_source_status.setText(f"{source.title()} state unavailable")
             for label in self.teach_joint_labels.values():
                 label.setText("—")
             self.teach_gripper_label.setText("—")
             self.teach_pose_label.setText("TCP: —")
+            if hasattr(self, "teach_arm_panel"):
+                self.teach_arm_panel.clear_state(label="NO SOURCE")
+                self._preview_selected_taught_point()
             return
+        if hasattr(self, "teach_arm_panel"):
+            self.teach_arm_panel.update_state(state)
+            self._preview_selected_taught_point()
         self.teach_source_status.setText(
             f"{source.title()} connected"
             + (" — simulation" if state.get("simulation") else "")
@@ -3770,6 +3788,8 @@ class MainWindow(QMainWindow):
             self.edit_joint_targets_check.setChecked(False)
             self._latest_effort_status = {"supported": False}
             self._effort_controls_initialized = False
+            for panel in self._follower_status_panels:
+                panel.clear_state()
         elif self._follower_setup_session:
             self.calibration_status.setText(
                 "Follower connected for calibration with torque off. Start the sweep when ready."
@@ -3819,17 +3839,13 @@ class MainWindow(QMainWindow):
         pose = tuple(float(value) for value in values["pose_mm_deg"])
         for label, value in zip(self.pose_value_labels, pose, strict=True):
             label.setText(f"{value:.2f}")
-        if hasattr(self, "cartesian_view"):
-            self.cartesian_view.set_joint_degrees(
-                {name: float(values["joints_deg"][name]) for name in ARM_JOINTS}
-            )
+        for panel in self._follower_status_panels:
+            panel.update_state(values)
         self.pose_summary.setText(
             f"TCP: X {pose[0]:.1f}  Y {pose[1]:.1f}  Z {pose[2]:.1f} mm"
         )
         gripper = float(values["gripper"])
         self.gripper_measured.setText(f"Measured: {gripper:.3f}")
-        if hasattr(self, "cartesian_view"):
-            self.cartesian_view.set_gripper_position(gripper)
 
         if not self.edit_joint_targets_check.isChecked():
             self._load_current_targets()
