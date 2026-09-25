@@ -628,9 +628,24 @@ class MainWindow(QMainWindow):
         self.diagnostic_logging_requested.emit(enabled)
         self._log(f"Detailed motion diagnostics {'enabled' if enabled else 'disabled'}.")
 
+    def _new_follower_status_panel(
+        self,
+        title: str,
+        *,
+        subtitle: str = "",
+        compact: bool = True,
+    ) -> RobotStatusPanel:
+        panel = RobotStatusPanel(title, subtitle=subtitle, compact=compact)
+        self._follower_status_panels.append(panel)
+        if self._latest_state is not None:
+            panel.update_state(self._latest_state)
+        return panel
+
     def _build_control_tab(self) -> QWidget:
         page = QWidget()
         layout = QHBoxLayout(page)
+        layout.setSpacing(12)
+
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -648,19 +663,14 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self._build_gripper_panel())
         layout.addWidget(controls, 3)
 
-        view_box = QGroupBox("SO-101 kinematic view")
-        view_layout = QVBoxLayout(view_box)
-        self.cartesian_view = CartesianArmView()
-        view_layout.addWidget(self.cartesian_view, 1)
-        view_note = QLabel(
-            "Joint centers and the gripper-link frame come from the SDK SO-101 "
-            "kinematic model. The gripper jaws are a schematic aperture view; the "
-            "orange point/axes mark the modeled TCP. Drag to rotate; double-click "
-            "to return to the side view."
+        self.manual_arm_panel = self._new_follower_status_panel(
+            "Follower",
+            subtitle="Live kinematics · drag to rotate",
+            compact=False,
         )
-        view_note.setWordWrap(True)
-        view_layout.addWidget(view_note)
-        layout.addWidget(view_box, 2)
+        # Preserve the public-ish attribute used by existing tests and diagnostics.
+        self.cartesian_view = self.manual_arm_panel.view
+        layout.addWidget(self.manual_arm_panel, 2)
         return page
 
     def _build_coordination_panel(self) -> QGroupBox:
