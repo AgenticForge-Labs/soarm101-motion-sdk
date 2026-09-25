@@ -1628,7 +1628,6 @@ class MainWindow(QMainWindow):
         if self._connected:
             self.disconnect_requested.emit()
             return
-        self._update_coordination_panels()
         simulation = self.simulation_check.isChecked()
         port = self.port_combo.currentText().strip()
         if not simulation and not port:
@@ -3731,6 +3730,7 @@ class MainWindow(QMainWindow):
             else:
                 message = "Ready. Align follower and start; keep the leader still until live following begins."
             self.teleop_status.setText(message)
+        self._update_coordination_panels()
         simulation = self.simulation_check.isChecked()
         session_editable = not self._connected and not self._follower_connecting and not self._busy
         self.connect_button.setEnabled(not self._follower_connecting and not self._busy)
@@ -3891,6 +3891,8 @@ class MainWindow(QMainWindow):
             and self._latest_leader_state is not None
             and self._recording_source is None
             and not self._busy
+            and not self._leader_busy
+            and self._sync_capture_pending is None
         )
         self.teleop_button.setEnabled(
             self._teleop_active or self._teleop_starting or can_start_teleop
