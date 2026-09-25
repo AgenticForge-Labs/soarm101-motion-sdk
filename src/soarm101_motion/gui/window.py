@@ -2337,7 +2337,85 @@ class MainWindow(QMainWindow):
             self.point_combo.setCurrentText(current)
         self.point_combo.blockSignals(False)
         self._refresh_sequence_resources()
+        self._preview_selected_taught_point()
         self._update_enabled_state()
+
+    def _show_saved_pose_preview(
+        self,
+        panel: RobotStatusPanel,
+        name: str,
+        *,
+        label: str | None = None,
+    ) -> None:
+        key = str(name).strip()
+        if not key:
+            panel.clear_secondary()
+            return
+        try:
+            pose = self._get_pose_library().require(key)
+        except Exception:
+            panel.clear_secondary()
+            return
+        panel.show_saved_pose(
+            joints_rad=pose.joints,
+            gripper=pose.gripper,
+            label=label or key,
+        )
+
+    def _preview_selected_taught_point(self) -> None:
+        if not hasattr(self, "teach_arm_panel"):
+            return
+        self._show_saved_pose_preview(
+            self.teach_arm_panel,
+            self.point_combo.currentText(),
+            label="saved position",
+        )
+
+    def _preview_program_position(self) -> None:
+        if not hasattr(self, "program_arm_panel"):
+            return
+        self._show_saved_pose_preview(
+            self.program_arm_panel,
+            self.run_point_combo.currentText(),
+            label="selected position",
+        )
+
+    def _preview_selected_program_step(self) -> None:
+        if not hasattr(self, "program_arm_panel"):
+            return
+        row = self.sequence_step_list.currentRow()
+        if not 0 <= row < len(self._sequence_steps):
+            self._preview_program_position()
+            return
+        step = self._sequence_steps[row]
+        if step.kind == "point":
+            self._show_saved_pose_preview(
+                self.program_arm_panel,
+                str(step.params.get("name") or ""),
+                label=f"step {row + 1}",
+            )
+            return
+        if step.kind in {"home", "rest"}:
+            self._show_saved_pose_preview(
+                self.program_arm_panel,
+                step.kind,
+                label=f"step {row + 1}",
+            )
+            return
+        self.program_arm_panel.clear_secondary()
+
+    def _add_selected_taught_point_to_program(self) -> None:
+        name = self.point_combo.currentText().strip()
+        if not name:
+            return
+        if self.run_point_combo.findText(name) < 0:
+            self._refresh_sequence_resources()
+        self.run_point_combo.setCurrentText(name)
+        mode_index = self.run_point_mode_combo.findData(self.point_mode_combo.currentData())
+        if mode_index >= 0:
+            self.run_point_mode_combo.setCurrentIndex(mode_index)
+        self._add_point_sequence_step()
+        self._log(f"Added saved position {name!r} to the current program.")
 
     def _save_taught_point(self) -> None:
         name = self.point_name_edit.text().strip()
