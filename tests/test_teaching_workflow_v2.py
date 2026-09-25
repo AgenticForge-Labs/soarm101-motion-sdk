@@ -287,7 +287,9 @@ def test_sequence_library_and_runner(tmp_path: Path) -> None:
         )
         assert result.completed
         assert arm.get_joint_positions().positions["shoulder_pan"] == pytest.approx(0.0)
-        assert arm.tool.get_position() == pytest.approx(0.25)
+        # The final Home step restores Home's stored gripper state after the
+        # explicit 0.25 gripper step.
+        assert arm.tool.get_position() == pytest.approx(1.0)
         assert (0, "started") in progress
         assert (3, "completed") in progress
     finally:
