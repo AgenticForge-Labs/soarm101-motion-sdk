@@ -382,7 +382,12 @@ class RobotWorker(QObject):
                     )
                     self._track(
                         "teleop gripper alignment",
-                        arm.tool.move(leader_gripper, wait=False, timeout=5.0),
+                        arm.tool.move(
+                            leader_gripper,
+                            speed_raw=int(align_gripper["gripper_speed_raw"]),
+                            wait=False,
+                            timeout=5.0,
+                        ),
                     )
             except BaseException as exc:
                 self._teleop_staging = None
@@ -694,6 +699,7 @@ class RobotWorker(QObject):
                 arm.config.hardware_speed_raw,
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
+            values["gripper_speed_raw"] = selected_gripper_speed
             mode = str(values.get("mode") or "relative")
             if mode not in {"relative", "absolute"}:
                 raise ValueError("teleoperation mode must be relative or absolute")
@@ -1130,11 +1136,16 @@ class RobotWorker(QObject):
                 sequence.metadata,
                 artifact_label=f"sequence {sequence.name!r}",
             )
+            selected_gripper_speed = gripper_speed_raw(
+                arm.config.hardware_speed_raw,
+                float(values.get("gripper_speed_multiplier", 2.0)),
+            )
             runner = SequenceRunner(
                 arm,
                 pose_library=PoseLibrary(self._robot_id),
                 trajectory_library=TrajectoryLibrary(self._robot_id),
                 primitive_library=MotionPrimitiveLibrary(self._robot_id),
+                gripper_speed_raw=selected_gripper_speed,
             )
 
             def progress(index: int, total: int, step: object, status: str) -> None:
@@ -1235,7 +1246,18 @@ class RobotWorker(QObject):
                     raise MotionCancelledError(
                         "saved pose move cancelled before gripper command"
                     )
-                return arm.tool.move(pose.gripper, wait=True) or result
+                selected_gripper_speed = gripper_speed_raw(
+                    arm.config.hardware_speed_raw,
+                    float(values.get("gripper_speed_multiplier", 2.0)),
+                )
+                return (
+                    arm.tool.move(
+                        pose.gripper,
+                        speed_raw=selected_gripper_speed,
+                        wait=True,
+                    )
+                    or result
+                )
 
             handle: MotionHandle[Any] = MotionHandle(operation)
             handle.start()
@@ -1255,10 +1277,15 @@ class RobotWorker(QObject):
                 trajectory.metadata,
                 artifact_label="recorded trajectory",
             )
+            selected_gripper_speed = gripper_speed_raw(
+                arm.config.hardware_speed_raw,
+                float(values.get("gripper_speed_multiplier", 2.0)),
+            )
             result = arm.play_trajectory(
                 trajectory,
                 speed_scale=float(values.get("speed_scale", 1.0)),
                 move_to_start=bool(values.get("move_to_start", True)),
+                gripper_speed_raw=selected_gripper_speed,
                 wait=False,
             )
             self._track("recorded trajectory replay", result)
@@ -1475,6 +1502,82 @@ class RobotWorker(QObject):
             self._track("absolute world linear move", result)
         except BaseException as exc:
             self._report_error("absolute Cartesian move", exc)
+
+    @Slot(object)
+    def synchronize_pose(self, request: object) -> None:
+        """Move this arm to a fresh measured pose from the other arm.
+
+        This is deliberately a live handoff operation, not artifact replay. The
+        destination arm applies its own calibration, limits, workspace checks, and
+        normal motion guards. A relaxed destination is first latched where it is,
+        then moved under torque.
+        """
+
+        try:
+            values = dict(request)  # type: ignore[arg-type]
+            if self._handles:
+                raise RuntimeError("wait for active motion to finish before matching poses")
+            arm = self._require_motion_available()
+            target = {
+                name: radians(float(values["joints_deg"][name]))
+                for name in ARM_JOINTS
+            }
+            include_gripper = bool(values.get("include_gripper", False))
+            target_gripper = float(values.get("gripper", 0.0))
+            if include_gripper and not 0.0 <= target_gripper <= 1.0:
+                raise ValueError("synchronization gripper target must be within [0, 1]")
+
+            speed = radians(float(values.get("speed_deg_s", 8.0)))
+            acceleration = radians(float(values.get("acceleration_deg_s2", 25.0)))
+            selected_gripper_speed = gripper_speed_raw(
+                arm.config.hardware_speed_raw,
+                float(values.get("gripper_speed_multiplier", 2.0)),
+            )
+            source = str(values.get("source") or "other arm")
+            if not arm.get_state().torque_enabled:
+                arm.enable()
+                self.log_message.emit(
+                    "Destination arm parked at its measured pose before synchronization."
+                )
+
+            record_session(
+                "live_pose_sync_requested",
+                worker=self._robot_id,
+                source=source,
+                target_joints_deg={
+                    name: float(values["joints_deg"][name]) for name in ARM_JOINTS
+                },
+                include_gripper=include_gripper,
+                target_gripper=target_gripper if include_gripper else None,
+                gripper_speed_raw=selected_gripper_speed if include_gripper else None,
+            )
+
+            def operation(cancel_event: threading.Event) -> Any:
+                if cancel_event.is_set():
+                    raise MotionCancelledError("pose synchronization cancelled before start")
+                result = arm.move_joints(
+                    target,
+                    speed=speed,
+                    acceleration=acceleration,
+                    wait=True,
+                )
+                if cancel_event.is_set():
+                    raise MotionCancelledError(
+                        "pose synchronization cancelled before gripper command"
+                    )
+                if include_gripper:
+                    arm.tool.move(
+                        target_gripper,
+                        speed_raw=selected_gripper_speed,
+                        wait=True,
+                    )
+                return result
+
+            handle: MotionHandle[Any] = MotionHandle(operation)
+            handle.start()
+            self._track(f"match pose from {source}", handle)
+        except BaseException as exc:
+            self._report_error("match arm pose", exc)
 
     @Slot(object)
     def move_gripper(self, request: object) -> None:
