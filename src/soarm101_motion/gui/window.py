@@ -43,8 +43,8 @@ from soarm101_motion.constants import (
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     JOINT_LIMITS,
 )
+from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
-from soarm101_motion.gui.cartesian_view import CartesianArmView
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
         self._effort_controls_initialized = False
         self._cartesian_jog_active = False
         self._cartesian_jog_queued = 0
+        self._follower_status_panels: list[RobotStatusPanel] = []
         self._coordination_leader_labels: list[QLabel] = []
         self._coordination_relation_labels: list[QLabel] = []
         self._coordination_park_buttons: list[QPushButton] = []
@@ -281,9 +282,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.calibration_page, "Setup")
         self.tabs.addTab(self.manual_page, "Manual")
         self.tabs.addTab(self.teleop_page, "Teleoperation")
-        self.tabs.addTab(self.record_page, "Record / Teach")
+        self.tabs.addTab(self.record_page, "Teach / Record")
         self.tabs.addTab(self.trajectory_page, "Edit recordings")
-        self.tabs.addTab(self.run_page, "Run")
+        self.tabs.addTab(self.run_page, "Programs")
         self.log_page = QWidget()
         log_layout = QVBoxLayout(self.log_page)
         self.log = QTextEdit()
