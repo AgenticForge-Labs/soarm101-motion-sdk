@@ -1026,8 +1026,16 @@ class MainWindow(QMainWindow):
         library_grid.addWidget(self.trajectory_stats, 1, 0, 1, 4)
         layout.addWidget(library_box)
 
+        preview_row = QHBoxLayout()
         self.trajectory_timeline = TrajectoryTimeline()
-        layout.addWidget(self.trajectory_timeline, 1)
+        preview_row.addWidget(self.trajectory_timeline, 3)
+        self.trajectory_arm_panel = self._new_follower_status_panel(
+            "Recording preview",
+            subtitle="Live follower solid · scrubbed recording ghost",
+            compact=True,
+        )
+        preview_row.addWidget(self.trajectory_arm_panel, 2)
+        layout.addLayout(preview_row, 1)
 
         edit_box = QGroupBox("Selection and playback")
         edit_grid = QGridLayout(edit_box)
