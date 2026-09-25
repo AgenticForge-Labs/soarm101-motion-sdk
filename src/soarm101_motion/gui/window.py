@@ -4199,6 +4199,7 @@ class MainWindow(QMainWindow):
         self.save_point_button.setEnabled(can_save_point)
         has_point = bool(self.point_combo.currentText())
         self.move_point_button.setEnabled(can_move and has_point)
+        self.add_point_to_program_button.setEnabled(has_point and not self._busy)
         self.delete_point_button.setEnabled(has_point and self._recording_source is None)
 
         source_available = source_state is not None
@@ -4294,6 +4295,10 @@ class MainWindow(QMainWindow):
         self.add_home_step_button.setEnabled(has_home and not self._busy)
         self.add_rest_step_button.setEnabled(has_rest and not self._busy)
         self.add_gripper_step_button.setEnabled(not self._busy)
+        self.program_open_gripper_button.setEnabled(not self._busy)
+        self.program_close_gripper_button.setEnabled(not self._busy)
+        self.program_move_speed_spin.setEnabled(not self._busy)
+        self.run_point_mode_combo.setEnabled(not self._busy)
         self.add_wait_step_button.setEnabled(not self._busy)
         self.add_trajectory_step_button.setEnabled(
             self.run_trajectory_combo.count() > 0 and not self._busy
