@@ -6,7 +6,9 @@ Low-cost arms make robotics hardware much more accessible, but there is still a 
 
 The project follows a simple progression:
 
-**connect → calibrate → move → teach → record → edit → sequence → automate**
+**connect → calibrate → move → teach → program → automate**
+
+Continuous trajectory recording/editing remains available when the exact path or timing matters, but simple automation does not require recording a motion first.
 
 You can begin visually, learn how the robot actually moves, teach useful positions and trajectories, and then reuse those same capabilities from Python, scripts, services, or higher-level agents. Recording is useful for deterministic automation as well as future robot-learning workflows; this is not a dataset-collection-first project.
 
@@ -15,8 +17,8 @@ You can begin visually, learn how the robot actually moves, teach useful positio
 ## What makes it different
 
 - **Learn robotics without hiding the robotics.** The GUI separates Setup, Manual motion, Teleoperation, Record / Teach, editing, and Run workflows so concepts such as calibration, joint coordinates, tool position, trajectories, and sequencing stay visible rather than being buried behind a single automation button.
-- **Teach once, replay many times.** Named poses, Home/Rest positions, trajectories, gripper actions, waits, and reusable motion primitives can be combined into deterministic sequences. The leader can be FREE for hand teaching or deliberately PARKED at its measured pose, and the GUI supports guarded leader↔follower pose matching plus a no-motion relative relink when the two arms intentionally diverge during teaching.
-- **Go beyond servo angles.** The SDK includes forward and inverse kinematics plus Cartesian motion planning, providing a natural path from understanding individual joints to working in terms of tool position and linear movement in space. The Manual workspace uses 2 mm Cartesian jogs by default, accepts short FIFO bursts of repeated jog clicks, shows requested-versus-achieved TCP diagnostics, and keeps a joint-center kinematic view visible beside the controls. The view starts in an orthographic X/Z side view, can be rotated by dragging, and returns to the side view on double-click.
+- **Teach positions, then build a program.** Save named positions such as `above_pick`, `pick`, and `drop`, then arrange them into a simple top-to-bottom program with Move, Open/Close gripper, custom gripper, and Wait actions. Each Move can have its own speed multiplier. Recorded trajectories and reusable motion primitives remain available as advanced steps when the continuous path matters. The leader can be FREE for hand teaching or deliberately PARKED at its measured pose, and the GUI supports guarded leader↔follower pose matching plus a no-motion relative relink when the two arms intentionally diverge during teaching.
+- **Go beyond servo angles.** The SDK includes forward and inverse kinematics plus Cartesian motion planning, providing a natural path from understanding individual joints to working in terms of tool position and linear movement in space. A shared modern kinematic view now appears anywhere pose context is useful: Manual shows the live follower, Teleoperation overlays the leader as a ghost, Teach previews saved positions, Edit recordings previews the scrubbed recorded pose, and Programs previews the selected destination. The view starts in an orthographic X/Z side view, can be rotated by dragging, and returns to the side view on double-click.
 - **Calibration you can see and understand.** Guided mechanical-stop calibration visualizes two complete traversals for every joint and the gripper. Discovery verifies the SO-101 servo bus and uses measured voltage as a clue for distinguishing a typical low-voltage leader from the powered follower, while still requiring the user to confirm the hardware.
 - **Safety and provenance live below the application layer.** Motion requests remain subject to calibration, joint, rate, acceleration, following-error, fault, effort, and other guards. Calibrations are versioned, and saved physical motion artifacts can be bound to the calibration under which they were created so stale motion can fail closed after a hardware or calibration change.
 - **GUI, CLI, and Python share the same foundation.** The desktop application is not a separate toy controller. The interfaces reuse the same SDK operations and saved libraries, making it possible to start visually and transition naturally to scripting and automation.
@@ -113,16 +115,16 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 | **Setup** | Find and connect the leader and follower, calibrate either arm, save Home and Rest, and inspect motor status. |
 | **Manual** | Read current joint positions, switch between angular and Cartesian arm control, keep the gripper tool visible in either mode, park/release the leader, and hand poses between leader and follower. |
 | **Teleoperation** | Move the leader by hand, align the follower or relink the two current poses with no motion, and transfer to Manual while parking the leader. |
-| **Record / Teach** | Save named positions and record trajectories with gripper movement. |
-| **Edit recordings** | Review and adjust recorded motions. |
-| **Run** | Replay trajectories or build sequences from taught positions and actions. |
+| **Teach / Record** | Save named positions from the follower or leader, preview them, add them to the current program, or optionally record continuous trajectories. |
+| **Edit recordings** | Review and adjust recorded motions with a scrubbed kinematic preview. |
+| **Programs** | Build and run linear programs from saved positions, gripper actions, waits, and optional recorded-motion steps. |
 | **Log** | Review connection, motion, and diagnostic events. |
 
 The follower has five pose joints; the stock gripper is a separate tool actuator. The SDK includes forward kinematics to estimate the tool pose from joint readings, inverse kinematics for finding joint targets, and Cartesian motion planning for linear moves. These calculations use the arm model and calibration, so check the TCP, joint directions, and coordinate frame against your own assembly before relying on Cartesian accuracy. The Manual workspace exposes this explicitly: its joint-center view uses the SDK FK model, renders the gripper from the modeled wrist/gripper-link frame, and keeps the gripper controls visible below both angular and Cartesian modes. Each Cartesian jog reports the requested and achieved TCP so physical/model direction mismatches can be diagnosed rather than hidden.
 
 The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration.
 
-The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
+The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. Programs are stored using the existing `MotionSequence` format, so GUI Programs and SDK/CLI sequence execution share the same guarded runner and provenance rules. See [Programs and saved positions](docs/programs.md) for the simple position-program workflow. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
 
 ### CLI examples
 
@@ -186,6 +188,7 @@ Open an issue or pull request on [GitHub](https://github.com/AgenticForge-Labs/s
 - [Safety](docs/safety.md)
 - [Teleoperation](docs/teleoperation.md)
 - [Kinematics](docs/kinematics.md)
+- [Programs and saved positions](docs/programs.md)
 - [Simulation](docs/simulation.md)
 - [Validation](docs/validation.md)
 - [Architecture](docs/architecture.md)
