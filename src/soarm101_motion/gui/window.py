@@ -1270,7 +1270,9 @@ class MainWindow(QMainWindow):
         )
         simple_grid.addWidget(self.sequence_gripper_spin, 1, 4)
         self.add_gripper_step_button = QPushButton("+ Custom gripper")
-        self.add_gripper_step_button.clicked.connect(self._add_gripper_sequence_step)
+        self.add_gripper_step_button.clicked.connect(
+            lambda _checked=False: self._add_gripper_sequence_step()
+        )
         simple_grid.addWidget(self.add_gripper_step_button, 1, 5)
 
         simple_grid.addWidget(QLabel("Wait"), 2, 0)
