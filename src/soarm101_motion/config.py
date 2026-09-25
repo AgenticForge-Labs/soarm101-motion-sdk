@@ -51,6 +51,7 @@ class SOARM101Config:
     max_ik_waypoint_jump_radians: float = 0.50
     cartesian_waypoint_spacing_m: float = 0.005
     cartesian_waypoint_spacing_rad: float = 0.08
+    cartesian_position_tolerance_m: float = 0.0005
     joint_position_tolerance_rad: float = 0.025
     following_error_limit_rad: float = 0.30
     unexpected_direction_threshold_rad: float = 0.05
@@ -129,6 +130,7 @@ class SOARM101Config:
             "max_ik_waypoint_jump_radians": self.max_ik_waypoint_jump_radians,
             "cartesian_waypoint_spacing_m": self.cartesian_waypoint_spacing_m,
             "cartesian_waypoint_spacing_rad": self.cartesian_waypoint_spacing_rad,
+            "cartesian_position_tolerance_m": self.cartesian_position_tolerance_m,
             "joint_position_tolerance_rad": self.joint_position_tolerance_rad,
             "following_error_limit_rad": self.following_error_limit_rad,
             "unexpected_direction_threshold_rad": self.unexpected_direction_threshold_rad,
