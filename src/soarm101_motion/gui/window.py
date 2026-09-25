@@ -72,6 +72,10 @@ class MainWindow(QMainWindow):
     leader_calibration_requested = Signal(float)
     leader_connect_requested = Signal(object)
     leader_disconnect_requested = Signal()
+    leader_park_requested = Signal()
+    leader_release_requested = Signal()
+    leader_sync_requested = Signal(object)
+    follower_sync_requested = Signal(object)
     move_saved_pose_requested = Signal(object)
     trajectory_play_requested = Signal(object)
     recording_start_requested = Signal(object)
@@ -113,6 +117,7 @@ class MainWindow(QMainWindow):
         self._joint_targets_initialized = False
         self._last_joint_limits: dict[str, tuple[float, float]] | None = None
         self._leader_connected = False
+        self._leader_torque_enabled = False
         self._teleop_error: str | None = None
         self._teleop_alignment_note: str | None = None
         self._follower_connecting = False
@@ -138,6 +143,14 @@ class MainWindow(QMainWindow):
         self._effort_controls_initialized = False
         self._cartesian_jog_active = False
         self._cartesian_jog_queued = 0
+        self._coordination_leader_labels: list[QLabel] = []
+        self._coordination_relation_labels: list[QLabel] = []
+        self._coordination_park_buttons: list[QPushButton] = []
+        self._coordination_move_leader_buttons: list[QPushButton] = []
+        self._coordination_move_follower_buttons: list[QPushButton] = []
+        self._coordination_relink_buttons: list[QPushButton] = []
+        self._coordination_gripper_checks: list[QCheckBox] = []
+        self._sync_include_gripper = True
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -171,6 +184,7 @@ class MainWindow(QMainWindow):
         self.effort_configure_requested.connect(self._worker.configure_effort_safety)
         self.discover_arms_requested.connect(self._worker.discover_arms)
         self.capture_follower_pose_requested.connect(self._worker.capture_measured_pose)
+        self.follower_sync_requested.connect(self._worker.synchronize_pose)
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.joint_measurements.connect(self._on_follower_joint_measurements)
@@ -199,6 +213,9 @@ class MainWindow(QMainWindow):
         self._leader_thread.finished.connect(self._leader_worker.deleteLater)
         self.leader_connect_requested.connect(self._leader_worker.connect_robot)
         self.leader_disconnect_requested.connect(self._leader_worker.disconnect_robot)
+        self.leader_park_requested.connect(self._leader_worker.enable)
+        self.leader_release_requested.connect(self._leader_worker.relax)
+        self.leader_sync_requested.connect(self._leader_worker.synchronize_pose)
         self.leader_calibration_requested.connect(self._leader_worker.run_calibration)
         self.diagnostic_logging_requested.connect(self._leader_worker.set_detailed_logging)
         self.leader_recording_start_requested.connect(self._leader_worker.start_recording)
@@ -612,27 +629,94 @@ class MainWindow(QMainWindow):
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.addWidget(self._build_coordination_panel())
         controls_layout.addWidget(self._build_named_pose_controls())
-        subtabs = QTabWidget()
-        subtabs.addTab(self._build_joint_tab(), "Joints")
-        subtabs.addTab(self._build_cartesian_tab(), "Cartesian")
-        subtabs.addTab(self._build_gripper_tab(), "Gripper")
-        controls_layout.addWidget(subtabs, 1)
+
+        self.manual_mode_tabs = QTabWidget()
+        self.manual_mode_tabs.addTab(self._build_joint_tab(), "Joint / angular")
+        self.manual_mode_tabs.addTab(self._build_cartesian_tab(), "Cartesian")
+        controls_layout.addWidget(self.manual_mode_tabs, 1)
+
+        # The gripper is a tool, not a sixth pose joint. Keep its controls visible
+        # below both angular and Cartesian modes so switching arm representations
+        # never hides the tool state or speed.
+        controls_layout.addWidget(self._build_gripper_panel())
         layout.addWidget(controls, 3)
 
-        view_box = QGroupBox("SO-101 joint-center view")
+        view_box = QGroupBox("SO-101 kinematic view")
         view_layout = QVBoxLayout(view_box)
         self.cartesian_view = CartesianArmView()
         view_layout.addWidget(self.cartesian_view, 1)
         view_note = QLabel(
-            "Side view of measured joint axes from the SO-101 kinematic model. "
-            "The orange cross marks a requested TCP target. Drag to rotate; "
-            "double-click to return to the side view."
+            "Joint centers and the gripper-link frame come from the SDK SO-101 "
+            "kinematic model. The gripper jaws are a schematic aperture view; the "
+            "orange point/axes mark the modeled TCP. Drag to rotate; double-click "
+            "to return to the side view."
         )
         view_note.setWordWrap(True)
         view_layout.addWidget(view_note)
         layout.addWidget(view_box, 2)
         return page
+
+    def _build_coordination_panel(self) -> QGroupBox:
+        box = QGroupBox("Leader / follower coordination")
+        grid = QGridLayout(box)
+
+        leader_status = QLabel("Leader: disconnected")
+        leader_status.setStyleSheet("font-weight: 700;")
+        relation_status = QLabel("Pose relationship: unavailable")
+        relation_status.setWordWrap(True)
+        self._coordination_leader_labels.append(leader_status)
+        self._coordination_relation_labels.append(relation_status)
+        grid.addWidget(leader_status, 0, 0, 1, 2)
+        grid.addWidget(relation_status, 0, 2, 1, 4)
+
+        park = QPushButton("Park leader here")
+        park.clicked.connect(self._toggle_leader_park)
+        move_leader = QPushButton("Move leader → follower pose")
+        move_leader.setToolTip(
+            "Guarded joint move: the leader moves to the follower's fresh measured pose."
+        )
+        move_leader.clicked.connect(self._move_leader_to_follower)
+        move_follower = QPushButton("Move follower → leader pose")
+        move_follower.setToolTip(
+            "Guarded joint move: the follower moves to the leader's fresh measured pose."
+        )
+        move_follower.clicked.connect(self._move_follower_to_leader)
+        relink = QPushButton("Relink here — no motion")
+        relink.setToolTip(
+            "Start relative teleoperation using both arms' current poses as the new reference."
+        )
+        relink.clicked.connect(self._relink_here)
+
+        self._coordination_park_buttons.append(park)
+        self._coordination_move_leader_buttons.append(move_leader)
+        self._coordination_move_follower_buttons.append(move_follower)
+        self._coordination_relink_buttons.append(relink)
+
+        grid.addWidget(park, 1, 0)
+        grid.addWidget(move_leader, 1, 1, 1, 2)
+        grid.addWidget(move_follower, 1, 3, 1, 2)
+        grid.addWidget(relink, 1, 5)
+
+        include_gripper = QCheckBox("Include gripper when matching poses")
+        include_gripper.setChecked(self._sync_include_gripper)
+        include_gripper.toggled.connect(
+            lambda checked, source=include_gripper: self._set_sync_include_gripper(
+                checked, source
+            )
+        )
+        self._coordination_gripper_checks.append(include_gripper)
+        grid.addWidget(include_gripper, 2, 0, 1, 3)
+
+        hint = QLabel(
+            "Park latches the leader exactly where it is. Matching moves only the "
+            "selected destination arm. Relink preserves both current poses and starts "
+            "relative leader control without an alignment move."
+        )
+        hint.setWordWrap(True)
+        grid.addWidget(hint, 2, 3, 1, 3)
+        return box
 
     def _build_named_pose_controls(self) -> QGroupBox:
         box = QGroupBox("Standard poses")
@@ -695,9 +779,10 @@ class MainWindow(QMainWindow):
         self.leader_connect_button.clicked.connect(self._toggle_leader_connection)
         grid.addWidget(self.leader_connect_button, 1, 3)
         note = QLabel(
-            "The leader stays read-only with torque off: move it by hand while the "
-            "follower mirrors it through guarded live teleoperation. The 20 Hz default "
-            "keeps the follower responsive; 50 Hz still requires a timing check."
+            "The leader connects FREE with torque off for hand teaching. Park it "
+            "deliberately when you want it to hold a pose; starting/relinking live "
+            "teleoperation releases it again. The 20 Hz default keeps the follower "
+            "responsive; 50 Hz still requires a timing check."
         )
         note.setWordWrap(True)
         grid.addWidget(note, 2, 0, 1, 4)
@@ -712,6 +797,7 @@ class MainWindow(QMainWindow):
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.addWidget(self._build_coordination_panel())
         teleop = QGroupBox("Live leader → follower teleoperation")
         teleop_grid = QGridLayout(teleop)
         teleop_grid.addWidget(QLabel("Mapping"), 0, 0)
@@ -747,6 +833,13 @@ class MainWindow(QMainWindow):
         self.teleop_button = QPushButton("Align follower and start")
         self.teleop_button.clicked.connect(self._toggle_teleop)
         teleop_grid.addWidget(self.teleop_button, 0, 5)
+        self.transfer_manual_button = QPushButton("Stop → Manual + park leader")
+        self.transfer_manual_button.setToolTip(
+            "Stop following, hold the follower, park the leader at its current pose, "
+            "and open Manual for fine adjustment."
+        )
+        self.transfer_manual_button.clicked.connect(self._transfer_to_manual_and_park)
+        teleop_grid.addWidget(self.transfer_manual_button, 1, 4, 1, 2)
         self.teleop_status = QLabel(
             "Connect both arms in Setup. Starting teleoperation reads the leader, "
             "holds the follower at its current pose, aligns its five joints, then follows live."
@@ -920,6 +1013,9 @@ class MainWindow(QMainWindow):
             lambda _checked=False: self._replay_trajectory(selection=True)
         )
         edit_grid.addWidget(self.replay_selection_button, 2, 3)
+        edit_grid.addWidget(QLabel("Gripper speed"), 2, 4)
+        self.trajectory_gripper_speed_combo = self._new_gripper_speed_combo()
+        edit_grid.addWidget(self.trajectory_gripper_speed_combo, 2, 5)
 
         edit_grid.addWidget(QLabel("Save selection as"), 3, 0)
         self.edited_trajectory_name = QLineEdit()
@@ -1116,6 +1212,9 @@ class MainWindow(QMainWindow):
             0.1, 3.0, 1.0, decimals=2, step=0.1, suffix="×"
         )
         run_grid.addWidget(self.sequence_speed_spin, 0, 3)
+        run_grid.addWidget(QLabel("Gripper speed"), 0, 4)
+        self.run_gripper_speed_combo = self._new_gripper_speed_combo()
+        run_grid.addWidget(self.run_gripper_speed_combo, 0, 5)
         self.run_step_button = QPushButton("Run selected step")
         self.run_step_button.clicked.connect(lambda _checked=False: self._run_sequence(step_only=True))
         run_grid.addWidget(self.run_step_button, 1, 0, 1, 2)
@@ -1336,10 +1435,8 @@ class MainWindow(QMainWindow):
 
         return page
 
-    def _build_gripper_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        box = QGroupBox("Stock gripper")
+    def _build_gripper_panel(self) -> QGroupBox:
+        box = QGroupBox("Gripper — tool control")
         grid = QGridLayout(box)
 
         self.gripper_slider = QSlider(Qt.Orientation.Horizontal)
@@ -1352,12 +1449,15 @@ class MainWindow(QMainWindow):
         self.gripper_spin.valueChanged.connect(
             lambda value: self._set_gripper_slider(value)
         )
-        grid.addWidget(QLabel("0 = closed, 1 = open"), 0, 0, 1, 3)
-        grid.addWidget(self.gripper_spin, 1, 0)
-        grid.addWidget(self.gripper_slider, 1, 1, 1, 2)
-        grid.addWidget(QLabel("Speed"), 2, 0)
+        grid.addWidget(QLabel("Target · 0 closed · 1 open"), 0, 0)
+        grid.addWidget(self.gripper_spin, 0, 1)
+        grid.addWidget(self.gripper_slider, 0, 2, 1, 3)
+
+        grid.addWidget(QLabel("Speed"), 1, 0)
         self.manual_gripper_speed_combo = self._new_gripper_speed_combo()
-        grid.addWidget(self.manual_gripper_speed_combo, 2, 1, 1, 2)
+        grid.addWidget(self.manual_gripper_speed_combo, 1, 1)
+        self.gripper_measured = QLabel("Measured: —")
+        grid.addWidget(self.gripper_measured, 1, 2)
 
         self.close_gripper_button = QPushButton("Close")
         self.close_gripper_button.clicked.connect(lambda: self._request_gripper(0.0))
@@ -1367,14 +1467,10 @@ class MainWindow(QMainWindow):
         )
         self.open_gripper_button = QPushButton("Open")
         self.open_gripper_button.clicked.connect(lambda: self._request_gripper(1.0))
-        grid.addWidget(self.close_gripper_button, 3, 0)
-        grid.addWidget(self.move_gripper_button, 3, 1)
-        grid.addWidget(self.open_gripper_button, 3, 2)
-        self.gripper_measured = QLabel("Measured: —")
-        grid.addWidget(self.gripper_measured, 4, 0, 1, 3)
-        layout.addWidget(box)
-        layout.addStretch(1)
-        return page
+        grid.addWidget(self.close_gripper_button, 1, 3)
+        grid.addWidget(self.move_gripper_button, 1, 4)
+        grid.addWidget(self.open_gripper_button, 1, 5)
+        return box
 
     def _new_gripper_speed_combo(self) -> QComboBox:
         combo = QComboBox()
@@ -1392,6 +1488,8 @@ class MainWindow(QMainWindow):
         for combo in (
             getattr(self, "manual_gripper_speed_combo", None),
             getattr(self, "teleop_gripper_speed_combo", None),
+            getattr(self, "trajectory_gripper_speed_combo", None),
+            getattr(self, "run_gripper_speed_combo", None),
         ):
             if combo is not None and combo is not source:
                 combo.blockSignals(True)
@@ -2033,6 +2131,7 @@ class MainWindow(QMainWindow):
                 "speed_mm_s": self.linear_speed.value(),
                 "acceleration_mm_s2": self.linear_acceleration.value(),
                 "orientation_mode": self.orientation_combo.currentData(),
+                "gripper_speed_multiplier": self._gripper_speed_multiplier,
             }
         )
         self._log(
@@ -2459,6 +2558,7 @@ class MainWindow(QMainWindow):
                     "trajectory": clip,
                     "speed_scale": self.trajectory_speed_scale.value(),
                     "move_to_start": True,
+                    "gripper_speed_multiplier": self._gripper_speed_multiplier,
                 }
             )
         except Exception as exc:
@@ -2783,6 +2883,7 @@ class MainWindow(QMainWindow):
                     "sequence": sequence,
                     "repeat": 1 if step_only else self.sequence_repeat_spin.value(),
                     "speed_scale": self.sequence_speed_spin.value(),
+                    "gripper_speed_multiplier": self._gripper_speed_multiplier,
                     "start_index": start_index,
                     "stop_index": stop_index,
                 }
@@ -2987,12 +3088,14 @@ class MainWindow(QMainWindow):
                 self.teleop_stop_requested.emit()
             self._latest_leader_state = None
             self._leader_busy = False
+            self._leader_torque_enabled = False
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
         self._update_enabled_state()
 
     def _on_leader_state(self, state: object) -> None:
         self._latest_leader_state = dict(state)  # type: ignore[arg-type]
+        self._leader_torque_enabled = bool(self._latest_leader_state.get("torque_enabled"))
         self._update_teach_readout()
         self._update_enabled_state()
 
@@ -3216,6 +3319,8 @@ class MainWindow(QMainWindow):
         )
         gripper = float(values["gripper"])
         self.gripper_measured.setText(f"Measured: {gripper:.3f}")
+        if hasattr(self, "cartesian_view"):
+            self.cartesian_view.set_gripper_position(gripper)
 
         if not self.edit_joint_targets_check.isChecked():
             self._load_current_targets()
@@ -3364,7 +3469,8 @@ class MainWindow(QMainWindow):
             self.follower_session_status.setText(follower_status)
             self.leader_session_status.setText(
                 "Connecting leader…" if self._leader_connecting else
-                "Connected · move by hand" if self._leader_connected
+                "Connected · PARKED · torque on" if self._leader_connected and self._leader_torque_enabled
+                else "Connected · FREE · move by hand" if self._leader_connected
                 else "Disconnected · press Connect leader"
             )
         if hasattr(self, "teleop_status") and self._teleop_starting:
@@ -3546,8 +3652,13 @@ class MainWindow(QMainWindow):
         self.teleop_mode_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_rate_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_gripper_check.setEnabled(not self._teleop_active and not self._teleop_starting)
-        self.teleop_gripper_speed_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
-        self.manual_gripper_speed_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
+        for combo in (
+            self.teleop_gripper_speed_combo,
+            self.manual_gripper_speed_combo,
+            self.trajectory_gripper_speed_combo,
+            self.run_gripper_speed_combo,
+        ):
+            combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         follower_recording = self._recording_source == "follower"
         if follower_recording:
             self.move_joints_button.setEnabled(False)
