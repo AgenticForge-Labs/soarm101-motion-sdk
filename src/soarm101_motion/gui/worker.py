@@ -161,11 +161,12 @@ class RobotWorker(QObject):
 
     @Slot(object)
     def capture_measured_pose(self, request: object) -> None:
-        """Capture the follower's measured pose without interrupting live teleoperation."""
+        """Capture a fresh measured pose for teaching or cross-arm handoff."""
 
         values = dict(request)  # type: ignore[arg-type]
+        source = str(values.get("source") or "follower")
         try:
-            pose = SavedPose.capture(self._require_arm(), source="follower")
+            pose = SavedPose.capture(self._require_arm(), source=source)
             self.measured_pose_captured.emit(
                 {
                     "request": values,
@@ -181,7 +182,7 @@ class RobotWorker(QObject):
                     "error": str(exc),
                 }
             )
-            self._report_error("capture measured follower pose", exc)
+            self._report_error(f"capture measured {source} pose", exc)
 
     def _require_arm(self) -> SOARM101:
         if self.arm is None or not self.arm.is_connected:
@@ -842,6 +843,11 @@ class RobotWorker(QObject):
                 self._teleop_staging = values
                 self._track("teleop alignment", result)
                 return
+            if not arm.get_state().torque_enabled:
+                self._enable_follower_for_teleop(arm)
+                self.log_message.emit(
+                    "Follower parked at its current pose for no-motion relative relink."
+                )
             follower_origin = dict(arm.get_joint_positions().positions)
             follower_gripper = float(arm.tool.get_position())
             stream_joint_limits = arm.get_joint_limits()
