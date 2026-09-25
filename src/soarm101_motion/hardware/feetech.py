@@ -47,6 +47,10 @@ from soarm101_motion.types import HardwareState, MotorDiagnostic
 
 logger = logging.getLogger(__name__)
 
+# A small encoder-count tolerance handles quantization/backlash at a calibrated
+# endpoint. Any correction is always inward, toward the active EEPROM limit.
+TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS = 8
+
 
 class FeetechBackend(SO101HardwareBackend):
     """SO-ARM101 follower backend built directly on ``ftservo-python-sdk``."""
@@ -68,6 +72,7 @@ class FeetechBackend(SO101HardwareBackend):
         self._packet_handler: Any = None
         self._comm_success: int = 0
         self._io_lock = threading.RLock()
+        self.last_torque_latch_adjustments: dict[str, tuple[int, int]] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -489,6 +494,7 @@ class FeetechBackend(SO101HardwareBackend):
     def enable_torque(self, motors: Sequence[str] | None = None) -> None:
         with self._io_lock:
             self._require_connected()
+            self.last_torque_latch_adjustments = {}
             selected = tuple(motors) if motors is not None else ALL_MOTORS
             unknown = set(selected) - set(ALL_MOTORS)
             if unknown:
@@ -508,22 +514,40 @@ class FeetechBackend(SO101HardwareBackend):
                 for name in selected
             }
             raw_positions = {name: self.read_raw_position(name) for name in selected}
+            latch_positions = dict(raw_positions)
+            adjustments: dict[str, tuple[int, int]] = {}
             violations = []
             for name, position in raw_positions.items():
                 minimum, maximum = limits[name]
                 if minimum >= maximum:
                     violations.append(f"{name}: invalid EEPROM limits {minimum}..{maximum}")
-                elif position < minimum or position > maximum:
-                    violations.append(
-                        f"{name}: present {position} outside EEPROM limits {minimum}..{maximum}"
-                    )
+                elif position < minimum:
+                    if minimum - position <= TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS:
+                        latch_positions[name] = minimum
+                        adjustments[name] = (position, minimum)
+                    else:
+                        violations.append(
+                            f"{name}: present {position} outside EEPROM limits "
+                            f"{minimum}..{maximum} by {minimum - position} ticks "
+                            f"(endpoint tolerance {TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS})"
+                        )
+                elif position > maximum:
+                    if position - maximum <= TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS:
+                        latch_positions[name] = maximum
+                        adjustments[name] = (position, maximum)
+                    else:
+                        violations.append(
+                            f"{name}: present {position} outside EEPROM limits "
+                            f"{minimum}..{maximum} by {position - maximum} ticks "
+                            f"(endpoint tolerance {TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS})"
+                        )
             if violations:
                 raise SafetyViolationError(
                     "refusing torque enable because safe position latching cannot be "
                     "guaranteed: " + "; ".join(violations) + ". With torque off, move the "
                     "affected joint inside its calibrated range or repair/re-run calibration."
                 )
-            self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
+            self._write_raw_positions(latch_positions, speed_raw=1, acceleration_raw=1)
             enabled: list[str] = []
             try:
                 for name in selected:
@@ -539,6 +563,15 @@ class FeetechBackend(SO101HardwareBackend):
                         logger.exception("failed to roll back torque enable for %s", name)
                 self._torque_enabled = False
                 raise
+            self.last_torque_latch_adjustments = adjustments
+            if adjustments:
+                logger.warning(
+                    "torque-enable latch corrected small endpoint overshoots inward: %s",
+                    ", ".join(
+                        f"{name} {measured}->{target} ticks"
+                        for name, (measured, target) in adjustments.items()
+                    ),
+                )
             if motors is None or set(selected) == set(ALL_MOTORS):
                 self._torque_enabled = True
 

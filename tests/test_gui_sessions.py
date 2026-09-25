@@ -26,6 +26,36 @@ def test_roles_are_in_setup_tab(window):
     assert window.record_page.isAncestorOf(window.record_button)
 
 
+def test_manual_kinematic_view_draws_all_links_in_frame(window, capfd):
+    from math import radians
+
+    window.resize(1440, 900)
+    window.show()
+    window.tabs.setCurrentWidget(window.manual_page)
+    view = window.cartesian_view
+    view.set_joint_degrees({
+        "shoulder_pan": -8.2,
+        "shoulder_lift": 4.3,
+        "elbow_flex": -1.4,
+        "wrist_flex": -81.4,
+        "wrist_roll": -79.1,
+    })
+    view.grab()
+
+    joints = {name: radians(value) for name, value in {
+        "shoulder_pan": -8.2,
+        "shoulder_lift": 4.3,
+        "elbow_flex": -1.4,
+        "wrist_flex": -81.4,
+        "wrist_roll": -79.1,
+    }.items()}
+    for point in view._model.link_points(joints).values():
+        projected = view._project(point)
+        assert 0 < projected.x() < view.width()
+        assert 0 < projected.y() < view.height()
+    assert "Error calling Python override" not in capfd.readouterr().err
+
+
 def test_discovery_selects_roles_but_never_connects(window):
     requests = []
     window.connect_requested.disconnect(window._worker.connect_robot)

@@ -14,7 +14,10 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
 
 - Normal connection and read-only diagnosis do not rewrite motor configuration.
 - Direct hardware writes are rejected while torque is disabled.
-- Enabling torque first writes each measured servo position back as its goal.
+- Enabling torque latches measured positions as goals. If a position is no more than
+  8 encoder ticks (about 0.7°) outside a calibrated EEPROM limit, its goal is clamped
+  inward to that limit and the GUI logs the correction. Larger violations still block
+  enable before any goal or torque write.
 - Feetech transport and synchronized writes use one reentrant lock.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.

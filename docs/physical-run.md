@@ -88,7 +88,9 @@ Continue only if:
 - STOP/HOLD and physical power remain immediately available.
 
 Torque enable checks each current raw position against the active EEPROM Min/Max limits
-before any Goal_Position or Torque_Enable write.
+before any Goal_Position or Torque_Enable write. A position up to 8 ticks (about 0.7°)
+outside a limit is clamped inward to the limit and clearly logged; larger violations
+still block enable. Confirm any inward correction is small and expected before continuing.
 
 Relax again before moving to Gate 4.
 

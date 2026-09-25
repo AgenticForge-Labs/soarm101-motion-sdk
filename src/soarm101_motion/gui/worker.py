@@ -478,8 +478,26 @@ class RobotWorker(QObject):
     @Slot()
     def enable(self) -> None:
         try:
-            self._require_arm().enable()
-            self.log_message.emit("Torque enabled after latching current positions.")
+            arm = self._require_arm()
+            arm.enable()
+            adjustments = getattr(arm.backend, "last_torque_latch_adjustments", {})
+            if adjustments:
+                details = ", ".join(
+                    f"{name} {measured}→{target} ticks "
+                    f"({360.0 * abs(target - measured) / 4096.0:.2f}° inward)"
+                    for name, (measured, target) in adjustments.items()
+                )
+                self.log_message.emit(
+                    "Torque enabled with a small inward endpoint correction: "
+                    f"{details}."
+                )
+                record_session(
+                    "torque_latch_endpoint_adjustment",
+                    worker=self._robot_id,
+                    corrections=adjustments,
+                )
+            else:
+                self.log_message.emit("Torque enabled after latching current positions.")
             self.poll()
         except BaseException as exc:
             self._report_error("enable", exc)

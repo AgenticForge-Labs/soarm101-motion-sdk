@@ -7,6 +7,7 @@ and NumPy, while keeping the displayed joint/TCP geometry aligned with planning.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from math import cos, radians, sin
 from typing import Mapping, Sequence
 
@@ -29,12 +30,19 @@ class CartesianArmView(QWidget):
         self._target_position_m: np.ndarray | None = None
         self._queue_active = False
         self._queue_depth = 0
-        self._yaw = radians(-35.0)
-        self._pitch = radians(24.0)
+        # Start orthographic in the arm's X/Z plane so the main link spans are
+        # comparable to a physical side view without perspective shortening.
+        self._yaw = 0.0
+        self._pitch = 0.0
         self._zoom = 1.0
+        self._projection_center = (0.0, 0.0)
+        self._projection_scale = 1.0
         self._last_mouse: QPointF | None = None
         self.setMinimumSize(300, 300)
-        self.setToolTip("Drag to rotate the view. Use the mouse wheel to zoom.")
+        self.setToolTip(
+            "Joint-center diagram from the SO-101 kinematic model. Drag to rotate, "
+            "use the wheel to zoom, or double-click for the side view."
+        )
 
     def sizeHint(self) -> QSize:
         return QSize(380, 380)
@@ -78,11 +86,24 @@ class CartesianArmView(QWidget):
 
     def _project(self, point: np.ndarray) -> QPointF:
         x, _depth, z = self._view_coordinates(point)
-        scale = min(self.width(), self.height()) * 1.65 * self._zoom
+        center_x, center_z = self._projection_center
+        scale = self._projection_scale * self._zoom
         return QPointF(
-            self.width() * 0.50 + x * scale,
-            self.height() * 0.70 - z * scale,
+            self.width() * 0.50 + (x - center_x) * scale,
+            self.height() * 0.50 - (z - center_z) * scale,
         )
+
+    def _fit_projection(self, points: Sequence[np.ndarray]) -> None:
+        projected = [self._view_coordinates(point) for point in points]
+        min_x = min(point[0] for point in projected)
+        max_x = max(point[0] for point in projected)
+        min_z = min(point[2] for point in projected)
+        max_z = max(point[2] for point in projected)
+        self._projection_center = ((min_x + max_x) / 2.0, (min_z + max_z) / 2.0)
+        self._projection_scale = min(
+            max(1, self.width() - 48) / max(0.05, max_x - min_x),
+            max(1, self.height() - 96) / max(0.05, max_z - min_z),
+        ) * 0.85
 
     def _draw_axis(
         self,
@@ -109,11 +130,6 @@ class CartesianArmView(QWidget):
         text_color = self.palette().color(QPalette.ColorRole.Text)
         muted = self.palette().color(QPalette.ColorRole.Mid)
 
-        origin = np.zeros(3, dtype=float)
-        self._draw_axis(painter, origin, np.array([0.10, 0.0, 0.0]), "X", QColor("#d95c5c"))
-        self._draw_axis(painter, origin, np.array([0.0, 0.10, 0.0]), "Y", QColor("#55a868"))
-        self._draw_axis(painter, origin, np.array([0.0, 0.0, 0.10]), "Z", QColor("#4c78a8"))
-
         points = self._model.link_points(self._joints)
         ordered_names = (
             "base",
@@ -125,9 +141,23 @@ class CartesianArmView(QWidget):
             "tcp",
         )
         ordered = [points[name] for name in ordered_names]
+        tcp_pose = self._model.forward(self._joints)
+        tcp = tcp_pose.position
+        frame_length = 0.035
+        fit_points = [*ordered, np.zeros(3, dtype=float)]
+        fit_points.extend(np.eye(3) * 0.10)
+        fit_points.extend(tcp + tcp_pose.rotation[:, index] * frame_length for index in range(3))
+        if self._target_position_m is not None:
+            fit_points.append(self._target_position_m)
+        self._fit_projection(fit_points)
+
+        origin = np.zeros(3, dtype=float)
+        self._draw_axis(painter, origin, np.array([0.10, 0.0, 0.0]), "X", QColor("#d95c5c"))
+        self._draw_axis(painter, origin, np.array([0.0, 0.10, 0.0]), "Y", QColor("#55a868"))
+        self._draw_axis(painter, origin, np.array([0.0, 0.0, 0.10]), "Z", QColor("#4c78a8"))
 
         painter.setPen(QPen(text_color, 6.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        for first, second in zip(ordered, ordered[1:], strict=True):
+        for first, second in pairwise(ordered):
             painter.drawLine(self._project(first), self._project(second))
 
         painter.setPen(QPen(muted, 1.5))
@@ -137,9 +167,6 @@ class CartesianArmView(QWidget):
             radius = 4.5 if name != "tcp" else 6.0
             painter.drawEllipse(projected, radius, radius)
 
-        tcp_pose = self._model.forward(self._joints)
-        tcp = tcp_pose.position
-        frame_length = 0.035
         frame_colors = (QColor("#d95c5c"), QColor("#55a868"), QColor("#4c78a8"))
         for index, color in enumerate(frame_colors):
             endpoint = tcp + tcp_pose.rotation[:, index] * frame_length
@@ -162,7 +189,21 @@ class CartesianArmView(QWidget):
         )
         painter.drawText(10, 20, queue_text)
         painter.setPen(muted)
-        painter.drawText(10, self.height() - 10, "Drag: rotate · Wheel: zoom · axes are world/base XYZ")
+        painter.drawText(
+            10, self.height() - 10,
+            "Drag: rotate · Wheel: zoom · Double-click: side view · world/base XYZ",
+        )
+        painter.end()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._yaw = 0.0
+            self._pitch = 0.0
+            self._zoom = 1.0
+            self.update()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

@@ -239,3 +239,25 @@ def test_enable_refuses_present_position_outside_eeprom_limits(
         backend.enable_torque()
     assert all(packet.registers[(motor_id, 40)] == 0 for motor_id in MOTOR_IDS.values())
     backend.disconnect()
+
+
+def test_enable_moves_small_endpoint_overshoot_inward_before_latching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False)
+    )
+    backend.connect()
+    packet = backend._packet_handler
+    motor_id = MOTOR_IDS["elbow_flex"]
+    packet.registers[(motor_id, 9)] = 944
+    packet.registers[(motor_id, 11)] = 3150
+    packet.positions[motor_id] = 3156
+
+    backend.enable_torque()
+
+    assert packet.positions[motor_id] == 3150
+    assert backend.last_torque_latch_adjustments == {"elbow_flex": (3156, 3150)}
+    assert all(packet.registers[(selected_id, 40)] == 1 for selected_id in MOTOR_IDS.values())
+    backend.disconnect()

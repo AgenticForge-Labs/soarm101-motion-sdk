@@ -606,13 +606,30 @@ class MainWindow(QMainWindow):
 
     def _build_control_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(self._build_named_pose_controls())
+        layout = QHBoxLayout(page)
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.addWidget(self._build_named_pose_controls())
         subtabs = QTabWidget()
         subtabs.addTab(self._build_joint_tab(), "Joints")
         subtabs.addTab(self._build_cartesian_tab(), "Cartesian")
         subtabs.addTab(self._build_gripper_tab(), "Gripper")
-        layout.addWidget(subtabs, 1)
+        controls_layout.addWidget(subtabs, 1)
+        layout.addWidget(controls, 3)
+
+        view_box = QGroupBox("SO-101 joint-center view")
+        view_layout = QVBoxLayout(view_box)
+        self.cartesian_view = CartesianArmView()
+        view_layout.addWidget(self.cartesian_view, 1)
+        view_note = QLabel(
+            "Side view of measured joint axes from the SO-101 kinematic model. "
+            "The orange cross marks a requested TCP target. Drag to rotate; "
+            "double-click to return to the side view."
+        )
+        view_note.setWordWrap(True)
+        view_layout.addWidget(view_note)
+        layout.addWidget(view_box, 2)
         return page
 
     def _build_named_pose_controls(self) -> QGroupBox:
@@ -1312,17 +1329,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(jog_box)
         layout.addStretch(1)
 
-        view_box = QGroupBox("3D kinematic view")
-        view_layout = QVBoxLayout(view_box)
-        self.cartesian_view = CartesianArmView()
-        view_layout.addWidget(self.cartesian_view, 1)
-        view_note = QLabel(
-            "Measured model state is shown when the arm is idle; the orange cross is the "
-            "currently requested TCP target. Drag to rotate and use the wheel to zoom."
-        )
-        view_note.setWordWrap(True)
-        view_layout.addWidget(view_note)
-        outer.addWidget(view_box, 2)
         return page
 
     def _build_gripper_tab(self) -> QWidget:
