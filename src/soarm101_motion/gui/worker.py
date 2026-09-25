@@ -843,11 +843,12 @@ class RobotWorker(QObject):
                 self._teleop_staging = values
                 self._track("teleop alignment", result)
                 return
-            if not arm.get_state().torque_enabled:
-                self._enable_follower_for_teleop(arm)
-                self.log_message.emit(
-                    "Follower parked at its current pose for no-motion relative relink."
-                )
+            if bool(values.get("latch_follower_if_relaxed", False)):
+                if not arm.get_state().torque_enabled:
+                    self._enable_follower_for_teleop(arm)
+                    self.log_message.emit(
+                        "Follower parked at its current pose for no-motion relative relink."
+                    )
             follower_origin = dict(arm.get_joint_positions().positions)
             follower_gripper = float(arm.tool.get_position())
             stream_joint_limits = arm.get_joint_limits()
