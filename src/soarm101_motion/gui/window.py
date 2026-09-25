@@ -3206,6 +3206,7 @@ class MainWindow(QMainWindow):
             "mirror_gripper": self.teleop_gripper_check.isChecked(),
             "gripper_speed_multiplier": self._gripper_speed_multiplier,
             "align_follower": align_follower,
+            "latch_follower_if_relaxed": not align_follower,
         }
         self.teleop_button.setText(
             "Cancel alignment" if align_follower else "Cancel relink"
