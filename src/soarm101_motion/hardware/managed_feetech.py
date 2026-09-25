@@ -421,8 +421,9 @@ class FeetechBackend(_ProtocolFeetechBackend):
                     # Lock EEPROM before torque is enabled. Normal operation never
                     # needs EEPROM writes and should leave the persistent area protected.
                     self.write_register(name, "Lock", 1)
-                    self.write_register(name, "Torque_Enable", 1)
+                    # A missing status packet does not prove the torque write failed.
                     enabled.append(name)
+                    self.write_register(name, "Torque_Enable", 1)
             except BaseException:
                 for name in reversed(enabled):
                     try:

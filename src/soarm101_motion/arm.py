@@ -608,9 +608,12 @@ class SOARM101:
         positions: Mapping[str, float],
         *,
         gripper: float | None = None,
+        gripper_speed_raw: int | None = None,
     ) -> MotionResult:
         """Send one guarded streaming target while a joint stream is active."""
-        return self.motion.stream_joint_target(positions, gripper=gripper)
+        return self.motion.stream_joint_target(
+            positions, gripper=gripper, gripper_speed_raw=gripper_speed_raw
+        )
 
     def stop_joint_stream(self, *, hold: bool = True) -> None:
         """End continuous streaming and optionally hold the measured pose."""

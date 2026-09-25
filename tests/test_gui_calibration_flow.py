@@ -11,6 +11,31 @@ import pytest
 from soarm101_motion.calibration_live import PROVISIONAL_MINIMUM_TRAVEL_TICKS
 
 
+def test_gripper_speed_presets_sync_and_send_manual_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from soarm101_motion.gui.window import MainWindow
+
+    QApplication.instance() or QApplication([])
+    window = MainWindow(simulation=True)
+    requests = []
+    window.gripper_requested.disconnect(window._worker.move_gripper)
+    window.gripper_requested.connect(requests.append)
+    try:
+        assert window.manual_gripper_speed_combo.currentData() == 2.0
+        assert window.teleop_gripper_speed_combo.currentData() == 2.0
+        window.teleop_gripper_speed_combo.setCurrentIndex(
+            window.teleop_gripper_speed_combo.findData(5.0)
+        )
+        assert window.manual_gripper_speed_combo.currentData() == 5.0
+        window._request_gripper(0.4)
+        assert requests == [{"position": 0.4, "gripper_speed_multiplier": 5.0}]
+    finally:
+        window.close()
+
+
 def test_setup_connects_selected_arm_without_torque(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("PySide6")

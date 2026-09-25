@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Mapping
 
 from soarm101_motion.constants import STOCK_GRIPPER
@@ -65,6 +66,41 @@ class SO101Gripper(RobotTool):
 
     def get_position(self) -> float:
         return self._backend().read_tool_position(STOCK_GRIPPER)
+
+    def begin_opening(
+        self,
+        position: float,
+        *,
+        speed_raw: int | None = None,
+        acceleration_raw: int | None = None,
+    ) -> None:
+        """Send one opening goal; callers must verify arrival before relying on it.
+
+        This avoids a second serial polling loop while an arm trajectory runs.
+        The backend's shared transport lock serializes this write with joint commands.
+        """
+        target = float(position)
+        if not isfinite(target) or not 0.0 <= target <= 1.0:
+            raise InvalidCommandError("gripper opening target must be within [0, 1]")
+        if speed_raw is not None and (
+            not isinstance(speed_raw, int) or not 0 <= speed_raw <= 4095
+        ):
+            raise InvalidCommandError("gripper speed must be an integer within [0, 4095]")
+        if acceleration_raw is not None and (
+            not isinstance(acceleration_raw, int) or not 0 <= acceleration_raw <= 254
+        ):
+            raise InvalidCommandError("gripper acceleration must be an integer within [0, 254]")
+        if self.is_moving:
+            raise InvalidCommandError("another gripper motion is already active")
+        current = self.get_position()
+        if target < current:
+            raise InvalidCommandError("begin_opening cannot command the gripper to close")
+        self._backend().write_tool_position(
+            STOCK_GRIPPER,
+            target,
+            speed_raw=speed_raw,
+            acceleration_raw=acceleration_raw,
+        )
 
     def _execute_move(
         self,

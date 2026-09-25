@@ -62,7 +62,8 @@ def test_teleop_records_per_sample_target_and_measured_pose(monkeypatch) -> None
         def start_joint_stream(self, *, frequency_hz):
             assert frequency_hz == 10.0
 
-        def stream_joint_target(self, command, *, gripper):
+        def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
+            assert gripper_speed_raw == 500
             return SimpleNamespace(final_positions=dict(command), message="accepted")
 
     worker = RobotWorker()
@@ -87,6 +88,100 @@ def test_teleop_records_per_sample_target_and_measured_pose(monkeypatch) -> None
     worker.set_detailed_logging(False)
     worker.apply_teleop_sample({**sample, "timestamp": time.perf_counter()})
     assert len([name for name, _ in events if name == "teleop_frame"]) == 1
+
+
+def test_manual_gripper_speed_reaches_tool_move() -> None:
+    pytest.importorskip("PySide6")
+    from soarm101_motion.config import SOARM101Config
+    from soarm101_motion.gui.worker import RobotWorker
+
+    calls = []
+    worker = RobotWorker()
+    worker.arm = SimpleNamespace(
+        config=SOARM101Config(),
+        tool=SimpleNamespace(move=lambda position, **kwargs: calls.append((position, kwargs))),
+    )
+    worker._require_motion_available = lambda: worker.arm
+    worker._track = lambda *_args: None
+    worker.move_gripper({"position": 0.3, "gripper_speed_multiplier": 5.0})
+    assert calls == [(0.3, {"speed_raw": 1250, "wait": False})]
+
+
+def test_gripper_speed_presets() -> None:
+    from soarm101_motion.gui.teleop_rate import gripper_speed_raw
+
+    assert [gripper_speed_raw(250, multiplier) for multiplier in (1.0, 2.0, 5.0)] == [
+        250, 500, 1250
+    ]
+    with pytest.raises(ValueError, match="unknown"):
+        gripper_speed_raw(250, 10.0)
+
+
+def test_teleop_torque_enable_retries_missing_reply_after_torque_off(monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    from soarm101_motion.exceptions import CommunicationError
+    from soarm101_motion.gui.worker import RobotWorker
+
+    events = []
+    monkeypatch.setattr(
+        "soarm101_motion.gui.worker.record_session",
+        lambda name, **fields: events.append((name, fields)),
+    )
+
+    class FakeArm:
+        backend = SimpleNamespace(disable_torque=lambda: events.append(("torque_off", {})))
+
+        def enable(self):
+            events.append(("enable", {}))
+            if sum(name == "enable" for name, _ in events) < 3:
+                raise CommunicationError(
+                    "write Torque_Enable on shoulder_lift: There is no status packet!"
+                )
+
+    worker = RobotWorker()
+    worker._enable_follower_for_teleop(FakeArm())
+    assert [name for name, _ in events if name in {"enable", "torque_off"}] == [
+        "enable", "torque_off", "enable", "torque_off", "enable"
+    ]
+    assert len([name for name, _ in events if name == "teleop_torque_enable_retry"]) == 2
+
+
+def test_teleop_torque_enable_does_not_retry_other_faults() -> None:
+    pytest.importorskip("PySide6")
+    from soarm101_motion.exceptions import CommunicationError
+    from soarm101_motion.gui.worker import RobotWorker
+
+    calls = []
+
+    class FakeArm:
+        backend = SimpleNamespace(disable_torque=lambda: calls.append("torque_off"))
+
+        def enable(self):
+            calls.append("enable")
+            raise CommunicationError("write Torque_Enable on shoulder_lift: voltage fault")
+
+    with pytest.raises(CommunicationError, match="voltage fault"):
+        RobotWorker()._enable_follower_for_teleop(FakeArm())
+    assert calls == ["enable"]
+
+
+def test_teleop_torque_enable_fails_after_two_retries() -> None:
+    pytest.importorskip("PySide6")
+    from soarm101_motion.exceptions import CommunicationError
+    from soarm101_motion.gui.worker import RobotWorker
+
+    calls = []
+
+    class FakeArm:
+        backend = SimpleNamespace(disable_torque=lambda: calls.append("torque_off"))
+
+        def enable(self):
+            calls.append("enable")
+            raise CommunicationError("write Torque_Enable: There is no status packet!")
+
+    with pytest.raises(CommunicationError, match="no status packet"):
+        RobotWorker()._enable_follower_for_teleop(FakeArm())
+    assert calls == ["enable", "torque_off"] * 3
 
 
 def test_teleop_gripper_contact_latch_does_not_stop_arm_stream(monkeypatch) -> None:
@@ -119,7 +214,7 @@ def test_teleop_gripper_contact_latch_does_not_stop_arm_stream(monkeypatch) -> N
         def start_joint_stream(self, *, frequency_hz):
             assert frequency_hz == 10.0
 
-        def stream_joint_target(self, command, *, gripper):
+        def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
             self.gripper_targets.append(gripper)
             return SimpleNamespace(final_positions=dict(command), message="accepted")
 
@@ -146,11 +241,11 @@ def test_teleop_gripper_contact_latch_does_not_stop_arm_stream(monkeypatch) -> N
 
 
 @pytest.mark.parametrize(
-    ("follower_start", "leader_gripper", "stages_tool"),
-    [(0.2, 0.8, True), (0.8, 0.2, False)],
+    ("follower_start", "leader_gripper", "stages_tool", "opening_arrives"),
+    [(0.2, 0.8, True, True), (0.2, 0.8, True, False), (0.8, 0.2, False, False)],
 )
 def test_teleop_stages_opening_and_guards_closing(
-    monkeypatch, follower_start, leader_gripper, stages_tool
+    monkeypatch, follower_start, leader_gripper, stages_tool, opening_arrives
 ) -> None:
     pytest.importorskip("PySide6")
     from soarm101_motion.config import SOARM101Config
@@ -159,12 +254,18 @@ def test_teleop_stages_opening_and_guards_closing(
 
     monkeypatch.setattr("soarm101_motion.gui.worker.record_session", lambda *args, **kwargs: None)
     joints = {name: 0.0 for name in ARM_JOINTS}
+    events = []
 
     class FakeTool:
         position = follower_start
 
         def get_position(self):
             return self.position
+
+        def begin_opening(self, target, *, speed_raw):
+            events.append(("begin_opening", target, speed_raw))
+            if opening_arrives:
+                self.position = target
 
         def move(self, target, *, wait, timeout):
             assert not wait
@@ -194,6 +295,7 @@ def test_teleop_stages_opening_and_guards_closing(
         def move_joints(self, target, **kwargs):
             assert kwargs["servo_speed_raw"] == 0
             assert kwargs["servo_acceleration_raw"] == 254
+            events.append(("move_joints", target))
             handle = MotionHandle(lambda _cancel: target)
             handle.start()
             return handle
@@ -201,7 +303,7 @@ def test_teleop_stages_opening_and_guards_closing(
         def start_joint_stream(self, *, frequency_hz):
             self.motion.is_streaming = True
 
-        def stream_joint_target(self, command, *, gripper):
+        def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
             self.gripper_targets.append(gripper)
             return SimpleNamespace(final_positions=dict(command), message="accepted")
 
@@ -215,13 +317,16 @@ def test_teleop_stages_opening_and_guards_closing(
         "mirror_gripper": True,
         "align_follower": True,
     })
+    assert events[0][0] == "move_joints"
+    assert (len(events) == 2 and events[1][0] == "begin_opening") == stages_tool
     worker._handles[0][1].wait(1)
     worker._process_handles()
-    if stages_tool:
-        assert worker.arm.tool.position == pytest.approx(leader_gripper)
+    if stages_tool and not opening_arrives:
         assert worker._handles[0][0] == "teleop gripper alignment"
         worker._handles[0][1].wait(1)
         worker._process_handles()
+    if stages_tool:
+        assert worker.arm.tool.position == pytest.approx(leader_gripper)
     else:
         assert worker.arm.tool.position == pytest.approx(follower_start)
     assert worker._teleop is not None
@@ -260,7 +365,7 @@ def test_gripper_mirrors_absolute_leader_value_when_joint_mapping_is_relative(mo
         def start_joint_stream(self, *, frequency_hz):
             pass
 
-        def stream_joint_target(self, command, *, gripper):
+        def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
             self.gripper_targets.append(gripper)
             return SimpleNamespace(final_positions=dict(command), message="accepted")
 

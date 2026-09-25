@@ -885,6 +885,7 @@ class MotionController:
         positions: Mapping[str, float],
         *,
         gripper: float | None = None,
+        gripper_speed_raw: int | None = None,
     ) -> MotionResult:
         """Accept one guarded sample in an active joint stream.
 
@@ -964,6 +965,11 @@ class MotionController:
                     raise InvalidCommandError("streamed gripper must be within [0, 1]")
             else:
                 gripper_value = None
+            if gripper_speed_raw is not None and (
+                not isinstance(gripper_speed_raw, int)
+                or not 1 <= gripper_speed_raw <= 32767
+            ):
+                raise InvalidCommandError("streamed gripper speed must be within [1, 32767]")
 
             try:
                 # Match the direct position-command behavior used by LeRobot's
@@ -977,7 +983,12 @@ class MotionController:
                     acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
                 )
                 if gripper_value is not None:
-                    self.backend.write_tool_position(STOCK_GRIPPER, gripper_value)
+                    if gripper_speed_raw is None:
+                        self.backend.write_tool_position(STOCK_GRIPPER, gripper_value)
+                    else:
+                        self.backend.write_tool_position(
+                            STOCK_GRIPPER, gripper_value, speed_raw=gripper_speed_raw
+                        )
                 actual = self._monitor_motion(
                     target,
                     state.last_command,

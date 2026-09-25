@@ -551,8 +551,10 @@ class FeetechBackend(SO101HardwareBackend):
             enabled: list[str] = []
             try:
                 for name in selected:
-                    self.write_register(name, "Torque_Enable", 1)
+                    # The write may reach the motor even when its status reply is
+                    # lost. Include that motor in rollback before sending it.
                     enabled.append(name)
+                    self.write_register(name, "Torque_Enable", 1)
                     self.write_register(name, "Lock", 1)
             except BaseException:
                 for name in reversed(enabled):

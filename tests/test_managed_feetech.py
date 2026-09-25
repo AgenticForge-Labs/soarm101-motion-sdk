@@ -97,6 +97,7 @@ def test_failed_enable_rolls_back_torque_without_unlocking_eeprom() -> None:
         backend.enable_torque(["shoulder_pan", "shoulder_lift"])
 
     assert ("shoulder_pan", "Torque_Enable", 0) in writes
+    assert ("shoulder_lift", "Torque_Enable", 0) in writes
     assert all(not (register == "Lock" and value == 0) for _, register, value in writes)
 
 

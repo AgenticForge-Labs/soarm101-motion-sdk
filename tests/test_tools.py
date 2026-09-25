@@ -3,7 +3,7 @@ import pytest
 
 from soarm101_motion import CameraTool, Pose, SOARM101, ToolAssembly
 from soarm101_motion.tools import SO101Gripper
-from soarm101_motion.exceptions import MotionTimeoutError
+from soarm101_motion.exceptions import InvalidCommandError, MotionTimeoutError
 from soarm101_motion.hardware import SimulationBackend
 
 
@@ -24,6 +24,22 @@ def test_tool_assembly_binds_primary_gripper() -> None:
         gripper.close()
         assert gripper.is_closed
         arm.set_active_tcp("camera")
+
+
+def test_gripper_begin_opening_sends_goal_without_starting_polling() -> None:
+    backend = SimulationBackend()
+    backend.connect()
+    backend.enable_torque()
+    backend.write_tool_position("so101_gripper", 0.2)
+    gripper = SO101Gripper(backend=backend)
+
+    gripper.begin_opening(0.8, speed_raw=100)
+
+    assert gripper.get_position() == pytest.approx(0.8)
+    assert not gripper.is_moving
+    with pytest.raises(InvalidCommandError, match="cannot command.*close"):
+        gripper.begin_opening(0.1)
+    backend.disconnect()
 
 
 def test_gripper_long_travel_can_finish_after_old_three_second_deadline() -> None:

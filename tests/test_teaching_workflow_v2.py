@@ -60,6 +60,34 @@ def test_guarded_joint_stream_in_simulation() -> None:
         arm.disconnect()
 
 
+def test_stream_passes_gripper_speed_to_backend() -> None:
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    backend = SimulationBackend(realtime=False)
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    writes = []
+    original_write = backend.write_tool_position
+
+    def capture_write(actuator, position, *, speed_raw=None, acceleration_raw=None):
+        writes.append((actuator, position, speed_raw))
+        original_write(
+            actuator, position, speed_raw=speed_raw, acceleration_raw=acceleration_raw
+        )
+
+    backend.write_tool_position = capture_write
+    try:
+        arm.start_joint_stream()
+        neutral = {name: 0.0 for name in ARM_JOINTS}
+        arm.stream_joint_target(neutral, gripper=0.7, gripper_speed_raw=500)
+        assert writes[-1] == ("so101_gripper", 0.7, 500)
+        with pytest.raises(InvalidCommandError, match="gripper speed"):
+            arm.stream_joint_target(neutral, gripper=0.7, gripper_speed_raw=0)
+        arm.stop_joint_stream()
+    finally:
+        arm.disconnect()
+
+
 def test_stream_rejects_large_command_step() -> None:
     config = SOARM101Config(
         enable_workspace_checks=False,

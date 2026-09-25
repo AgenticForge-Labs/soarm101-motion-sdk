@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from math import degrees, isfinite, radians
+from math import ceil, degrees, isfinite, radians, sqrt
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -20,7 +20,7 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.control import relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
-from soarm101_motion.exceptions import MotionCancelledError
+from soarm101_motion.exceptions import CommunicationError, MotionCancelledError
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitiveLibrary
@@ -30,6 +30,7 @@ from soarm101_motion.gui.session_log import record as record_session
 from soarm101_motion.gui.teleop_rate import (
     GripperContactLatch,
     TELEOP_GRIPPER_SPEED_PER_S,
+    gripper_speed_raw,
     limit_joint_target,
     plan_alignment_target,
     update_gripper_contact_latch,
@@ -656,6 +657,32 @@ class RobotWorker(QObject):
             self._record_voltage_fault("high-rate readout", exc)
             self._report_error("high-rate readout", exc)
 
+    def _enable_follower_for_teleop(self, arm: SOARM101) -> None:
+        """Retry only a lost torque-enable reply, relatching the pose each time."""
+        for attempt in range(1, 4):
+            try:
+                arm.enable()
+                return
+            except CommunicationError as exc:
+                message = str(exc).lower()
+                if "write torque_enable" not in message or "no status packet" not in message:
+                    raise
+                # The write may have reached a motor despite the lost reply.
+                # Require all torque-off writes to succeed before relatching.
+                arm.backend.disable_torque()
+                if attempt == 3:
+                    raise
+                self.log_message.emit(
+                    f"Follower torque-enable reply missing; retrying with fresh "
+                    f"position latch ({attempt}/2 retries)."
+                )
+                record_session(
+                    "teleop_torque_enable_retry",
+                    worker=self._robot_id,
+                    retry=attempt,
+                    error=str(exc),
+                )
+
     @Slot(object)
     def start_teleop(self, options: object) -> None:
         try:
@@ -663,6 +690,10 @@ class RobotWorker(QObject):
             if self._handles:
                 raise RuntimeError("wait for active motion to finish before teleoperation")
             values = dict(options)  # type: ignore[arg-type]
+            selected_gripper_speed = gripper_speed_raw(
+                arm.config.hardware_speed_raw,
+                float(values.get("gripper_speed_multiplier", 2.0)),
+            )
             mode = str(values.get("mode") or "relative")
             if mode not in {"relative", "absolute"}:
                 raise ValueError("teleoperation mode must be relative or absolute")
@@ -710,7 +741,7 @@ class RobotWorker(QObject):
                         "before_torque_enable",
                         leader_gripper=float(values.get("leader_gripper", 0.0)),
                     )
-                    arm.enable()
+                    self._enable_follower_for_teleop(arm)
                     self._record_gripper_snapshot(
                         "after_torque_enable",
                         leader_gripper=float(values.get("leader_gripper", 0.0)),
@@ -722,6 +753,49 @@ class RobotWorker(QObject):
                                leader_joints_rad=leader_origin,
                                follower_target_rad=alignment_target,
                                adjustments_deg=adjustments)
+                opening_start: float | None = None
+                opening_target: float | None = None
+                opening_speed_raw: int | None = None
+                opening_duration_s: float | None = None
+                if bool(values.get("mirror_gripper", True)):
+                    opening_target = float(values["leader_gripper"])
+                    opening_start = float(arm.tool.get_position())
+                    if opening_target <= opening_start + 0.03:
+                        if opening_start > opening_target + 0.03:
+                            self.log_message.emit(
+                                "Follower gripper will close under the live contact guard "
+                                "after joint alignment."
+                            )
+                        opening_target = None
+                    else:
+                        joint_start = arm.get_joint_positions().positions
+                        max_joint_delta = max(
+                            abs(alignment_target[name] - joint_start[name])
+                            for name in ARM_JOINTS
+                        )
+                        speed = radians(25.0)
+                        acceleration = radians(60.0)
+                        estimated_duration = max(
+                            0.25,
+                            1.875 * max_joint_delta / speed,
+                            sqrt(5.774 * max_joint_delta / acceleration),
+                        )
+                        opening_duration_s = estimated_duration
+                        gripper_calibration = getattr(
+                            getattr(arm.backend, "calibration", None), "motors", {}
+                        ).get(STOCK_GRIPPER)
+                        if gripper_calibration is not None:
+                            span = gripper_calibration.range_max - gripper_calibration.range_min
+                            opening_speed_raw = min(
+                                selected_gripper_speed,
+                                max(
+                                    50,
+                                    ceil(
+                                        span * (opening_target - opening_start)
+                                        / estimated_duration
+                                    ),
+                                ),
+                            )
                 result = arm.move_joints(
                     alignment_target,
                     speed=radians(25.0),
@@ -730,6 +804,35 @@ class RobotWorker(QObject):
                     servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
                     servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
                 )
+                if opening_target is not None:
+                    try:
+                        if result.done:
+                            alignment_error = result.exception(0)
+                            if alignment_error is not None:
+                                raise alignment_error
+                        arm.tool.begin_opening(
+                            opening_target,
+                            speed_raw=opening_speed_raw,
+                        )
+                    except BaseException:
+                        result.cancel()
+                        try:
+                            arm.stop()
+                        except BaseException:
+                            pass
+                        raise
+                    self.log_message.emit(
+                        f"Opening follower gripper {opening_start:.3f} → "
+                        f"{opening_target:.3f} alongside joint alignment."
+                    )
+                    record_session(
+                        "teleop_gripper_opening_started",
+                        worker=self._robot_id,
+                        follower_gripper=opening_start,
+                        leader_gripper=opening_target,
+                        speed_raw=opening_speed_raw,
+                        estimated_joint_duration_s=opening_duration_s,
+                    )
                 self._teleop_staging = values
                 self._track("teleop alignment", result)
                 return
@@ -758,6 +861,7 @@ class RobotWorker(QObject):
                     last_actual=follower_gripper,
                 ),
                 "mirror_gripper": bool(values.get("mirror_gripper", True)),
+                "gripper_speed_raw": selected_gripper_speed,
                 "samples": 0,
                 "limited_samples": 0,
                 "frequency_hz": frequency,
@@ -780,6 +884,7 @@ class RobotWorker(QObject):
                 max_joint_speed_rad_s=arm.config.stream_joint_speed_limit,
                 max_joint_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
                 gripper_speed_per_s=TELEOP_GRIPPER_SPEED_PER_S,
+                gripper_speed_raw=selected_gripper_speed,
                 max_command_step_rad=arm.config.max_command_step_radians,
                 following_error_limit_rad=arm.config.following_error_limit_rad,
                 teleop_servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
@@ -908,7 +1013,12 @@ class RobotWorker(QObject):
                 "limited": limited,
             }
             teleop["last_frame"] = frame
-            result = arm.stream_joint_target(command, gripper=gripper)
+            if gripper is None:
+                result = arm.stream_joint_target(command, gripper=None)
+            else:
+                result = arm.stream_joint_target(
+                    command, gripper=gripper, gripper_speed_raw=teleop["gripper_speed_raw"]
+                )
             self.joint_measurements.emit({
                 name: degrees(float(result.final_positions[name])) for name in ARM_JOINTS
             })
@@ -1366,11 +1476,20 @@ class RobotWorker(QObject):
         except BaseException as exc:
             self._report_error("absolute Cartesian move", exc)
 
-    @Slot(float)
-    def move_gripper(self, position: float) -> None:
+    @Slot(object)
+    def move_gripper(self, request: object) -> None:
         try:
-            record_session("gripper_requested", worker=self._robot_id, position=float(position))
-            result = self._require_motion_available().tool.move(float(position), wait=False)
+            values = dict(request) if isinstance(request, dict) else {"position": request}
+            position = float(values["position"])
+            arm = self._require_motion_available()
+            speed = gripper_speed_raw(
+                arm.config.hardware_speed_raw,
+                float(values.get("gripper_speed_multiplier", 2.0)),
+            )
+            record_session(
+                "gripper_requested", worker=self._robot_id, position=position, speed_raw=speed
+            )
+            result = arm.tool.move(position, speed_raw=speed, wait=False)
             self._track("gripper move", result)
         except BaseException as exc:
             self._report_error("gripper", exc)

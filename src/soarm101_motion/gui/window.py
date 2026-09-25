@@ -47,6 +47,7 @@ from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
 from soarm101_motion.gui.cartesian_view import CartesianArmView
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
+from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
 from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitive, MotionPrimitiveLibrary
@@ -66,7 +67,7 @@ class MainWindow(QMainWindow):
     move_joints_requested = Signal(object)
     jog_requested = Signal(object)
     absolute_pose_requested = Signal(object)
-    gripper_requested = Signal(float)
+    gripper_requested = Signal(object)
     calibration_requested = Signal(float)
     leader_calibration_requested = Signal(float)
     leader_connect_requested = Signal(object)
@@ -128,6 +129,7 @@ class MainWindow(QMainWindow):
         self._pending_recording_name: str | None = None
         self._teleop_active = False
         self._teleop_starting = False
+        self._gripper_speed_multiplier = 2.0
         self._sequence_library_cache: tuple[str, SequenceLibrary] | None = None
         self._primitive_library_cache: tuple[str, MotionPrimitiveLibrary] | None = None
         self._sequence_steps: list[SequenceStep] = []
@@ -739,6 +741,9 @@ class MainWindow(QMainWindow):
             "it holds that opening until you open the leader gripper."
         )
         teleop_grid.addWidget(self.teleop_gripper_check, 0, 4)
+        teleop_grid.addWidget(QLabel("Gripper speed"), 1, 0)
+        self.teleop_gripper_speed_combo = self._new_gripper_speed_combo()
+        teleop_grid.addWidget(self.teleop_gripper_speed_combo, 1, 1)
         self.teleop_button = QPushButton("Align follower and start")
         self.teleop_button.clicked.connect(self._toggle_teleop)
         teleop_grid.addWidget(self.teleop_button, 0, 5)
@@ -747,7 +752,7 @@ class MainWindow(QMainWindow):
             "holds the follower at its current pose, aligns its five joints, then follows live."
         )
         self.teleop_status.setWordWrap(True)
-        teleop_grid.addWidget(self.teleop_status, 1, 0, 1, 6)
+        teleop_grid.addWidget(self.teleop_status, 2, 0, 1, 6)
         layout.addWidget(teleop)
 
         self.teleop_readout = QLabel("Connect both arms to see live measurements.")
@@ -1350,23 +1355,54 @@ class MainWindow(QMainWindow):
         grid.addWidget(QLabel("0 = closed, 1 = open"), 0, 0, 1, 3)
         grid.addWidget(self.gripper_spin, 1, 0)
         grid.addWidget(self.gripper_slider, 1, 1, 1, 2)
+        grid.addWidget(QLabel("Speed"), 2, 0)
+        self.manual_gripper_speed_combo = self._new_gripper_speed_combo()
+        grid.addWidget(self.manual_gripper_speed_combo, 2, 1, 1, 2)
 
         self.close_gripper_button = QPushButton("Close")
-        self.close_gripper_button.clicked.connect(lambda: self.gripper_requested.emit(0.0))
+        self.close_gripper_button.clicked.connect(lambda: self._request_gripper(0.0))
         self.move_gripper_button = QPushButton("Move to value")
         self.move_gripper_button.clicked.connect(
-            lambda: self.gripper_requested.emit(self.gripper_spin.value())
+            lambda: self._request_gripper(self.gripper_spin.value())
         )
         self.open_gripper_button = QPushButton("Open")
-        self.open_gripper_button.clicked.connect(lambda: self.gripper_requested.emit(1.0))
-        grid.addWidget(self.close_gripper_button, 2, 0)
-        grid.addWidget(self.move_gripper_button, 2, 1)
-        grid.addWidget(self.open_gripper_button, 2, 2)
+        self.open_gripper_button.clicked.connect(lambda: self._request_gripper(1.0))
+        grid.addWidget(self.close_gripper_button, 3, 0)
+        grid.addWidget(self.move_gripper_button, 3, 1)
+        grid.addWidget(self.open_gripper_button, 3, 2)
         self.gripper_measured = QLabel("Measured: —")
-        grid.addWidget(self.gripper_measured, 3, 0, 1, 3)
+        grid.addWidget(self.gripper_measured, 4, 0, 1, 3)
         layout.addWidget(box)
         layout.addStretch(1)
         return page
+
+    def _new_gripper_speed_combo(self) -> QComboBox:
+        combo = QComboBox()
+        for label, multiplier in GRIPPER_SPEED_PRESETS:
+            combo.addItem(label, multiplier)
+        combo.setCurrentIndex(combo.findData(self._gripper_speed_multiplier))
+        combo.setToolTip("Speed relative to the original gripper motor setting. Applies to the next move.")
+        combo.currentIndexChanged.connect(
+            lambda _index, source=combo: self._set_gripper_speed(source)
+        )
+        return combo
+
+    def _set_gripper_speed(self, source: QComboBox) -> None:
+        self._gripper_speed_multiplier = float(source.currentData())
+        for combo in (
+            getattr(self, "manual_gripper_speed_combo", None),
+            getattr(self, "teleop_gripper_speed_combo", None),
+        ):
+            if combo is not None and combo is not source:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(combo.findData(self._gripper_speed_multiplier))
+                combo.blockSignals(False)
+
+    def _request_gripper(self, position: float) -> None:
+        self.gripper_requested.emit({
+            "position": position,
+            "gripper_speed_multiplier": self._gripper_speed_multiplier,
+        })
 
     def _set_gripper_spin(self, value: float) -> None:
         self.gripper_spin.blockSignals(True)
@@ -2861,6 +2897,7 @@ class MainWindow(QMainWindow):
                 "mode": self.teleop_mode_combo.currentData(),
                 "frequency_hz": frequency_hz,
                 "mirror_gripper": self.teleop_gripper_check.isChecked(),
+                "gripper_speed_multiplier": self._gripper_speed_multiplier,
                 "align_follower": True,
             }
         )
@@ -3509,6 +3546,8 @@ class MainWindow(QMainWindow):
         self.teleop_mode_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_rate_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_gripper_check.setEnabled(not self._teleop_active and not self._teleop_starting)
+        self.teleop_gripper_speed_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
+        self.manual_gripper_speed_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         follower_recording = self._recording_source == "follower"
         if follower_recording:
             self.move_joints_button.setEnabled(False)

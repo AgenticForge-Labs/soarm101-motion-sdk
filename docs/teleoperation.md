@@ -21,9 +21,12 @@ The GUI offers:
 After both arms are connected, **Align follower and start** reads a fresh leader
 pose, latches the follower's current positions before enabling torque, and moves
 the follower's five pose joints to those leader angles with a guarded planned
-move. With gripper mirroring selected, it then opens the follower gripper to
-the leader's measured normalized opening if needed. Any closing difference is
-handled by the live contact guard after joint alignment. Keep the leader still
+move. The five joints start together and follow one timed trajectory. With
+gripper mirroring selected, an opening gripper starts alongside the joint move;
+its speed is chosen to approach the leader's measured opening near the end of
+joint alignment. The GUI verifies arrival before streaming and completes any
+remaining opening then. Any closing difference is handled by the live contact
+guard after joint alignment. Keep the leader still
 during alignment. The button can cancel alignment, and STOP/HOLD also stops it.
 Joint alignment uses a 25°/s planned speed and the responsive servo profile
 used for live following; completion checks the five measured pose joints.
@@ -69,6 +72,17 @@ while the arm stream continues. Opening the leader gripper from the position whe
 contact was detected releases the latch. During the latch, the managed software effort threshold exempts
 only gripper current/load; arm-joint effort checks remain active, and servo-reported
 hardware faults still stop the stream.
+The Manual and Teleoperation tabs share a gripper motor speed selector: Slow uses
+the original 250 raw ticks/s setting, Normal (the default) uses 500, and Fast
+uses 1250. The selected speed applies to the next manual move or teleoperation
+session. Opening during teleoperation alignment may run slower so it finishes
+near the five joint axes. Closing during alignment still waits for the live
+contact guard. These faster settings have simulator coverage but have not yet
+been verified on a physical arm.
+If the follower loses only the status reply to a torque-enable write at
+teleoperation start, the GUI turns torque off and retries up to twice with a
+fresh measured-position latch. Other communication and hardware faults stop
+the start attempt.
 When the measured starting pose sits just beyond a model limit, mapped targets are
 clipped at that stream boundary so an outward leader twitch holds position instead of
 raising a joint-limit error. Motion back into the legal range remains available.

@@ -9,6 +9,17 @@ from dataclasses import dataclass
 from soarm101_motion.constants import ARM_JOINTS
 
 TELEOP_GRIPPER_SPEED_PER_S = 1.2
+GRIPPER_SPEED_PRESETS = (("Slow · original", 1.0), ("Normal · 2×", 2.0), ("Fast · 5×", 5.0))
+
+
+def gripper_speed_raw(base_speed: int, multiplier: float) -> int:
+    """Resolve a GUI speed preset to the Feetech goal speed register."""
+    if multiplier not in {value for _, value in GRIPPER_SPEED_PRESETS}:
+        raise ValueError("unknown gripper speed preset")
+    speed = round(base_speed * multiplier)
+    if not 1 <= speed <= 32767:
+        raise ValueError("gripper speed exceeds the motor command range")
+    return speed
 
 
 def plan_alignment_target(

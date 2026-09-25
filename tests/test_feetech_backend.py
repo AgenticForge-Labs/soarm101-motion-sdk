@@ -10,6 +10,7 @@ from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import MOTOR_IDS
 from soarm101_motion.exceptions import CalibrationError, CommunicationError, SafetyViolationError
 from soarm101_motion.hardware.feetech import FeetechBackend
+from soarm101_motion.tools import SO101Gripper
 
 
 class FakePortHandler:
@@ -146,6 +147,32 @@ def test_connect_read_write_and_diagnostics(monkeypatch: pytest.MonkeyPatch) -> 
     assert not backend.is_connected
 
 
+def test_torque_enable_missing_reply_rolls_back_attempted_motor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False, verify_model_numbers=True)
+    )
+    backend.connect()
+    original_write = backend.write_register
+
+    def missing_reply(motor: str, register: str, value: int) -> None:
+        original_write(motor, register, value)
+        if motor == "shoulder_lift" and register == "Torque_Enable" and value == 1:
+            raise CommunicationError("injected missing status packet")
+
+    backend.write_register = missing_reply
+    try:
+        with pytest.raises(CommunicationError, match="missing status packet"):
+            backend.enable_torque()
+        assert backend.read_register("shoulder_pan", "Torque_Enable") == 0
+        assert backend.read_register("shoulder_lift", "Torque_Enable") == 0
+        assert not backend._torque_enabled
+    finally:
+        backend.disconnect()
+
+
 def test_voltage_snapshot_preserves_value_and_packet_fault(monkeypatch: pytest.MonkeyPatch) -> None:
     install_fake_sdk(monkeypatch)
     backend = FeetechBackend(
@@ -260,4 +287,22 @@ def test_enable_moves_small_endpoint_overshoot_inward_before_latching(
     assert packet.positions[motor_id] == 3150
     assert backend.last_torque_latch_adjustments == {"elbow_flex": (3156, 3150)}
     assert all(packet.registers[(selected_id, 40)] == 1 for selected_id in MOTOR_IDS.values())
+    backend.disconnect()
+
+
+def test_gripper_begin_opening_writes_one_goal_on_fake_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(SOARM101Config(port="FAKE", use_stored_calibration=False))
+    backend.connect()
+    backend.enable_torque()
+    packet = backend._packet_handler
+    motor_id = MOTOR_IDS["so101_gripper"]
+    packet.positions[motor_id] = 700
+    gripper = SO101Gripper(backend=backend)
+
+    gripper.begin_opening(0.8, speed_raw=100)
+
+    assert packet.positions[motor_id] == backend.calibration.motors["so101_gripper"].normalized_to_raw(0.8)
     backend.disconnect()
