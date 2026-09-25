@@ -3062,6 +3062,10 @@ class MainWindow(QMainWindow):
             self.sequence_step_list.setCurrentRow(
                 min(max(current, 0), len(self._sequence_steps) - 1)
             )
+        else:
+            if hasattr(self, "program_arm_panel"):
+                self.program_arm_panel.clear_secondary()
+        self._preview_selected_program_step()
         self._update_enabled_state()
 
     def _append_sequence_step(self, step: SequenceStep) -> None:
@@ -3113,14 +3117,29 @@ class MainWindow(QMainWindow):
         if data:
             kind, name = data
             self._append_sequence_step(
-                SequenceStep("trajectory", {"kind": kind, "name": name, "loops": 1})
+                SequenceStep(
+                    "trajectory",
+                    {
+                        "kind": kind,
+                        "name": name,
+                        "loops": 1,
+                        "speed_scale": self._current_program_move_speed(),
+                    },
+                )
             )
 
     def _add_primitive_sequence_step(self) -> None:
         name = self.run_primitive_combo.currentText().strip()
         if name:
             self._append_sequence_step(
-                SequenceStep("primitive", {"name": name, "loops": 1})
+                SequenceStep(
+                    "primitive",
+                    {
+                        "name": name,
+                        "loops": 1,
+                        "speed_scale": self._current_program_move_speed(),
+                    },
+                )
             )
 
     def _move_sequence_step(self, delta: int) -> None:
@@ -3144,10 +3163,10 @@ class MainWindow(QMainWindow):
     def _save_sequence(self) -> None:
         name = self.sequence_name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "Sequence name required", "Enter a sequence name.")
+            QMessageBox.warning(self, "Program name required", "Enter a program name.")
             return
         if not self._sequence_steps:
-            QMessageBox.warning(self, "No steps", "Add at least one sequence step.")
+            QMessageBox.warning(self, "No steps", "Add at least one program step.")
             return
         try:
             binding = self._follower_calibration_binding()
@@ -3163,11 +3182,11 @@ class MainWindow(QMainWindow):
                 metadata=sequence_metadata,
             )
             path = self._get_sequence_library().save(sequence)
-            self._log(f"Saved sequence {name!r} to {path}.")
+            self._log(f"Saved program {name!r} to {path}.")
             self._refresh_sequence_list()
             self.sequence_combo.setCurrentText(name)
         except Exception as exc:
-            self._on_error(f"Save sequence: {exc}")
+            self._on_error(f"Save program: {exc}")
 
     def _load_sequence(self) -> None:
         name = self.sequence_combo.currentText().strip()
@@ -3178,9 +3197,9 @@ class MainWindow(QMainWindow):
             self._sequence_steps = list(sequence.steps)
             self.sequence_name_edit.setText(sequence.name)
             self._refresh_sequence_step_list()
-            self._log(f"Loaded sequence {name!r}.")
+            self._log(f"Loaded program {name!r}.")
         except Exception as exc:
-            self._on_error(f"Load sequence: {exc}")
+            self._on_error(f"Load program: {exc}")
 
     def _delete_sequence(self) -> None:
         name = self.sequence_combo.currentText().strip()
@@ -3188,10 +3207,10 @@ class MainWindow(QMainWindow):
             return
         try:
             self._get_sequence_library().delete(name)
-            self._log(f"Deleted sequence {name!r}.")
+            self._log(f"Deleted program {name!r}.")
             self._refresh_sequence_list()
         except Exception as exc:
-            self._on_error(f"Delete sequence: {exc}")
+            self._on_error(f"Delete program: {exc}")
 
     def _run_sequence(self, *, step_only: bool) -> None:
         if not self._sequence_steps:
@@ -3216,7 +3235,7 @@ class MainWindow(QMainWindow):
                 f"Running {'step ' + str(start_index + 1) if step_only else sequence.name}…"
             )
         except Exception as exc:
-            self._on_error(f"Run sequence: {exc}")
+            self._on_error(f"Run program: {exc}")
 
     def _toggle_sequence_pause(self) -> None:
         if self._sequence_paused:
@@ -3233,12 +3252,12 @@ class MainWindow(QMainWindow):
                 "Resume sequence" if self._sequence_paused else "Pause after current step"
             )
             labels = {
-                "paused": "Sequence paused",
-                "running": "Sequence running",
-                "completed": "Sequence complete",
-                "failed": "Sequence stopped with an error",
+                "paused": "Program paused",
+                "running": "Program running",
+                "completed": "Program complete",
+                "failed": "Program stopped with an error",
             }
-            self.sequence_status.setText(labels.get(status, f"Sequence {status}"))
+            self.sequence_status.setText(labels.get(status, f"Program {status}"))
             return
         if values.get("type") == "teleop":
             if self._teleop_active:
