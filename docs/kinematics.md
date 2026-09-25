@@ -2,7 +2,7 @@
 
 The native model reproduces the five revolute-joint origins, axes, calibrated limits, and stock gripper TCP from the official SO-101 URDF. It does not require ROS or a URDF parser at runtime.
 
-Inverse kinematics uses bounded `scipy.optimize.least_squares`. The current or previous joint configuration is the seed, which preserves continuity during linear motion.
+Inverse kinematics uses bounded `scipy.optimize.least_squares`. The current or previous joint configuration is the seed, which preserves continuity during linear motion. Planned Cartesian paths use a configurable 0.5 mm position tolerance by default; this is a solver acceptance threshold, not a claim of 0.5 mm physical accuracy.
 
 Orientation modes:
 
@@ -12,3 +12,5 @@ Orientation modes:
 - `look_at`: place the TCP and aim its +Z axis at a target point, leaving roll unconstrained.
 
 `move_linear()` interpolates Cartesian position and orientation, solves IK sequentially, rejects discontinuities, computes a safe total duration, then uniformly resamples the joint path at the command rate.
+
+The Cartesian GUI's 3D view is generated from this same native model rather than a second visual-only arm definition. During a jog, the GUI marks the requested TCP target and logs the requested-versus-achieved Cartesian pose. The physical validation sequence in `TESTING.md` uses those diagnostics to distinguish a GUI/planner axis error from a calibration or physical joint-direction mismatch.
