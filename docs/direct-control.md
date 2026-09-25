@@ -71,4 +71,6 @@ Each streamed sample is checked against calibrated/model joint limits, maximum c
 
 The normal planned-motion clock remains 50 Hz. Guarded live streaming defaults to **20 Hz** in the current software and the GUI offers 5/10/20/50 Hz. The first physical validation still starts at 5 Hz and progresses through 10 Hz before validating the 20 Hz default; 50 Hz remains experimental and requires explicit confirmation. Stale queued samples and repeated follower-cycle overruns stop teleoperation and hold the follower.
 
+The desktop Cartesian jog controls remain discrete planned moves rather than Cartesian velocity streaming. Their default translation step is 2 mm; repeated clicks are queued in the GUI worker and executed one at a time through the same guarded `move_linear()` path. STOP/HOLD clears pending jogs. Each started jog records its measured start TCP, requested target TCP, and achieved TCP in the GUI session log.
+
 This streaming path is implemented and tested in simulation, but it is **not yet physically validated**. Before hardware teleoperation, complete the calibration/direction/kinematics gates and the dedicated low-speed streaming checks in `TESTING.md`. See [teleoperation.md](teleoperation.md) for the validation ladder, timing metrics, and the future path toward higher rates. Cartesian velocity/servo streaming is still not implemented.
