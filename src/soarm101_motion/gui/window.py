@@ -1178,11 +1178,24 @@ class MainWindow(QMainWindow):
 
     def _build_run_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        outer = QHBoxLayout(page)
+        outer.setSpacing(12)
 
-        library_box = QGroupBox("Sequence library")
+        left = QWidget()
+        layout = QVBoxLayout(left)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        intro = QLabel(
+            "Build a deterministic program by arranging saved positions and simple "
+            "actions. The rows execute from top to bottom; recorded trajectories remain "
+            "available as an advanced step when a continuous path matters."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        library_box = QGroupBox("Program library")
         library_grid = QGridLayout(library_box)
-        library_grid.addWidget(QLabel("Saved sequence"), 0, 0)
+        library_grid.addWidget(QLabel("Saved program"), 0, 0)
         self.sequence_combo = QComboBox()
         library_grid.addWidget(self.sequence_combo, 0, 1)
         self.load_sequence_button = QPushButton("Load")
@@ -1191,92 +1204,153 @@ class MainWindow(QMainWindow):
         self.delete_sequence_button = QPushButton("Delete")
         self.delete_sequence_button.clicked.connect(self._delete_sequence)
         library_grid.addWidget(self.delete_sequence_button, 0, 3)
-        library_grid.addWidget(QLabel("Name"), 1, 0)
+        library_grid.addWidget(QLabel("Program name"), 1, 0)
         self.sequence_name_edit = QLineEdit()
         self.sequence_name_edit.setPlaceholderText("pick_and_place")
         library_grid.addWidget(self.sequence_name_edit, 1, 1, 1, 2)
-        self.save_sequence_button = QPushButton("Save / replace sequence")
+        self.save_sequence_button = QPushButton("Save / replace program")
         self.save_sequence_button.clicked.connect(self._save_sequence)
         library_grid.addWidget(self.save_sequence_button, 1, 3)
         layout.addWidget(library_box)
 
-        builder = QGroupBox("Add steps")
-        builder_grid = QGridLayout(builder)
-        builder_grid.addWidget(QLabel("Point"), 0, 0)
+        step_tabs = QTabWidget()
+
+        simple = QWidget()
+        simple_grid = QGridLayout(simple)
+        simple_grid.addWidget(QLabel("Saved position"), 0, 0)
         self.run_point_combo = QComboBox()
-        builder_grid.addWidget(self.run_point_combo, 0, 1)
+        self.run_point_combo.currentTextChanged.connect(
+            lambda _text: self._preview_program_position()
+        )
+        simple_grid.addWidget(self.run_point_combo, 0, 1)
         self.run_point_mode_combo = QComboBox()
-        self.run_point_mode_combo.addItem("Joint", "joint")
-        self.run_point_mode_combo.addItem("Linear", "linear")
-        builder_grid.addWidget(self.run_point_mode_combo, 0, 2)
-        self.add_point_step_button = QPushButton("+ Point")
+        self.run_point_mode_combo.addItem("Joint / angular", "joint")
+        self.run_point_mode_combo.addItem("Cartesian linear", "linear")
+        simple_grid.addWidget(self.run_point_mode_combo, 0, 2)
+
+        simple_grid.addWidget(QLabel("Move speed"), 0, 3)
+        self.program_move_speed_spin = self._spin(
+            0.1, 3.0, 1.0, decimals=2, step=0.1, suffix="×"
+        )
+        self.program_move_speed_spin.setToolTip(
+            "Per-move speed multiplier. This is multiplied by the program's overall speed."
+        )
+        simple_grid.addWidget(self.program_move_speed_spin, 0, 4)
+        self.add_point_step_button = QPushButton("+ Move to position")
         self.add_point_step_button.clicked.connect(self._add_point_sequence_step)
-        builder_grid.addWidget(self.add_point_step_button, 0, 3)
+        simple_grid.addWidget(self.add_point_step_button, 0, 5)
 
         self.add_home_step_button = QPushButton("+ Home")
         self.add_home_step_button.clicked.connect(
-            lambda _checked=False: self._append_sequence_step(SequenceStep("home"))
+            lambda _checked=False: self._add_named_pose_program_step("home")
         )
-        builder_grid.addWidget(self.add_home_step_button, 1, 0)
+        simple_grid.addWidget(self.add_home_step_button, 1, 0)
         self.add_rest_step_button = QPushButton("+ Rest")
         self.add_rest_step_button.clicked.connect(
-            lambda _checked=False: self._append_sequence_step(SequenceStep("rest"))
+            lambda _checked=False: self._add_named_pose_program_step("rest")
         )
-        builder_grid.addWidget(self.add_rest_step_button, 1, 1)
+        simple_grid.addWidget(self.add_rest_step_button, 1, 1)
+
+        self.program_close_gripper_button = QPushButton("+ Close gripper")
+        self.program_close_gripper_button.clicked.connect(
+            lambda _checked=False: self._add_gripper_sequence_step(0.0)
+        )
+        simple_grid.addWidget(self.program_close_gripper_button, 1, 2)
+        self.program_open_gripper_button = QPushButton("+ Open gripper")
+        self.program_open_gripper_button.clicked.connect(
+            lambda _checked=False: self._add_gripper_sequence_step(1.0)
+        )
+        simple_grid.addWidget(self.program_open_gripper_button, 1, 3)
 
         self.sequence_gripper_spin = self._spin(
-            0.0, 1.0, 0.0, decimals=3, step=0.05
+            0.0, 1.0, 0.5, decimals=3, step=0.05
         )
-        builder_grid.addWidget(self.sequence_gripper_spin, 1, 2)
-        self.add_gripper_step_button = QPushButton("+ Gripper")
+        self.sequence_gripper_spin.setToolTip(
+            "Custom normalized gripper position: 0 closed, 1 open."
+        )
+        simple_grid.addWidget(self.sequence_gripper_spin, 1, 4)
+        self.add_gripper_step_button = QPushButton("+ Custom gripper")
         self.add_gripper_step_button.clicked.connect(self._add_gripper_sequence_step)
-        builder_grid.addWidget(self.add_gripper_step_button, 1, 3)
+        simple_grid.addWidget(self.add_gripper_step_button, 1, 5)
 
+        simple_grid.addWidget(QLabel("Wait"), 2, 0)
         self.sequence_wait_spin = self._spin(
             0.0, 60.0, 0.25, decimals=2, step=0.25, suffix=" s"
         )
-        builder_grid.addWidget(self.sequence_wait_spin, 2, 0)
+        simple_grid.addWidget(self.sequence_wait_spin, 2, 1)
         self.add_wait_step_button = QPushButton("+ Wait")
         self.add_wait_step_button.clicked.connect(self._add_wait_sequence_step)
-        builder_grid.addWidget(self.add_wait_step_button, 2, 1)
+        simple_grid.addWidget(self.add_wait_step_button, 2, 2)
 
+        simple_hint = QLabel(
+            "Typical program: MOVE above_pick → MOVE pick → CLOSE → MOVE above_pick "
+            "→ MOVE above_drop → MOVE drop → OPEN."
+        )
+        simple_hint.setWordWrap(True)
+        simple_hint.setStyleSheet("color: palette(mid); padding-top: 4px;")
+        simple_grid.addWidget(simple_hint, 3, 0, 1, 6)
+        step_tabs.addTab(simple, "Position steps")
+
+        advanced = QWidget()
+        advanced_grid = QGridLayout(advanced)
+        advanced_grid.addWidget(
+            QLabel(
+                "Use these only when a prerecorded path or reusable motion primitive "
+                "is more appropriate than moving between saved positions."
+            ),
+            0,
+            0,
+            1,
+            4,
+        )
         self.run_trajectory_combo = QComboBox()
-        builder_grid.addWidget(self.run_trajectory_combo, 2, 2)
-        self.add_trajectory_step_button = QPushButton("+ Trajectory")
+        advanced_grid.addWidget(self.run_trajectory_combo, 1, 0, 1, 2)
+        self.add_trajectory_step_button = QPushButton("+ Recorded trajectory")
         self.add_trajectory_step_button.clicked.connect(self._add_trajectory_sequence_step)
-        builder_grid.addWidget(self.add_trajectory_step_button, 2, 3)
+        advanced_grid.addWidget(self.add_trajectory_step_button, 1, 2)
 
         self.run_primitive_combo = QComboBox()
-        builder_grid.addWidget(self.run_primitive_combo, 3, 2)
-        self.add_primitive_step_button = QPushButton("+ Primitive")
+        advanced_grid.addWidget(self.run_primitive_combo, 2, 0, 1, 2)
+        self.add_primitive_step_button = QPushButton("+ Motion primitive")
         self.add_primitive_step_button.clicked.connect(self._add_primitive_sequence_step)
-        builder_grid.addWidget(self.add_primitive_step_button, 3, 3)
-        layout.addWidget(builder)
+        advanced_grid.addWidget(self.add_primitive_step_button, 2, 2)
+        step_tabs.addTab(advanced, "Recorded motion · advanced")
+        layout.addWidget(step_tabs)
 
+        program_box = QGroupBox("Program steps · top to bottom")
+        program_layout = QVBoxLayout(program_box)
         self.sequence_step_list = QListWidget()
-        layout.addWidget(self.sequence_step_list, 1)
+        self.sequence_step_list.setAlternatingRowColors(True)
+        self.sequence_step_list.itemSelectionChanged.connect(
+            self._preview_selected_program_step
+        )
+        self.sequence_step_list.itemDoubleClicked.connect(
+            lambda _item: self._run_sequence(step_only=True)
+        )
+        program_layout.addWidget(self.sequence_step_list, 1)
 
         edit_row = QHBoxLayout()
-        self.sequence_up_button = QPushButton("Move up")
+        self.sequence_up_button = QPushButton("↑ Move up")
         self.sequence_up_button.clicked.connect(lambda _checked=False: self._move_sequence_step(-1))
         edit_row.addWidget(self.sequence_up_button)
-        self.sequence_down_button = QPushButton("Move down")
+        self.sequence_down_button = QPushButton("↓ Move down")
         self.sequence_down_button.clicked.connect(lambda _checked=False: self._move_sequence_step(1))
         edit_row.addWidget(self.sequence_down_button)
         self.sequence_delete_step_button = QPushButton("Delete step")
         self.sequence_delete_step_button.clicked.connect(self._delete_sequence_step)
         edit_row.addWidget(self.sequence_delete_step_button)
         edit_row.addStretch(1)
-        layout.addLayout(edit_row)
+        program_layout.addLayout(edit_row)
+        layout.addWidget(program_box, 1)
 
-        run_box = QGroupBox("Execute")
+        run_box = QGroupBox("Run program")
         run_grid = QGridLayout(run_box)
         run_grid.addWidget(QLabel("Repeat"), 0, 0)
         self.sequence_repeat_spin = QSpinBox()
         self.sequence_repeat_spin.setRange(1, 1000)
         self.sequence_repeat_spin.setValue(1)
         run_grid.addWidget(self.sequence_repeat_spin, 0, 1)
-        run_grid.addWidget(QLabel("Speed"), 0, 2)
+        run_grid.addWidget(QLabel("Overall speed"), 0, 2)
         self.sequence_speed_spin = self._spin(
             0.1, 3.0, 1.0, decimals=2, step=0.1, suffix="×"
         )
@@ -1284,21 +1358,38 @@ class MainWindow(QMainWindow):
         run_grid.addWidget(QLabel("Gripper speed"), 0, 4)
         self.run_gripper_speed_combo = self._new_gripper_speed_combo()
         run_grid.addWidget(self.run_gripper_speed_combo, 0, 5)
+
         self.run_step_button = QPushButton("Run selected step")
-        self.run_step_button.clicked.connect(lambda _checked=False: self._run_sequence(step_only=True))
+        self.run_step_button.clicked.connect(
+            lambda _checked=False: self._run_sequence(step_only=True)
+        )
         run_grid.addWidget(self.run_step_button, 1, 0, 1, 2)
-        self.run_sequence_button = QPushButton("Run sequence")
-        self.run_sequence_button.clicked.connect(lambda _checked=False: self._run_sequence(step_only=False))
-        run_grid.addWidget(self.run_sequence_button, 1, 2)
+        self.run_sequence_button = QPushButton("Run full program")
+        self.run_sequence_button.clicked.connect(
+            lambda _checked=False: self._run_sequence(step_only=False)
+        )
+        run_grid.addWidget(self.run_sequence_button, 1, 2, 1, 2)
         self.pause_sequence_button = QPushButton("Pause after current step")
         self.pause_sequence_button.clicked.connect(self._toggle_sequence_pause)
-        run_grid.addWidget(self.pause_sequence_button, 1, 3)
+        run_grid.addWidget(self.pause_sequence_button, 1, 4)
         self.stop_sequence_button = QPushButton("STOP / HOLD")
-        self.stop_sequence_button.clicked.connect(lambda _checked=False: self.stop_requested.emit())
-        run_grid.addWidget(self.stop_sequence_button, 2, 3)
-        self.sequence_status = QLabel("No sequence running")
-        run_grid.addWidget(self.sequence_status, 2, 0, 1, 3)
+        self.stop_sequence_button.clicked.connect(
+            lambda _checked=False: self.stop_requested.emit()
+        )
+        run_grid.addWidget(self.stop_sequence_button, 1, 5)
+        self.sequence_status = QLabel("No program running")
+        self.sequence_status.setWordWrap(True)
+        run_grid.addWidget(self.sequence_status, 2, 0, 1, 6)
         layout.addWidget(run_box)
+
+        outer.addWidget(left, 3)
+
+        self.program_arm_panel = self._new_follower_status_panel(
+            "Program preview",
+            subtitle="Live follower solid · selected position ghost",
+            compact=True,
+        )
+        outer.addWidget(self.program_arm_panel, 2)
         return page
 
     def _build_joint_tab(self) -> QWidget:
