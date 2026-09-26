@@ -321,7 +321,7 @@ Only continue after Batch 1 first-motion validation passes.
     ghost, and is rejected if a generated shoulder-pan target exceeds the current limits.
 13. Run the radial rows one at a time in simulation and confirm shoulder lift, elbow,
     wrist flex, and wrist roll remain equal to the saved base position.
-14. If a saved trajectory exists, open **Recorded motion · advanced**, add it as one
+14. If a saved trajectory exists, open **Trajectories / primitives**, add it as one
     Program step, and confirm it executes through the same guarded runner. Confirm
     recording, replay, editing, and trajectory-library persistence remain available
     independently of the position Program workflow.
