@@ -2425,11 +2425,28 @@ class MainWindow(QMainWindow):
             return
         step = self._sequence_steps[row]
         if step.kind == "point":
-            self._show_saved_pose_preview(
-                self.program_arm_panel,
-                str(step.params.get("name") or ""),
-                label=f"step {row + 1}",
-            )
+            name = str(step.params.get("name") or "")
+            overrides = dict(step.params.get("joint_overrides_deg") or {})
+            if overrides:
+                try:
+                    pose = self._get_pose_library().require(name)
+                    joints = dict(pose.joints)
+                    for joint, value_deg in overrides.items():
+                        if joint in joints:
+                            joints[joint] = radians(float(value_deg))
+                    self.program_arm_panel.show_saved_pose(
+                        joints_rad=joints,
+                        gripper=pose.gripper,
+                        label=f"step {row + 1}",
+                    )
+                except Exception:
+                    self.program_arm_panel.clear_secondary()
+            else:
+                self._show_saved_pose_preview(
+                    self.program_arm_panel,
+                    name,
+                    label=f"step {row + 1}",
+                )
             return
         if step.kind in {"home", "rest"}:
             self._show_saved_pose_preview(
@@ -3062,6 +3079,19 @@ class MainWindow(QMainWindow):
         speed = float(params.get("speed_scale", 1.0))
         speed_text = f" · {speed:.2f}×" if abs(speed - 1.0) > 1e-9 else ""
         if step.kind == "point":
+            overrides = dict(params.get("joint_overrides_deg") or {})
+            if "shoulder_pan" in overrides:
+                offset = params.get("radial_pan_offset_deg")
+                offset_text = (
+                    ""
+                    if offset is None
+                    else f" · {float(offset):+.1f}° offset"
+                )
+                return (
+                    f"PAN  {params.get('name')} · "
+                    f"shoulder {float(overrides['shoulder_pan']):+.1f}°"
+                    f"{offset_text}{speed_text}"
+                )
             mode = "linear" if params.get("mode", "joint") == "linear" else "joint"
             return f"MOVE  {params.get('name')} · {mode}{speed_text}"
         if step.kind in {"home", "rest"}:
@@ -3129,6 +3159,91 @@ class MainWindow(QMainWindow):
                     },
                 )
             )
+
+    def _shoulder_pan_limits_deg(self) -> tuple[float, float]:
+        if self._last_joint_limits and "shoulder_pan" in self._last_joint_limits:
+            return self._last_joint_limits["shoulder_pan"]
+        lower, upper = JOINT_LIMITS["shoulder_pan"]
+        return degrees(lower), degrees(upper)
+
+    @staticmethod
+    def _radial_offsets(start_deg: float, end_deg: float, increment_deg: float) -> list[float]:
+        start = float(start_deg)
+        end = float(end_deg)
+        increment = abs(float(increment_deg))
+        if increment <= 0:
+            raise ValueError("radial pan increment must be positive")
+        direction = 1.0 if end >= start else -1.0
+        step = increment * direction
+        values: list[float] = []
+        current = start
+        tolerance = increment * 1e-6 + 1e-9
+        while (
+            current <= end + tolerance
+            if direction > 0
+            else current >= end - tolerance
+        ):
+            values.append(round(current, 9))
+            if len(values) > 361:
+                raise ValueError("radial pan pattern is limited to 361 positions")
+            current += step
+        if not values or abs(values[-1] - end) > tolerance:
+            values.append(end)
+        return values
+
+    def _add_radial_pan_pattern(self) -> None:
+        name = self.run_point_combo.currentText().strip()
+        if not name:
+            QMessageBox.warning(
+                self,
+                "Saved position required",
+                "Choose a saved position to use as the radial-pattern base.",
+            )
+            return
+        try:
+            pose = self._get_pose_library().require(name)
+            base_pan_deg = degrees(float(pose.joints["shoulder_pan"]))
+            offsets = self._radial_offsets(
+                self.radial_pan_start_spin.value(),
+                self.radial_pan_end_spin.value(),
+                self.radial_pan_step_spin.value(),
+            )
+            lower, upper = self._shoulder_pan_limits_deg()
+            targets = [base_pan_deg + offset for offset in offsets]
+            outside = [
+                target for target in targets
+                if target < lower - 1e-9 or target > upper + 1e-9
+            ]
+            if outside:
+                raise ValueError(
+                    "generated shoulder-pan target "
+                    f"{outside[0]:.1f}° is outside the current "
+                    f"{lower:.1f}°..{upper:.1f}° limit"
+                )
+
+            speed = self._current_program_move_speed()
+            for offset, target in zip(offsets, targets, strict=True):
+                self._sequence_steps.append(
+                    SequenceStep(
+                        "point",
+                        {
+                            "name": name,
+                            "mode": "joint",
+                            "speed_scale": speed,
+                            "joint_overrides_deg": {"shoulder_pan": target},
+                            "radial_pan_offset_deg": offset,
+                        },
+                    )
+                )
+            self._refresh_sequence_step_list()
+            if offsets:
+                self.sequence_step_list.setCurrentRow(len(self._sequence_steps) - len(offsets))
+            self._log(
+                f"Appended {len(offsets)} radial pan moves from {name!r}; "
+                f"all joints except shoulder_pan inherit the saved position."
+            )
+        except Exception as exc:
+            self._on_error(f"Add radial pan pattern: {exc}")
 
     def _add_named_pose_program_step(self, kind: str) -> None:
         if kind not in {"home", "rest"}:
@@ -4333,6 +4448,12 @@ class MainWindow(QMainWindow):
         self.program_close_gripper_button.setEnabled(not self._busy)
         self.program_move_speed_spin.setEnabled(not self._busy)
         self.run_point_mode_combo.setEnabled(not self._busy)
+        self.radial_pan_start_spin.setEnabled(not self._busy)
+        self.radial_pan_end_spin.setEnabled(not self._busy)
+        self.radial_pan_step_spin.setEnabled(not self._busy)
+        self.add_radial_pan_pattern_button.setEnabled(
+            self.run_point_combo.count() > 0 and not self._busy
+        )
         self.add_wait_step_button.setEnabled(not self._busy)
         self.add_trajectory_step_button.setEnabled(
             self.run_trajectory_combo.count() > 0 and not self._busy
