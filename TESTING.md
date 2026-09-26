@@ -42,15 +42,19 @@ after any failed gate rather than continuing into later capabilities.
 5. Enable it, jog joints/Cartesian axes, move the gripper, and confirm STOP/HOLD and
    Relax still work. Confirm Manual has only **Joint / angular** and **Cartesian** arm
    mode tabs and that the gripper tool panel remains visible in both.
-6. Confirm the modern kinematic card is visible in Manual, Teleoperation, Teach / Record,
-   Edit recordings, and Programs. Teleoperation should show a leader ghost when leader
-   state is available; Teach / Record and Programs should show saved-position ghosts;
-   Edit recordings should show the scrubbed recording pose as a ghost.
-7. Change the gripper speed preset in Manual and confirm the same preset appears in
+6. Confirm one persistent right-hand follower sidebar is visible while switching through
+   Setup, Manual, Teleoperation, Teach / Record, Edit recordings, Programs, and Log. The
+   solid arm must always remain the follower. Confirm its five joint values, TCP XYZ/RPY,
+   gripper value, state chip, and Enable hold / STOP-HOLD / Relax controls remain visible.
+7. Confirm active-tab context appears only as a ghost: leader in Teleoperation, saved
+   position in Teach / Record, scrubbed recording pose in Edit recordings, and selected
+   destination in Programs. Select Leader as the teaching source and verify the solid
+   primary model still remains the follower.
+8. Change the gripper speed preset in Manual and confirm the same preset appears in
    Teleoperation, Edit recordings, and Programs.
-7. Save the current simulated follower position as Home and Rest.
-8. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
-9. Close and reopen the GUI and confirm Home and Rest are still present.
+9. Save the current simulated follower position as Home and Rest.
+10. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
+11. Close and reopen the GUI and confirm Home and Rest are still present.
 
 ### 2. Physical follower connection — DO LATER
 
