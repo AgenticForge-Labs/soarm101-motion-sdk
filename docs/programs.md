@@ -113,9 +113,11 @@ the complete list.
 
 ## Recorded motion is optional
 
-The **Recorded motion · advanced** tab can insert a recorded trajectory or semantic motion
-primitive into the same Program. Use that when the continuous path or timing matters—for
-example, a gesture or a taught curved motion.
+The **Trajectories / primitives** tab can insert a recorded trajectory or semantic motion
+primitive into the same Program. Trajectory recording, replay, and editing are first-class
+workflows in their own right; inserting one into a Program is simply another way to reuse
+that motion. Recorded demonstrations are also the intended motion-data source for future
+Robo Puppeteer integration.
 
 For ordinary pick/place, loading, unloading, inspection, and bench automation, prefer
 saved positions plus explicit gripper/wait actions when the important information is the
@@ -137,8 +139,9 @@ In **Programs → Position steps**:
 
 The GUI expands the pattern into ordinary Program Move rows. Each row references the same
 saved base pose and overrides only `shoulder_pan`; shoulder lift, elbow flex, wrist flex,
-wrist roll, and the saved gripper value remain unchanged. The base saved pose itself is
-not modified and no duplicate poses are created.
+and wrist roll inherit the saved joint values. The gripper is not commanded by a Pan row,
+so add an explicit gripper action when needed. The base saved pose itself is not modified
+and no duplicate poses are created.
 
 For example, a base pose at shoulder pan 10° with offsets -30°, 0°, and +30° produces
 shoulder-pan targets -20°, 10°, and 40°. Generated targets are checked against the active
