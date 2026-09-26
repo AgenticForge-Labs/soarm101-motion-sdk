@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
+    QSplitter,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -107,8 +108,9 @@ class MainWindow(QMainWindow):
         simulation: bool = False,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("SO-ARM101 Control")
-        self.resize(1050, 780)
+        self.setWindowTitle("SO-ARM101 Motion Studio")
+        self.resize(1480, 900)
+        self.setMinimumSize(1080, 720)
 
         self._connected = False
         self._follower_setup_session = False
@@ -256,9 +258,96 @@ class MainWindow(QMainWindow):
         self._refresh_sequence_list()
         self._update_enabled_state()
 
+    def _apply_modern_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QMainWindow, QWidget {
+                font-size: 12px;
+            }
+            QGroupBox {
+                font-weight: 700;
+                border: 1px solid palette(midlight);
+                border-radius: 12px;
+                margin-top: 10px;
+                padding-top: 8px;
+                background: palette(base);
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 5px;
+            }
+            QTabWidget::pane {
+                border: 1px solid palette(midlight);
+                border-radius: 12px;
+                top: -1px;
+                background: palette(window);
+            }
+            QTabBar::tab {
+                min-height: 28px;
+                padding: 7px 13px;
+                margin-right: 2px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+            }
+            QTabBar::tab:selected {
+                font-weight: 700;
+                background: palette(base);
+            }
+            QPushButton {
+                min-height: 28px;
+                padding: 5px 11px;
+                border: 1px solid palette(midlight);
+                border-radius: 8px;
+                background: palette(button);
+            }
+            QPushButton:hover {
+                border-color: palette(highlight);
+            }
+            QPushButton:pressed {
+                background: palette(midlight);
+            }
+            QPushButton:disabled {
+                color: palette(mid);
+            }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+                min-height: 27px;
+                padding: 3px 6px;
+                border: 1px solid palette(midlight);
+                border-radius: 7px;
+                background: palette(base);
+            }
+            QListWidget {
+                border: 1px solid palette(midlight);
+                border-radius: 9px;
+                background: palette(base);
+                padding: 4px;
+            }
+            QProgressBar {
+                min-height: 18px;
+                border: 1px solid palette(midlight);
+                border-radius: 7px;
+                text-align: center;
+                background: palette(alternate-base);
+            }
+            QProgressBar::chunk {
+                border-radius: 6px;
+                background: palette(highlight);
+            }
+            QScrollArea {
+                border: 0;
+                background: transparent;
+            }
+            """
+        )
+
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
+        self._apply_modern_style()
         root = QWidget(self)
         layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(9)
+
         self.follower_connection_panel = self._build_connection_bar(port, robot_id, simulation)
         self.leader_connection_panel = self._build_leader_connection()
 
@@ -266,10 +355,15 @@ class MainWindow(QMainWindow):
         self.alert_label.setTextFormat(Qt.TextFormat.PlainText)
         self.alert_label.setWordWrap(True)
         self.alert_label.setStyleSheet(
-            "font-weight: 700; padding: 8px; background: #fee2e2; color: #7f1d1d;"
+            "font-weight: 700; padding: 9px 11px; border-radius: 9px; "
+            "background: #fee2e2; color: #7f1d1d;"
         )
         self.alert_label.hide()
         layout.addWidget(self.alert_label)
+
+        self.robot_sidebar = self._build_persistent_robot_sidebar()
+        self._follower_status_panels = [self.robot_sidebar]
+        self.cartesian_view = self.robot_sidebar.view
 
         self.tabs = QTabWidget()
         # Build in dependency order, then display in task order.
@@ -287,6 +381,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.run_page, "Programs")
         self.log_page = QWidget()
         log_layout = QVBoxLayout(self.log_page)
+        log_layout.setContentsMargins(10, 10, 10, 10)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.document().setMaximumBlockCount(2000)
@@ -294,22 +389,97 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log)
         self.tabs.addTab(self.log_page, "Log")
         self.tabs.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self.tabs, 1)
 
-        status_row = QHBoxLayout()
-        self.status_label = QLabel("Disconnected")
-        self.status_label.setStyleSheet("font-weight: 600; padding: 5px;")
-        status_row.addWidget(self.status_label, 1)
-        status_row.addWidget(self.stop_button)
-        self.pose_summary = QLabel("TCP: —")
-        status_row.addWidget(self.pose_summary)
-        layout.addLayout(status_row)
+        workspace = QSplitter(Qt.Orientation.Horizontal)
+        workspace.setChildrenCollapsible(False)
+        workspace.addWidget(self.tabs)
+
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sidebar_scroll.setWidget(self.robot_sidebar_container)
+        workspace.addWidget(sidebar_scroll)
+        workspace.setStretchFactor(0, 1)
+        workspace.setStretchFactor(1, 0)
+        workspace.setSizes([1040, 360])
+        layout.addWidget(workspace, 1)
+        self.workspace_splitter = workspace
 
         self.setCentralWidget(root)
+        self._refresh_sidebar_context()
+
+    def _build_persistent_robot_sidebar(self) -> RobotStatusPanel:
+        container = QWidget()
+        container.setObjectName("robotSidebarContainer")
+        container.setMinimumWidth(330)
+        container.setMaximumWidth(430)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(4, 2, 4, 4)
+        layout.setSpacing(9)
+
+        heading = QHBoxLayout()
+        title = QLabel("ROBOT")
+        title.setStyleSheet("font-size: 11px; font-weight: 800; color: palette(mid);")
+        heading.addWidget(title)
+        heading.addStretch(1)
+        self.sidebar_mode_label = QLabel("FOLLOWER")
+        self.sidebar_mode_label.setStyleSheet(
+            "font-size: 10px; font-weight: 800; padding: 3px 7px; "
+            "border-radius: 8px; background: palette(alternate-base);"
+        )
+        heading.addWidget(self.sidebar_mode_label)
+        layout.addLayout(heading)
+
+        panel = RobotStatusPanel(
+            "Follower",
+            subtitle="Live state · solid arm is always the follower",
+            compact=False,
+        )
+        layout.addWidget(panel, 1)
+
+        controls = QGroupBox("Always available")
+        controls_layout = QGridLayout(controls)
+        self.status_label = QLabel("Disconnected")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("font-weight: 700; padding: 4px 0;")
+        controls_layout.addWidget(self.status_label, 0, 0, 1, 3)
+
+        self.sidebar_enable_button = QPushButton("Enable hold")
+        self.sidebar_enable_button.setToolTip(
+            "Latch the follower's measured pose, then enable torque."
+        )
+        self.sidebar_enable_button.clicked.connect(
+            lambda _checked=False: self.enable_requested.emit()
+        )
+        controls_layout.addWidget(self.sidebar_enable_button, 1, 0)
+
+        self.stop_button.setObjectName("stopButton")
+        self.stop_button.setStyleSheet(
+            "QPushButton#stopButton { font-weight: 800; min-height: 34px; "
+            "border: 2px solid #b91c1c; border-radius: 9px; }"
+        )
+        controls_layout.addWidget(self.stop_button, 1, 1)
+
+        self.sidebar_relax_button = QPushButton("Relax")
+        self.sidebar_relax_button.setToolTip("Disable follower servo torque.")
+        self.sidebar_relax_button.clicked.connect(
+            lambda _checked=False: self.relax_requested.emit()
+        )
+        controls_layout.addWidget(self.sidebar_relax_button, 1, 2)
+
+        self.pose_summary = QLabel("TCP: —")
+        self.pose_summary.setWordWrap(True)
+        self.pose_summary.setStyleSheet("color: palette(mid);")
+        controls_layout.addWidget(self.pose_summary, 2, 0, 1, 3)
+        layout.addWidget(controls)
+
+        self.robot_sidebar_container = container
+        return panel
 
     def _on_tab_changed(self, index: int) -> None:
         if self.tabs.widget(index) is self.log_page:
             self.tabs.setTabText(index, "Log")
+        self._refresh_sidebar_context()
 
     def _build_connection_bar(
         self,
