@@ -4212,6 +4212,10 @@ class MainWindow(QMainWindow):
 
     def _on_busy(self, busy: bool) -> None:
         self._busy = busy
+        if self._latest_state is not None and hasattr(self, "robot_sidebar"):
+            live = dict(self._latest_state)
+            live["moving"] = bool(live.get("moving")) or busy
+            self.robot_sidebar.update_state(live)
         if not busy:
             if self._active_calibration_target == "follower":
                 self._active_calibration_target = None
@@ -4252,8 +4256,10 @@ class MainWindow(QMainWindow):
         pose = tuple(float(value) for value in values["pose_mm_deg"])
         for label, value in zip(self.pose_value_labels, pose, strict=True):
             label.setText(f"{value:.2f}")
+        live_sidebar_state = dict(values)
+        live_sidebar_state["moving"] = moving
         for panel in self._follower_status_panels:
-            panel.update_state(values)
+            panel.update_state(live_sidebar_state)
         self.pose_summary.setText(
             f"TCP: X {pose[0]:.1f}  Y {pose[1]:.1f}  Z {pose[2]:.1f} mm"
         )
@@ -4442,13 +4448,17 @@ class MainWindow(QMainWindow):
         )
         self.setup_find_arms_button.setEnabled(self.find_arms_button.isEnabled())
 
-        self.enable_button.setEnabled(
+        can_enable_hold = (
             self._connected
             and not self._torque_enabled
             and not self._busy
             and not self._follower_setup_session
         )
-        self.relax_button.setEnabled(self._connected and self._torque_enabled)
+        self.enable_button.setEnabled(can_enable_hold)
+        self.sidebar_enable_button.setEnabled(can_enable_hold)
+        can_relax = self._connected and self._torque_enabled
+        self.relax_button.setEnabled(can_relax)
+        self.sidebar_relax_button.setEnabled(can_relax)
         self.stop_button.setEnabled(self._connected)
         self.edit_joint_targets_check.setEnabled(self._connected and not self._busy)
         for control in (*self.joint_sliders.values(), *self.joint_spins.values()):
