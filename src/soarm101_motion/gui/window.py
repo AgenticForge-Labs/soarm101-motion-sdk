@@ -394,11 +394,7 @@ class MainWindow(QMainWindow):
         workspace.setChildrenCollapsible(False)
         workspace.addWidget(self.tabs)
 
-        sidebar_scroll = QScrollArea()
-        sidebar_scroll.setWidgetResizable(True)
-        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        sidebar_scroll.setWidget(self.robot_sidebar_container)
-        workspace.addWidget(sidebar_scroll)
+        workspace.addWidget(self.robot_sidebar_container)
         workspace.setStretchFactor(0, 1)
         workspace.setStretchFactor(1, 0)
         workspace.setSizes([1040, 360])
@@ -432,10 +428,16 @@ class MainWindow(QMainWindow):
 
         panel = RobotStatusPanel(
             "Follower",
-            subtitle="Live state · solid arm is always the follower",
+            subtitle="Measured follower state · solid arm is always the follower",
             compact=False,
         )
-        layout.addWidget(panel, 1)
+        panel_scroll = QScrollArea()
+        panel_scroll.setWidgetResizable(True)
+        panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        panel_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        panel_scroll.setWidget(panel)
+        layout.addWidget(panel_scroll, 1)
+        self.robot_sidebar_scroll = panel_scroll
 
         controls = QGroupBox("Always available")
         controls_layout = QGridLayout(controls)
@@ -486,7 +488,10 @@ class MainWindow(QMainWindow):
             return
 
         panel = self.robot_sidebar
-        panel.set_title("Follower", "Live state · solid arm is always the follower")
+        panel.set_title(
+            "Follower",
+            "Measured follower state · solid arm is always the follower",
+        )
         panel.clear_secondary()
         page = self.tabs.currentWidget()
 
