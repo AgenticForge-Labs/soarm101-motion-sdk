@@ -29,6 +29,9 @@ def test_roles_are_in_setup_tab(window):
 def test_persistent_robot_sidebar_is_outside_tabs_and_shared(window):
     assert not window.tabs.isAncestorOf(window.robot_sidebar)
     assert window.robot_sidebar_container.isAncestorOf(window.robot_sidebar)
+    assert window.robot_sidebar_scroll.widget() is window.robot_sidebar
+    assert window.robot_sidebar_container.isAncestorOf(window.stop_button)
+    assert not window.robot_sidebar_scroll.isAncestorOf(window.stop_button)
     assert window.manual_arm_panel is window.robot_sidebar
     assert window.teleop_arm_panel is window.robot_sidebar
     assert window.teach_arm_panel is window.robot_sidebar
