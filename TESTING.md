@@ -46,6 +46,8 @@ after any failed gate rather than continuing into later capabilities.
    Setup, Manual, Teleoperation, Teach / Record, Edit recordings, Programs, and Log. The
    solid arm must always remain the follower. Confirm its five joint values, TCP XYZ/RPY,
    gripper value, state chip, and Enable hold / STOP-HOLD / Relax controls remain visible.
+   Shrink the window vertically and verify only the model/readout region scrolls while the
+   three safety controls stay pinned. Confirm torque-off follower state reads RELAXED.
 7. Confirm active-tab context appears only as a ghost: leader in Teleoperation, saved
    position in Teach / Record, scrubbed recording pose in Edit recordings, and selected
    destination in Programs. Select Leader as the teaching source and verify the solid
