@@ -206,6 +206,14 @@ class RobotStatusPanel(QWidget):
         self.gripper_bar.setFormat("—")
         self.view.clear_target()
 
+    def update_joint_degrees(self, joints_deg: Mapping[str, float]) -> None:
+        """Refresh live joint/model state between slower full-state samples."""
+
+        joints = {name: float(joints_deg[name]) for name in ARM_JOINTS}
+        self.view.set_joint_degrees(joints)
+        for name, angle in joints.items():
+            self.joint_value_labels[name].setText(f"{angle:+.1f}°")
+
     def update_state(self, state: Mapping[str, Any] | None) -> None:
         if not state:
             self.clear_state()
