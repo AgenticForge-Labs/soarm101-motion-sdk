@@ -296,6 +296,76 @@ def test_sequence_library_and_runner(tmp_path: Path) -> None:
         arm.disconnect()
 
 
+def test_sequence_saved_pose_joint_override_changes_only_requested_joint(
+    tmp_path: Path,
+) -> None:
+    poses = PoseLibrary("pattern-test", path=tmp_path / "poses.json")
+    base = SavedPose(
+        joints={
+            "shoulder_pan": 0.10,
+            "shoulder_lift": -0.20,
+            "elbow_flex": 0.30,
+            "wrist_flex": -0.40,
+            "wrist_roll": 0.50,
+        },
+        gripper=0.65,
+        tcp_xyz_rpy=(0, 0, 0, 0, 0, 0),
+    )
+    poses.save("radial_base", base)
+    trajectories = TrajectoryLibrary("pattern-test", root=tmp_path / "trajectories")
+    arm = SOARM101(
+        SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False),
+        backend=SimulationBackend(realtime=False),
+    )
+    arm.connect()
+    arm.enable()
+    try:
+        runner = SequenceRunner(
+            arm,
+            pose_library=poses,
+            trajectory_library=trajectories,
+        )
+        result = runner.run(
+            MotionSequence(
+                "pan_demo",
+                (
+                    SequenceStep(
+                        "point",
+                        {
+                            "name": "radial_base",
+                            "mode": "joint",
+                            "joint_overrides_deg": {"shoulder_pan": 30.0},
+                        },
+                    ),
+                ),
+            )
+        )
+        assert result.completed
+        measured = arm.get_joint_positions().positions
+        assert measured["shoulder_pan"] == pytest.approx(np.deg2rad(30.0))
+        for joint in ("shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"):
+            assert measured[joint] == pytest.approx(base.joints[joint])
+
+        with pytest.raises(ValueError, match="joint-overridden"):
+            runner.run(
+                MotionSequence(
+                    "bad_linear_pan",
+                    (
+                        SequenceStep(
+                            "point",
+                            {
+                                "name": "radial_base",
+                                "mode": "linear",
+                                "joint_overrides_deg": {"shoulder_pan": 20.0},
+                            },
+                        ),
+                    ),
+                )
+            )
+    finally:
+        arm.disconnect()
+
+
 def test_sequence_runner_honors_gripper_speed_for_gripper_steps(tmp_path: Path) -> None:
     poses = PoseLibrary("speed-test", path=tmp_path / "poses.json")
     trajectories = TrajectoryLibrary("speed-test", root=tmp_path / "trajectories")
