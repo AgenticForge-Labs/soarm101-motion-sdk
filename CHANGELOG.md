@@ -30,12 +30,9 @@
   append Move/Open/Close/Custom-gripper/Wait steps, assign a per-Move speed multiplier,
   reorder the linear list, save it, and run one step or the complete program. The existing
   `MotionSequence` persistence/runner remains the compatibility layer underneath.
-- Added contextual kinematic cards to Manual, Teleoperation, Teach / Record, Edit
-  recordings, and Programs. Teleoperation overlays the leader as a ghost, Teach and
-  Programs preview saved positions, and Edit recordings previews the scrubbed recorded
-  pose over the live follower.
 - Modernized the shared arm renderer with a rounded gradient canvas, floor grid, link
-  shadows, clearer joints/TCP/gripper styling, and reusable ghost-pose overlays.
+  shadows, clearer joints/TCP/gripper styling, and reusable ghost-pose overlays; these
+  previews now feed the persistent sidebar rather than separate per-tab cards.
 - Reorganized Teach / Record around saved positions first; continuous trajectory recording
   is now presented as an optional workflow for cases where the exact path/timing matters.
 
