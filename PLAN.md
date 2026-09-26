@@ -34,8 +34,9 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] Position-first GUI Programs workflow over the existing MotionSequence engine, with
   saved-position Move steps, Open/Close/custom gripper actions, waits, per-Move speed,
   and advanced recorded-motion steps.
-- [x] Shared modern kinematic status/preview cards across Manual, Teleoperation,
-  Teach / Record, Edit recordings, and Programs.
+- [x] Persistent right-hand live follower sidebar across every GUI tab, with modern
+  styling, current joints/TCP/gripper/status, always-available follower controls, and
+  contextual ghost overlays for leader/saved/recorded/program poses.
 - [x] Radial shoulder-pan Program pattern generator that inherits a saved base pose and
   overrides only shoulder pan across an inspectable series of guarded Move steps.
 
