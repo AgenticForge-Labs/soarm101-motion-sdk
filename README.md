@@ -8,16 +8,16 @@ The project follows a simple progression:
 
 **connect → calibrate → move → teach → program → automate**
 
-Continuous trajectory recording/editing remains available when the exact path or timing matters, but simple automation does not require recording a motion first.
+Continuous trajectory recording/editing remains a first-class capability: demonstrations can be replayed directly, edited into reusable motion, and later supplied as structured motion data to Robo Puppeteer. Simple automation does not require recording a motion first, so Programs and trajectory recording are complementary workflows rather than replacements for one another.
 
-You can begin visually, learn how the robot actually moves, teach useful positions and trajectories, and then reuse those same capabilities from Python, scripts, services, or higher-level agents. Recording is useful for deterministic automation as well as future robot-learning workflows; this is not a dataset-collection-first project.
+You can begin visually, learn how the robot actually moves, teach useful positions and trajectories, and then reuse those same capabilities from Python, scripts, services, or higher-level agents. Recording supports deterministic replay/editing today and is also the intended demonstration-data path toward Robo Puppeteer and later robot-learning workflows.
 
 ![SO-ARM101 Motion SDK Setup tab, showing arm connections and live mechanical-stop calibration](docs/Screenshot%20From%202026-09-24%2017-34-28.png)
 
 ## What makes it different
 
 - **Learn robotics without hiding the robotics.** The GUI separates Setup, Manual motion, Teleoperation, Record / Teach, editing, and Run workflows so concepts such as calibration, joint coordinates, tool position, trajectories, and sequencing stay visible rather than being buried behind a single automation button.
-- **Teach positions, then build a program.** Save named positions such as `above_pick`, `pick`, and `drop`, then arrange them into a simple top-to-bottom program with Move, Open/Close gripper, custom gripper, and Wait actions. Each Move can have its own speed multiplier. Recorded trajectories and reusable motion primitives remain available as advanced steps when the continuous path matters. The leader can be FREE for hand teaching or deliberately PARKED at its measured pose, and the GUI supports guarded leader↔follower pose matching plus a no-motion relative relink when the two arms intentionally diverge during teaching.
+- **Teach positions, then build a program.** Save as many named positions as needed, such as `above_pick`, `pick`, `drop`, or `camera_left`, then arrange them into a simple top-to-bottom program with Move, Open/Close gripper, custom gripper, and Wait actions. Each Move can have its own speed multiplier. A radial/pan pattern generator can expand one saved base pose into a series of moves that preserve every joint except shoulder pan. Recorded trajectories remain fully supported for replay, editing, reusable motion primitives, and future Robo Puppeteer demonstration data.
 - **Go beyond servo angles.** The SDK includes forward and inverse kinematics plus Cartesian motion planning, providing a natural path from understanding individual joints to working in terms of tool position and linear movement in space. A shared modern kinematic view now appears anywhere pose context is useful: Manual shows the live follower, Teleoperation overlays the leader as a ghost, Teach previews saved positions, Edit recordings previews the scrubbed recorded pose, and Programs previews the selected destination. The view starts in an orthographic X/Z side view, can be rotated by dragging, and returns to the side view on double-click.
 - **Calibration you can see and understand.** Guided mechanical-stop calibration visualizes two complete traversals for every joint and the gripper. Discovery verifies the SO-101 servo bus and uses measured voltage as a clue for distinguishing a typical low-voltage leader from the powered follower, while still requiring the user to confirm the hardware.
 - **Safety and provenance live below the application layer.** Motion requests remain subject to calibration, joint, rate, acceleration, following-error, fault, effort, and other guards. Calibrations are versioned, and saved physical motion artifacts can be bound to the calibration under which they were created so stale motion can fail closed after a hardware or calibration change.
@@ -115,7 +115,7 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 | **Setup** | Find and connect the leader and follower, calibrate either arm, save Home and Rest, and inspect motor status. |
 | **Manual** | Read current joint positions, switch between angular and Cartesian arm control, keep the gripper tool visible in either mode, park/release the leader, and hand poses between leader and follower. |
 | **Teleoperation** | Move the leader by hand, align the follower or relink the two current poses with no motion, and transfer to Manual while parking the leader. |
-| **Teach / Record** | Save named positions from the follower or leader, preview them, add them to the current program, or optionally record continuous trajectories. |
+| **Teach / Record** | Save named positions from the follower or leader, or record continuous demonstration trajectories for replay/editing and future Robo Puppeteer motion data. |
 | **Edit recordings** | Review and adjust recorded motions with a scrubbed kinematic preview. |
 | **Programs** | Build and run linear programs from saved positions, gripper actions, waits, and optional recorded-motion steps. |
 | **Log** | Review connection, motion, and diagnostic events. |

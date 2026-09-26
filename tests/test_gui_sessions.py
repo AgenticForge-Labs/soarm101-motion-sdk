@@ -67,6 +67,50 @@ def test_position_program_builder_creates_readable_linear_steps(window):
     assert "GRIPPER  OPEN" in rows[3]
 
 
+def test_radial_pan_pattern_expands_to_saved_pose_overrides(
+    window,
+    monkeypatch,
+    tmp_path,
+):
+    from soarm101_motion.poses import PoseLibrary, SavedPose
+
+    library = PoseLibrary("radial-test", path=tmp_path / "poses.json")
+    library.save(
+        "radial_base",
+        SavedPose(
+            joints={
+                "shoulder_pan": 0.0,
+                "shoulder_lift": -0.2,
+                "elbow_flex": 0.3,
+                "wrist_flex": -0.4,
+                "wrist_roll": 0.5,
+            },
+            gripper=0.7,
+            tcp_xyz_rpy=(0, 0, 0, 0, 0, 0),
+        ),
+    )
+    monkeypatch.setattr(window, "_get_pose_library", lambda: library)
+    window.run_point_combo.clear()
+    window.run_point_combo.addItem("radial_base")
+    window.radial_pan_start_spin.setValue(-30.0)
+    window.radial_pan_end_spin.setValue(30.0)
+    window.radial_pan_step_spin.setValue(30.0)
+    window.program_move_speed_spin.setValue(0.75)
+
+    window._add_radial_pan_pattern()
+
+    assert len(window._sequence_steps) == 3
+    targets = [
+        step.params["joint_overrides_deg"]["shoulder_pan"]
+        for step in window._sequence_steps
+    ]
+    assert targets == pytest.approx([-30.0, 0.0, 30.0])
+    assert all(step.params["name"] == "radial_base" for step in window._sequence_steps)
+    assert all(step.params["mode"] == "joint" for step in window._sequence_steps)
+    assert all(step.params["speed_scale"] == 0.75 for step in window._sequence_steps)
+    assert "PAN  radial_base" in window.sequence_step_list.item(0).text()
+
+
 def test_manual_workspace_keeps_gripper_visible_across_arm_modes(window):
     labels = [
         window.manual_mode_tabs.tabText(i)

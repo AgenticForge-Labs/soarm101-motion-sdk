@@ -315,8 +315,16 @@ Only continue after Batch 1 first-motion validation passes.
 10. During another run press **STOP / HOLD** and confirm the active Program is cancelled
     and the follower holds.
 11. Restart the GUI and confirm saved Programs remain available.
-12. If a saved trajectory exists, open **Recorded motion · advanced**, add it as one
-    Program step, and confirm it executes through the same guarded runner.
+12. Select a saved base position in Programs and generate a radial shoulder-pan
+    pattern from -30° to +30° in 15° increments. Confirm each generated row references
+    the same base position, changes only shoulder pan, previews the overridden pose as a
+    ghost, and is rejected if a generated shoulder-pan target exceeds the current limits.
+13. Run the radial rows one at a time in simulation and confirm shoulder lift, elbow,
+    wrist flex, and wrist roll remain equal to the saved base position.
+14. If a saved trajectory exists, open **Trajectories / primitives**, add it as one
+    Program step, and confirm it executes through the same guarded runner. Confirm
+    recording, replay, editing, and trajectory-library persistence remain available
+    independently of the position Program workflow.
 
 ### 13. Software-only advanced trajectory editing and primitives
 
@@ -365,7 +373,14 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
     gripper step, and recorded-trajectory replay; inspect simulator/backend tests for the
     raw speed propagation because simulation itself has no motor-speed dynamics.
 
-### 15. Physical sequence execution — DO LATER
+### 15. Physical Program / radial-pattern execution — DO LATER
+
+Before a complete physical Program, validate every saved destination individually at
+conservative speed. For a radial pattern, first test the smallest shoulder-pan offset,
+confirm all four non-pan arm joints remain at the base pose, then expand the range one
+step at a time. The generator checks configured/calibrated pan limits but does not know
+about external fixtures, cables, payload collisions, or table geometry.
+
 
 Only continue after the Batch 1 and Batch 2 physical checks pass.
 

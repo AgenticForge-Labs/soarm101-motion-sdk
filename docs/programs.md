@@ -113,13 +113,43 @@ the complete list.
 
 ## Recorded motion is optional
 
-The **Recorded motion · advanced** tab can insert a recorded trajectory or semantic motion
-primitive into the same Program. Use that when the continuous path or timing matters—for
-example, a gesture or a taught curved motion.
+The **Trajectories / primitives** tab can insert a recorded trajectory or semantic motion
+primitive into the same Program. Trajectory recording, replay, and editing are first-class
+workflows in their own right; inserting one into a Program is simply another way to reuse
+that motion. Recorded demonstrations are also the intended motion-data source for future
+Robo Puppeteer integration.
 
 For ordinary pick/place, loading, unloading, inspection, and bench automation, prefer
-saved positions plus explicit gripper/wait actions. They are easier to inspect, modify,
-and reason about than an opaque recorded path.
+saved positions plus explicit gripper/wait actions when the important information is the
+set of destinations rather than the exact continuous path. Recorded trajectories remain
+first-class when the demonstrated path, timing, or future Robo Puppeteer motion data is
+important.
+
+## Radial / shoulder-pan patterns
+
+A common SO-ARM101 pattern is to keep the arm's reach/elevation/wrist configuration fixed
+while rotating around the base with `shoulder_pan`.
+
+In **Programs → Position steps**:
+
+1. Teach/select one saved base position.
+2. Set start and end shoulder-pan **offsets** relative to that saved position.
+3. Set the angular increment.
+4. Click **Append pan pattern**.
+
+The GUI expands the pattern into ordinary Program Move rows. Each row references the same
+saved base pose and overrides only `shoulder_pan`; shoulder lift, elbow flex, wrist flex,
+and wrist roll inherit the saved joint values. The gripper is not commanded by a Pan row,
+so add an explicit gripper action when needed. The base saved pose itself is not modified
+and no duplicate poses are created.
+
+For example, a base pose at shoulder pan 10° with offsets -30°, 0°, and +30° produces
+shoulder-pan targets -20°, 10°, and 40°. Generated targets are checked against the active
+or configured shoulder-pan limits before the rows are appended.
+
+These radial steps intentionally use joint/angular motion. A joint-overridden saved pose
+cannot be replayed as a Cartesian-linear step because its stored TCP belongs to the
+unmodified saved joint configuration.
 
 ## Kinematic previews
 

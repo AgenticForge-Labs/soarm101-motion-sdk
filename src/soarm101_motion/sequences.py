@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.exceptions import MotionCancelledError
 from soarm101_motion.motion import MotionHandle
 from soarm101_motion.primitives import MotionPrimitiveLibrary
@@ -206,6 +207,7 @@ class SequenceRunner:
         speed_scale: float,
         *,
         move_gripper: bool = False,
+        joint_overrides_deg: dict[str, float] | None = None,
     ) -> MotionResult:
         pose = self.pose_library.require(name)
         self.arm.require_artifact_calibration(
@@ -217,6 +219,15 @@ class SequenceRunner:
             },
             artifact_label=f"saved pose {name!r}",
         )
+        overrides = dict(joint_overrides_deg or {})
+        unknown = set(overrides) - set(ARM_JOINTS)
+        if unknown:
+            raise ValueError(f"unknown joint override(s): {sorted(unknown)}")
+        if overrides and mode == "linear":
+            raise ValueError(
+                "joint-overridden saved poses can only use joint/angular movement"
+            )
+
         if mode == "linear":
             target = Pose.from_xyz_rpy(*pose.tcp_xyz_rpy)
             result = self.arm.move_linear(
@@ -228,8 +239,14 @@ class SequenceRunner:
                 wait=True,
             )
         else:
+            joint_target = dict(pose.joints)
+            for joint, value_deg in overrides.items():
+                value = float(value_deg)
+                if not math.isfinite(value):
+                    raise ValueError(f"joint override {joint!r} must be finite")
+                joint_target[joint] = math.radians(value)
             result = self.arm.move_joints(
-                pose.joints,
+                joint_target,
                 speed=self._scaled(self.arm.config.default_joint_speed, speed_scale),
                 acceleration=self._scaled(
                     self.arm.config.default_joint_acceleration, speed_scale
@@ -260,6 +277,14 @@ class SequenceRunner:
                 str(params["name"]),
                 str(params.get("mode", "joint")),
                 scale,
+                joint_overrides_deg=(
+                    None
+                    if params.get("joint_overrides_deg") is None
+                    else {
+                        str(name): float(value)
+                        for name, value in dict(params["joint_overrides_deg"]).items()
+                    }
+                ),
             )
         if step.kind == "home":
             return self._move_pose(
