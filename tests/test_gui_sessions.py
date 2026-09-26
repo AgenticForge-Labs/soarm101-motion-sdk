@@ -26,13 +26,72 @@ def test_roles_are_in_setup_tab(window):
     assert window.record_page.isAncestorOf(window.record_button)
 
 
-def test_motion_tabs_show_contextual_arm_views(window):
-    assert window.manual_page.isAncestorOf(window.manual_arm_panel)
-    assert window.teleop_page.isAncestorOf(window.teleop_arm_panel)
-    assert window.record_page.isAncestorOf(window.teach_arm_panel)
-    assert window.trajectory_page.isAncestorOf(window.trajectory_arm_panel)
-    assert window.run_page.isAncestorOf(window.program_arm_panel)
-    assert len(window._follower_status_panels) == 4
+def test_persistent_robot_sidebar_is_outside_tabs_and_shared(window):
+    assert not window.tabs.isAncestorOf(window.robot_sidebar)
+    assert window.robot_sidebar_container.isAncestorOf(window.robot_sidebar)
+    assert window.manual_arm_panel is window.robot_sidebar
+    assert window.teleop_arm_panel is window.robot_sidebar
+    assert window.teach_arm_panel is window.robot_sidebar
+    assert window.trajectory_arm_panel is window.robot_sidebar
+    assert window.program_arm_panel is window.robot_sidebar
+    assert window.cartesian_view is window.robot_sidebar.view
+    assert window._follower_status_panels == [window.robot_sidebar]
+
+    for page in (
+        window.calibration_page,
+        window.manual_page,
+        window.teleop_page,
+        window.record_page,
+        window.trajectory_page,
+        window.run_page,
+        window.log_page,
+    ):
+        window.tabs.setCurrentWidget(page)
+        assert window.robot_sidebar.isVisible() or not window.isVisible()
+
+
+def test_sidebar_primary_arm_remains_follower_when_teaching_from_leader(window):
+    follower = {
+        "connected": True,
+        "torque_enabled": True,
+        "moving": False,
+        "faulted": False,
+        "simulation": True,
+        "joints_deg": {
+            "shoulder_pan": 1.0,
+            "shoulder_lift": 2.0,
+            "elbow_flex": 3.0,
+            "wrist_flex": 4.0,
+            "wrist_roll": 5.0,
+        },
+        "pose_mm_deg": (100.0, 20.0, 30.0, 1.0, 2.0, 3.0),
+        "gripper": 0.4,
+        "joint_limits_deg": {},
+    }
+    leader = {
+        **follower,
+        "torque_enabled": False,
+        "joints_deg": {
+            "shoulder_pan": 31.0,
+            "shoulder_lift": 32.0,
+            "elbow_flex": 33.0,
+            "wrist_flex": 34.0,
+            "wrist_roll": 35.0,
+        },
+        "pose_mm_deg": (200.0, 40.0, 60.0, 4.0, 5.0, 6.0),
+        "gripper": 0.8,
+    }
+
+    window._on_state(follower)
+    window._leader_connected = True
+    window._on_leader_state(leader)
+    window.tabs.setCurrentWidget(window.record_page)
+    window.teaching_source_combo.setCurrentIndex(
+        window.teaching_source_combo.findData("leader")
+    )
+
+    assert window.robot_sidebar.joint_value_labels["shoulder_pan"].text() == "+1.0°"
+    assert window.robot_sidebar.gripper_bar.format() == "0.400"
 
 
 def test_position_program_builder_creates_readable_linear_steps(window):

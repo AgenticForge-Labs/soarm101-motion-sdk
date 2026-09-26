@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Replaced duplicated per-tab arm cards with one persistent **right-hand follower sidebar**
+  outside the tab widget. It remains visible in Setup, Manual, Teleoperation, Teach /
+  Record, Edit recordings, Programs, and Log.
+- The solid 3D arm is now always the live follower when connected. The sidebar also shows
+  all five current joint angles, full TCP XYZ/RPY, gripper position, motion/torque/fault
+  status, and persistent Enable hold / STOP-HOLD / Relax controls.
+- Context from the active workflow is shown only as a ghost overlay: leader in
+  Teleoperation, saved pose in Teach, scrubbed recorded pose in Edit recordings, and the
+  selected destination in Programs. Selecting the leader as a teaching source no longer
+  replaces the primary follower model.
+- Added a broader modern Qt style pass with cleaner cards, tabs, controls, spacing,
+  rounded inputs/buttons, status chips, and a resizable task/sidebar workspace.
+
 - Added a **Radial / shoulder-pan pattern** generator to Programs. It uses any selected
   saved position as a base, generates a start/end/increment series of pan offsets, and
   executes each row by overriding only `shoulder_pan` while all other joints inherit the
@@ -17,12 +30,9 @@
   append Move/Open/Close/Custom-gripper/Wait steps, assign a per-Move speed multiplier,
   reorder the linear list, save it, and run one step or the complete program. The existing
   `MotionSequence` persistence/runner remains the compatibility layer underneath.
-- Added contextual kinematic cards to Manual, Teleoperation, Teach / Record, Edit
-  recordings, and Programs. Teleoperation overlays the leader as a ghost, Teach and
-  Programs preview saved positions, and Edit recordings previews the scrubbed recorded
-  pose over the live follower.
 - Modernized the shared arm renderer with a rounded gradient canvas, floor grid, link
-  shadows, clearer joints/TCP/gripper styling, and reusable ghost-pose overlays.
+  shadows, clearer joints/TCP/gripper styling, and reusable ghost-pose overlays; these
+  previews now feed the persistent sidebar rather than separate per-tab cards.
 - Reorganized Teach / Record around saved positions first; continuous trajectory recording
   is now presented as an optional workflow for cases where the exact path/timing matters.
 

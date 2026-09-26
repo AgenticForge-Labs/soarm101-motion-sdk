@@ -18,6 +18,10 @@ Rules:
 - The GUI term **Program** is a presentation layer over the persisted `MotionSequence`
   model and `SequenceRunner`. Saved-position programs therefore do not introduce a
   second execution engine or bypass sequence provenance/safety checks.
+- The GUI owns one persistent follower-status sidebar outside the task tabs. Its primary
+  kinematic model is always the measured follower state when connected; active workflows
+  may add a secondary leader/saved/recorded/program ghost without replacing that primary
+  state.
 - Kinematic GUI previews consume the same `SO101KinematicModel` used by planning; ghost
   overlays are visualization only and never authorize or execute motion.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.

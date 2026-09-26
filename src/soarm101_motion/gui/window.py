@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
+    QSplitter,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -107,8 +108,9 @@ class MainWindow(QMainWindow):
         simulation: bool = False,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("SO-ARM101 Control")
-        self.resize(1050, 780)
+        self.setWindowTitle("SO-ARM101 Motion Studio")
+        self.resize(1480, 900)
+        self.setMinimumSize(1080, 720)
 
         self._connected = False
         self._follower_setup_session = False
@@ -256,9 +258,96 @@ class MainWindow(QMainWindow):
         self._refresh_sequence_list()
         self._update_enabled_state()
 
+    def _apply_modern_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QMainWindow, QWidget {
+                font-size: 12px;
+            }
+            QGroupBox {
+                font-weight: 700;
+                border: 1px solid palette(midlight);
+                border-radius: 12px;
+                margin-top: 10px;
+                padding-top: 8px;
+                background: palette(base);
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 5px;
+            }
+            QTabWidget::pane {
+                border: 1px solid palette(midlight);
+                border-radius: 12px;
+                top: -1px;
+                background: palette(window);
+            }
+            QTabBar::tab {
+                min-height: 28px;
+                padding: 7px 13px;
+                margin-right: 2px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+            }
+            QTabBar::tab:selected {
+                font-weight: 700;
+                background: palette(base);
+            }
+            QPushButton {
+                min-height: 28px;
+                padding: 5px 11px;
+                border: 1px solid palette(midlight);
+                border-radius: 8px;
+                background: palette(button);
+            }
+            QPushButton:hover {
+                border-color: palette(highlight);
+            }
+            QPushButton:pressed {
+                background: palette(midlight);
+            }
+            QPushButton:disabled {
+                color: palette(mid);
+            }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+                min-height: 27px;
+                padding: 3px 6px;
+                border: 1px solid palette(midlight);
+                border-radius: 7px;
+                background: palette(base);
+            }
+            QListWidget {
+                border: 1px solid palette(midlight);
+                border-radius: 9px;
+                background: palette(base);
+                padding: 4px;
+            }
+            QProgressBar {
+                min-height: 18px;
+                border: 1px solid palette(midlight);
+                border-radius: 7px;
+                text-align: center;
+                background: palette(alternate-base);
+            }
+            QProgressBar::chunk {
+                border-radius: 6px;
+                background: palette(highlight);
+            }
+            QScrollArea {
+                border: 0;
+                background: transparent;
+            }
+            """
+        )
+
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
+        self._apply_modern_style()
         root = QWidget(self)
         layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(9)
+
         self.follower_connection_panel = self._build_connection_bar(port, robot_id, simulation)
         self.leader_connection_panel = self._build_leader_connection()
 
@@ -266,10 +355,15 @@ class MainWindow(QMainWindow):
         self.alert_label.setTextFormat(Qt.TextFormat.PlainText)
         self.alert_label.setWordWrap(True)
         self.alert_label.setStyleSheet(
-            "font-weight: 700; padding: 8px; background: #fee2e2; color: #7f1d1d;"
+            "font-weight: 700; padding: 9px 11px; border-radius: 9px; "
+            "background: #fee2e2; color: #7f1d1d;"
         )
         self.alert_label.hide()
         layout.addWidget(self.alert_label)
+
+        self.robot_sidebar = self._build_persistent_robot_sidebar()
+        self._follower_status_panels = [self.robot_sidebar]
+        self.cartesian_view = self.robot_sidebar.view
 
         self.tabs = QTabWidget()
         # Build in dependency order, then display in task order.
@@ -287,6 +381,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.run_page, "Programs")
         self.log_page = QWidget()
         log_layout = QVBoxLayout(self.log_page)
+        log_layout.setContentsMargins(10, 10, 10, 10)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.document().setMaximumBlockCount(2000)
@@ -294,22 +389,179 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log)
         self.tabs.addTab(self.log_page, "Log")
         self.tabs.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self.tabs, 1)
 
-        status_row = QHBoxLayout()
-        self.status_label = QLabel("Disconnected")
-        self.status_label.setStyleSheet("font-weight: 600; padding: 5px;")
-        status_row.addWidget(self.status_label, 1)
-        status_row.addWidget(self.stop_button)
-        self.pose_summary = QLabel("TCP: —")
-        status_row.addWidget(self.pose_summary)
-        layout.addLayout(status_row)
+        workspace = QSplitter(Qt.Orientation.Horizontal)
+        workspace.setChildrenCollapsible(False)
+        workspace.addWidget(self.tabs)
+
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sidebar_scroll.setWidget(self.robot_sidebar_container)
+        workspace.addWidget(sidebar_scroll)
+        workspace.setStretchFactor(0, 1)
+        workspace.setStretchFactor(1, 0)
+        workspace.setSizes([1040, 360])
+        layout.addWidget(workspace, 1)
+        self.workspace_splitter = workspace
 
         self.setCentralWidget(root)
+        self._refresh_sidebar_context()
+
+    def _build_persistent_robot_sidebar(self) -> RobotStatusPanel:
+        container = QWidget()
+        container.setObjectName("robotSidebarContainer")
+        container.setMinimumWidth(330)
+        container.setMaximumWidth(430)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(4, 2, 4, 4)
+        layout.setSpacing(9)
+
+        heading = QHBoxLayout()
+        title = QLabel("ROBOT")
+        title.setStyleSheet("font-size: 11px; font-weight: 800; color: palette(mid);")
+        heading.addWidget(title)
+        heading.addStretch(1)
+        self.sidebar_mode_label = QLabel("FOLLOWER")
+        self.sidebar_mode_label.setStyleSheet(
+            "font-size: 10px; font-weight: 800; padding: 3px 7px; "
+            "border-radius: 8px; background: palette(alternate-base);"
+        )
+        heading.addWidget(self.sidebar_mode_label)
+        layout.addLayout(heading)
+
+        panel = RobotStatusPanel(
+            "Follower",
+            subtitle="Live state · solid arm is always the follower",
+            compact=False,
+        )
+        layout.addWidget(panel, 1)
+
+        controls = QGroupBox("Always available")
+        controls_layout = QGridLayout(controls)
+        self.status_label = QLabel("Disconnected")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("font-weight: 700; padding: 4px 0;")
+        controls_layout.addWidget(self.status_label, 0, 0, 1, 3)
+
+        self.sidebar_enable_button = QPushButton("Enable hold")
+        self.sidebar_enable_button.setToolTip(
+            "Latch the follower's measured pose, then enable torque."
+        )
+        self.sidebar_enable_button.clicked.connect(
+            lambda _checked=False: self.enable_requested.emit()
+        )
+        controls_layout.addWidget(self.sidebar_enable_button, 1, 0)
+
+        self.stop_button.setObjectName("stopButton")
+        self.stop_button.setStyleSheet(
+            "QPushButton#stopButton { font-weight: 800; min-height: 34px; "
+            "border: 2px solid #b91c1c; border-radius: 9px; }"
+        )
+        controls_layout.addWidget(self.stop_button, 1, 1)
+
+        self.sidebar_relax_button = QPushButton("Relax")
+        self.sidebar_relax_button.setToolTip("Disable follower servo torque.")
+        self.sidebar_relax_button.clicked.connect(
+            lambda _checked=False: self.relax_requested.emit()
+        )
+        controls_layout.addWidget(self.sidebar_relax_button, 1, 2)
+
+        self.pose_summary = QLabel("TCP: —")
+        self.pose_summary.setWordWrap(True)
+        self.pose_summary.setStyleSheet("color: palette(mid);")
+        controls_layout.addWidget(self.pose_summary, 2, 0, 1, 3)
+        layout.addWidget(controls)
+
+        self.robot_sidebar_container = container
+        return panel
 
     def _on_tab_changed(self, index: int) -> None:
         if self.tabs.widget(index) is self.log_page:
             self.tabs.setTabText(index, "Log")
+        self._refresh_sidebar_context()
+
+    def _refresh_sidebar_context(self) -> None:
+        if not hasattr(self, "robot_sidebar") or not hasattr(self, "tabs"):
+            return
+
+        panel = self.robot_sidebar
+        panel.set_title("Follower", "Live state · solid arm is always the follower")
+        panel.clear_secondary()
+        page = self.tabs.currentWidget()
+
+        if page is self.calibration_page:
+            self.sidebar_mode_label.setText("SETUP")
+            panel.set_context(
+                "Setup and calibration. The solid arm remains the follower's live "
+                "measured state whenever it is connected."
+            )
+            return
+
+        if page is self.manual_page:
+            self.sidebar_mode_label.setText("MANUAL")
+            panel.set_context(
+                "Manual control. The solid arm follows measured follower joints; "
+                "Cartesian targets appear on this same view."
+            )
+            return
+
+        if page is self.teleop_page:
+            self.sidebar_mode_label.setText("TELEOP")
+            panel.set_context(
+                "Teleoperation. Follower is solid; connected leader is shown as a "
+                "ghost so alignment and divergence stay visible."
+            )
+            if self._latest_leader_state is not None:
+                panel.show_secondary_state(self._latest_leader_state, label="leader")
+            return
+
+        if page is self.record_page:
+            self.sidebar_mode_label.setText("TEACH")
+            source = (
+                str(self.teaching_source_combo.currentData())
+                if hasattr(self, "teaching_source_combo")
+                else "follower"
+            )
+            selected = (
+                self.point_combo.currentText().strip()
+                if hasattr(self, "point_combo")
+                else ""
+            )
+            panel.set_context(
+                f"Teach / Record · source: {source}. Follower stays solid; a selected "
+                "saved position is shown as a ghost."
+            )
+            if selected:
+                self._preview_selected_taught_point(force=True)
+            elif source == "leader" and self._latest_leader_state is not None:
+                panel.show_secondary_state(self._latest_leader_state, label="leader source")
+            return
+
+        if page is self.trajectory_page:
+            self.sidebar_mode_label.setText("RECORDING")
+            panel.set_context(
+                "Recording editor. Follower stays solid; the scrubbed trajectory pose "
+                "is shown as a ghost."
+            )
+            if self._active_trajectory is not None:
+                self._update_trajectory_arm_preview(self._cursor_seconds(), force=True)
+            return
+
+        if page is self.run_page:
+            self.sidebar_mode_label.setText("PROGRAM")
+            panel.set_context(
+                "Program preview. Follower stays solid; the selected Move destination "
+                "is shown as a ghost."
+            )
+            self._preview_selected_program_step(force=True)
+            return
+
+        self.sidebar_mode_label.setText("LOG")
+        panel.set_context(
+            "Live follower status remains visible while you inspect connection, motion, "
+            "and safety events."
+        )
 
     def _build_connection_bar(
         self,
@@ -643,34 +895,22 @@ class MainWindow(QMainWindow):
 
     def _build_control_tab(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setSpacing(12)
-
-        controls = QWidget()
-        controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.addWidget(self._build_coordination_panel())
-        controls_layout.addWidget(self._build_named_pose_controls())
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(9)
+        layout.addWidget(self._build_coordination_panel())
+        layout.addWidget(self._build_named_pose_controls())
 
         self.manual_mode_tabs = QTabWidget()
         self.manual_mode_tabs.addTab(self._build_joint_tab(), "Joint / angular")
         self.manual_mode_tabs.addTab(self._build_cartesian_tab(), "Cartesian")
-        controls_layout.addWidget(self.manual_mode_tabs, 1)
+        layout.addWidget(self.manual_mode_tabs, 1)
 
         # The gripper is a tool, not a sixth pose joint. Keep its controls visible
         # below both angular and Cartesian modes so switching arm representations
         # never hides the tool state or speed.
-        controls_layout.addWidget(self._build_gripper_panel())
-        layout.addWidget(controls, 3)
-
-        self.manual_arm_panel = self._new_follower_status_panel(
-            "Follower",
-            subtitle="Live kinematics · drag to rotate",
-            compact=False,
-        )
-        # Preserve the public-ish attribute used by existing tests and diagnostics.
-        self.cartesian_view = self.manual_arm_panel.view
-        layout.addWidget(self.manual_arm_panel, 2)
+        layout.addWidget(self._build_gripper_panel())
+        self.manual_arm_panel = self.robot_sidebar
         return page
 
     def _build_coordination_panel(self) -> QGroupBox:
@@ -811,8 +1051,9 @@ class MainWindow(QMainWindow):
 
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setSpacing(12)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(9)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -877,20 +1118,15 @@ class MainWindow(QMainWindow):
         )
         self.teleop_readout.setAlignment(Qt.AlignmentFlag.AlignTop)
         left_layout.addWidget(self.teleop_readout, 1)
-        layout.addWidget(left, 3)
-
-        self.teleop_arm_panel = self._new_follower_status_panel(
-            "Teleoperation",
-            subtitle="Follower solid · leader ghost",
-            compact=True,
-        )
-        layout.addWidget(self.teleop_arm_panel, 2)
+        layout.addWidget(left, 1)
+        self.teleop_arm_panel = self.robot_sidebar
         return page
 
     def _build_teach_tab(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setSpacing(12)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(9)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -998,14 +1234,8 @@ class MainWindow(QMainWindow):
         go_programs.clicked.connect(lambda: self.tabs.setCurrentWidget(self.run_page))
         left_layout.addWidget(go_programs)
         left_layout.addStretch(1)
-        layout.addWidget(left, 3)
-
-        self.teach_arm_panel = RobotStatusPanel(
-            "Teaching pose",
-            subtitle="Selected source solid · saved position ghost",
-            compact=True,
-        )
-        layout.addWidget(self.teach_arm_panel, 2)
+        layout.addWidget(left, 1)
+        self.teach_arm_panel = self.robot_sidebar
         return page
 
     def _build_trajectory_tab(self) -> QWidget:
@@ -1027,16 +1257,9 @@ class MainWindow(QMainWindow):
         library_grid.addWidget(self.trajectory_stats, 1, 0, 1, 4)
         layout.addWidget(library_box)
 
-        preview_row = QHBoxLayout()
         self.trajectory_timeline = TrajectoryTimeline()
-        preview_row.addWidget(self.trajectory_timeline, 3)
-        self.trajectory_arm_panel = self._new_follower_status_panel(
-            "Recording preview",
-            subtitle="Live follower solid · scrubbed recording ghost",
-            compact=True,
-        )
-        preview_row.addWidget(self.trajectory_arm_panel, 2)
-        layout.addLayout(preview_row, 1)
+        layout.addWidget(self.trajectory_timeline, 1)
+        self.trajectory_arm_panel = self.robot_sidebar
 
         edit_box = QGroupBox("Selection and playback")
         edit_grid = QGridLayout(edit_box)
@@ -1179,8 +1402,9 @@ class MainWindow(QMainWindow):
 
     def _build_run_tab(self) -> QWidget:
         page = QWidget()
-        outer = QHBoxLayout(page)
-        outer.setSpacing(12)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(9)
 
         left = QWidget()
         layout = QVBoxLayout(left)
@@ -1420,14 +1644,8 @@ class MainWindow(QMainWindow):
         run_grid.addWidget(self.sequence_status, 2, 0, 1, 6)
         layout.addWidget(run_box)
 
-        outer.addWidget(left, 3)
-
-        self.program_arm_panel = self._new_follower_status_panel(
-            "Program preview",
-            subtitle="Live follower solid · selected position ghost",
-            compact=True,
-        )
-        outer.addWidget(self.program_arm_panel, 2)
+        outer.addWidget(left, 1)
+        self.program_arm_panel = self.robot_sidebar
         return page
 
     def _build_joint_tab(self) -> QWidget:
@@ -2400,30 +2618,36 @@ class MainWindow(QMainWindow):
             label=label or key,
         )
 
-    def _preview_selected_taught_point(self) -> None:
+    def _preview_selected_taught_point(self, *, force: bool = False) -> None:
         if not hasattr(self, "teach_arm_panel"):
             return
+        if not force and self.tabs.currentWidget() is not self.record_page:
+            return
         self._show_saved_pose_preview(
-            self.teach_arm_panel,
+            self.robot_sidebar,
             self.point_combo.currentText(),
             label="saved position",
         )
 
-    def _preview_program_position(self) -> None:
+    def _preview_program_position(self, *, force: bool = False) -> None:
         if not hasattr(self, "program_arm_panel"):
             return
+        if not force and self.tabs.currentWidget() is not self.run_page:
+            return
         self._show_saved_pose_preview(
-            self.program_arm_panel,
+            self.robot_sidebar,
             self.run_point_combo.currentText(),
             label="selected position",
         )
 
-    def _preview_selected_program_step(self) -> None:
+    def _preview_selected_program_step(self, *, force: bool = False) -> None:
         if not hasattr(self, "program_arm_panel"):
+            return
+        if not force and self.tabs.currentWidget() is not self.run_page:
             return
         row = self.sequence_step_list.currentRow()
         if not 0 <= row < len(self._sequence_steps):
-            self._preview_program_position()
+            self._preview_program_position(force=force)
             return
         step = self._sequence_steps[row]
         if step.kind == "point":
@@ -2436,28 +2660,28 @@ class MainWindow(QMainWindow):
                     for joint, value_deg in overrides.items():
                         if joint in joints:
                             joints[joint] = radians(float(value_deg))
-                    self.program_arm_panel.show_saved_pose(
+                    self.robot_sidebar.show_saved_pose(
                         joints_rad=joints,
                         gripper=pose.gripper,
                         label=f"step {row + 1}",
                     )
                 except Exception:
-                    self.program_arm_panel.clear_secondary()
+                    self.robot_sidebar.clear_secondary()
             else:
                 self._show_saved_pose_preview(
-                    self.program_arm_panel,
+                    self.robot_sidebar,
                     name,
                     label=f"step {row + 1}",
                 )
             return
         if step.kind in {"home", "rest"}:
             self._show_saved_pose_preview(
-                self.program_arm_panel,
+                self.robot_sidebar,
                 step.kind,
                 label=f"step {row + 1}",
             )
             return
-        self.program_arm_panel.clear_secondary()
+        self.robot_sidebar.clear_secondary()
 
     def _add_selected_taught_point_to_program(self) -> None:
         name = self.point_combo.currentText().strip()
@@ -2829,9 +3053,16 @@ class MainWindow(QMainWindow):
         self._selection_changed()
         self._update_enabled_state()
 
-    def _update_trajectory_arm_preview(self, cursor_s: float) -> None:
+    def _update_trajectory_arm_preview(
+        self,
+        cursor_s: float,
+        *,
+        force: bool = False,
+    ) -> None:
         trajectory = self._active_trajectory
         if trajectory is None or not hasattr(self, "trajectory_arm_panel"):
+            return
+        if not force and self.tabs.currentWidget() is not self.trajectory_page:
             return
         index = min(
             range(trajectory.sample_count),
@@ -2841,7 +3072,7 @@ class MainWindow(QMainWindow):
             name: float(trajectory.joints_rad[index, joint_index])
             for joint_index, name in enumerate(ARM_JOINTS)
         }
-        self.trajectory_arm_panel.show_saved_pose(
+        self.robot_sidebar.show_saved_pose(
             joints_rad=joints,
             gripper=float(trajectory.gripper[index]),
             label=f"recorded {float(trajectory.timestamps_s[index]):.2f} s",
@@ -3772,20 +4003,16 @@ class MainWindow(QMainWindow):
             self._latest_leader_state = None
             self._leader_busy = False
             self._leader_torque_enabled = False
-            if hasattr(self, "teleop_arm_panel"):
-                self.teleop_arm_panel.clear_secondary()
+            self._refresh_sidebar_context()
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
+        self._refresh_sidebar_context()
         self._update_enabled_state()
 
     def _on_leader_state(self, state: object) -> None:
         self._latest_leader_state = dict(state)  # type: ignore[arg-type]
         self._leader_torque_enabled = bool(self._latest_leader_state.get("torque_enabled"))
-        if hasattr(self, "teleop_arm_panel"):
-            self.teleop_arm_panel.show_secondary_state(
-                self._latest_leader_state,
-                label="leader",
-            )
+        self._refresh_sidebar_context()
         self._update_teach_readout()
         self._update_enabled_state()
 
@@ -3821,24 +4048,14 @@ class MainWindow(QMainWindow):
             return
         source = str(self.teaching_source_combo.currentData())
         state = self._latest_state if source == "follower" else self._latest_leader_state
-        if hasattr(self, "teach_arm_panel"):
-            self.teach_arm_panel.set_title(
-                f"{source.title()} teaching pose",
-                "Selected source solid · saved position ghost",
-            )
         if not state:
             self.teach_source_status.setText(f"{source.title()} state unavailable")
             for label in self.teach_joint_labels.values():
                 label.setText("—")
             self.teach_gripper_label.setText("—")
             self.teach_pose_label.setText("TCP: —")
-            if hasattr(self, "teach_arm_panel"):
-                self.teach_arm_panel.clear_state(label="NO SOURCE")
-                self._preview_selected_taught_point()
+            self._refresh_sidebar_context()
             return
-        if hasattr(self, "teach_arm_panel"):
-            self.teach_arm_panel.update_state(state)
-            self._preview_selected_taught_point()
         self.teach_source_status.setText(
             f"{source.title()} connected"
             + (" — simulation" if state.get("simulation") else "")
@@ -3853,6 +4070,7 @@ class MainWindow(QMainWindow):
             f"TCP: X {pose[0]:.1f}, Y {pose[1]:.1f}, Z {pose[2]:.1f} mm\n"
             f"RPY: {pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°"
         )
+        self._refresh_sidebar_context()
 
     def _move_joints(self) -> None:
         self.move_joints_requested.emit(
@@ -3989,10 +4207,15 @@ class MainWindow(QMainWindow):
         self.connect_button.setText("Disconnect follower" if connected else "Connect follower")
         self._refresh_named_pose_status()
         self._refresh_point_list()
+        self._refresh_sidebar_context()
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
         self._busy = busy
+        if self._latest_state is not None and hasattr(self, "robot_sidebar"):
+            live = dict(self._latest_state)
+            live["moving"] = bool(live.get("moving")) or busy
+            self.robot_sidebar.update_state(live)
         if not busy:
             if self._active_calibration_target == "follower":
                 self._active_calibration_target = None
@@ -4013,6 +4236,8 @@ class MainWindow(QMainWindow):
             self.joint_actual_labels[name].setText(f"{measured[name]:.1f}°")
             if not self.edit_joint_targets_check.isChecked():
                 self.joint_spins[name].setValue(measured[name])
+        if hasattr(self, "robot_sidebar"):
+            self.robot_sidebar.update_joint_degrees(measured)
         self._update_teach_readout()
 
     def _on_state(self, state: object) -> None:
@@ -4031,8 +4256,10 @@ class MainWindow(QMainWindow):
         pose = tuple(float(value) for value in values["pose_mm_deg"])
         for label, value in zip(self.pose_value_labels, pose, strict=True):
             label.setText(f"{value:.2f}")
+        live_sidebar_state = dict(values)
+        live_sidebar_state["moving"] = moving
         for panel in self._follower_status_panels:
-            panel.update_state(values)
+            panel.update_state(live_sidebar_state)
         self.pose_summary.setText(
             f"TCP: X {pose[0]:.1f}  Y {pose[1]:.1f}  Z {pose[2]:.1f} mm"
         )
@@ -4221,13 +4448,17 @@ class MainWindow(QMainWindow):
         )
         self.setup_find_arms_button.setEnabled(self.find_arms_button.isEnabled())
 
-        self.enable_button.setEnabled(
+        can_enable_hold = (
             self._connected
             and not self._torque_enabled
             and not self._busy
             and not self._follower_setup_session
         )
-        self.relax_button.setEnabled(self._connected and self._torque_enabled)
+        self.enable_button.setEnabled(can_enable_hold)
+        self.sidebar_enable_button.setEnabled(can_enable_hold)
+        can_relax = self._connected and self._torque_enabled
+        self.relax_button.setEnabled(can_relax)
+        self.sidebar_relax_button.setEnabled(can_relax)
         self.stop_button.setEnabled(self._connected)
         self.edit_joint_targets_check.setEnabled(self._connected and not self._busy)
         for control in (*self.joint_sliders.values(), *self.joint_spins.values()):
