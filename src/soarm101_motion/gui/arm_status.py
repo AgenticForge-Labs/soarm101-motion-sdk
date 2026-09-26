@@ -196,8 +196,24 @@ class RobotStatusPanel(QWidget):
     def set_context(self, text: str) -> None:
         self.context_label.setText(str(text))
 
+    def _set_status_chip(self, text: str, state: str) -> None:
+        palette = {
+            "fault": ("#7f1d1d", "#ffffff"),
+            "moving": ("#854d0e", "#ffffff"),
+            "holding": ("#166534", "#ffffff"),
+            "free": ("#1d4ed8", "#ffffff"),
+            "offline": ("palette(alternate-base)", "palette(text)"),
+        }
+        background, foreground = palette.get(state, palette["offline"])
+        self.status_chip.setText(text)
+        self.status_chip.setStyleSheet(
+            "padding: 4px 9px; border-radius: 10px; font-weight: 800; "
+            f"background: {background}; color: {foreground};"
+        )
+
     def clear_state(self, *, label: str = "OFFLINE") -> None:
-        self.status_chip.setText(label)
+        self._set_status_chip(label, "offline")
+        self.view.setEnabled(False)
         for value in self.pose_value_labels.values():
             value.setText("—")
         for value in self.joint_value_labels.values():
@@ -219,6 +235,7 @@ class RobotStatusPanel(QWidget):
             self.clear_state()
             return
 
+        self.view.setEnabled(True)
         joints = {name: float(state["joints_deg"][name]) for name in ARM_JOINTS}
         self.view.set_joint_degrees(joints)
         for name, angle in joints.items():
@@ -236,18 +253,18 @@ class RobotStatusPanel(QWidget):
             self.pose_value_labels[key].setText(f"{value:+.1f} {unit}")
 
         if bool(state.get("faulted")):
-            chip = "FAULT"
+            chip, status_state = "FAULT", "fault"
         elif bool(state.get("moving")):
-            chip = "MOVING"
+            chip, status_state = "MOVING", "moving"
         elif bool(state.get("torque_enabled")):
-            chip = "HOLDING"
+            chip, status_state = "HOLDING", "holding"
         elif bool(state.get("connected")):
-            chip = "FREE"
+            chip, status_state = "FREE", "free"
         else:
-            chip = "OFFLINE"
+            chip, status_state = "OFFLINE", "offline"
         if bool(state.get("simulation")):
             chip += " · SIM"
-        self.status_chip.setText(chip)
+        self._set_status_chip(chip, status_state)
 
     def show_secondary_state(
         self,
