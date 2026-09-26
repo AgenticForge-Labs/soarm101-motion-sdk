@@ -259,7 +259,7 @@ class RobotStatusPanel(QWidget):
         elif bool(state.get("torque_enabled")):
             chip, status_state = "HOLDING", "holding"
         elif bool(state.get("connected")):
-            chip, status_state = "FREE", "free"
+            chip, status_state = "RELAXED", "free"
         else:
             chip, status_state = "OFFLINE", "offline"
         if bool(state.get("simulation")):
