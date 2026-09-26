@@ -115,7 +115,7 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 | **Setup** | Find and connect the leader and follower, calibrate either arm, save Home and Rest, and inspect motor status. |
 | **Manual** | Read current joint positions, switch between angular and Cartesian arm control, keep the gripper tool visible in either mode, park/release the leader, and hand poses between leader and follower. |
 | **Teleoperation** | Move the leader by hand, align the follower or relink the two current poses with no motion, and transfer to Manual while parking the leader. |
-| **Teach / Record** | Save named positions from the follower or leader, preview them, add them to the current program, or optionally record continuous trajectories. |
+| **Teach / Record** | Save named positions from the follower or leader, or record continuous demonstration trajectories for replay/editing and future Robo Puppeteer motion data. |
 | **Edit recordings** | Review and adjust recorded motions with a scrubbed kinematic preview. |
 | **Programs** | Build and run linear programs from saved positions, gripper actions, waits, and optional recorded-motion steps. |
 | **Log** | Review connection, motion, and diagnostic events. |
