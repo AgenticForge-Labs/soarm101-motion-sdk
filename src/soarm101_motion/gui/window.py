@@ -813,34 +813,22 @@ class MainWindow(QMainWindow):
 
     def _build_control_tab(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setSpacing(12)
-
-        controls = QWidget()
-        controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.addWidget(self._build_coordination_panel())
-        controls_layout.addWidget(self._build_named_pose_controls())
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(9)
+        layout.addWidget(self._build_coordination_panel())
+        layout.addWidget(self._build_named_pose_controls())
 
         self.manual_mode_tabs = QTabWidget()
         self.manual_mode_tabs.addTab(self._build_joint_tab(), "Joint / angular")
         self.manual_mode_tabs.addTab(self._build_cartesian_tab(), "Cartesian")
-        controls_layout.addWidget(self.manual_mode_tabs, 1)
+        layout.addWidget(self.manual_mode_tabs, 1)
 
         # The gripper is a tool, not a sixth pose joint. Keep its controls visible
         # below both angular and Cartesian modes so switching arm representations
         # never hides the tool state or speed.
-        controls_layout.addWidget(self._build_gripper_panel())
-        layout.addWidget(controls, 3)
-
-        self.manual_arm_panel = self._new_follower_status_panel(
-            "Follower",
-            subtitle="Live kinematics · drag to rotate",
-            compact=False,
-        )
-        # Preserve the public-ish attribute used by existing tests and diagnostics.
-        self.cartesian_view = self.manual_arm_panel.view
-        layout.addWidget(self.manual_arm_panel, 2)
+        layout.addWidget(self._build_gripper_panel())
+        self.manual_arm_panel = self.robot_sidebar
         return page
 
     def _build_coordination_panel(self) -> QGroupBox:
@@ -981,8 +969,9 @@ class MainWindow(QMainWindow):
 
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setSpacing(12)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(9)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -1047,20 +1036,15 @@ class MainWindow(QMainWindow):
         )
         self.teleop_readout.setAlignment(Qt.AlignmentFlag.AlignTop)
         left_layout.addWidget(self.teleop_readout, 1)
-        layout.addWidget(left, 3)
-
-        self.teleop_arm_panel = self._new_follower_status_panel(
-            "Teleoperation",
-            subtitle="Follower solid · leader ghost",
-            compact=True,
-        )
-        layout.addWidget(self.teleop_arm_panel, 2)
+        layout.addWidget(left, 1)
+        self.teleop_arm_panel = self.robot_sidebar
         return page
 
     def _build_teach_tab(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setSpacing(12)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(9)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -1168,14 +1152,8 @@ class MainWindow(QMainWindow):
         go_programs.clicked.connect(lambda: self.tabs.setCurrentWidget(self.run_page))
         left_layout.addWidget(go_programs)
         left_layout.addStretch(1)
-        layout.addWidget(left, 3)
-
-        self.teach_arm_panel = RobotStatusPanel(
-            "Teaching pose",
-            subtitle="Selected source solid · saved position ghost",
-            compact=True,
-        )
-        layout.addWidget(self.teach_arm_panel, 2)
+        layout.addWidget(left, 1)
+        self.teach_arm_panel = self.robot_sidebar
         return page
 
     def _build_trajectory_tab(self) -> QWidget:
@@ -1197,16 +1175,9 @@ class MainWindow(QMainWindow):
         library_grid.addWidget(self.trajectory_stats, 1, 0, 1, 4)
         layout.addWidget(library_box)
 
-        preview_row = QHBoxLayout()
         self.trajectory_timeline = TrajectoryTimeline()
-        preview_row.addWidget(self.trajectory_timeline, 3)
-        self.trajectory_arm_panel = self._new_follower_status_panel(
-            "Recording preview",
-            subtitle="Live follower solid · scrubbed recording ghost",
-            compact=True,
-        )
-        preview_row.addWidget(self.trajectory_arm_panel, 2)
-        layout.addLayout(preview_row, 1)
+        layout.addWidget(self.trajectory_timeline, 1)
+        self.trajectory_arm_panel = self.robot_sidebar
 
         edit_box = QGroupBox("Selection and playback")
         edit_grid = QGridLayout(edit_box)
@@ -1349,8 +1320,9 @@ class MainWindow(QMainWindow):
 
     def _build_run_tab(self) -> QWidget:
         page = QWidget()
-        outer = QHBoxLayout(page)
-        outer.setSpacing(12)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(9)
 
         left = QWidget()
         layout = QVBoxLayout(left)
@@ -1590,14 +1562,8 @@ class MainWindow(QMainWindow):
         run_grid.addWidget(self.sequence_status, 2, 0, 1, 6)
         layout.addWidget(run_box)
 
-        outer.addWidget(left, 3)
-
-        self.program_arm_panel = self._new_follower_status_panel(
-            "Program preview",
-            subtitle="Live follower solid · selected position ghost",
-            compact=True,
-        )
-        outer.addWidget(self.program_arm_panel, 2)
+        outer.addWidget(left, 1)
+        self.program_arm_panel = self.robot_sidebar
         return page
 
     def _build_joint_tab(self) -> QWidget:
