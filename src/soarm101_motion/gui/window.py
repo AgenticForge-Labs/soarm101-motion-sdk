@@ -434,7 +434,6 @@ class MainWindow(QMainWindow):
         panel_scroll = QScrollArea()
         panel_scroll.setWidgetResizable(True)
         panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        panel_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         panel_scroll.setWidget(panel)
         layout.addWidget(panel_scroll, 1)
         self.robot_sidebar_scroll = panel_scroll
