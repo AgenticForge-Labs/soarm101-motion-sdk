@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added a **Radial / shoulder-pan pattern** generator to Programs. It uses any selected
+  saved position as a base, generates a start/end/increment series of pan offsets, and
+  executes each row by overriding only `shoulder_pan` while all other joints inherit the
+  saved pose. Generated angles are checked against shoulder-pan limits; the base pose is
+  never modified.
+- Generalized Program saved-position steps to support explicit joint overrides while
+  rejecting Cartesian-linear replay when an override would make the stored TCP inconsistent.
+- Clarified that continuous trajectory recording/replay/editing remains first-class and
+  is the intended future demonstration-data path into Robo Puppeteer as well as a direct
+  deterministic motion capability.
+
 - Reframed deterministic GUI sequencing as **Programs**: users can save named positions,
   append Move/Open/Close/Custom-gripper/Wait steps, assign a per-Move speed multiplier,
   reorder the linear list, save it, and run one step or the complete program. The existing
