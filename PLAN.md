@@ -36,6 +36,8 @@ Robo Director is the primary source of cross-repository integration requirements
   and advanced recorded-motion steps.
 - [x] Shared modern kinematic status/preview cards across Manual, Teleoperation,
   Teach / Record, Edit recordings, and Programs.
+- [x] Radial shoulder-pan Program pattern generator that inherits a saved base pose and
+  overrides only shoulder pan across an inspectable series of guarded Move steps.
 
 ## Director ecosystem integration 0.2
 
@@ -47,6 +49,8 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] Add integration metadata tests.
 - [ ] Validate the Studio SO-ARM motion-platform plugin in simulation.
 - [ ] Validate the Puppeteer named-gesture embodiment in simulation.
+- [ ] Define and validate the trajectory/demo-data adapter from this SDK's recorded
+  leader/follower trajectories into Robo Puppeteer training and motion-data workflows.
 - [ ] Pass the Director cross-repository simulated-show suite.
 
 ## CLI and GUI feature parity
