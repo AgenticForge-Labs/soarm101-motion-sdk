@@ -1291,6 +1291,40 @@ class MainWindow(QMainWindow):
         simple_hint.setWordWrap(True)
         simple_hint.setStyleSheet("color: palette(mid); padding-top: 4px;")
         simple_grid.addWidget(simple_hint, 3, 0, 1, 6)
+
+        pan_box = QGroupBox("Radial / shoulder-pan pattern")
+        pan_grid = QGridLayout(pan_box)
+        pan_note = QLabel(
+            "Use the selected saved position as the base. Every generated Move keeps "
+            "shoulder lift, elbow, wrists, and gripper unchanged and varies only "
+            "shoulder pan by an offset from the saved angle."
+        )
+        pan_note.setWordWrap(True)
+        pan_grid.addWidget(pan_note, 0, 0, 1, 6)
+        pan_grid.addWidget(QLabel("Start offset"), 1, 0)
+        self.radial_pan_start_spin = self._spin(
+            -180.0, 180.0, -45.0, decimals=1, step=5.0, suffix="°"
+        )
+        pan_grid.addWidget(self.radial_pan_start_spin, 1, 1)
+        pan_grid.addWidget(QLabel("End offset"), 1, 2)
+        self.radial_pan_end_spin = self._spin(
+            -180.0, 180.0, 45.0, decimals=1, step=5.0, suffix="°"
+        )
+        pan_grid.addWidget(self.radial_pan_end_spin, 1, 3)
+        pan_grid.addWidget(QLabel("Increment"), 1, 4)
+        self.radial_pan_step_spin = self._spin(
+            0.5, 180.0, 15.0, decimals=1, step=5.0, suffix="°"
+        )
+        pan_grid.addWidget(self.radial_pan_step_spin, 1, 5)
+        self.add_radial_pan_pattern_button = QPushButton("+ Append pan pattern")
+        self.add_radial_pan_pattern_button.setToolTip(
+            "Generate ordinary guarded joint Move steps. The base saved position is "
+            "not modified and no new saved positions are created."
+        )
+        self.add_radial_pan_pattern_button.clicked.connect(self._add_radial_pan_pattern)
+        pan_grid.addWidget(self.add_radial_pan_pattern_button, 2, 0, 1, 6)
+        simple_grid.addWidget(pan_box, 4, 0, 1, 6)
+
         step_tabs.addTab(simple, "Position steps")
 
         advanced = QWidget()
