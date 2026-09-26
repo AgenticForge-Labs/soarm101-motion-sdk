@@ -13,7 +13,11 @@
   selected destination in Programs. Selecting the leader as a teaching source no longer
   replaces the primary follower model.
 - Added a broader modern Qt style pass with cleaner cards, tabs, controls, spacing,
-  rounded inputs/buttons, status chips, and a resizable task/sidebar workspace.
+  rounded inputs/buttons, status chips, and a resizable task/sidebar workspace. The
+  model/readout portion may scroll vertically on short windows while Enable hold,
+  STOP/HOLD, and Relax remain pinned at the bottom of the sidebar.
+- Renamed the follower torque-off sidebar state from **FREE** to **RELAXED** to avoid
+  confusing it with the leader's explicit FREE/PARKED teaching state.
 
 - Added a **Radial / shoulder-pan pattern** generator to Programs. It uses any selected
   saved position as a base, generates a start/end/increment series of pan offsets, and
