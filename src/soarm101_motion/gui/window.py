@@ -4003,20 +4003,16 @@ class MainWindow(QMainWindow):
             self._latest_leader_state = None
             self._leader_busy = False
             self._leader_torque_enabled = False
-            if hasattr(self, "teleop_arm_panel"):
-                self.teleop_arm_panel.clear_secondary()
+            self._refresh_sidebar_context()
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
+        self._refresh_sidebar_context()
         self._update_enabled_state()
 
     def _on_leader_state(self, state: object) -> None:
         self._latest_leader_state = dict(state)  # type: ignore[arg-type]
         self._leader_torque_enabled = bool(self._latest_leader_state.get("torque_enabled"))
-        if hasattr(self, "teleop_arm_panel"):
-            self.teleop_arm_panel.show_secondary_state(
-                self._latest_leader_state,
-                label="leader",
-            )
+        self._refresh_sidebar_context()
         self._update_teach_readout()
         self._update_enabled_state()
 
@@ -4052,24 +4048,14 @@ class MainWindow(QMainWindow):
             return
         source = str(self.teaching_source_combo.currentData())
         state = self._latest_state if source == "follower" else self._latest_leader_state
-        if hasattr(self, "teach_arm_panel"):
-            self.teach_arm_panel.set_title(
-                f"{source.title()} teaching pose",
-                "Selected source solid · saved position ghost",
-            )
         if not state:
             self.teach_source_status.setText(f"{source.title()} state unavailable")
             for label in self.teach_joint_labels.values():
                 label.setText("—")
             self.teach_gripper_label.setText("—")
             self.teach_pose_label.setText("TCP: —")
-            if hasattr(self, "teach_arm_panel"):
-                self.teach_arm_panel.clear_state(label="NO SOURCE")
-                self._preview_selected_taught_point()
+            self._refresh_sidebar_context()
             return
-        if hasattr(self, "teach_arm_panel"):
-            self.teach_arm_panel.update_state(state)
-            self._preview_selected_taught_point()
         self.teach_source_status.setText(
             f"{source.title()} connected"
             + (" — simulation" if state.get("simulation") else "")
@@ -4084,6 +4070,7 @@ class MainWindow(QMainWindow):
             f"TCP: X {pose[0]:.1f}, Y {pose[1]:.1f}, Z {pose[2]:.1f} mm\n"
             f"RPY: {pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°"
         )
+        self._refresh_sidebar_context()
 
     def _move_joints(self) -> None:
         self.move_joints_requested.emit(
@@ -4220,6 +4207,7 @@ class MainWindow(QMainWindow):
         self.connect_button.setText("Disconnect follower" if connected else "Connect follower")
         self._refresh_named_pose_status()
         self._refresh_point_list()
+        self._refresh_sidebar_context()
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
@@ -4244,6 +4232,8 @@ class MainWindow(QMainWindow):
             self.joint_actual_labels[name].setText(f"{measured[name]:.1f}°")
             if not self.edit_joint_targets_check.isChecked():
                 self.joint_spins[name].setValue(measured[name])
+        if hasattr(self, "robot_sidebar"):
+            self.robot_sidebar.update_joint_degrees(measured)
         self._update_teach_readout()
 
     def _on_state(self, state: object) -> None:
