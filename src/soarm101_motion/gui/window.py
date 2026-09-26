@@ -897,9 +897,9 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         note = QLabel(
-            "Save named positions for deterministic programs, or record continuous "
-            "movement when the path itself matters. Saved positions are usually the "
-            "simplest way to build pick/place and bench automation."
+            "Teach named positions for deterministic Programs, or record continuous "
+            "demonstration trajectories for replay, editing, and future Robo Puppeteer "
+            "motion data. Both workflows are first-class."
         )
         note.setWordWrap(True)
         left_layout.addWidget(note)
@@ -972,7 +972,7 @@ class MainWindow(QMainWindow):
         point_grid.addWidget(self.delete_point_button, 2, 3)
         left_layout.addWidget(points)
 
-        recording = QGroupBox("Continuous trajectory recording · optional")
+        recording = QGroupBox("Trajectory recording / demonstration data")
         record_grid = QGridLayout(recording)
         record_grid.addWidget(QLabel("Name"), 0, 0)
         self.recording_name_edit = QLineEdit()
@@ -986,8 +986,9 @@ class MainWindow(QMainWindow):
         self.record_button.clicked.connect(self._toggle_recording)
         record_grid.addWidget(self.record_button, 0, 3, 2, 1)
         self.recording_status = QLabel(
-            "Use recording when the path/timing itself matters. Raw recordings are "
-            "immutable; editing creates a derived trajectory."
+            "Record the complete demonstrated motion when path/timing matters or when "
+            "capturing motion data for later consumers. Raw recordings are immutable; "
+            "editing creates a derived trajectory."
         )
         self.recording_status.setWordWrap(True)
         record_grid.addWidget(self.recording_status, 2, 0, 1, 4)
@@ -1331,8 +1332,9 @@ class MainWindow(QMainWindow):
         advanced_grid = QGridLayout(advanced)
         advanced_grid.addWidget(
             QLabel(
-                "Use these only when a prerecorded path or reusable motion primitive "
-                "is more appropriate than moving between saved positions."
+                "Insert a recorded trajectory or reusable motion primitive into the "
+                "same deterministic Program. Recording/replay remains a separate "
+                "first-class workflow in Teach / Record and Edit recordings."
             ),
             0,
             0,
@@ -1350,7 +1352,7 @@ class MainWindow(QMainWindow):
         self.add_primitive_step_button = QPushButton("+ Motion primitive")
         self.add_primitive_step_button.clicked.connect(self._add_primitive_sequence_step)
         advanced_grid.addWidget(self.add_primitive_step_button, 2, 2)
-        step_tabs.addTab(advanced, "Recorded motion · advanced")
+        step_tabs.addTab(advanced, "Trajectories / primitives")
         layout.addWidget(step_tabs)
 
         program_box = QGroupBox("Program steps · top to bottom")
