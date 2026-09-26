@@ -96,6 +96,11 @@ def test_sidebar_primary_arm_remains_follower_when_teaching_from_leader(window):
     assert window.robot_sidebar.joint_value_labels["shoulder_pan"].text() == "+1.0°"
     assert window.robot_sidebar.gripper_bar.format() == "0.400"
 
+    relaxed = dict(follower)
+    relaxed["torque_enabled"] = False
+    window._on_state(relaxed)
+    assert window.robot_sidebar.status_chip.text() == "RELAXED · SIM"
+
 
 def test_position_program_builder_creates_readable_linear_steps(window):
     window.run_point_combo.addItem("pick")
