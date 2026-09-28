@@ -14,6 +14,12 @@ import numpy as np
 
 from soarm101_motion import SOARM101, SOARM101Config, __version__
 from soarm101_motion.calibration import default_calibration_path
+from soarm101_motion.camera import (
+    CameraCapture,
+    CameraSettings,
+    CameraSettingsStore,
+    discover_camera_devices,
+)
 from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, MOTOR_IDS
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
@@ -480,6 +486,65 @@ def _cmd_kinematics_check(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def _camera_settings_from_args(args: argparse.Namespace) -> CameraSettings:
+    store = CameraSettingsStore()
+    settings = store.load()
+    overrides: dict[str, object] = {}
+    for key in ("device", "width", "height", "fps", "fourcc", "snapshot_dir"):
+        value = getattr(args, key, None)
+        if value is not None:
+            overrides[key] = value
+    mirror = getattr(args, "mirror", None)
+    if mirror is not None:
+        overrides["mirror"] = bool(mirror)
+    auto_start = getattr(args, "auto_start", None)
+    if auto_start is not None:
+        overrides["auto_start"] = bool(auto_start)
+    return settings.with_overrides(**overrides) if overrides else settings
+
+
+def _cmd_camera_list(args: argparse.Namespace) -> int:
+    devices = discover_camera_devices()
+    if args.json:
+        print(json.dumps({"devices": devices}, indent=2))
+    elif devices:
+        for device in devices:
+            print(device)
+    else:
+        print("No camera devices found.")
+    return 0 if devices else 1
+
+
+def _cmd_camera_show(args: argparse.Namespace) -> int:
+    settings = CameraSettingsStore().load()
+    payload = asdict(settings)
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for key, value in payload.items():
+            print(f"{key}: {value}")
+    return 0
+
+
+def _cmd_camera_configure(args: argparse.Namespace) -> int:
+    settings = _camera_settings_from_args(args)
+    settings = CameraSettingsStore().save(settings)
+    print(json.dumps(asdict(settings), indent=2) if args.json else f"Saved camera settings for {settings.device}")
+    return 0
+
+
+def _cmd_camera_capture(args: argparse.Namespace) -> int:
+    settings = _camera_settings_from_args(args)
+    with CameraCapture(settings) as camera:
+        path, metadata = camera.snapshot(args.output)
+    if args.json:
+        print(json.dumps(metadata, indent=2))
+    else:
+        print(path)
+    return 0
+
+
 def _cmd_sim_demo(args: argparse.Namespace) -> int:
     arm = SOARM101.simulated(gui=args.gui, realtime=args.realtime)
     with arm:
@@ -668,6 +733,44 @@ def build_parser() -> argparse.ArgumentParser:
     sequence_run.add_argument("--stop-index", type=int)
     sequence_run.add_argument("--yes", action="store_true")
     sequence_run.set_defaults(func=_cmd_sequence_run)
+
+    camera = sub.add_parser("camera", help="discover, configure, and capture USB camera frames")
+    camera_sub = camera.add_subparsers(dest="camera_command", required=True)
+
+    camera_list = camera_sub.add_parser("list", help="list likely local camera devices")
+    camera_list.add_argument("--json", action="store_true")
+    camera_list.set_defaults(func=_cmd_camera_list)
+
+    camera_show = camera_sub.add_parser("show", help="show persisted camera settings")
+    camera_show.add_argument("--json", action="store_true")
+    camera_show.set_defaults(func=_cmd_camera_show)
+
+    def add_camera_settings_options(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--device", help="camera index or path, for example /dev/video0")
+        command.add_argument("--width", type=int)
+        command.add_argument("--height", type=int)
+        command.add_argument("--fps", type=float)
+        command.add_argument("--fourcc", help="four-character capture codec such as MJPG")
+        command.add_argument("--snapshot-dir")
+        mirror_group = command.add_mutually_exclusive_group()
+        mirror_group.add_argument("--mirror", dest="mirror", action="store_true")
+        mirror_group.add_argument("--no-mirror", dest="mirror", action="store_false")
+        command.set_defaults(mirror=None)
+
+    camera_configure = camera_sub.add_parser("configure", help="persist shared GUI/CLI camera settings")
+    add_camera_settings_options(camera_configure)
+    start_group = camera_configure.add_mutually_exclusive_group()
+    start_group.add_argument("--auto-start", dest="auto_start", action="store_true")
+    start_group.add_argument("--no-auto-start", dest="auto_start", action="store_false")
+    camera_configure.set_defaults(auto_start=None)
+    camera_configure.add_argument("--json", action="store_true")
+    camera_configure.set_defaults(func=_cmd_camera_configure)
+
+    camera_capture = camera_sub.add_parser("capture", help="acquire one fresh frame and save it")
+    add_camera_settings_options(camera_capture)
+    camera_capture.add_argument("--output", help="output image path; default uses snapshot_dir")
+    camera_capture.add_argument("--json", action="store_true")
+    camera_capture.set_defaults(func=_cmd_camera_capture)
 
     effort = sub.add_parser("effort", help="read session motor-effort safety status")
     effort_sub = effort.add_subparsers(dest="effort_command", required=True)
