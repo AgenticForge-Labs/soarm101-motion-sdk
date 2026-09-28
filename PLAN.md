@@ -39,6 +39,9 @@ Robo Director is the primary source of cross-repository integration requirements
   contextual ghost overlays for leader/saved/recorded/program poses.
 - [x] Radial shoulder-pan Program pattern generator that inherits a saved base pose and
   overrides only shoulder pan across an inspectable series of guarded Move steps.
+- [x] Shared USB-camera foundation with persisted device/resolution/FPS/FourCC/mirror settings,
+  one GUI-owned live stream, Camera-tab preview/settings, Teleoperation preview, and CLI
+  discovery/configuration/still capture for constrained agent loops.
 
 ## Director ecosystem integration 0.2
 
@@ -65,6 +68,7 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Add CLI trajectory recording, non-destructive editing, and primitive management.
 - [ ] Add CLI sequence and named pose library editing beyond capture/replay.
 - [ ] Add CLI effort guard configuration, peak reset, and trip clearing.
+- [x] Add CLI camera discovery, shared settings, and fresh still-frame capture.
 - [ ] Add a persistent CLI session for STOP/HOLD, pause/resume, and guarded leader-to-follower teleoperation.
 - [ ] Verify matching behavior in simulation and fake transport before hardware use.
 
@@ -80,6 +84,8 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
   leader-readout loss, gripper mirroring, and stream safety trips.
 - [ ] Validate sequence execution and edited motion primitives on hardware.
+- [ ] Validate the selected USB camera on the target workstation, confirm negotiated
+  resolution/FPS/FourCC, live GUI preview in Camera and Teleoperation, and still capture.
 - [ ] Tag the first hardware-validated alpha release.
 
 ## Later

@@ -21,6 +21,9 @@ Consumer adapters must:
 5. Claim the same `motion-platform:<id>` resource in Studio and Puppeteer.
 6. Treat `stop()` as a controlled software stop, not a certified emergency stop.
 7. Require an explicit named frame before converting an external pose into the SDK's frame-free `Pose` type.
+8. Reuse the SDK camera settings/capture surface for a directly attached bench camera rather
+   than opening the same USB device in multiple adapters. Higher-level stage calibration and
+   perception remain consumer responsibilities.
 
 ## Units and orientation
 
@@ -28,7 +31,7 @@ The SDK uses meters, radians, and seconds. `Pose.rotation` is a 3×3 rotation ma
 
 ## TCP ownership
 
-The SDK owns flange-to-active-TCP transforms used by FK, IK, and motion planning. A camera consumer may add active-TCP-to-optical-frame calibration and stage extrinsics, but it must not configure the flange transform a second time.
+The SDK owns flange-to-active-TCP transforms used by FK, IK, and motion planning. A camera consumer may add active-TCP-to-optical-frame calibration and stage extrinsics, but it must not configure the flange transform a second time. Basic USB capture is available from this SDK; calibrated scene geometry remains outside the raw capture layer.
 
 ## Puppeteer boundary
 

@@ -37,7 +37,7 @@ after any failed gate rather than continuing into later capabilities.
    `pip install -e ".[gui]"`
 2. Run:
    `soarm101-gui --simulation`
-3. Confirm the window opens with Setup, Manual, Teleoperation, Teach / Record, Edit recordings, Programs, and Log tabs.
+3. Confirm the window opens with Setup, Camera, Manual, Teleoperation, Teach / Record, Edit recordings, Programs, and Log tabs.
 4. Connect the follower simulation.
 5. Enable it, jog joints/Cartesian axes, move the gripper, and confirm STOP/HOLD and
    Relax still work. Confirm Manual has only **Joint / angular** and **Cartesian** arm
@@ -52,11 +52,14 @@ after any failed gate rather than continuing into later capabilities.
    position in Teach / Record, scrubbed recording pose in Edit recordings, and selected
    destination in Programs. Select Leader as the teaching source and verify the solid
    primary model still remains the follower.
-8. Change the gripper speed preset in Manual and confirm the same preset appears in
+8. Open Camera and confirm device, width, height, FPS, FourCC, mirror, auto-start, and
+   snapshot-folder controls are present. With no camera connected, the GUI must remain
+   responsive and show a stopped/unavailable preview rather than failing startup.
+9. Change the gripper speed preset in Manual and confirm the same preset appears in
    Teleoperation, Edit recordings, and Programs.
-9. Save the current simulated follower position as Home and Rest.
-10. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
-11. Close and reopen the GUI and confirm Home and Rest are still present.
+10. Save the current simulated follower position as Home and Rest.
+11. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
+12. Close and reopen the GUI and confirm Home and Rest are still present.
 
 ### 2. Physical follower connection — DO LATER
 
@@ -470,3 +473,22 @@ The teaching workflow is now implemented through the Run/primitive layer. Remain
 is physical validation and future optional capabilities such as Cartesian velocity
 streaming, richer mesh collision models, and show-level orchestration in the appropriate
 Robo Puppeteer/Director repositories.
+
+
+## Camera validation — workstation / hardware
+
+Camera capture is independent of powered robot motion, but it still needs local workstation
+validation because UVC devices negotiate formats differently across drivers.
+
+1. Install the GUI or camera extra and run `soarm101 camera list`.
+2. Select the intended USB camera by stable device path when available.
+3. Save 1280×720, 30 FPS, MJPG settings and run `soarm101 camera capture --json`.
+4. Confirm the saved image is fresh, correctly oriented, and reports the expected dimensions.
+5. Open the GUI Camera tab, start the shared camera, and confirm the preview remains responsive.
+6. Switch to Teleoperation and confirm the same live stream is visible there without a
+   second device open or a loss of frames in Camera.
+7. Change resolution/FPS/mirroring in Camera, Save / apply, and confirm both views update.
+8. Capture pictures from both Camera and Teleoperation and confirm they land in the same
+   configured snapshot folder.
+9. Close the GUI and verify the camera device is released so a subsequent CLI capture can open it.
+10. Only after camera capture is stable should an agent loop be given camera + motion CLI access.

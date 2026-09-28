@@ -15,7 +15,7 @@ changes require development discipline; robot use requires conservative hardware
 
 ## Development
 
-1. Keep ROS, camera capture, tracking, OBS, and show orchestration out of this repository.
+1. Keep ROS, perception/tracking, OBS, and show orchestration out of this repository. Basic USB camera discovery, configuration, live preview, and still-frame capture are first-class SDK capabilities shared by CLI and GUI.
 2. Keep LeRobot optional and reference-only; do not import it from runtime code.
 3. Treat the arm as five pose joints plus tool actuators.
 4. Never add a motion method that reports success without executing documented behavior.
@@ -26,8 +26,9 @@ changes require development discipline; robot use requires conservative hardware
 9. Treat calibration IDs as motion provenance; physical replay must fail closed on missing
    or mismatched provenance.
 10. Keep GUI and CLI features on shared SDK operations and saved libraries. The GUI may own
-    persistent hardware sessions, but it must not shell out to CLI subprocesses for robot
-    behavior.
+    persistent hardware and camera sessions, but it must not shell out to CLI subprocesses for
+    robot or camera behavior. Camera settings must have one persisted source of truth and GUI
+    views must reuse one camera session rather than competing for the same device.
 11. Preserve the distinction between planned motion and live-streaming safety. Do not weaken
     joint, step, rate, acceleration, following-error, fault, effort, calibration, or
     provenance checks merely to make a new workflow pass.
@@ -65,6 +66,7 @@ changes require development discipline; robot use requires conservative hardware
 ## Repository boundary
 
 This SDK owns SO-ARM101 motion, calibration, kinematics, tooling/TCP definitions,
-diagnostics, teaching/replay primitives, and their safety/provenance rules. Higher-level
-camera systems, perception, show control, and cross-robot orchestration belong in their
+diagnostics, teaching/replay primitives, their safety/provenance rules, and basic local USB
+camera capture used to observe the arm workspace. Higher-level perception/tracking, calibrated
+multi-camera stage systems, show control, and cross-robot orchestration belong in their
 respective AgenticForge repositories.
