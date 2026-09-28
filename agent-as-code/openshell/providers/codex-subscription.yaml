@@ -1,0 +1,28 @@
+id: agenticforge-codex-subscription
+display_name: Codex subscription bridge
+description: Placeholder-backed Codex CLI OAuth material imported from an existing host login
+category: agent
+inference_capable: true
+credentials:
+  - name: access_token
+    description: Codex OAuth access token
+    env_vars: [CODEX_AUTH_ACCESS_TOKEN]
+    required: true
+  - name: refresh_token
+    description: Codex OAuth refresh token
+    env_vars: [CODEX_AUTH_REFRESH_TOKEN]
+    required: true
+  - name: account_id
+    description: Codex account identifier
+    env_vars: [CODEX_AUTH_ACCOUNT_ID]
+    required: true
+discovery:
+  credentials: [access_token, refresh_token, account_id]
+endpoints:
+  - { host: api.openai.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+  - { host: auth.openai.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+  - { host: chatgpt.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+  - { host: ab.chatgpt.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+binaries:
+  - /usr/local/bin/codex
+  - /usr/local/lib/node_modules/@openai/**

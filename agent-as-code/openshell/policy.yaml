@@ -1,0 +1,20 @@
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /proc
+    - /dev/urandom
+    - /opt/agent-as-code
+  read_write:
+    - /workspace
+    - /tmp
+    - /dev/null
+    - /home/sandbox
+    - /opt/data
+
+landlock:
+  compatibility: hard_requirement
