@@ -11,7 +11,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +75,7 @@ class CameraSettingsStore:
         if not self.path.exists():
             return CameraSettings().validated()
         payload = json.loads(self.path.read_text(encoding="utf-8"))
-        known = {field.name for field in __import__("dataclasses").fields(CameraSettings)}
+        known = {field.name for field in fields(CameraSettings)}
         values = {key: value for key, value in payload.items() if key in known}
         return CameraSettings(**values).validated()
 
@@ -138,15 +138,15 @@ class CameraCapture:
         if not capture.isOpened():
             capture.release()
             raise RuntimeError(f"could not open camera {self.settings.device!r}")
+        capture.set(
+            cv2.CAP_PROP_FOURCC,
+            float(cv2.VideoWriter_fourcc(*self.settings.fourcc)),
+        )
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.settings.width))
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.settings.height))
         capture.set(cv2.CAP_PROP_FPS, float(self.settings.fps))
         if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        capture.set(
-            cv2.CAP_PROP_FOURCC,
-            float(cv2.VideoWriter_fourcc(*self.settings.fourcc)),
-        )
         self._capture = capture
         return self
 
