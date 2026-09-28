@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
@@ -95,11 +94,12 @@ class CameraWorker(QThread):
                 except Exception as exc:
                     capture = None
                     last_connected = False
+                    with self._lock:
+                        self._streaming = False
                     self.error_message.emit(str(exc))
                     self.status_changed.emit(
                         {"connected": False, "device": settings.device, "error": str(exc)}
                     )
-                    self.msleep(500)
                     continue
             try:
                 frame = capture.read_bgr()
@@ -120,13 +120,15 @@ class CameraWorker(QThread):
                 capture.close()
                 capture = None
                 last_connected = False
+                with self._lock:
+                    self._streaming = False
                 self.status_changed.emit(
                     {"connected": False, "device": settings.device, "error": str(exc)}
                 )
-                self.msleep(250)
                 continue
-            target_period = 1.0 / max(float(settings.fps), 1.0)
-            time.sleep(min(target_period, 0.1))
+            # VideoCapture normally blocks to the device frame cadence. Yield briefly
+            # so stop/configuration requests remain responsive without halving FPS.
+            self.msleep(1)
         if capture is not None:
             capture.close()
         if last_connected:
