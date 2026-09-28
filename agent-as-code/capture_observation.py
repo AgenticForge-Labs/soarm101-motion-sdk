@@ -58,6 +58,13 @@ def _slug(text: str) -> str:
     return value or "observation"
 
 
+def _observation_id(label: str, timestamp_ns: int | None = None) -> str:
+    value = time.time_ns() if timestamp_ns is None else int(timestamp_ns)
+    seconds, nanos = divmod(value, 1_000_000_000)
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(seconds))
+    return f"{stamp}-{nanos:09d}-{_slug(label)}"
+
+
 def _camera_command(camera: dict[str, Any], output: Path) -> list[str]:
     command = [
         "soarm101",
@@ -95,8 +102,7 @@ def _capture(setup: dict[str, Any], setup_path: Path, label: str) -> Path:
         repo_root = setup_path.resolve().parent.parent
         output_root = repo_root / output_root
 
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    observation_dir = output_root / f"{stamp}-{_slug(label)}"
+    observation_dir = output_root / _observation_id(label)
     observation_dir.mkdir(parents=True, exist_ok=False)
 
     manifest: dict[str, Any] = {
@@ -104,6 +110,7 @@ def _capture(setup: dict[str, Any], setup_path: Path, label: str) -> Path:
         "label": label,
         "setup": str(setup_path.resolve()),
         "agent": setup.get("agent", {}),
+        "agents": setup.get("agents", {}),
         "vlm": setup.get("vlm", {}),
         "robot": setup.get("robot", {}),
         "cameras": [],
