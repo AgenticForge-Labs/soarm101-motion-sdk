@@ -20,8 +20,11 @@ def test_roles_are_in_setup_tab(window):
     assert window.calibration_page.isAncestorOf(window.leader_port_combo)
     assert not window.tabs.isAncestorOf(window.stop_button)
     labels = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert labels == ["Setup", "Manual", "Teleoperation", "Teach / Record", "Edit recordings", "Programs", "Log"]
+    assert labels == ["Setup", "Camera", "Manual", "Teleoperation", "Teach / Record", "Edit recordings", "Programs", "Log"]
+    assert window.camera_page.isAncestorOf(window.camera_preview)
+    assert window.camera_page.isAncestorOf(window.camera_device_combo)
     assert window.teleop_page.isAncestorOf(window.teleop_button)
+    assert window.teleop_page.isAncestorOf(window.teleop_camera_preview)
     assert window.record_page.isAncestorOf(window.save_point_button)
     assert window.record_page.isAncestorOf(window.record_button)
 
@@ -42,6 +45,7 @@ def test_persistent_robot_sidebar_is_outside_tabs_and_shared(window):
 
     for page in (
         window.calibration_page,
+        window.camera_page,
         window.manual_page,
         window.teleop_page,
         window.record_page,
