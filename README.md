@@ -50,6 +50,17 @@ AI reasoning -> constrained robot capabilities -> motion SDK -> hardware
 
 An agent can choose a validated capability such as moving to a taught point or executing a known sequence, but it should not need unrestricted raw motor access. It can acquire fresh camera frames through the same SDK/CLI surface, reason about them externally, and then request another constrained motion. The SDK remains responsible for motion validation, calibration context, hardware safety checks, and deterministic camera acquisition; perception and task reasoning remain above the SDK.
 
+### Agent-as-code experiment
+
+The [`agent-as-code/`](agent-as-code/) project is a deliberately small, model-agnostic
+observe-reason-act scaffold for comparing arbitrary agents and VLMs on physical tasks. It
+uses the public CLI rather than a second robot-control implementation. Its machine-local
+setup names exactly one primary task camera and may add any number of auxiliary USB webcams;
+the observation helper captures each view through `soarm101 camera capture` and presents
+the primary view first. `agent-as-code/AGENTS.md` and `agent-as-code/CLI.md` provide the
+operating contract an agent needs without coupling the experiment to MCP or a specific
+provider.
+
 ## Get started
 
 ### Install
