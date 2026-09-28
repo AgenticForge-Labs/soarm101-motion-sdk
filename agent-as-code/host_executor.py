@@ -10,6 +10,7 @@ import math
 import secrets
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -72,6 +73,16 @@ def load_setup(path: Path) -> dict[str, Any]:
         raise ValueError("setup.robot.port is required")
     if not str(robot.get("robot_id", "")).strip():
         raise ValueError("setup.robot.robot_id is required")
+
+    executor = setup.get("executor", {})
+    if not isinstance(executor, dict):
+        raise ValueError("setup.executor must be an object")
+    configured_port = int(executor.get("port", DEFAULT_PORT))
+    if configured_port != DEFAULT_PORT:
+        raise ValueError(
+            f"setup.executor.port must currently be {DEFAULT_PORT}; "
+            "the OpenShell robot provider is intentionally fixed to that local endpoint"
+        )
     return setup
 
 
@@ -201,16 +212,20 @@ class RobotExecutor:
         self.setup = load_setup(self.setup_path)
         self.limits = limits_from_setup(self.setup)
         self.token = token
+        # ThreadingHTTPServer may receive concurrent tool calls. Physical/camera access
+        # is deliberately single-owner so two requests cannot race the serial or USB stack.
+        self._io_lock = threading.Lock()
 
     def _run(self, args: list[str]) -> dict[str, Any]:
         command = ["soarm101", *args]
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=self.limits.command_timeout_seconds,
-        )
+        with self._io_lock:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.limits.command_timeout_seconds,
+            )
         result: dict[str, Any] = {
             "ok": completed.returncode == 0,
             "returncode": completed.returncode,
@@ -292,28 +307,29 @@ class RobotExecutor:
         if unknown:
             raise RequestError(f"unknown observe fields: {', '.join(unknown)}")
         label = str(payload.get("label", "observation"))
-        manifest_path = capture_observation._capture(self.setup, self.setup_path, label)
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        total = 0
-        cameras: list[dict[str, Any]] = []
-        for camera in manifest["cameras"]:
-            image_path = Path(camera["path"])
-            data = image_path.read_bytes()
-            total += len(data)
-            if total > self.limits.max_observation_bytes:
-                raise RuntimeError(
-                    f"observation images exceed {self.limits.max_observation_bytes} bytes"
+        with self._io_lock:
+            manifest_path = capture_observation._capture(self.setup, self.setup_path, label)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            total = 0
+            cameras: list[dict[str, Any]] = []
+            for camera in manifest["cameras"]:
+                image_path = Path(camera["path"])
+                data = image_path.read_bytes()
+                total += len(data)
+                if total > self.limits.max_observation_bytes:
+                    raise RuntimeError(
+                        f"observation images exceed {self.limits.max_observation_bytes} bytes"
+                    )
+                cameras.append(
+                    {
+                        "name": camera["name"],
+                        "primary": camera["primary"],
+                        "metadata": camera.get("metadata", {}),
+                        "filename": image_path.name,
+                        "media_type": "image/jpeg",
+                        "data_base64": base64.b64encode(data).decode("ascii"),
+                    }
                 )
-            cameras.append(
-                {
-                    "name": camera["name"],
-                    "primary": camera["primary"],
-                    "metadata": camera.get("metadata", {}),
-                    "filename": image_path.name,
-                    "media_type": "image/jpeg",
-                    "data_base64": base64.b64encode(data).decode("ascii"),
-                }
-            )
         return {
             "ok": True,
             "observation_id": manifest_path.parent.name,
