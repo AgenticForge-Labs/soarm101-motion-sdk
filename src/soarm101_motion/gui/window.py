@@ -7,7 +7,7 @@ from math import ceil, degrees, radians
 from typing import Any
 
 from PySide6.QtCore import QMetaObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from soarm101_motion.calibration import SO101Calibration, default_calibration_path
+from soarm101_motion.camera import CameraSettingsStore, discover_camera_devices
 from soarm101_motion.calibration_live import (
     PROVISIONAL_MINIMUM_TRAVEL_TICKS,
     display_travel_targets,
@@ -46,6 +47,7 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
+from soarm101_motion.gui.camera_worker import CameraWorker
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
@@ -156,6 +158,9 @@ class MainWindow(QMainWindow):
         self._coordination_gripper_checks: list[QCheckBox] = []
         self._sync_include_gripper = True
         self._sync_capture_pending: str | None = None
+        self._camera_store = CameraSettingsStore()
+        self._camera_settings = self._camera_store.load()
+        self._camera_connected = False
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -247,6 +252,13 @@ class MainWindow(QMainWindow):
         self._leader_worker.measured_pose_captured.connect(self._on_measured_pose_captured)
 
         self._build_ui(port=port, robot_id=robot_id, simulation=simulation)
+        self._camera_worker = CameraWorker(self._camera_settings)
+        self._camera_worker.frame_ready.connect(self._on_camera_frame)
+        self._camera_worker.status_changed.connect(self._on_camera_status)
+        self._camera_worker.error_message.connect(self._on_camera_error)
+        self._camera_worker.snapshot_saved.connect(self._on_camera_snapshot_saved)
+        if self._camera_settings.auto_start:
+            self._camera_worker.start_stream()
         self._thread.start()
         self._leader_thread.start()
         self._refresh_ports()
@@ -368,12 +380,14 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         # Build in dependency order, then display in task order.
         self.calibration_page = self._build_setup_tab()
+        self.camera_page = self._build_camera_tab()
         self.manual_page = self._build_control_tab()
         self.teleop_page = self._build_teleop_tab()
         self.record_page = self._build_teach_tab()
         self.trajectory_page = self._build_trajectory_tab()
         self.run_page = self._build_run_tab()
         self.tabs.addTab(self.calibration_page, "Setup")
+        self.tabs.addTab(self.camera_page, "Camera")
         self.tabs.addTab(self.manual_page, "Manual")
         self.tabs.addTab(self.teleop_page, "Teleoperation")
         self.tabs.addTab(self.record_page, "Teach / Record")
@@ -499,6 +513,14 @@ class MainWindow(QMainWindow):
             panel.set_context(
                 "Setup and calibration. The solid arm remains the follower's live "
                 "measured state whenever it is connected."
+            )
+            return
+
+        if page is self.camera_page:
+            self.sidebar_mode_label.setText("CAMERA")
+            panel.set_context(
+                "Camera configuration and capture. Camera settings are shared with "
+                "Teleoperation, CLI capture, and higher-level agent workflows."
             )
             return
 
@@ -1053,6 +1075,231 @@ class MainWindow(QMainWindow):
         grid.setRowStretch(5, 1)
         return leader
 
+    def _new_camera_preview_label(self, *, minimum_height: int = 240) -> QLabel:
+        preview = QLabel("Camera preview is stopped.")
+        preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.setMinimumHeight(minimum_height)
+        preview.setStyleSheet(
+            "background: #111827; color: #d1d5db; border-radius: 10px; padding: 8px;"
+        )
+        return preview
+
+    def _build_camera_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(9)
+
+        settings_box = QGroupBox("Shared USB camera")
+        grid = QGridLayout(settings_box)
+
+        grid.addWidget(QLabel("Device"), 0, 0)
+        self.camera_device_combo = QComboBox()
+        self.camera_device_combo.setEditable(True)
+        self.camera_device_combo.addItem(self._camera_settings.device)
+        grid.addWidget(self.camera_device_combo, 0, 1, 1, 3)
+        self.camera_refresh_button = QPushButton("Find cameras")
+        self.camera_refresh_button.clicked.connect(self._refresh_camera_devices)
+        grid.addWidget(self.camera_refresh_button, 0, 4)
+
+        grid.addWidget(QLabel("Width"), 1, 0)
+        self.camera_width_spin = QSpinBox()
+        self.camera_width_spin.setRange(160, 7680)
+        self.camera_width_spin.setValue(self._camera_settings.width)
+        grid.addWidget(self.camera_width_spin, 1, 1)
+
+        grid.addWidget(QLabel("Height"), 1, 2)
+        self.camera_height_spin = QSpinBox()
+        self.camera_height_spin.setRange(120, 4320)
+        self.camera_height_spin.setValue(self._camera_settings.height)
+        grid.addWidget(self.camera_height_spin, 1, 3)
+
+        grid.addWidget(QLabel("FPS"), 2, 0)
+        self.camera_fps_spin = QDoubleSpinBox()
+        self.camera_fps_spin.setRange(1.0, 240.0)
+        self.camera_fps_spin.setDecimals(1)
+        self.camera_fps_spin.setValue(self._camera_settings.fps)
+        grid.addWidget(self.camera_fps_spin, 2, 1)
+
+        grid.addWidget(QLabel("FourCC"), 2, 2)
+        self.camera_fourcc_edit = QLineEdit(self._camera_settings.fourcc)
+        self.camera_fourcc_edit.setMaxLength(4)
+        grid.addWidget(self.camera_fourcc_edit, 2, 3)
+
+        self.camera_mirror_check = QCheckBox("Mirror preview/captures horizontally")
+        self.camera_mirror_check.setChecked(self._camera_settings.mirror)
+        grid.addWidget(self.camera_mirror_check, 3, 0, 1, 3)
+
+        self.camera_auto_start_check = QCheckBox("Start camera automatically with GUI")
+        self.camera_auto_start_check.setChecked(self._camera_settings.auto_start)
+        grid.addWidget(self.camera_auto_start_check, 3, 3, 1, 2)
+
+        grid.addWidget(QLabel("Snapshot folder"), 4, 0)
+        self.camera_snapshot_dir_edit = QLineEdit(self._camera_settings.snapshot_dir)
+        grid.addWidget(self.camera_snapshot_dir_edit, 4, 1, 1, 4)
+
+        self.camera_apply_button = QPushButton("Save / apply settings")
+        self.camera_apply_button.clicked.connect(self._apply_camera_settings)
+        grid.addWidget(self.camera_apply_button, 5, 0, 1, 2)
+
+        self.camera_toggle_button = QPushButton("Start camera")
+        self.camera_toggle_button.clicked.connect(self._toggle_camera_stream)
+        grid.addWidget(self.camera_toggle_button, 5, 2)
+
+        self.camera_capture_button = QPushButton("Capture picture")
+        self.camera_capture_button.clicked.connect(self._capture_camera_frame)
+        grid.addWidget(self.camera_capture_button, 5, 3, 1, 2)
+
+        self.camera_status = QLabel(
+            f"Stopped · {self._camera_settings.device} · "
+            f"{self._camera_settings.width}×{self._camera_settings.height} "
+            f"@ {self._camera_settings.fps:g} FPS"
+        )
+        self.camera_status.setWordWrap(True)
+        grid.addWidget(self.camera_status, 6, 0, 1, 5)
+        layout.addWidget(settings_box)
+
+        self.camera_preview = self._new_camera_preview_label(minimum_height=420)
+        layout.addWidget(self.camera_preview, 1)
+
+        note = QLabel(
+            "This tab owns camera configuration for the application. Teleoperation "
+            "shows the same live session, and CLI camera capture reads the same persisted settings."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        return page
+
+    def _refresh_camera_devices(self) -> None:
+        current = self.camera_device_combo.currentText().strip()
+        try:
+            devices = discover_camera_devices()
+        except Exception as exc:
+            self._on_camera_error(str(exc))
+            return
+        self.camera_device_combo.clear()
+        for device in devices:
+            self.camera_device_combo.addItem(device)
+        if current and self.camera_device_combo.findText(current) < 0:
+            self.camera_device_combo.addItem(current)
+        if current:
+            self.camera_device_combo.setCurrentText(current)
+        if not devices:
+            self.camera_status.setText("No camera devices found; enter a device path or index manually.")
+
+    def _camera_settings_from_controls(self):
+        return self._camera_settings.with_overrides(
+            device=self.camera_device_combo.currentText().strip(),
+            width=self.camera_width_spin.value(),
+            height=self.camera_height_spin.value(),
+            fps=self.camera_fps_spin.value(),
+            fourcc=self.camera_fourcc_edit.text().strip(),
+            mirror=self.camera_mirror_check.isChecked(),
+            auto_start=self.camera_auto_start_check.isChecked(),
+            snapshot_dir=self.camera_snapshot_dir_edit.text().strip(),
+        )
+
+    def _apply_camera_settings(self) -> None:
+        try:
+            settings = self._camera_settings_from_controls()
+            self._camera_settings = self._camera_store.save(settings)
+            self._camera_worker.configure(settings)
+        except Exception as exc:
+            self._on_camera_error(str(exc))
+            return
+        self.camera_status.setText(
+            f"Settings saved · {settings.device} · {settings.width}×{settings.height} "
+            f"@ {settings.fps:g} FPS · {settings.fourcc}"
+        )
+        self._log(f"Camera settings saved: {settings.device}")
+
+    def _toggle_camera_stream(self) -> None:
+        if self._camera_connected:
+            self._camera_worker.stop_stream()
+            return
+        self._apply_camera_settings()
+        self._camera_worker.start_stream()
+        self.camera_status.setText(f"Opening camera {self._camera_settings.device}…")
+
+    def _capture_camera_frame(self) -> None:
+        if not self._camera_connected:
+            self._apply_camera_settings()
+            self._camera_worker.request_snapshot()
+            self._camera_worker.start_stream()
+            self.camera_status.setText(
+                f"Opening {self._camera_settings.device} and capturing a fresh frame…"
+            )
+            return
+        self._camera_worker.request_snapshot()
+
+    @Slot(object)
+    def _on_camera_frame(self, image: object) -> None:
+        if not hasattr(image, "isNull") or image.isNull():
+            return
+        pixmap = QPixmap.fromImage(image)
+        for preview in (
+            getattr(self, "camera_preview", None),
+            getattr(self, "teleop_camera_preview", None),
+        ):
+            if preview is None:
+                continue
+            scaled = pixmap.scaled(
+                max(preview.width(), 1),
+                max(preview.height(), 1),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            preview.setPixmap(scaled)
+
+    @Slot(object)
+    def _on_camera_status(self, status: object) -> None:
+        values = dict(status)
+        self._camera_connected = bool(values.get("connected"))
+        if self._camera_connected:
+            text = (
+                f"Live · {values.get('device', self._camera_settings.device)} · "
+                f"{values.get('width', '?')}×{values.get('height', '?')} "
+                f"@ {float(values.get('fps', 0.0)):.1f} FPS"
+            )
+        else:
+            text = f"Stopped · {values.get('device', self._camera_settings.device)}"
+            error = values.get("error")
+            if error:
+                text += f" · {error}"
+        if hasattr(self, "camera_status"):
+            self.camera_status.setText(text)
+            self.camera_toggle_button.setText("Stop camera" if self._camera_connected else "Start camera")
+        if hasattr(self, "teleop_camera_status"):
+            self.teleop_camera_status.setText(text)
+            self.teleop_camera_toggle_button.setText(
+                "Stop camera" if self._camera_connected else "Start camera"
+            )
+        if not self._camera_connected:
+            for preview in (
+                getattr(self, "camera_preview", None),
+                getattr(self, "teleop_camera_preview", None),
+            ):
+                if preview is not None:
+                    preview.clear()
+                    preview.setText("Camera preview is stopped.")
+
+    @Slot(str)
+    def _on_camera_error(self, message: str) -> None:
+        if hasattr(self, "camera_status"):
+            self.camera_status.setText(f"Camera error: {message}")
+        if hasattr(self, "teleop_camera_status"):
+            self.teleop_camera_status.setText(f"Camera error: {message}")
+        if hasattr(self, "log"):
+            self._log(f"Camera: {message}")
+
+    @Slot(str)
+    def _on_camera_snapshot_saved(self, path: str) -> None:
+        if hasattr(self, "camera_status"):
+            self.camera_status.setText(f"Captured picture: {path}")
+        if hasattr(self, "teleop_camera_status"):
+            self.teleop_camera_status.setText(f"Captured picture: {path}")
+        self._log(f"Camera picture saved: {path}")
+
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1113,6 +1360,28 @@ class MainWindow(QMainWindow):
         self.teleop_status.setWordWrap(True)
         teleop_grid.addWidget(self.teleop_status, 2, 0, 1, 6)
         left_layout.addWidget(teleop)
+
+        camera_box = QGroupBox("Live camera")
+        camera_layout = QVBoxLayout(camera_box)
+        self.teleop_camera_preview = self._new_camera_preview_label(minimum_height=260)
+        camera_layout.addWidget(self.teleop_camera_preview)
+        camera_controls = QHBoxLayout()
+        self.teleop_camera_status = QLabel(
+            f"Stopped · shared settings: {self._camera_settings.device}"
+        )
+        self.teleop_camera_status.setWordWrap(True)
+        camera_controls.addWidget(self.teleop_camera_status, 1)
+        self.teleop_camera_toggle_button = QPushButton("Start camera")
+        self.teleop_camera_toggle_button.clicked.connect(self._toggle_camera_stream)
+        camera_controls.addWidget(self.teleop_camera_toggle_button)
+        teleop_capture_button = QPushButton("Capture picture")
+        teleop_capture_button.clicked.connect(self._capture_camera_frame)
+        camera_controls.addWidget(teleop_capture_button)
+        camera_layout.addLayout(camera_controls)
+        camera_note = QLabel("Configure device, resolution, FPS, mirroring, and capture folder in Camera.")
+        camera_note.setWordWrap(True)
+        camera_layout.addWidget(camera_note)
+        left_layout.addWidget(camera_box)
 
         self.teleop_readout = QLabel("Connect both arms to see live measurements.")
         self.teleop_readout.setTextFormat(Qt.TextFormat.PlainText)
@@ -4748,6 +5017,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
+            if hasattr(self, "_camera_worker"):
+                self._camera_worker.shutdown()
             if self._active_calibration_target is not None:
                 # A sweep blocks its worker event loop, so request rollback
                 # before waiting for the queued shutdown slot.
