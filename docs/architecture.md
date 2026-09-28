@@ -4,13 +4,14 @@ Dependency direction is strict:
 
 ```text
 applications -> SOARM101 -> motion/kinematics/tools -> backend -> Feetech transport
+applications -> CameraCapture -> OpenCV -> local USB/UVC camera
 ```
 
 Rules:
 
-- Camera capture, tracking, OBS, and show orchestration remain outside this repository.
+- Basic local USB-camera discovery, persisted capture settings, live preview, and still-frame capture are owned here so CLI, GUI, and constrained agents share one deterministic observation surface.
 - The arm has five pose joints. The stock motor-6 gripper is an `SO101Gripper` tool.
-- Tools define motion-relevant TCP transforms; camera operation belongs in Robo Cam.
+- Tools define motion-relevant TCP transforms. Tool/stage camera extrinsics, perception, tracking, OBS, and show-level capture orchestration remain higher-level concerns; this repository only owns the basic camera device session and raw frames.
 - No LeRobot import exists in the runtime package.
 - Hardware and simulation implement the same backend contract.
 - Cartesian paths are validated before execution.
@@ -26,3 +27,18 @@ Rules:
   overlays are visualization only and never authorize or execute motion.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
+
+
+## Camera session boundary
+
+Camera settings are persisted once and consumed by both CLI and GUI. The GUI owns at most
+one live camera session and fans frames out to Camera and Teleoperation views. A view must
+never open the same device independently. CLI commands may open the device for a short-lived
+capture when the GUI is not already using it.
+
+The camera layer deliberately stops at raw observation: it does not identify objects, infer
+task state, plan motion, or bypass motion safety. Agentic loops should remain:
+
+```text
+camera observation -> AI reasoning -> constrained motion command -> validated SDK -> hardware
+```
