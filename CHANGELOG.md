@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added first-class local USB camera support shared across SDK, CLI, and GUI. Camera settings
+  persist once for device, resolution, FPS, FourCC, mirroring, auto-start, and snapshot folder.
+- Added a dedicated Camera tab with live preview, start/stop, device discovery, settings, and
+  still capture. Teleoperation now embeds the same live stream and can capture a still without
+  opening a second camera session.
+- Added `soarm101 camera list`, `camera show`, `camera configure`, and `camera capture`
+  for constrained agent observation loops. The camera layer returns raw frames only; perception
+  and task reasoning remain outside the SDK.
+
 - Replaced duplicated per-tab arm cards with one persistent **right-hand follower sidebar**
   outside the tab widget. It remains visible in Setup, Manual, Teleoperation, Teach /
   Record, Edit recordings, Programs, and Log.
