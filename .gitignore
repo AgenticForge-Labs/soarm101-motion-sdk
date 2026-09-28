@@ -10,3 +10,6 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+
+# Local uv resolver state for this library package; not a source artifact.
+uv.lock
