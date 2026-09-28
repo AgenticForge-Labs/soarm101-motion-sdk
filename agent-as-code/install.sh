@@ -22,17 +22,26 @@ need python3
 need curl
 need systemctl
 
-if ! command -v uv >/dev/null 2>&1; then
-    die "uv is required for this repository. Install it first: https://docs.astral.sh/uv/"
-fi
-
 say "Checking Docker"
 docker info >/dev/null 2>&1 || die "Docker is installed but not usable by this user"
+DOCKER_SERVER_VERSION="$(docker version --format '{{.Server.Version}}')"
+DOCKER_MAJOR="${DOCKER_SERVER_VERSION%%.*}"
+[[ "$DOCKER_MAJOR" =~ ^[0-9]+$ ]] || die "could not parse Docker server version: $DOCKER_SERVER_VERSION"
+(( DOCKER_MAJOR >= 28 )) || die "NVIDIA OpenShell requires Docker Engine 28+; found $DOCKER_SERVER_VERSION"
+
+say "Installing/checking uv"
+if ! command -v uv >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+command -v uv >/dev/null 2>&1 || die "uv installation completed but uv is not on PATH"
 
 say "Installing/checking NVIDIA OpenShell"
 if ! command -v openshell >/dev/null 2>&1; then
     curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
 fi
+command -v openshell >/dev/null 2>&1 || die "OpenShell installation completed but openshell is not on PATH"
 openshell status
 
 say "Installing Motion SDK + camera dependencies"
@@ -43,6 +52,14 @@ if [[ ! -f "$SETUP_FILE" ]]; then
     cp "${SCRIPT_DIR}/setup.example.json" "$SETUP_FILE"
     printf "Created %s. Edit the robot and camera device paths before a physical run.\n" "$SETUP_FILE"
 fi
+
+SETUP_PORT="$(python3 - "$SETUP_FILE" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+print(int((p.get("executor") or {}).get("port", 8765)))
+PY
+)"
+[[ "$SETUP_PORT" == "$EXECUTOR_PORT" ]] || die "setup.executor.port must remain $EXECUTOR_PORT for the current OpenShell provider"
 
 say "Creating robot-executor credential"
 mkdir -p "$SECRETS_DIR"
@@ -71,7 +88,6 @@ mkdir -p "$SERVICE_DIR"
 cat >"$SERVICE_FILE" <<EOF
 [Unit]
 Description=AgenticForge constrained robot executor
-After=docker.service
 
 [Service]
 Type=simple
