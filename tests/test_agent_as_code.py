@@ -163,3 +163,59 @@ def test_agent_as_code_shell_scripts_parse() -> None:
     for script in scripts:
         subprocess.run(["bash", "-n", str(script)], check=True)
         assert os.access(script, os.X_OK), f"{script} should be executable"
+
+
+def test_observation_ids_are_unique_within_one_second() -> None:
+    first = __import__("capture_observation")._observation_id("same", 1_700_000_000_000_000_001)
+    second = __import__("capture_observation")._observation_id("same", 1_700_000_000_000_000_002)
+    assert first != second
+    assert first.endswith("-same")
+
+
+def test_executor_rejects_nonstandard_provider_port(tmp_path: Path) -> None:
+    setup = _setup()
+    setup["executor"]["port"] = 9999  # type: ignore[index]
+    path = tmp_path / "setup.json"
+    path.write_text(json.dumps(setup), encoding="utf-8")
+    with pytest.raises(ValueError, match="must currently be 8765"):
+        host_executor.load_setup(path)
+
+
+def test_executor_serializes_cli_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    setup = _setup()
+    setup["executor"]["port"] = 8765  # type: ignore[index]
+    path = tmp_path / "setup.json"
+    path.write_text(json.dumps(setup), encoding="utf-8")
+    executor = host_executor.RobotExecutor(path, "x" * 48)
+
+    active = 0
+    peak = 0
+    guard = threading.Lock()
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def fake_run(*args: object, **kwargs: object) -> Completed:
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.03)
+        with guard:
+            active -= 1
+        return Completed()
+
+    monkeypatch.setattr(host_executor.subprocess, "run", fake_run)
+
+    workers = [
+        threading.Thread(target=executor.state),
+        threading.Thread(target=executor.diagnose),
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+
+    assert peak == 1
