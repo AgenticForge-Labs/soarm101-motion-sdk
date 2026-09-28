@@ -2,7 +2,7 @@
 
 **A Python-first way to learn, teach, program, and automate the SO-ARM101.**
 
-Low-cost arms make robotics hardware much more accessible, but there is still a gap between assembling an arm and programming it to do useful work. The SO-ARM101 Motion SDK is intended to fill that gap with a lighter, fundamentals-first environment built around a shared Python motion system, desktop GUI, and CLI.
+Low-cost arms make robotics hardware much more accessible, but there is still a gap between assembling an arm and programming it to do useful work. The SO-ARM101 Motion SDK is intended to fill that gap with a lighter, fundamentals-first environment built around a shared Python motion system, USB-camera observation layer, desktop GUI, and CLI.
 
 The project follows a simple progression:
 
@@ -21,7 +21,8 @@ You can begin visually, learn how the robot actually moves, teach useful positio
 - **Go beyond servo angles.** The SDK includes forward and inverse kinematics plus Cartesian motion planning, providing a natural path from understanding individual joints to working in terms of tool position and linear movement in space. The desktop GUI now keeps one persistent right-hand robot sidebar visible across every tab. Its solid arm is always the live follower when connected, with current joints, TCP position/orientation, gripper, torque/motion/fault state, and always-available hold/stop/relax controls. Tabs add context only as ghost overlays: Teleoperation can show the leader, Teach a saved position, Edit recordings the scrubbed trajectory pose, and Programs the selected destination. The view can be rotated by dragging and reset with a double-click.
 - **Calibration you can see and understand.** Guided mechanical-stop calibration visualizes two complete traversals for every joint and the gripper. Discovery verifies the SO-101 servo bus and uses measured voltage as a clue for distinguishing a typical low-voltage leader from the powered follower, while still requiring the user to confirm the hardware.
 - **Safety and provenance live below the application layer.** Motion requests remain subject to calibration, joint, rate, acceleration, following-error, fault, effort, and other guards. Calibrations are versioned, and saved physical motion artifacts can be bound to the calibration under which they were created so stale motion can fail closed after a hardware or calibration change.
-- **GUI, CLI, and Python share the same foundation.** The desktop application is not a separate toy controller. The interfaces reuse the same SDK operations and saved libraries, making it possible to start visually and transition naturally to scripting and automation.
+- **GUI, CLI, and Python share the same foundation.** The desktop application is not a separate toy controller. The interfaces reuse the same SDK operations, saved libraries, and camera settings, making it possible to start visually and transition naturally to scripting and automation.
+- **One camera session, several consumers.** Basic USB-camera discovery, configuration, live preview, and still capture are built into the SDK. The Camera tab owns the settings; Teleoperation shows the same live stream, and CLI capture reads the same persisted configuration for agent loops.
 - **Useful before AI, ready for AI.** Many automation tasks are deterministic: move to a known position, operate a tool, wait, move somewhere else, and repeat. The SDK makes those reliable capabilities useful on their own while also providing a constrained layer that higher-level AI systems can call.
 - **A small platform for serious robotics concepts.** Calibration, coordinate systems, FK/IK, Cartesian motion, trajectory generation, teleoperation, motion recording, and sequence programming can all be explored on an inexpensive desktop arm. That makes the project useful for education, research prototyping, laboratories, small-business automation, and agentic robotics experiments.
 
@@ -38,6 +39,7 @@ person             -> GUI               -> SDK -> hardware
 script             -> Python SDK        -> hardware
 automation service -> SDK               -> hardware
 agent              -> constrained tools -> SDK -> hardware
+agent              -> camera capture    -> fresh observation
 ```
 
 For agentic robotics, the intended architecture is:
@@ -46,7 +48,7 @@ For agentic robotics, the intended architecture is:
 AI reasoning -> constrained robot capabilities -> motion SDK -> hardware
 ```
 
-An agent can choose a validated capability such as moving to a taught point or executing a known sequence, but it should not need unrestricted raw motor access. The SDK remains responsible for motion validation, calibration context, and hardware safety checks.
+An agent can choose a validated capability such as moving to a taught point or executing a known sequence, but it should not need unrestricted raw motor access. It can acquire fresh camera frames through the same SDK/CLI surface, reason about them externally, and then request another constrained motion. The SDK remains responsible for motion validation, calibration context, hardware safety checks, and deterministic camera acquisition; perception and task reasoning remain above the SDK.
 
 ## Get started
 
@@ -66,7 +68,7 @@ python -m pip install --upgrade pip
 pip install -e ".[gui]"
 ```
 
-The `gui` extra installs PySide6. If you only need the SDK and CLI, use `pip install -e .` instead. Optional visual simulation:
+The `gui` extra installs PySide6 plus the camera capture dependency so live preview works out of the box. If you only need the motion SDK and CLI, use `pip install -e .` instead. For CLI camera capture without the desktop GUI, install `pip install -e ".[camera]"`. Optional visual simulation:
 
 ```bash
 pip install -e ".[simulation]"  # PyBullet visual simulation
@@ -113,8 +115,9 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 | Tab | What you can do |
 | --- | --- |
 | **Setup** | Find and connect the leader and follower, calibrate either arm, save Home and Rest, and inspect motor status. |
+| **Camera** | Choose the USB camera, set resolution/FPS/FourCC/mirroring, select the snapshot folder, start/stop the shared stream, and capture still images. |
 | **Manual** | Read current joint positions, switch between angular and Cartesian arm control, keep the gripper tool visible in either mode, park/release the leader, and hand poses between leader and follower. |
-| **Teleoperation** | Move the leader by hand, align the follower or relink the two current poses with no motion, and transfer to Manual while parking the leader. |
+| **Teleoperation** | Move the leader by hand, align the follower or relink the two current poses with no motion, watch the shared live camera feed, capture a picture, and transfer to Manual while parking the leader. |
 | **Teach / Record** | Save named positions from the follower or leader, or record continuous demonstration trajectories for replay/editing and future Robo Puppeteer motion data. |
 | **Edit recordings** | Review and adjust recorded motions with a scrubbed kinematic preview. |
 | **Programs** | Build and run linear programs from saved positions, gripper actions, waits, and optional recorded-motion steps. |
@@ -143,6 +146,11 @@ soarm101 pose go home --port /dev/ttyACM0 --robot-id so101 --yes
 
 # Operate the stock gripper
 soarm101 gripper --port /dev/ttyACM0 --robot-id so101 open --yes
+
+# Discover and configure a USB camera, then acquire one fresh observation
+soarm101 camera list
+soarm101 camera configure --device /dev/video0 --width 1280 --height 720 --fps 30 --fourcc MJPG
+soarm101 camera capture --json
 ```
 
 Run `soarm101 --help` or `soarm101 <command> --help` for more commands and options. The Python SDK is the programmatic motion interface, and the CLI exposes setup, diagnostics, guarded motion, saved poses, trajectory playback, and sequence playback. These interfaces make the same motion capabilities available to scripts and agentic applications. The GUI currently provides the authoring workflow for recording, editing, and live leader-to-follower teleoperation; CLI coverage for those workflows is still developing.
@@ -170,7 +178,7 @@ This is experimental software for a low-cost educational and hobby arm, not a ce
 
 Simulation and fake-transport tests cover the motion and hardware interfaces. Physical behavior depends on the specific arm, assembly, calibration, power supply, and payload; test cautiously before relying on a movement or saved trajectory. Leader parking and cross-arm pose matching enable torque and can move a physical arm; treat them as powered-motion operations even though the leader is normally back-drivable with torque off.
 
-The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, deterministic sequence programming, simulation, and an optional PySide6 GUI. ROS, camera capture, tracking, and show orchestration are outside this project. The SDK is intended to remain the constrained motion layer beneath those higher-level systems. See [Architecture](docs/architecture.md) for the boundaries.
+The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, deterministic sequence programming, simulation, basic local USB-camera capture, and an optional PySide6 GUI. Higher-level perception/tracking, calibrated multi-camera stage systems, ROS integration, and show orchestration remain outside this project. The SDK is intended to provide constrained motion plus a deterministic local observation surface beneath those higher-level systems. See [Architecture](docs/architecture.md) and [Camera](docs/camera.md) for the boundaries.
 
 ### Where we want to go
 
@@ -190,6 +198,7 @@ Open an issue or pull request on [GitHub](https://github.com/AgenticForge-Labs/s
 - [Kinematics](docs/kinematics.md)
 - [Programs and saved positions](docs/programs.md)
 - [Simulation](docs/simulation.md)
+- [Camera](docs/camera.md)
 - [Validation](docs/validation.md)
 - [Architecture](docs/architecture.md)
 - [Development plan](PLAN.md)
