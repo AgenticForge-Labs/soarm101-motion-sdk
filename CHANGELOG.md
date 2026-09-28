@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added `agent-as-code/`, a provider-neutral physical-agent experiment scaffold with
+  agent-facing CLI instructions, machine-local robot/camera setup, one required primary
+  task camera, arbitrary auxiliary USB cameras, and a multi-view observation helper.
+- Added hardware-free setup validation coverage for primary-camera selection and ordering.
+
 - Added first-class local USB camera support shared across SDK, CLI, and GUI. Camera settings
   persist once for device, resolution, FPS, FourCC, mirroring, auto-start, and snapshot folder.
 - Added a dedicated Camera tab with live preview, start/stop, device discovery, settings, and
