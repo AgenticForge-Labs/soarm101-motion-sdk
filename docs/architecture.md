@@ -42,3 +42,35 @@ task state, plan motion, or bypass motion safety. Agentic loops should remain:
 ```text
 camera observation -> AI reasoning -> constrained motion command -> validated SDK -> hardware
 ```
+
+
+## Agent-as-code sandbox boundary
+
+The physical-agent benchmark adds a higher-level containment layer without moving hardware
+ownership out of this SDK:
+
+```text
+Codex / Hermes / future agent
+        ↓
+NVIDIA OpenShell sandbox
+        ↓
+robotctl constrained client
+        ↓ authenticated endpoint-bound request
+host robot executor
+        ↓
+public soarm101 CLI
+        ↓
+Motion SDK / CameraCapture
+        ↓
+SO-ARM101 + local USB cameras
+```
+
+The sandbox never receives raw serial or USB camera devices. The host executor owns the
+machine-specific setup and exposes only observation, read-only state/diagnostics, bounded
+relative Cartesian jogs, and gripper commands. It does not implement motion itself; every
+physical request is translated into the existing CLI/SDK so calibration, path validation,
+provenance, following-error, fault, effort, and other guards remain authoritative.
+
+OpenShell owns agent filesystem/process/network/provider isolation. The same base policy
+and robot capability contract are used for every compared agent so differences in an
+agent's own approval system do not become accidental benchmark treatments.

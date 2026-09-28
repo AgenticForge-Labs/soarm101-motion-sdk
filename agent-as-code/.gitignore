@@ -1,2 +1,1 @@
-setup.local.json
-runs/
+setup.local.json\nruns/\n.secrets/\n

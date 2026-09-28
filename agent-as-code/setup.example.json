@@ -3,14 +3,14 @@
     "name": "agent-as-code",
     "task_file": "TASK.example.md"
   },
-  "agent": {
-    "name": "any-agent",
-    "model": "replace-with-agent-model"
-  },
-  "vlm": {
-    "name": "any-vlm",
-    "model": "replace-with-vlm-model",
-    "mode": "agent-native-or-separate"
+  "agents": {
+    "codex": {
+      "model": ""
+    },
+    "hermes": {
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-v4.1-flash"
+    }
   },
   "robot": {
     "port": "/dev/ttyACM0",
@@ -41,6 +41,15 @@
       "mirror": false
     }
   ],
+  "executor": {
+    "port": 8765,
+    "max_jog_mm": 10.0,
+    "max_jog_deg": 5.0,
+    "max_speed_mm_s": 10.0,
+    "max_acceleration_mm_s2": 40.0,
+    "max_observation_bytes": 25000000,
+    "command_timeout_seconds": 180
+  },
   "run": {
     "output_dir": "agent-as-code/runs"
   }

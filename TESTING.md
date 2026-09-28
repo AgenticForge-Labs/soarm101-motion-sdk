@@ -492,3 +492,50 @@ validation because UVC devices negotiate formats differently across drivers.
    configured snapshot folder.
 9. Close the GUI and verify the camera device is released so a subsequent CLI capture can open it.
 10. Only after camera capture is stable should an agent loop be given camera + motion CLI access.
+
+
+## Agent-as-code / OpenShell workstation validation
+
+This integration requires the target Ubuntu workstation, Docker/OpenShell, local agent
+credentials, cameras, and eventually the real arm. CI validates parsing and deterministic
+request limits but cannot establish provider, container-network, image, camera, or hardware
+behavior.
+
+### Sandbox/runtime checks — no robot motion
+
+1. Checkout the exact validation commit and run `./agent-as-code/install.sh`.
+2. Confirm `openshell status` is connected and both local sandbox images build.
+3. Edit `setup.local.json` with the real serial/camera paths.
+4. Run `./agent-as-code/doctor.sh`. It must not open a camera or command motion.
+5. Inspect the effective policy of a temporary sandbox and confirm there is no raw
+   `/dev/tty*` or `/dev/video*` access and provider network access is limited to the
+   attached robot/model endpoints.
+6. Use a temporary task containing only "Call robotctl health, report the result, and stop."
+   with Codex and Hermes. Neither run may attempt hardware motion.
+7. Confirm Codex can authenticate through the selected subscription or API provider.
+8. Confirm Hermes authenticates through OpenRouter with
+   `deepseek/deepseek-v4.1-flash` and starts with file/terminal/vision tools.
+
+### Camera observation through the sandbox — no powered arm motion
+
+1. Close the SDK GUI so it does not own any configured camera.
+2. Run a temporary task: "Observe the workspace once, describe each camera view, then stop."
+3. Confirm `robotctl observe` acquires every enabled host camera, returns primary first,
+   transfers each JPEG into the sandbox, and the agent actually uses its visual capability.
+4. Repeat with Codex and Hermes and confirm both receive the same camera set.
+5. Confirm the sandbox cannot open the physical camera device directly.
+
+### First physical agent run — DO LATER
+
+Only continue after the normal physical calibration, joint-direction, Cartesian, gripper,
+and camera gates above have passed.
+
+1. Use an empty workspace/no payload and keep physical follower power immediately reachable.
+2. Start with a task that requires observation but at most a few millimeters of motion,
+   such as hovering above an isolated target rather than grasping it.
+3. Confirm each executor request stays within the configured outer jog envelope and every
+   accepted request still passes the Motion SDK guards.
+4. Confirm a deliberately oversized `robotctl jog` is rejected by the host executor and
+   the agent replans rather than seeking another hardware path.
+5. Progress to touch, grasp, lift, and object-to-box tasks only after the preceding level
+   is repeatable.
