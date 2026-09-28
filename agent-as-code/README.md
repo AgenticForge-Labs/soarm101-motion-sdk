@@ -79,7 +79,7 @@ Exactly one enabled camera must have `"primary": true`. Any number of additional
 USB webcams may be listed. The primary view is returned first to the agent, while the
 others are additional evidence.
 
-The `executor` section is also the benchmark's outer physical-action envelope. The
+The `executor` section is also the benchmark's outer physical-action envelope. Port 8765 is\ncurrently fixed because it is part of the endpoint-scoped OpenShell provider profile. The
 default is intentionally conservative: one jog request may translate at most 10 mm or
 rotate at most 5 degrees, at no more than 10 mm/s and 40 mm/s². The Motion SDK applies
 its own calibration, path, joint, fault, following-error, effort, and provenance guards
