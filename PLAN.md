@@ -42,6 +42,8 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] Shared USB-camera foundation with persisted device/resolution/FPS/FourCC/mirror settings,
   one GUI-owned live stream, Camera-tab preview/settings, Teleoperation preview, and CLI
   discovery/configuration/still capture for constrained agent loops.
+- [x] Model-agnostic `agent-as-code/` scaffold with agent-facing CLI instructions, one
+  primary task camera plus arbitrary auxiliary USB cameras, and a multi-view observation helper.
 
 ## Director ecosystem integration 0.2
 
