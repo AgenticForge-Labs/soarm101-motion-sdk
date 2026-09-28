@@ -3,6 +3,7 @@
 from soarm101_motion.api import SOArmAPI
 from soarm101_motion.arm import SOARM101
 from soarm101_motion.calibration import MotorCalibration, SO101Calibration
+from soarm101_motion.camera import CameraCapture, CameraSettings, CameraSettingsStore, discover_camera_devices
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.hardware import FeetechMotorSetup, MotorSetupResult
 from soarm101_motion.integration import (
@@ -25,6 +26,9 @@ from soarm101_motion.types import HardwareState, IKResult, JointState, MotionRes
 __version__ = "0.1.0.dev8"
 
 __all__ = [
+    "CameraCapture",
+    "CameraSettings",
+    "CameraSettingsStore",
     "CameraTool",
     "DEFAULT_BASE_FRAME",
     "DEFAULT_RESOURCE_ID",
@@ -63,5 +67,6 @@ __all__ = [
     "TrajectoryEntry",
     "TrajectoryLibrary",
     "__version__",
+    "discover_camera_devices",
     "integration_metadata",
 ]
