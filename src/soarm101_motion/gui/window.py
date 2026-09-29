@@ -842,12 +842,20 @@ class MainWindow(QMainWindow):
         calibration = QGroupBox("Calibrate arm — mechanical stops")
         calibration.setStyleSheet("QGroupBox { font-weight: 700; }")
         grid = QGridLayout(calibration)
-        explanation = QLabel(
-            "Select the arm, connect with torque off, then start recording. "
-            "Move each joint and the gripper to both stops and back. Never force a stop."
-        )
+        explanation = QLabel("Select arm → connect torque off → run two full sweeps.")
         explanation.setWordWrap(True)
-        grid.addWidget(explanation, 0, 0, 1, 4)
+        grid.addWidget(explanation, 0, 0, 1, 3)
+        grid.addWidget(
+            self._help_button(
+                "Mechanical-stop calibration",
+                "Move each joint and the gripper gently from one printed/mechanical stop "
+                "to the other and back twice. Never force or hold an actuator against a "
+                "stop. All six channels must reach 2/2 before calibration is saved. A "
+                "failed or cancelled sweep preserves the previous calibration.",
+            ),
+            0,
+            3,
+        )
 
         grid.addWidget(QLabel("Calibration target"), 1, 0)
         self.calibration_target_combo = QComboBox()
@@ -873,7 +881,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.setup_connect_button, 2, 1, 1, 2)
 
         self.leader_allow_uncalibrated_check = QCheckBox(
-            "Advanced: allow uncalibrated leader connection from Teach"
+            "Allow uncalibrated leader setup"
         )
         self.leader_allow_uncalibrated_check.setToolTip(
             "Used on the next leader connection for calibration/setup only. "
@@ -2699,6 +2707,10 @@ class MainWindow(QMainWindow):
         )
 
     def _on_robot_id_changed(self) -> None:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        self.robot_id_edit.setToolTip(
+            f"Robot/calibration ID. Calibration file: {default_calibration_path(robot_id)}"
+        )
         self._pose_library_cache = None
         self._trajectory_library_cache = None
         self._sequence_library_cache = None
@@ -2783,11 +2795,12 @@ class MainWindow(QMainWindow):
     def _update_calibration_guide(self) -> None:
         gripper_ticks = self._current_calibration_display_targets()["so101_gripper"]
         self.calibration_target_note.setText(
-            "The inner ring fills on sweep 1/2 and stays filled while the outer ring "
-            "fills on the return sweep. Both rings mark DONE with a black pop at 2/2. "
-            "The gripper dial uses this arm's saved travel "
-            f"when available (100% ≈ {gripper_ticks} ticks). A servo voltage or "
-            "communication fault stops calibration regardless of dial progress."
+            f"Target: 2/2 on every dial · gripper display ≈ {gripper_ticks} ticks."
+        )
+        self.calibration_target_note.setToolTip(
+            "Inner ring = first sweep; outer ring = return sweep. Both must reach 2/2. "
+            "The gripper display uses saved travel when available. Voltage or communication "
+            "faults stop calibration regardless of dial progress."
         )
 
     def _connect_for_calibration(self) -> None:
@@ -4642,6 +4655,8 @@ class MainWindow(QMainWindow):
             self._leader_busy = False
             self._leader_torque_enabled = False
             self._refresh_sidebar_context()
+        elif not self.leader_simulation_check.isChecked():
+            self._save_arm_connection_profile("leader")
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
         self._refresh_sidebar_context()
@@ -4842,6 +4857,8 @@ class MainWindow(QMainWindow):
             self.calibration_status.setText(
                 "Follower connected for calibration with torque off. Start the sweep when ready."
             )
+        if connected and not self.simulation_check.isChecked():
+            self._save_arm_connection_profile("follower")
         self.connect_button.setText("Disconnect follower" if connected else "Connect follower")
         self._refresh_named_pose_status()
         self._refresh_point_list()
@@ -5382,8 +5399,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
-            if hasattr(self, "_camera_worker"):
-                self._camera_worker.shutdown()
+            if hasattr(self, "_camera_manager"):
+                self._camera_manager.shutdown()
             if self._active_calibration_target is not None:
                 # A sweep blocks its worker event loop, so request rollback
                 # before waiting for the queued shutdown slot.
