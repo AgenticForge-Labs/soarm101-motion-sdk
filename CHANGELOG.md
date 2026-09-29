@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Lowered hardware-facing defaults after physical bench validation: live leader→follower
+  teleoperation now starts at 10 Hz instead of 20 Hz, while 20/50 Hz remain explicit
+  higher-rate options. New camera profiles now default to 640×480 MJPG at 15 FPS to
+  reduce USB bandwidth and host processing load; existing saved camera profiles are
+  preserved unchanged.
+
 - Added a guided US Letter paper-frame Cartesian validation script. It opens the gripper,
   relaxes for three manual lower-finger corner captures, checks measured dimensions,
   orthogonality and probe-orientation drift, predicts the fourth corner, preflights
@@ -163,8 +169,8 @@
   encoder tick 2047. Asymmetric imported LeRobot calibrations therefore preserve
   their recorded midpoint as 0 rad, while native symmetric mechanical-stop
   calibrations remain effectively unchanged.
-- Made leader→follower streaming rate explicit: the software now defaults to 20 Hz with
-  5/10/20/50 Hz GUI choices. First hardware validation still proceeds 5→10→20 Hz, and
+- Made leader→follower streaming rate explicit with 5/10/20/50 Hz GUI choices.
+  Hardware validation proceeds 5→10→20 Hz, 10 Hz is the conservative default, and
   50 Hz remains experimental with an explicit confirmation.
 - Stream speed/acceleration checks now use the selected teleop rate rather than the
   separate 50 Hz planned-trajectory clock.
