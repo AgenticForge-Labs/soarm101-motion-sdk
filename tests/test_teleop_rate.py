@@ -20,8 +20,8 @@ from soarm101_motion.gui.teleop_rate import (
 from soarm101_motion.hardware import SimulationBackend
 
 
-def test_default_teleop_rate_is_conservative_for_hardware() -> None:
-    assert DEFAULT_TELEOP_STREAM_FREQUENCY_HZ == 10.0
+def test_default_teleop_rate_is_smooth_practical_rate() -> None:
+    assert DEFAULT_TELEOP_STREAM_FREQUENCY_HZ == 20.0
 
 
 class RecordingSimulationBackend(SimulationBackend):
