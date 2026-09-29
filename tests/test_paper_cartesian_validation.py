@@ -63,3 +63,26 @@ def test_letter_geometry_orthogonalizes_noisy_corner_measurements() -> None:
     assert abs(float(np.linalg.norm(geometry.x_axis)) - 1.0) < 1e-9
     assert abs(float(np.linalg.norm(geometry.y_axis)) - 1.0) < 1e-9
     assert abs(float(np.linalg.norm(geometry.normal)) - 1.0) < 1e-9
+
+
+def test_clockwise_corner_order_keeps_y_toward_c_but_lifts_upward() -> None:
+    module = _load_example_module()
+    a = np.array([0.0, 0.0, 0.100])
+    b = np.array([0.2159, 0.0, 0.100])
+    c = np.array([0.0, -0.2794, 0.100])
+
+    geometry = module.derive_paper_geometry(
+        a,
+        b,
+        c,
+        width_mm=215.9,
+        height_mm=279.4,
+    )
+
+    np.testing.assert_allclose(
+        geometry.predicted_far_corner_m,
+        np.array([0.2159, -0.2794, 0.100]),
+        atol=1e-9,
+    )
+    assert float(np.dot(geometry.y_axis, c - a)) > 0.0
+    assert geometry.normal[2] > 0.0
