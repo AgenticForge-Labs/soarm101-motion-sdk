@@ -396,7 +396,7 @@ def test_gui_buttons_have_explicit_visual_roles_and_contrast(window):
 def test_camera_device_is_an_obvious_selector_and_controls_are_compact(window):
     assert window.camera_device_combo.isEditable() is False
     assert window.camera_device_combo.objectName() == "cameraDeviceCombo"
-    assert window.camera_settings_box.maximumWidth() == 980
+    assert window.camera_settings_box.maximumWidth() == 820
     assert window.camera_page.isAncestorOf(window.camera_settings_box)
 
 
@@ -450,3 +450,63 @@ def test_camera_frame_routes_to_its_named_preview_card(window):
     assert preview.pixmap() is not None
     assert not preview.pixmap().isNull()
     assert name in window._camera_latest_images
+
+
+
+def test_camera_preview_cards_are_compact_for_two_views(window):
+    from soarm101_motion.camera import CameraSettings
+
+    existing = list(window._workstation_profile.cameras)
+    second = "wrist" if "wrist" not in existing else "side"
+    window._workstation_profile = window._workstation_profile.with_camera(
+        second,
+        CameraSettings(device="/dev/video97", width=640, height=480),
+        select=False,
+    )
+    window._rebuild_camera_preview_grid()
+
+    assert len(window.camera_preview_labels) >= 2
+    for preview in window.camera_preview_labels.values():
+        assert preview.minimumHeight() == 170
+        assert preview.maximumHeight() == 240
+    for card in window.camera_preview_cards.values():
+        assert card.maximumHeight() == 310
+
+
+def test_camera_recovering_state_keeps_preview_and_stop_control(window):
+    from PySide6.QtGui import QImage
+
+    name = window._camera_name()
+    image = QImage(160, 120, QImage.Format.Format_RGB32)
+    image.fill(0xFF112233)
+    window._on_camera_frame(name, image)
+
+    window._on_camera_status(
+        name,
+        {
+            "connected": True,
+            "recovering": True,
+            "dropped_frames": 1,
+            "drop_limit": 8,
+            "warning": "camera did not return a frame",
+        },
+    )
+
+    assert "RECOVERING" in window.camera_preview_cards[name].title()
+    assert "dropped frame 1/8" in window.camera_preview_status_labels[name].text()
+    assert window.camera_toggle_button.text() == "Stop selected"
+    assert window.camera_preview_labels[name].pixmap() is not None
+
+
+def test_camera_device_display_keeps_machine_path_as_item_data(window):
+    window._set_camera_device_choices(
+        ["/dev/v4l/by-id/usb-Example_Camera-video-index0"],
+        selected_device="/dev/v4l/by-id/usb-Example_Camera-video-index0",
+    )
+
+    assert "Example Camera" in window.camera_device_combo.currentText()
+    assert (
+        window.camera_device_combo.currentData()
+        == "/dev/v4l/by-id/usb-Example_Camera-video-index0"
+    )
+    assert window._camera_device_value().endswith("usb-Example_Camera-video-index0")
