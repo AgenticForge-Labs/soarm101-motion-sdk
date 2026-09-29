@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
         self._leader_connected = False
         self._leader_torque_enabled = False
         self._teleop_error: str | None = None
+        self._teleop_fault_details: dict[str, Any] | None = None
         self._teleop_alignment_note: str | None = None
         self._follower_connecting = False
         self._leader_connecting = False
@@ -231,6 +232,7 @@ class MainWindow(QMainWindow):
         self._worker.recording_completed.connect(self._on_recording_completed)
         self._worker.recording_changed.connect(self._on_follower_recording_changed)
         self._worker.teleop_changed.connect(self._on_teleop_changed)
+        self._worker.teleop_faulted.connect(self._on_teleop_faulted)
         self._worker.teleop_alignment_adjusted.connect(self._on_teleop_alignment_adjusted)
         self._worker.sequence_progress.connect(self._on_sequence_progress)
         self._worker.effort_changed.connect(self._on_effort_status)
@@ -4498,7 +4500,10 @@ class MainWindow(QMainWindow):
         force_relative: bool = False,
     ) -> None:
         self._teleop_error = None
+        self._teleop_fault_details = None
         self._teleop_alignment_note = None
+        if hasattr(self, "teleop_status"):
+            self.teleop_status.setStyleSheet("")
         if not self._connected:
             QMessageBox.warning(
                 self,
@@ -4607,6 +4612,45 @@ class MainWindow(QMainWindow):
             f"{names} offset to a legal pose, then following in relative mode."
         )
 
+    @Slot(object)
+    def _on_teleop_faulted(self, details: object) -> None:
+        values = dict(details)  # type: ignore[arg-type]
+        reason = str(values.get("reason") or "teleoperation fault")
+        self._teleop_error = reason
+        self._teleop_fault_details = values
+        self._teleop_active = False
+        self._teleop_starting = False
+        self.teleop_button.setText("Realign and restart")
+        self.teleop_status.setStyleSheet(
+            "font-weight: 800; padding: 9px; border-radius: 9px; "
+            "background: #fee2e2; color: #7f1d1d;"
+        )
+        self.teleop_status.setText(self._teleop_fault_message(values))
+        self.leader_stream_stop_requested.emit()
+        self._update_enabled_state()
+
+    @staticmethod
+    def _teleop_fault_message(values: dict[str, Any]) -> str:
+        reason = str(values.get("reason") or "teleoperation fault")
+        frequency = float(values.get("frequency_hz", 0.0) or 0.0)
+        recommended = float(values.get("recommended_frequency_hz", 0.0) or 0.0)
+        processing_ms = float(values.get("processing_ms", 0.0) or 0.0)
+        timing = (
+            f" Last follower iteration: {processing_ms:.0f} ms at {frequency:.0f} Hz."
+            if frequency > 0.0 and processing_ms > 0.0
+            else ""
+        )
+        retry = (
+            f" Select {recommended:.0f} Hz before retrying."
+            if recommended > 0.0 and frequency > recommended
+            else ""
+        )
+        return (
+            "TELEOP STOPPED — follower is holding and leader/follower are DELINKED. "
+            "No further leader motion will be sent until you explicitly realign or relink. "
+            f"Cause: {reason}.{timing}{retry}"
+        )
+
     def _on_teleop_changed(self, active: bool) -> None:
         self._teleop_active = bool(active)
         self._teleop_starting = False
@@ -4615,17 +4659,27 @@ class MainWindow(QMainWindow):
                 self.teleop_rate_combo.currentData()
                 or DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
             )
+            self._teleop_fault_details = None
+            self._teleop_error = None
+            self.teleop_status.setStyleSheet(
+                "font-weight: 700; padding: 7px; border-radius: 8px; "
+                "background: #dcfce7; color: #14532d;"
+            )
             self.teleop_button.setText("Stop live teleop")
             self.teleop_status.setText(
-                f"Live teleop active — {self.teleop_mode_combo.currentText()} "
+                f"LIVE / LINKED — {self.teleop_mode_combo.currentText()} "
                 f"at {frequency_hz:.0f} Hz. "
                 f"{self._teleop_alignment_note or ''}"
             )
             self.leader_stream_start_requested.emit(frequency_hz)
         else:
-            self.teleop_button.setText("Align follower and start")
             self.leader_stream_stop_requested.emit()
-            self.teleop_status.setText("Live teleoperation stopped / follower holding.")
+            if self._teleop_fault_details is None:
+                self.teleop_status.setStyleSheet("")
+                self.teleop_button.setText("Align follower and start")
+                self.teleop_status.setText(
+                    "Teleoperation stopped normally · follower holding · leader/follower delinked."
+                )
         self._update_enabled_state()
 
     def _on_leader_stream_readout_changed(self, active: bool) -> None:
@@ -5075,7 +5129,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, "teleop_status") and self._teleop_starting:
             pass
         elif hasattr(self, "teleop_status") and not self._teleop_active and self._teleop_error:
-            self.teleop_status.setText(f"Teleoperation stopped: {self._teleop_error}")
+            if self._teleop_fault_details is not None:
+                self.teleop_button.setText("Realign and restart")
+                self.teleop_status.setStyleSheet(
+                    "font-weight: 800; padding: 9px; border-radius: 9px; "
+                    "background: #fee2e2; color: #7f1d1d;"
+                )
+                self.teleop_status.setText(
+                    self._teleop_fault_message(self._teleop_fault_details)
+                )
+            else:
+                self.teleop_status.setText(f"Teleoperation stopped: {self._teleop_error}")
         elif hasattr(self, "teleop_status") and not self._teleop_active:
             if not self._connected or not self._leader_connected:
                 message = "Connect Follower and Leader using the panels above."
@@ -5360,8 +5424,20 @@ class MainWindow(QMainWindow):
             "live teleoperation:", "teleop alignment:", "start teleoperation:",
         )):
             self._teleop_error = message.partition(":")[2].strip()
+            if message.lower().startswith("live teleoperation:"):
+                if self._teleop_fault_details is None:
+                    self._teleop_fault_details = {
+                        "reason": self._teleop_error,
+                        "requires_relink": True,
+                        "follower_holding": True,
+                    }
+                prominent = (
+                    "TELEOP STOPPED — follower holding; leader/follower delinked. "
+                    + self._teleop_error
+                )
+                self.alert_label.setText(prominent)
             self._update_enabled_state()
-        self.statusBar().showMessage(message, 8000)
+        self.statusBar().showMessage(self.alert_label.text(), 8000)
         if "calibration:" in message.lower():
             self._active_calibration_target = None
             self._calibration_cancelling = False
