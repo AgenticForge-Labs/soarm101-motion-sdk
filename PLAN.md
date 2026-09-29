@@ -85,6 +85,8 @@ its own persistent connection for live controls; it must not launch CLI subproce
   physical direction before Cartesian motion.
 - [ ] Validate stop, completion timeout, and torque-safe enable on hardware.
 - [ ] Validate FK against measured TCP positions.
+- [ ] Run the three-corner known-paper test, predict the fourth corner, and verify
+  paper-frame +Z motion above the far corner.
 - [ ] Validate low-speed linear paths and tune tolerances.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
   leader-readout loss, gripper mirroring, and stream safety trips.
@@ -95,6 +97,9 @@ its own persistent connection for live controls; it must not launch CLI subproce
 
 ## Later
 
+- [ ] Revisit optional agent sandboxing only after direct CLI/camera robot loops are
+  physically validated. The earlier OpenShell experiment is deferred and is not an
+  architectural dependency for initial agent control.
 - [ ] Investigate true leader gravity compensation as a separate feature. Compare the
   Trossen leader/SDK approach before selecting a control strategy; do not couple this to
   the current position-hold parking implementation.

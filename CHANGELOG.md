@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a guided US Letter paper-frame Cartesian validation script. It opens the gripper,
+  relaxes for three manual lower-finger corner captures, checks measured dimensions,
+  orthogonality and probe-orientation drift, predicts the fourth corner, preflights
+  exact-orientation IK with torque off, then performs a supervised lift/traverse/point
+  sequence plus configurable paper-frame +Z height checks.
+
 - Made Feetech torque/lock control writes tolerant of a single corrupted or missing status
   reply: the backend first reads the control register back, accepts the write only if the
   requested value is confirmed, otherwise retries the same idempotent write once and still
