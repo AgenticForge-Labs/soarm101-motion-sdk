@@ -731,19 +731,28 @@ class MainWindow(QMainWindow):
             self.port_combo.setCurrentText(port)
         layout.addWidget(self.port_combo, 0, 2)
 
-        self.refresh_ports_button = QPushButton("Refresh")
+        self.refresh_ports_button = QPushButton("Refresh ports")
         self.refresh_ports_button.clicked.connect(self._refresh_ports)
         layout.addWidget(self.refresh_ports_button, 0, 3)
-
-        self.find_arms_button = QPushButton("Find Arms")
-        self.find_arms_button.setToolTip(
-            "Probe serial devices read-only, verify SO-101 servos, and identify leader/follower by voltage."
+        layout.addWidget(
+            self._help_button(
+                "Follower connection",
+                "The follower is the powered arm that executes motion. Find Arms probes "
+                "candidate serial devices read-only. Connect opens the session with torque "
+                "off; Enable hold latches the measured pose before enabling torque. The "
+                "selected port, robot ID, and calibration-file path are saved to the local "
+                "workstation profile after a successful connection.",
+            ),
+            0,
+            4,
         )
-        self.find_arms_button.clicked.connect(self._find_arms)
-        layout.addWidget(self.find_arms_button, 3, 0, 1, 2)
 
         layout.addWidget(QLabel("Calibration profile"), 1, 0, 1, 2)
         self.robot_id_edit = QLineEdit(robot_id)
+        self.robot_id_edit.setToolTip(
+            "Robot/calibration ID. Calibration file: "
+            f"{default_calibration_path(robot_id)}"
+        )
         self.robot_id_edit.textChanged.connect(
             lambda _text: self._on_robot_id_changed()
         )
@@ -751,7 +760,7 @@ class MainWindow(QMainWindow):
 
         self.connect_button = QPushButton("Connect follower")
         self.connect_button.clicked.connect(self._toggle_connection)
-        layout.addWidget(self.connect_button, 1, 3)
+        layout.addWidget(self.connect_button, 1, 3, 1, 2)
 
         self.enable_button = QPushButton("Enable hold")
         self.enable_button.setToolTip("Latch current positions, then enable torque.")
@@ -759,43 +768,43 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.enable_button, 2, 0)
 
         self.stop_button = QPushButton("STOP / HOLD")
-        self.stop_button.setStyleSheet("font-weight: 700; padding: 7px;")
+        self.stop_button.setStyleSheet("font-weight: 800;")
         self.stop_button.setToolTip("Software stop only. Keep physical power accessible.")
         self.stop_button.clicked.connect(lambda _checked=False: self.stop_requested.emit())
 
         self.relax_button = QPushButton("Relax follower")
         self.relax_button.setToolTip("Disable servo torque.")
         self.relax_button.clicked.connect(lambda _checked=False: self.relax_requested.emit())
-        layout.addWidget(self.relax_button, 2, 2)
+        layout.addWidget(self.relax_button, 2, 1)
+
+        self.find_arms_button = QPushButton("Find Arms")
+        self.find_arms_button.setToolTip(
+            "Probe serial devices read-only, verify SO-101 servos, and identify leader/follower by voltage."
+        )
+        self.find_arms_button.clicked.connect(self._find_arms)
+        layout.addWidget(self.find_arms_button, 2, 2)
 
         self.allow_uncalibrated_check = QCheckBox(
-            "Follower setup: allow uncalibrated connection"
+            "Allow uncalibrated setup connection"
         )
         self.allow_uncalibrated_check.setToolTip(
-            "For calibration/setup only. Keep torque off until calibration is complete."
+            "Calibration/setup only. Torque remains off until a valid calibration exists."
         )
-        layout.addWidget(self.allow_uncalibrated_check, 4, 0, 1, 4)
+        layout.addWidget(self.allow_uncalibrated_check, 2, 3, 1, 2)
 
-        self.arm_discovery_status = QLabel(
-            "Arm discovery: not run. Find Arms can identify ~5 V leaders and ~12 V followers."
-        )
-        self.arm_discovery_status.setWordWrap(True)
-        layout.addWidget(self.arm_discovery_status, 5, 0, 1, 4)
-        self.follower_session_status = QLabel("Disconnected · press Connect follower")
-        layout.addWidget(self.follower_session_status, 3, 2, 1, 2)
+        self.follower_session_status = QLabel("Disconnected")
+        self.follower_session_status.setWordWrap(True)
+        layout.addWidget(self.follower_session_status, 3, 0, 1, 2)
         self.follower_device_info = QLabel("Voltage: not measured")
-        layout.addWidget(self.follower_device_info, 6, 0, 1, 4)
-        layout.addWidget(
-            QLabel(
-                "Connect opens the arm session. Enable hold powers the follower at its current pose "
-                "for Manual moves; Teleoperation enables hold when you start. "
-                "Move sends the selected targets."
-            ),
-            7,
-            0,
-            1,
-            4,
+        layout.addWidget(self.follower_device_info, 3, 2, 1, 3)
+
+        self.arm_discovery_status = QLabel("Arm discovery: not run")
+        self.arm_discovery_status.setWordWrap(True)
+        self.arm_discovery_status.setToolTip(
+            "Find Arms identifies likely leader/follower roles from measured voltage; "
+            "confirm the physical hardware before connecting."
         )
+        layout.addWidget(self.arm_discovery_status, 4, 0, 1, 5)
         return box
 
     @staticmethod
@@ -1156,45 +1165,60 @@ class MainWindow(QMainWindow):
     def _build_leader_connection(self) -> QWidget:
         leader = QGroupBox("Leader — the arm you move by hand")
         grid = QGridLayout(leader)
+        stored = self._workstation_profile.leader
+
         self.leader_simulation_check = QCheckBox("Simulation")
         self.leader_simulation_check.setChecked(self.simulation_check.isChecked())
         self.leader_simulation_check.toggled.connect(
             lambda _checked: self._update_enabled_state()
         )
         grid.addWidget(self.leader_simulation_check, 0, 0)
+
         grid.addWidget(QLabel("Port"), 0, 1)
         self.leader_port_combo = QComboBox()
         self.leader_port_combo.setEditable(True)
         self.leader_port_combo.currentTextChanged.connect(lambda _: self._refresh_device_hints())
+        if stored.port:
+            self.leader_port_combo.addItem(stored.port)
+            self.leader_port_combo.setCurrentText(stored.port)
         grid.addWidget(self.leader_port_combo, 0, 2)
-        self.leader_refresh_button = QPushButton("Refresh")
+
+        self.leader_refresh_button = QPushButton("Refresh ports")
         self.leader_refresh_button.clicked.connect(self._refresh_leader_ports)
         grid.addWidget(self.leader_refresh_button, 0, 3)
+        grid.addWidget(
+            self._help_button(
+                "Leader connection",
+                "The leader is normally back-drivable with torque off. Park deliberately "
+                "only when you want it to hold a pose. Starting or relinking teleoperation "
+                "releases it again. The selected port, robot ID, and calibration-file path "
+                "are saved after a successful connection.",
+            ),
+            0,
+            4,
+        )
+
         grid.addWidget(QLabel("Calibration profile"), 1, 0, 1, 2)
-        self.leader_robot_id_edit = QLineEdit(
-            (self.robot_id_edit.text().strip() or "so101") + "-leader"
+        self.leader_robot_id_edit = QLineEdit(stored.robot_id or "so101-leader")
+        self.leader_robot_id_edit.setToolTip(
+            "Robot/calibration ID. Calibration file: "
+            f"{stored.calibration or default_calibration_path(stored.robot_id)}"
         )
         grid.addWidget(self.leader_robot_id_edit, 1, 2)
+
         self.leader_connect_button = QPushButton("Connect leader")
         self.leader_connect_button.clicked.connect(self._toggle_leader_connection)
-        grid.addWidget(self.leader_connect_button, 1, 3)
-        note = QLabel(
-            "The leader connects FREE with torque off for hand teaching. Park it "
-            "deliberately when you want it to hold a pose; starting/relinking live "
-            "teleoperation releases it again. The 20 Hz default keeps the follower "
-            "responsive; 50 Hz still requires a timing check."
-        )
-        note.setWordWrap(True)
-        grid.addWidget(note, 2, 0, 1, 4)
-        self.leader_session_status = QLabel("Disconnected · press Connect leader")
+        grid.addWidget(self.leader_connect_button, 1, 3, 1, 2)
+
+        self.leader_session_status = QLabel("Disconnected")
         self.leader_session_status.setWordWrap(True)
-        grid.addWidget(self.leader_session_status, 3, 0, 1, 4)
+        grid.addWidget(self.leader_session_status, 2, 0, 1, 2)
+
         self.leader_device_info = QLabel("Voltage: not measured")
-        grid.addWidget(self.leader_device_info, 4, 0, 1, 4)
-        grid.setRowStretch(5, 1)
+        grid.addWidget(self.leader_device_info, 2, 2, 1, 3)
         return leader
 
-    def _new_camera_preview_label(self, *, minimum_height: int = 240) -> QLabel:
+    def _new_camera_preview_label    def _new_camera_preview_label(self, *, minimum_height: int = 240) -> QLabel:
         preview = QLabel("Camera preview is stopped.")
         preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview.setMinimumHeight(minimum_height)
