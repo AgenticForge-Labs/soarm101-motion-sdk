@@ -244,6 +244,12 @@ software. Their deferred checks are below.
 
 These checks can wait until the Batch 1 hardware checks pass.
 
+For live teleoperation timing, use 20 Hz as the normal hand-following validation rate.
+A follower cycle may occasionally exceed the nominal 50 ms period without being unsafe
+if queued leader sample age stays low. Treat increasing queued age, stale-sample stops,
+communication faults, following-error trips, or delayed STOP/HOLD response as failures.
+Use 10 Hz only as a diagnostic fallback; its 100 ms command spacing can be visibly stepped.
+
 ### 6. Software-only point teaching
 
 1. Run `soarm101-gui --simulation`.

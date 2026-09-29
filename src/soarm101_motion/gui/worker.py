@@ -33,6 +33,7 @@ from soarm101_motion.gui.teleop_rate import (
     gripper_speed_raw,
     limit_joint_target,
     plan_alignment_target,
+    teleop_stale_limit_s,
     update_gripper_contact_latch,
 )
 from soarm101_motion.exceptions import CalibrationCancelledError, CalibrationError
@@ -923,12 +924,13 @@ class RobotWorker(QObject):
         if teleop is None:
             return
         teleop["last_frame"] = None
+        sample_age_s: float | None = None
         try:
             started = time.perf_counter()
             values = dict(sample)  # type: ignore[arg-type]
             sample_timestamp = float(values.get("timestamp", started))
             sample_age_s = max(0.0, started - sample_timestamp)
-            stale_limit_s = max(0.15, 3.0 * float(teleop["period_s"]))
+            stale_limit_s = teleop_stale_limit_s(float(teleop["period_s"]))
             if sample_age_s > stale_limit_s:
                 raise RuntimeError(
                     f"leader sample is {sample_age_s * 1000.0:.0f} ms old; "
@@ -1059,11 +1061,11 @@ class RobotWorker(QObject):
                 teleop["overruns"] += 1
             else:
                 teleop["overruns"] = 0
-            if teleop["overruns"] >= 3:
-                raise RuntimeError(
-                    "follower teleop processing exceeded the selected stream period "
-                    "for three consecutive samples; reduce the teleop rate before retrying"
-                )
+            # Processing time is diagnostic, not itself proof of unsafe backlog.
+            # The sample-age guard above measures the actual queued-command hazard
+            # directly and stops/holds when leader data becomes stale. A few
+            # slightly-long cycles can otherwise trip smooth 20 Hz teleoperation
+            # even while queued age remains near zero.
             if teleop["samples"] % 5 == 0:
                 self.sequence_progress.emit(
                     {
@@ -1097,9 +1099,9 @@ class RobotWorker(QObject):
             frequency_hz = float(teleop.get("frequency_hz", 0.0) or 0.0)
             processing_ms = float(teleop.get("last_processing_s", 0.0) or 0.0) * 1000.0
             sample_age_ms = (
-                None
-                if not isinstance(last_frame, dict)
-                else float(last_frame.get("sample_age_ms", 0.0))
+                float(last_frame.get("sample_age_ms", 0.0))
+                if isinstance(last_frame, dict)
+                else None if sample_age_s is None else sample_age_s * 1000.0
             )
             recommended_hz = (
                 10.0 if frequency_hz >= 20.0 else 5.0 if frequency_hz > 5.0 else frequency_hz
