@@ -341,3 +341,31 @@ def test_error_marks_log_tab_and_teleop_status(window):
     assert window.tabs.tabText(window.tabs.indexOf(window.log_page)) == "Log •"
     assert window.alert_label.isVisible()
     assert "acceleration exceeded" in window.teleop_status.text()
+
+
+
+def test_teleop_fault_is_prominent_and_requires_explicit_restart(window):
+    window._teleop_active = True
+    window._on_teleop_faulted(
+        {
+            "reason": (
+                "follower teleop processing exceeded the selected stream period "
+                "for three consecutive samples; reduce the teleop rate before retrying"
+            ),
+            "frequency_hz": 20.0,
+            "processing_ms": 63.0,
+            "sample_age_ms": 8.0,
+            "recommended_frequency_hz": 10.0,
+            "requires_relink": True,
+            "follower_holding": True,
+        }
+    )
+
+    assert window._teleop_active is False
+    assert window._teleop_error is not None
+    assert window.teleop_button.text() == "Realign and restart"
+    assert "TELEOP STOPPED" in window.teleop_status.text()
+    assert "DELINKED" in window.teleop_status.text()
+    assert "63 ms at 20 Hz" in window.teleop_status.text()
+    assert "Select 10 Hz" in window.teleop_status.text()
+    assert "#fee2e2" in window.teleop_status.styleSheet()
