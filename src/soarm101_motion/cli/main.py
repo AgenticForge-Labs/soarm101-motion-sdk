@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from math import pi
 from pathlib import Path
 
