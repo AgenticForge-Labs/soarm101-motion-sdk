@@ -1609,6 +1609,12 @@ class MainWindow(QMainWindow):
         values = self._camera_status_by_name.get(name, {})
         settings = self._workstation_profile.cameras.get(name)
         if bool(values.get("recovering")):
+            if bool(values.get("device_missing")):
+                waited = float(values.get("waited_s", 0.0) or 0.0)
+                timeout = float(values.get("wait_timeout_s", 0.0) or 0.0)
+                if timeout > 0.0:
+                    return f"Waiting for device · {waited:.0f}/{timeout:.0f} s"
+                return "Waiting for device to return…"
             dropped = int(values.get("dropped_frames", 0) or 0)
             limit = int(values.get("drop_limit", 0) or 0)
             if dropped and limit:
@@ -1639,7 +1645,9 @@ class MainWindow(QMainWindow):
         if card is not None:
             values = self._camera_status_by_name.get(name, {})
             state = (
-                "RECOVERING"
+                "WAITING"
+                if bool(values.get("recovering")) and bool(values.get("device_missing"))
+                else "RECOVERING"
                 if bool(values.get("recovering"))
                 else "LIVE"
                 if self._camera_is_connected(name)
@@ -1910,6 +1918,14 @@ class MainWindow(QMainWindow):
         status = self._camera_status_by_name.get(name, {})
         settings = self._workstation_profile.cameras.get(name)
         if bool(status.get("recovering")):
+            if bool(status.get("device_missing")):
+                waited = float(status.get("waited_s", 0.0) or 0.0)
+                timeout = float(status.get("wait_timeout_s", 0.0) or 0.0)
+                return (
+                    f"Waiting for device · {name} · {waited:.0f}/{timeout:.0f} s"
+                    if timeout > 0.0
+                    else f"Waiting for device · {name}"
+                )
             warning = str(status.get("warning") or "camera stream recovering")
             return f"Recovering · {name} · {warning}"
         if bool(status.get("connected")):
