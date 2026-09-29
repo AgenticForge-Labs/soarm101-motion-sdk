@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added explicit USB camera disconnect recovery for live GUI streams. A vanished Linux camera
+  or V4L2 reopen failure after a previously live stream now enters a visible WAITING state for
+  up to 30 seconds, keeps the last good frame, and automatically reopens the same saved stable
+  device identity when it returns.
+
 - Made GUI camera streams tolerant of transient USB frame drops: one missed frame no longer
   stops a stream, snapshots survive retry, repeated misses trigger device reopen, and terminal
   open failures remain explicit.

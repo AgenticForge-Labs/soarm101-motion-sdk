@@ -24,6 +24,29 @@ class CameraFrameReadError(RuntimeError):
     """Transient camera read failure suitable for retry by a live stream owner."""
 
 
+class CameraDeviceUnavailableError(RuntimeError):
+    """Camera device path disappeared or is not currently available to the OS."""
+
+
+def camera_device_available(device: str) -> bool:
+    """Return whether a configured camera device currently exists.
+
+    On Linux, stable /dev/v4l/by-id paths and /dev/videoN nodes are checked without
+    opening the device. A dangling by-id symlink therefore reports unavailable while
+    a disconnected USB camera is re-enumerating. Other platforms return True because
+    availability must be determined by opening the capture device.
+    """
+
+    if not sys.platform.startswith("linux"):
+        return True
+    text = str(device).strip()
+    if text.isdigit():
+        return Path(f"/dev/video{text}").exists()
+    if text.startswith("/dev/"):
+        return Path(text).exists()
+    return True
+
+
 def _opencv() -> Any:
     try:
         import cv2  # type: ignore
@@ -145,6 +168,10 @@ class CameraCapture:
         return bool(self._capture is not None and self._capture.isOpened())
 
     def open(self) -> "CameraCapture":
+        if not camera_device_available(self.settings.device):
+            raise CameraDeviceUnavailableError(
+                f"camera device is not currently available: {self.settings.device}"
+            )
         cv2 = _opencv()
         device = _device_value(self.settings.device)
         if sys.platform.startswith("linux") and hasattr(cv2, "CAP_V4L2"):
@@ -153,6 +180,10 @@ class CameraCapture:
             capture = cv2.VideoCapture(device)
         if not capture.isOpened():
             capture.release()
+            if not camera_device_available(self.settings.device):
+                raise CameraDeviceUnavailableError(
+                    f"camera device disappeared while opening: {self.settings.device}"
+                )
             raise RuntimeError(f"could not open camera {self.settings.device!r}")
         capture.set(
             cv2.CAP_PROP_FOURCC,
@@ -182,6 +213,10 @@ class CameraCapture:
             raise RuntimeError("camera is not open")
         ok, frame = self._capture.read()
         if not ok or frame is None:
+            if not camera_device_available(self.settings.device):
+                raise CameraDeviceUnavailableError(
+                    f"camera device disconnected: {self.settings.device}"
+                )
             raise CameraFrameReadError("camera did not return a frame")
         if self.settings.mirror:
             frame = _opencv().flip(frame, 1)
