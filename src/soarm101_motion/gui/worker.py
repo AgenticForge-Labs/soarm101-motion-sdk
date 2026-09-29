@@ -33,6 +33,7 @@ from soarm101_motion.gui.teleop_rate import (
     gripper_speed_raw,
     limit_joint_target,
     plan_alignment_target,
+    teleop_stale_limit_s,
     update_gripper_contact_latch,
 )
 from soarm101_motion.exceptions import CalibrationCancelledError, CalibrationError
