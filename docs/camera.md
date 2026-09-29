@@ -112,9 +112,17 @@ LIVE / RECOVERING / STOPPED state.
 
 A single missed USB frame is treated as transient rather than terminal. The GUI worker retries
 short read gaps, keeps pending snapshot requests intact, and only reopens the device after
-eight consecutive missed frames. Up to three empty-frame recovery cycles are attempted, and
-camera-open failures are retried three times; after those bounded retries the stream stops and
-surfaces a terminal error instead of retrying forever.
+eight consecutive missed frames. Up to three empty-frame recovery cycles are attempted for a
+camera that remains present but returns no usable frames.
+
+A true USB/V4L2 disappearance is handled separately. On Linux, if the configured device path
+vanishes (including a dangling stable `/dev/v4l/by-id/...` symlink), or if a camera that was
+already live fails to reopen after a V4L2/USB interruption, the GUI enters a **WAITING** state
+for up to 30 seconds. It polls for the same saved device identity to return and reopens it
+automatically when available. The last good preview remains visible while waiting. If the
+device does not recover within the bounded window, the stream stops with a terminal error.
+Initial open failures for a camera that has never streamed still use the shorter bounded retry
+path.
 
 The GUI may own multiple live camera sessions concurrently, one worker per named physical
 device. Camera and Teleoperation views consume those shared named sessions rather than opening
