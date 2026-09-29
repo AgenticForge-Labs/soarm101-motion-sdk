@@ -1218,7 +1218,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.leader_device_info, 2, 2, 1, 3)
         return leader
 
-    def _new_camera_preview_label    def _new_camera_preview_label(self, *, minimum_height: int = 240) -> QLabel:
+    def _new_camera_preview_label(self, *, minimum_height: int = 240) -> QLabel:
         preview = QLabel("Camera preview is stopped.")
         preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview.setMinimumHeight(minimum_height)
