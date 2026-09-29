@@ -323,8 +323,7 @@ def main() -> int:
 
     with SOARM101(config) as arm:
         try:
-            input("
-Press Enter to enable torque briefly and open the gripper fully... ")
+            input("\nPress Enter to enable torque briefly and open the gripper fully... ")
             arm.enable()
             arm.tool.open()
             print("Gripper is open. Relaxing all motors for manual corner pointing.")
