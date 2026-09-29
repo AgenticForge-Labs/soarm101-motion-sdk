@@ -50,16 +50,14 @@ AI reasoning -> constrained robot capabilities -> motion SDK -> hardware
 
 An agent can choose a validated capability such as moving to a taught point or executing a known sequence, but it should not need unrestricted raw motor access. It can acquire fresh camera frames through the same SDK/CLI surface, reason about them externally, and then request another constrained motion. The SDK remains responsible for motion validation, calibration context, hardware safety checks, and deterministic camera acquisition; perception and task reasoning remain above the SDK.
 
-### Agent-as-code experiment
+### Agent-facing CLI
 
-The [`agent-as-code/`](agent-as-code/) project is a deliberately small, model-agnostic
-observe-reason-act scaffold for comparing arbitrary agents and VLMs on physical tasks. It
-uses the public CLI rather than a second robot-control implementation. Its machine-local
-setup names exactly one primary task camera and may add any number of auxiliary USB webcams;
-the observation helper captures each view through `soarm101 camera capture` and presents
-the primary view first. `agent-as-code/AGENTS.md` and `agent-as-code/CLI.md` provide the
-operating contract an agent needs without coupling the experiment to MCP or a specific
-provider.
+The SDK exposes a provider-neutral command surface for coding agents and other automation
+clients. [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents only the CLI
+contract—commands, units, structured output, coordinate/orientation semantics, and enforced
+guards—without prescribing an agent strategy. The `agent-as-code/` directory remains a
+small machine-local setup and multi-camera capture helper for experiments; agent launchers,
+model selection, and sandboxing are intentionally outside the Motion SDK.
 
 ## Get started
 
@@ -146,6 +144,11 @@ The GUI automatically keeps displayed joint readings current and provides explic
 # Find arms and inspect their measured voltage and motor status
 soarm101 discover
 soarm101 diagnose --port /dev/ttyACM0 --robot-id so101
+
+# Read calibrated joints/TCP or solve a target without moving
+soarm101 read --port /dev/ttyACM0 --robot-id so101 --json
+soarm101 ik --port /dev/ttyACM0 --robot-id so101 \
+  --x-mm 180 --y-mm 0 --z-mm 160 --orientation-mode position_only --json
 
 # Move the five pose joints (degrees)
 soarm101 move-joints --port /dev/ttyACM0 --robot-id so101 \
