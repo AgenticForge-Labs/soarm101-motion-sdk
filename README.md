@@ -118,6 +118,13 @@ soarm101 smoke-test --port /dev/ttyACM0 --robot-id so101 --joint shoulder_pan
 
 Read [Safety](docs/safety.md) before moving hardware. Do not open the same serial port in the GUI and CLI at the same time.
 
+After the basic joint-direction and gripper checks pass, a guided US Letter paper test can
+validate the Cartesian model without relying on the GUI. `examples/paper_corner_cartesian_test.py`
+captures three manually pointed paper corners with torque off, derives the paper frame,
+predicts the fourth corner, preflights the resulting exact-orientation targets, and then
+performs the supervised fourth-corner and vertical-height checks. See
+[Physical kinematics validation](docs/validation.md) before running it.
+
 Successful GUI arm connections and saved camera profiles are remembered in the shared
 [machine-local workstation profile](docs/workstation.md), so the GUI, CLI, and external agents
 use the same follower/leader ports, calibration references, and camera names on the next run.
