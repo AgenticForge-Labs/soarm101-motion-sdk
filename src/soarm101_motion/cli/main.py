@@ -28,7 +28,7 @@ from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
 from soarm101_motion.trajectories import TrajectoryLibrary
-from soarm101_motion.types import Pose
+from soarm101_motion.types import MotionResult, Pose
 
 
 def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101Config:
@@ -57,6 +57,13 @@ def _confirm(args: argparse.Namespace, word: str, message: str) -> bool:
         return True
     answer = input(f"{message}\nType {word} to continue: ").strip()
     return answer == word
+
+
+def _print_motion_result(result: MotionResult, *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(asdict(result), indent=2))
+    else:
+        print(result)
 
 
 def _cmd_info(_: argparse.Namespace) -> int:
@@ -154,9 +161,17 @@ def _cmd_configure(args: argparse.Namespace) -> int:
 
 
 def _cmd_read(args: argparse.Namespace) -> int:
-    with SOARM101(_hardware_config(args)) as arm:
-        positions = arm.get_joint_positions().positions
+    with _arm_from_args(args) as arm:
+        positions = dict(arm.get_joint_positions().positions)
         pose = arm.get_position().xyz_rpy()
+    if args.json:
+        payload = {
+            "joint_positions_rad": positions,
+            "tcp_xyz_mm": [value * 1000.0 for value in pose[:3]],
+            "tcp_rpy_deg": [value * 180.0 / pi for value in pose[3:]],
+        }
+        print(json.dumps(payload, indent=2))
+    else:
         print("Joint positions (radians):")
         for name in ARM_JOINTS:
             print(f"  {name:15s} {positions[name]: .6f}")
@@ -255,21 +270,21 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
 
 def _cmd_move_joints(args: argparse.Namespace) -> int:
     if not args.yes:
-        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        print("Refusing to move without --yes.", file=sys.stderr)
         return 2
     values = [value * pi / 180.0 if args.degrees else value for value in args.joints]
-    with SOARM101(_hardware_config(args)) as arm:
+    with _arm_from_args(args) as arm:
         arm.enable()
         result = arm.move_joints(values, speed=args.speed, acceleration=args.acceleration)
-        print(result)
+        _print_motion_result(result, as_json=args.json)
     return 0
 
 
 def _cmd_jog(args: argparse.Namespace) -> int:
     if not args.yes:
-        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        print("Refusing to move without --yes.", file=sys.stderr)
         return 2
-    with SOARM101(_hardware_config(args)) as arm:
+    with _arm_from_args(args) as arm:
         arm.enable()
         result = jog_linear_cli_units(
             arm,
@@ -280,13 +295,13 @@ def _cmd_jog(args: argparse.Namespace) -> int:
             speed_mm_s=args.speed_mm_s,
             acceleration_mm_s2=args.acceleration_mm_s2,
         )
-        print(result)
+        _print_motion_result(result, as_json=args.json)
     return 0
 
 
 def _cmd_gripper(args: argparse.Namespace) -> int:
     if not args.yes:
-        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        print("Refusing to move without --yes.", file=sys.stderr)
         return 2
     if args.target == "open":
         position = 1.0
@@ -296,16 +311,46 @@ def _cmd_gripper(args: argparse.Namespace) -> int:
         position = float(args.target)
     if not 0.0 <= position <= 1.0:
         raise ValueError("gripper target must be 'open', 'close', or a value in [0, 1]")
-    with SOARM101(_hardware_config(args)) as arm:
+    with _arm_from_args(args) as arm:
         arm.enable()
         result = arm.tool.move(position)
-        print(result)
+        _print_motion_result(result, as_json=args.json)
     return 0
+
+
+def _cmd_ik(args: argparse.Namespace) -> int:
+    target = Pose.from_xyz_rpy(
+        args.x_mm / 1000.0,
+        args.y_mm / 1000.0,
+        args.z_mm / 1000.0,
+        *(value * pi / 180.0 for value in (args.roll_deg, args.pitch_deg, args.yaw_deg)),
+    )
+    with _arm_from_args(args) as arm:
+        result = arm.solve_ik(target, orientation_mode=args.orientation_mode)
+    payload = {
+        "success": result.success,
+        "joints_rad": dict(result.joints),
+        "joints_deg": {name: value * 180.0 / pi for name, value in result.joints.items()},
+        "position_error_mm": result.position_error_m * 1000.0,
+        "orientation_error_deg": result.orientation_error_rad * 180.0 / pi,
+        "iterations": result.iterations,
+        "message": result.message,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"success={result.success} position_error_mm={payload['position_error_mm']:.3f}")
+        print(f"orientation_error_deg={payload['orientation_error_deg']:.3f}")
+        print("Joint solution (degrees):")
+        for name in ARM_JOINTS:
+            print(f"  {name:15s} {payload['joints_deg'][name]: .3f}")
+        print(result.message)
+    return 0 if result.success else 2
 
 
 def _cmd_move_linear(args: argparse.Namespace) -> int:
     if not args.yes:
-        print("Refusing to move hardware without --yes.", file=sys.stderr)
+        print("Refusing to move without --yes.", file=sys.stderr)
         return 2
     target = Pose.from_xyz_rpy(
         args.x_mm / 1000.0,
@@ -315,14 +360,13 @@ def _cmd_move_linear(args: argparse.Namespace) -> int:
     )
     with _arm_from_args(args) as arm:
         arm.enable()
-        print(
-            arm.move_linear(
-                target,
-                orientation_mode=args.orientation_mode,
-                speed=args.speed_mm_s / 1000.0,
-                acceleration=args.acceleration_mm_s2 / 1000.0,
-            )
+        result = arm.move_linear(
+            target,
+            orientation_mode=args.orientation_mode,
+            speed=args.speed_mm_s / 1000.0,
+            acceleration=args.acceleration_mm_s2 / 1000.0,
         )
+        _print_motion_result(result, as_json=args.json)
     return 0
 
 
@@ -620,7 +664,8 @@ def build_parser() -> argparse.ArgumentParser:
     configure.set_defaults(func=_cmd_configure)
 
     read = sub.add_parser("read", help="read calibrated joints and TCP pose without configuration writes")
-    add_hardware_options(read)
+    add_session_options(read)
+    read.add_argument("--json", action="store_true")
     read.set_defaults(func=_cmd_read)
 
     diagnose = sub.add_parser(
@@ -643,16 +688,17 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.set_defaults(func=_cmd_calibrate)
 
     move = sub.add_parser("move-joints", help="perform one guarded five-joint absolute move")
-    add_hardware_options(move)
+    add_session_options(move)
     move.add_argument("joints", nargs=5, type=float)
     move.add_argument("--degrees", action="store_true")
     move.add_argument("--speed", type=float)
     move.add_argument("--acceleration", type=float)
     move.add_argument("--yes", action="store_true")
+    move.add_argument("--json", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
 
     jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
-    add_hardware_options(jog)
+    add_session_options(jog)
     jog.add_argument("--frame", choices=("world", "tool"), default="world")
     jog.add_argument("--x-mm", type=float, default=0.0)
     jog.add_argument("--y-mm", type=float, default=0.0)
@@ -668,13 +714,29 @@ def build_parser() -> argparse.ArgumentParser:
     jog.add_argument("--speed-mm-s", type=float, default=10.0)
     jog.add_argument("--acceleration-mm-s2", type=float, default=40.0)
     jog.add_argument("--yes", action="store_true")
+    jog.add_argument("--json", action="store_true")
     jog.set_defaults(func=_cmd_jog)
 
     gripper = sub.add_parser("gripper", help="open, close, or position the stock gripper")
-    add_hardware_options(gripper)
+    add_session_options(gripper)
     gripper.add_argument("target", help="open, close, or normalized position 0..1")
     gripper.add_argument("--yes", action="store_true")
+    gripper.add_argument("--json", action="store_true")
     gripper.set_defaults(func=_cmd_gripper)
+
+    ik = sub.add_parser("ik", help="solve a world TCP target without commanding motion")
+    add_session_options(ik)
+    for axis in ("x", "y", "z"):
+        ik.add_argument(f"--{axis}-mm", type=float, required=True)
+    for axis in ("roll", "pitch", "yaw"):
+        ik.add_argument(f"--{axis}-deg", type=float, default=0.0)
+    ik.add_argument(
+        "--orientation-mode",
+        choices=("compatible", "position_only", "exact"),
+        default="compatible",
+    )
+    ik.add_argument("--json", action="store_true")
+    ik.set_defaults(func=_cmd_ik)
 
     linear = sub.add_parser("move-linear", help="move to an absolute world TCP pose")
     add_session_options(linear)
@@ -684,6 +746,7 @@ def build_parser() -> argparse.ArgumentParser:
         linear.add_argument(f"--{axis}-deg", type=float, default=0.0)
     add_linear_options(linear)
     linear.add_argument("--yes", action="store_true")
+    linear.add_argument("--json", action="store_true")
     linear.set_defaults(func=_cmd_move_linear)
 
     pose = sub.add_parser("pose", help="list, capture, and replay GUI named poses")
