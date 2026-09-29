@@ -147,7 +147,7 @@ def test_connect_read_write_and_diagnostics(monkeypatch: pytest.MonkeyPatch) -> 
     assert not backend.is_connected
 
 
-def test_torque_enable_missing_reply_rolls_back_attempted_motor(
+def test_torque_enable_missing_reply_is_accepted_when_readback_confirms(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     install_fake_sdk(monkeypatch)
@@ -156,16 +156,82 @@ def test_torque_enable_missing_reply_rolls_back_attempted_motor(
     )
     backend.connect()
     original_write = backend.write_register
+    injected = {"done": False}
 
     def missing_reply(motor: str, register: str, value: int) -> None:
         original_write(motor, register, value)
-        if motor == "shoulder_lift" and register == "Torque_Enable" and value == 1:
+        if (
+            not injected["done"]
+            and motor == "shoulder_lift"
+            and register == "Torque_Enable"
+            and value == 1
+        ):
+            injected["done"] = True
             raise CommunicationError("injected missing status packet")
 
     backend.write_register = missing_reply
     try:
-        with pytest.raises(CommunicationError, match="missing status packet"):
+        backend.enable_torque()
+        assert injected["done"] is True
+        assert backend._torque_enabled
+        assert all(
+            backend.read_register(name, "Torque_Enable") == 1
+            for name in ALL_MOTORS
+        )
+    finally:
+        backend.disconnect()
+
+
+def test_torque_enable_retries_once_when_write_did_not_reach_motor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False, verify_model_numbers=True)
+    )
+    backend.connect()
+    original_write = backend.write_register
+    attempts = {"count": 0}
+
+    def dropped_first_write(motor: str, register: str, value: int) -> None:
+        if motor == "shoulder_lift" and register == "Torque_Enable" and value == 1:
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise CommunicationError("injected dropped write")
+        original_write(motor, register, value)
+
+    backend.write_register = dropped_first_write
+    try:
+        backend.enable_torque()
+        assert attempts["count"] == 2
+        assert backend.read_register("shoulder_lift", "Torque_Enable") == 1
+        assert backend._torque_enabled
+    finally:
+        backend.disconnect()
+
+
+def test_torque_enable_persistent_control_write_failure_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False, verify_model_numbers=True)
+    )
+    backend.connect()
+    original_write = backend.write_register
+    attempts = {"count": 0}
+
+    def persistent_failure(motor: str, register: str, value: int) -> None:
+        if motor == "shoulder_lift" and register == "Torque_Enable" and value == 1:
+            attempts["count"] += 1
+            raise CommunicationError("persistent status packet failure")
+        original_write(motor, register, value)
+
+    backend.write_register = persistent_failure
+    try:
+        with pytest.raises(CommunicationError, match="persistent status packet failure"):
             backend.enable_torque()
+        assert attempts["count"] == 2
         assert backend.read_register("shoulder_pan", "Torque_Enable") == 0
         assert backend.read_register("shoulder_lift", "Torque_Enable") == 0
         assert not backend._torque_enabled
