@@ -15,6 +15,7 @@ from soarm101_motion.gui.teleop_rate import (
     GripperContactLatch,
     limit_joint_target,
     plan_alignment_target,
+    teleop_stale_limit_s,
     update_gripper_contact_latch,
 )
 from soarm101_motion.hardware import SimulationBackend
@@ -22,6 +23,15 @@ from soarm101_motion.hardware import SimulationBackend
 
 def test_default_teleop_rate_is_smooth_practical_rate() -> None:
     assert DEFAULT_TELEOP_STREAM_FREQUENCY_HZ == 20.0
+
+
+def test_backlog_guard_uses_actual_sample_age_not_cycle_duration() -> None:
+    period_s = 1.0 / 20.0
+    assert teleop_stale_limit_s(period_s) == pytest.approx(0.15)
+    # The physical failure that motivated this change had a ~63 ms follower
+    # cycle but only ~8 ms of queued sample age. That is not stale playback.
+    assert 0.008 < teleop_stale_limit_s(period_s)
+    assert 0.200 > teleop_stale_limit_s(period_s)
 
 
 class RecordingSimulationBackend(SimulationBackend):
