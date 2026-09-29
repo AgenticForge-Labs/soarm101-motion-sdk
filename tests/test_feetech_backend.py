@@ -176,7 +176,7 @@ def test_torque_enable_missing_reply_is_accepted_when_readback_confirms(
         assert backend._torque_enabled
         assert all(
             backend.read_register(name, "Torque_Enable") == 1
-            for name in ALL_MOTORS
+            for name in MOTOR_IDS
         )
     finally:
         backend.disconnect()
