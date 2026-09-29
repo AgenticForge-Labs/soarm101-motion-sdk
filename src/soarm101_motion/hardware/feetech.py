@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 # A small encoder-count tolerance handles quantization/backlash at a calibrated
 # endpoint. Any correction is always inward, toward the active EEPROM limit.
 TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS = 8
+CONTROL_WRITE_RETRIES = 1
+CONTROL_WRITE_RETRY_DELAY_S = 0.01
 
 
 class FeetechBackend(SO101HardwareBackend):
@@ -293,6 +295,48 @@ class FeetechBackend(SO101HardwareBackend):
             else:
                 raise NotImplementedError(f"unsupported register width {width}")
             self._check_result(comm, error, f"write {register} on {motor}")
+
+    def _write_control_register_confirmed(
+        self,
+        motor: str,
+        register: str,
+        value: int,
+    ) -> None:
+        """Write an idempotent control register with bounded readback recovery.
+
+        Feetech writes may reach the servo even when the returned status packet is
+        corrupted or lost. For control bits such as Torque_Enable and Lock, first
+        verify the requested value after a communication error; only retry the same
+        idempotent write when readback does not already confirm success.
+        """
+
+        if register not in {"Torque_Enable", "Lock"}:
+            raise ValueError(f"unsupported confirmed control register: {register}")
+        requested = int(value)
+        last_error: CommunicationError | None = None
+        for attempt in range(CONTROL_WRITE_RETRIES + 1):
+            try:
+                self.write_register(motor, register, requested)
+                return
+            except CommunicationError as exc:
+                last_error = exc
+                try:
+                    actual = self.read_register(motor, register)
+                except CommunicationError:
+                    actual = None
+                if actual == requested:
+                    logger.warning(
+                        "%s write on %s returned a communication error but readback "
+                        "confirmed value %s",
+                        register,
+                        motor,
+                        requested,
+                    )
+                    return
+                if attempt < CONTROL_WRITE_RETRIES:
+                    time.sleep(CONTROL_WRITE_RETRY_DELAY_S)
+                    continue
+                raise last_error
 
     @contextmanager
     def eprom_unlocked(self, motor: str) -> Iterator[None]:
@@ -554,13 +598,13 @@ class FeetechBackend(SO101HardwareBackend):
                     # The write may reach the motor even when its status reply is
                     # lost. Include that motor in rollback before sending it.
                     enabled.append(name)
-                    self.write_register(name, "Torque_Enable", 1)
-                    self.write_register(name, "Lock", 1)
+                    self._write_control_register_confirmed(name, "Torque_Enable", 1)
+                    self._write_control_register_confirmed(name, "Lock", 1)
             except BaseException:
                 for name in reversed(enabled):
                     try:
-                        self.write_register(name, "Torque_Enable", 0)
-                        self.write_register(name, "Lock", 0)
+                        self._write_control_register_confirmed(name, "Torque_Enable", 0)
+                        self._write_control_register_confirmed(name, "Lock", 0)
                     except Exception:
                         logger.exception("failed to roll back torque enable for %s", name)
                 self._torque_enabled = False
@@ -584,11 +628,11 @@ class FeetechBackend(SO101HardwareBackend):
             errors: list[str] = []
             for name in selected:
                 try:
-                    self.write_register(name, "Torque_Enable", 0)
+                    self._write_control_register_confirmed(name, "Torque_Enable", 0)
                 except Exception as exc:
                     errors.append(f"{name} torque: {exc}")
                 try:
-                    self.write_register(name, "Lock", 0)
+                    self._write_control_register_confirmed(name, "Lock", 0)
                 except Exception as exc:
                     errors.append(f"{name} lock: {exc}")
             if motors is None or set(selected) == set(ALL_MOTORS):

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Made Feetech torque/lock control writes tolerant of a single corrupted or missing status
+  reply: the backend first reads the control register back, accepts the write only if the
+  requested value is confirmed, otherwise retries the same idempotent write once and still
+  rolls back/fails closed on persistent communication errors.
+
 - Added explicit USB camera disconnect recovery for live GUI streams. A vanished Linux camera
   or V4L2 reopen failure after a previously live stream now enters a visible WAITING state for
   up to 30 seconds, keeps the last good frame, and automatically reopens the same saved stable
