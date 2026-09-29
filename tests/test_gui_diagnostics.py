@@ -424,7 +424,9 @@ def test_setup_shows_default_detailed_log_option(tmp_path, monkeypatch) -> None:
 
 
 
-def test_teleop_overrun_fault_holds_and_emits_delink_state(monkeypatch) -> None:
+def test_teleop_overrun_is_diagnostic_but_stale_sample_holds_and_delinks(
+    monkeypatch,
+) -> None:
     pytest.importorskip("PySide6")
     from soarm101_motion.config import SOARM101Config
     from soarm101_motion.gui.worker import RobotWorker
@@ -479,9 +481,27 @@ def test_teleop_overrun_fault_holds_and_emits_delink_state(monkeypatch) -> None:
     assert worker._teleop is not None
     worker._teleop["overruns"] = 2
 
+    # A third 55 ms follower cycle at 20 Hz is an overrun, but the leader
+    # sample is fresh. Keep following instead of treating nominal-period jitter
+    # as proof of queued stale playback.
     worker.apply_teleop_sample(
         {
             "timestamp": time.perf_counter(),
+            "joints_rad": joints,
+            "gripper": 0.5,
+        }
+    )
+    assert worker._teleop is not None
+    assert worker._teleop["overruns"] >= 3
+    assert stop_calls == []
+    assert faults == []
+    assert errors == []
+
+    # Actual backlog remains fail-closed. At 20 Hz the stale threshold is
+    # 150 ms, so a 200 ms-old leader sample must hold and delink.
+    worker.apply_teleop_sample(
+        {
+            "timestamp": time.perf_counter() - 0.2,
             "joints_rad": joints,
             "gripper": 0.5,
         }
@@ -494,6 +514,6 @@ def test_teleop_overrun_fault_holds_and_emits_delink_state(monkeypatch) -> None:
     assert faults[0]["follower_holding"] is True
     assert faults[0]["frequency_hz"] == pytest.approx(20.0)
     assert faults[0]["recommended_frequency_hz"] == pytest.approx(10.0)
-    assert faults[0]["processing_ms"] >= 50.0
-    assert "processing exceeded" in faults[0]["reason"]
+    assert faults[0]["sample_age_ms"] >= 150.0
+    assert "leader sample is" in faults[0]["reason"]
     assert errors and errors[-1].startswith("live teleoperation:")
