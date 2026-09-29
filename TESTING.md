@@ -488,6 +488,20 @@ Robo Puppeteer/Director repositories.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## Camera layout / multi-view validation — workstation / hardware
+
+1. Open Camera with one saved camera and confirm the setup controls stay in a compact panel
+   rather than stretching across the whole workspace.
+2. Confirm **USB device** is visibly a dropdown and is populated on tab construction; press
+   **Find cameras** and verify the same stable devices remain available.
+3. Configure two named cameras such as `overhead` and `wrist`, start both, and confirm the
+   lower preview area splits side-by-side with a name/status card for each camera.
+4. Add a third saved camera profile (hardware stream optional) and confirm the preview switches
+   to a two-column grid without losing the first two cards.
+5. Rename/delete a camera and confirm the grid follows the saved registry without stale cards.
+6. Switch the selected profile while streams run and confirm selection changes controls/status
+   without hiding the other live camera cards.
+
 ## Workstation + multi-camera validation — workstation / hardware
 
 Camera capture is independent of powered robot motion, but USB/UVC enumeration, concurrent

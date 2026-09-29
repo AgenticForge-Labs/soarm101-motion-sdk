@@ -86,16 +86,25 @@ capture against a device currently owned by the GUI.
 
 ## GUI
 
-The **Camera** tab is the settings surface for named cameras. It supports:
+The **Camera** tab is the settings surface for named cameras. Its compact setup panel supports:
 
 - selecting/renaming a saved camera profile;
 - creating and deleting profiles;
-- discovering local camera devices;
+- an explicit USB-device dropdown populated from local discovery;
 - per-camera resolution/FPS/FourCC/mirroring/snapshot settings;
 - per-camera auto-start;
 - starting/stopping the selected camera;
 - starting/stopping all configured cameras; and
 - capturing a still from the selected camera.
+
+Camera discovery runs when the tab is built and can also be refreshed manually. The device
+selector is deliberately non-editable in the GUI so a discovered camera looks like a real
+choice rather than an ambiguous text field; custom device paths remain configurable through
+the CLI/workstation profile.
+
+The lower Camera-tab area shows every configured camera simultaneously: one camera uses the
+full preview area, two cameras split side-by-side, and three or more use a two-column grid.
+Each card is labeled with its logical camera name and live/stopped state.
 
 The GUI may own multiple live camera sessions concurrently, one worker per named physical
 device. Camera and Teleoperation views consume those shared named sessions rather than opening

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Made the Camera tab more compact, turned USB device selection into an explicit discovered-
+  device dropdown, and added an adaptive named-camera preview area: one view fills the panel,
+  two split side-by-side, and larger sets use a two-column grid.
+
 - Increased Motion Studio button contrast using colors computed from the active Qt palette,
   added explicit primary/danger action roles, and kept disabled controls visibly button-shaped
   instead of allowing Ubuntu palette roles to collapse into the page background.
