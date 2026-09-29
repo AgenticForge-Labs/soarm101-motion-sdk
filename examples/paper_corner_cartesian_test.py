@@ -108,7 +108,6 @@ def derive_paper_geometry(
     normal = _unit(np.cross(x_axis, y_axis), label="paper normal")
     if normal[2] < 0.0:
         normal = -normal
-        y_axis = -y_axis
 
     cosine = float(
         np.clip(
