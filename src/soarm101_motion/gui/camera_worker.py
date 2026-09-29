@@ -186,7 +186,6 @@ class CameraWorker(QThread):
                     consecutive_frame_failures = 0
                     open_failures = 0
                     recovering = False
-                    recovery_cycles = 0
                     device_wait_started = None
                     device_wait_last_second = -1
                     self.status_changed.emit(
