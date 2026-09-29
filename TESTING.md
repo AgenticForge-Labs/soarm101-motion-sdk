@@ -491,4 +491,22 @@ validation because UVC devices negotiate formats differently across drivers.
 8. Capture pictures from both Camera and Teleoperation and confirm they land in the same
    configured snapshot folder.
 9. Close the GUI and verify the camera device is released so a subsequent CLI capture can open it.
-10. Only after camera capture is stable should an agent loop be given camera + motion CLI access.
+10. Only after camera capture is stable should an external agent client be given camera +
+    motion CLI access.
+
+## Direct-agent CLI validation — software only
+
+Before giving a coding agent physical serial access, verify the structured command surface
+without hardware:
+
+```bash
+soarm101 read --simulation --json
+soarm101 ik --simulation --x-mm 180 --y-mm 0 --z-mm 160 \
+  --orientation-mode position_only --json
+soarm101 jog --simulation --x-mm 2 --json --yes
+soarm101 gripper --simulation 0.5 --json --yes
+```
+
+Confirm each command emits valid JSON and that `ik` performs no motion. Physical one-off
+CLI testing remains subject to the earlier joint-direction, FK/TCP, and Cartesian gates;
+the GUI and CLI must not own the follower serial port simultaneously.
