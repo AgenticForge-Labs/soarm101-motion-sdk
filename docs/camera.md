@@ -112,8 +112,9 @@ LIVE / RECOVERING / STOPPED state.
 
 A single missed USB frame is treated as transient rather than terminal. The GUI worker retries
 short read gaps, keeps pending snapshot requests intact, and only reopens the device after
-eight consecutive missed frames. Camera-open failures are retried three times before the
-stream is stopped and surfaced as an error.
+eight consecutive missed frames. Up to three empty-frame recovery cycles are attempted, and
+camera-open failures are retried three times; after those bounded retries the stream stops and
+surfaces a terminal error instead of retrying forever.
 
 The GUI may own multiple live camera sessions concurrently, one worker per named physical
 device. Camera and Teleoperation views consume those shared named sessions rather than opening
