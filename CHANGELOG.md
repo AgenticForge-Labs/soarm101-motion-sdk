@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added one machine-local workstation profile shared by GUI, CLI, and agents for follower/
+  leader ports, robot/calibration identities, and named cameras.
+- Added named multi-camera GUI sessions: profiles such as `overhead` and `wrist` can run
+  concurrently, while Camera and Teleoperation choose which shared stream to display.
+- Added named camera CLI operations, `camera capture --all`, workstation inspection/arm
+  configuration, and stable Linux `/dev/v4l/by-id/*-video-index0` discovery when available.
+- Migrated the legacy single-camera configuration into the workstation profile and removed
+  duplicate hardware addressing from agent-as-code experiment setup.
+- Simplified high-density GUI guidance into contextual help/tooltips and strengthened the
+  global push-button treatment so actions are visually distinct across tabs.
+
 - Added a neutral `docs/agent-arm101-cli.md` tool contract for direct coding-agent and
   automation use without prescribing an agent reasoning or action policy.
 - Added read-only `soarm101 ik` target solving plus JSON output for read, joint motion,
