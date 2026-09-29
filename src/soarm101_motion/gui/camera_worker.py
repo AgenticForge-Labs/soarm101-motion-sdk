@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from soarm101_motion.camera import CameraCapture, CameraFrameReadError, CameraSettings
+from soarm101_motion.camera import (
+    CameraCapture,
+    CameraDeviceUnavailableError,
+    CameraFrameReadError,
+    CameraSettings,
+    camera_device_available,
+)
 
 
 MAX_CONSECUTIVE_FRAME_FAILURES = 8
@@ -16,6 +23,8 @@ MAX_FRAME_RECOVERY_CYCLES = 3
 FRAME_RETRY_DELAY_MS = 8
 MAX_OPEN_FAILURES = 3
 OPEN_RETRY_DELAY_MS = 250
+DEVICE_RETURN_TIMEOUT_MS = 30_000
+DEVICE_RETURN_POLL_MS = 500
 
 
 class CameraWorker(QThread):
@@ -73,6 +82,8 @@ class CameraWorker(QThread):
         open_failures = 0
         recovering = False
         recovery_cycles = 0
+        device_wait_started: float | None = None
+        device_wait_last_second = -1
         while True:
             with self._lock:
                 shutdown = self._shutdown
@@ -93,6 +104,8 @@ class CameraWorker(QThread):
                 open_failures = 0
                 recovering = False
                 recovery_cycles = 0
+                device_wait_started = None
+                device_wait_last_second = -1
                 self.msleep(50)
                 continue
 
@@ -100,6 +113,62 @@ class CameraWorker(QThread):
                 if capture is not None:
                     capture.close()
                     capture = None
+
+                if generation != opened_generation:
+                    device_wait_started = None
+                    device_wait_last_second = -1
+                    open_failures = 0
+                    recovery_cycles = 0
+
+                if not camera_device_available(settings.device):
+                    now = time.monotonic()
+                    if device_wait_started is None:
+                        device_wait_started = now
+                        device_wait_last_second = -1
+                    waited_s = max(0.0, now - device_wait_started)
+                    timeout_s = DEVICE_RETURN_TIMEOUT_MS / 1000.0
+                    if waited_s >= timeout_s:
+                        message = (
+                            f"camera device did not return within {timeout_s:.0f} s: "
+                            f"{settings.device}"
+                        )
+                        with self._lock:
+                            self._streaming = False
+                        recovering = False
+                        self.error_message.emit(message)
+                        self.status_changed.emit(
+                            {
+                                "connected": False,
+                                "device": settings.device,
+                                "recovering": False,
+                                "device_missing": True,
+                                "waited_s": waited_s,
+                                "wait_timeout_s": timeout_s,
+                                "error": message,
+                            }
+                        )
+                        continue
+                    waited_second = int(waited_s)
+                    if waited_second != device_wait_last_second:
+                        device_wait_last_second = waited_second
+                        recovering = True
+                        self.status_changed.emit(
+                            {
+                                "connected": False,
+                                "device": settings.device,
+                                "recovering": True,
+                                "device_missing": True,
+                                "waited_s": waited_s,
+                                "wait_timeout_s": timeout_s,
+                                "warning": (
+                                    "camera disconnected; waiting for the saved device "
+                                    "identity to return"
+                                ),
+                            }
+                        )
+                    self.msleep(DEVICE_RETURN_POLL_MS)
+                    continue
+
                 try:
                     capture = CameraCapture(settings).open()
                     opened_generation = generation
@@ -107,17 +176,62 @@ class CameraWorker(QThread):
                     consecutive_frame_failures = 0
                     open_failures = 0
                     recovering = False
+                    recovery_cycles = 0
+                    device_wait_started = None
+                    device_wait_last_second = -1
                     self.status_changed.emit(
                         {
                             "connected": True,
                             "recovering": False,
+                            "device_missing": False,
                             "dropped_frames": 0,
                             **capture.actual_format(),
                         }
                     )
+                except CameraDeviceUnavailableError as exc:
+                    capture = None
+                    last_connected = False
+                    if device_wait_started is None:
+                        device_wait_started = time.monotonic()
+                        device_wait_last_second = -1
+                    recovering = True
+                    self.status_changed.emit(
+                        {
+                            "connected": False,
+                            "device": settings.device,
+                            "recovering": True,
+                            "device_missing": True,
+                            "waited_s": 0.0,
+                            "wait_timeout_s": DEVICE_RETURN_TIMEOUT_MS / 1000.0,
+                            "warning": str(exc),
+                        }
+                    )
+                    self.msleep(DEVICE_RETURN_POLL_MS)
+                    continue
                 except Exception as exc:
                     capture = None
                     last_connected = False
+                    if device_wait_started is not None:
+                        waited_s = time.monotonic() - device_wait_started
+                        timeout_s = DEVICE_RETURN_TIMEOUT_MS / 1000.0
+                        if waited_s < timeout_s:
+                            recovering = True
+                            self.status_changed.emit(
+                                {
+                                    "connected": False,
+                                    "device": settings.device,
+                                    "recovering": True,
+                                    "device_missing": False,
+                                    "waited_s": waited_s,
+                                    "wait_timeout_s": timeout_s,
+                                    "warning": (
+                                        "camera device returned but is not ready yet; "
+                                        "retrying"
+                                    ),
+                                }
+                            )
+                            self.msleep(DEVICE_RETURN_POLL_MS)
+                            continue
                     open_failures += 1
                     if open_failures < MAX_OPEN_FAILURES:
                         self.status_changed.emit(
@@ -125,6 +239,7 @@ class CameraWorker(QThread):
                                 "connected": False,
                                 "device": settings.device,
                                 "recovering": True,
+                                "device_missing": False,
                                 "open_attempt": open_failures,
                                 "open_attempt_limit": MAX_OPEN_FAILURES,
                                 "warning": str(exc),
@@ -140,6 +255,7 @@ class CameraWorker(QThread):
                             "connected": False,
                             "device": settings.device,
                             "recovering": False,
+                            "device_missing": False,
                             "error": str(exc),
                         }
                     )
@@ -159,6 +275,8 @@ class CameraWorker(QThread):
                 consecutive_frame_failures = 0
                 recovering = False
                 recovery_cycles = 0
+                device_wait_started = None
+                device_wait_last_second = -1
 
                 height, width = frame.shape[:2]
                 image = QImage(
@@ -176,6 +294,30 @@ class CameraWorker(QThread):
                     with self._lock:
                         if self._snapshot_path == snapshot_path:
                             self._snapshot_path = None
+
+            except CameraDeviceUnavailableError as exc:
+                capture.close()
+                capture = None
+                last_connected = False
+                consecutive_frame_failures = 0
+                recovery_cycles = 0
+                recovering = True
+                if device_wait_started is None:
+                    device_wait_started = time.monotonic()
+                    device_wait_last_second = -1
+                self.status_changed.emit(
+                    {
+                        "connected": False,
+                        "device": settings.device,
+                        "recovering": True,
+                        "device_missing": True,
+                        "waited_s": 0.0,
+                        "wait_timeout_s": DEVICE_RETURN_TIMEOUT_MS / 1000.0,
+                        "warning": str(exc),
+                    }
+                )
+                self.msleep(DEVICE_RETURN_POLL_MS)
+                continue
 
             except CameraFrameReadError as exc:
                 consecutive_frame_failures += 1
