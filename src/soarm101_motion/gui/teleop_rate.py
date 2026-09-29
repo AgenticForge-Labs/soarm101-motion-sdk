@@ -12,6 +12,18 @@ TELEOP_GRIPPER_SPEED_PER_S = 1.2
 GRIPPER_SPEED_PRESETS = (("Slow · original", 1.0), ("Normal · 2×", 2.0), ("Fast · 5×", 5.0))
 
 
+def teleop_stale_limit_s(period_s: float) -> float:
+    """Maximum acceptable leader-sample age before follower execution.
+
+    Timing safety is based on actual queued-sample age rather than whether an
+    individual follower iteration happened to exceed its nominal period.
+    """
+    period = float(period_s)
+    if not math.isfinite(period) or period <= 0.0:
+        raise ValueError("teleop period must be a positive finite value")
+    return max(0.15, 3.0 * period)
+
+
 def gripper_speed_raw(base_speed: int, multiplier: float) -> int:
     """Resolve a GUI speed preset to the Feetech goal speed register."""
     if multiplier not in {value for _, value in GRIPPER_SPEED_PRESETS}:
