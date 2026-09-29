@@ -7,6 +7,7 @@ import pytest
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.constants import (
+    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
@@ -17,6 +18,10 @@ from soarm101_motion.gui.teleop_rate import (
     update_gripper_contact_latch,
 )
 from soarm101_motion.hardware import SimulationBackend
+
+
+def test_default_teleop_rate_is_conservative_for_hardware() -> None:
+    assert DEFAULT_TELEOP_STREAM_FREQUENCY_HZ == 10.0
 
 
 class RecordingSimulationBackend(SimulationBackend):
