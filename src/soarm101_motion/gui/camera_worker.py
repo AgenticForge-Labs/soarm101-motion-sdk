@@ -84,6 +84,7 @@ class CameraWorker(QThread):
         recovery_cycles = 0
         device_wait_started: float | None = None
         device_wait_last_second = -1
+        observed_generation = -1
         while True:
             with self._lock:
                 shutdown = self._shutdown
@@ -106,19 +107,28 @@ class CameraWorker(QThread):
                 recovery_cycles = 0
                 device_wait_started = None
                 device_wait_last_second = -1
+                observed_generation = generation
                 self.msleep(50)
                 continue
+
+            if generation != observed_generation:
+                if capture is not None:
+                    capture.close()
+                    capture = None
+                observed_generation = generation
+                opened_generation = -1
+                last_connected = False
+                consecutive_frame_failures = 0
+                open_failures = 0
+                recovering = False
+                recovery_cycles = 0
+                device_wait_started = None
+                device_wait_last_second = -1
 
             if capture is None or generation != opened_generation:
                 if capture is not None:
                     capture.close()
                     capture = None
-
-                if generation != opened_generation:
-                    device_wait_started = None
-                    device_wait_last_second = -1
-                    open_failures = 0
-                    recovery_cycles = 0
 
                 if not camera_device_available(settings.device):
                     now = time.monotonic()
