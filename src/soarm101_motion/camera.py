@@ -62,9 +62,9 @@ class CameraSettings:
     """Persisted settings shared by CLI and GUI camera consumers."""
 
     device: str = "/dev/video0" if sys.platform.startswith("linux") else "0"
-    width: int = 1280
-    height: int = 720
-    fps: float = 30.0
+    width: int = 640
+    height: int = 480
+    fps: float = 15.0
     fourcc: str = "MJPG"
     mirror: bool = False
     auto_start: bool = False

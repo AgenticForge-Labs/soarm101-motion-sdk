@@ -8,6 +8,14 @@ from soarm101_motion.camera import CameraSettings, CameraSettingsStore
 from soarm101_motion.cli.main import build_parser
 
 
+def test_camera_defaults_are_low_bandwidth_for_robotics() -> None:
+    settings = CameraSettings()
+    assert settings.width == 640
+    assert settings.height == 480
+    assert settings.fps == 15.0
+    assert settings.fourcc == "MJPG"
+
+
 def test_camera_settings_round_trip(tmp_path) -> None:
     path = tmp_path / "camera.json"
     store = CameraSettingsStore(path)

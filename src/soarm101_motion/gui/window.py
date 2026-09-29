@@ -2078,8 +2078,8 @@ class MainWindow(QMainWindow):
         teleop_grid.addWidget(QLabel("Rate"), 0, 2)
         self.teleop_rate_combo = QComboBox()
         self.teleop_rate_combo.addItem("5 Hz — slow check", 5.0)
-        self.teleop_rate_combo.addItem("10 Hz", 10.0)
-        self.teleop_rate_combo.addItem("20 Hz — default", 20.0)
+        self.teleop_rate_combo.addItem("10 Hz — default", 10.0)
+        self.teleop_rate_combo.addItem("20 Hz — higher rate", 20.0)
         self.teleop_rate_combo.addItem("50 Hz — experimental", 50.0)
         default_rate_index = self.teleop_rate_combo.findData(
             DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
