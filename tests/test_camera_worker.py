@@ -82,6 +82,7 @@ def test_camera_worker_recovers_after_one_dropped_frame(monkeypatch) -> None:
 
     fake = FakeCapture(CameraSettings(device="/dev/video-test"))
     monkeypatch.setattr(camera_worker, "CameraCapture", lambda settings: fake)
+    monkeypatch.setattr(camera_worker, "camera_device_available", lambda _device: True)
 
     worker = camera_worker.CameraWorker(fake.settings)
     frames: list[object] = []
@@ -154,6 +155,7 @@ def test_camera_worker_keeps_snapshot_request_across_transient_drop(
 
     fake = FakeCapture(CameraSettings(device="/dev/video-test"))
     monkeypatch.setattr(camera_worker, "CameraCapture", lambda settings: fake)
+    monkeypatch.setattr(camera_worker, "camera_device_available", lambda _device: True)
 
     worker = camera_worker.CameraWorker(fake.settings)
     snapshots: list[str] = []
@@ -211,6 +213,7 @@ def test_camera_worker_stops_after_bounded_empty_frame_recovery(monkeypatch) -> 
 
     fake = EmptyCapture(CameraSettings(device="/dev/video-empty"))
     monkeypatch.setattr(camera_worker, "CameraCapture", lambda settings: fake)
+    monkeypatch.setattr(camera_worker, "camera_device_available", lambda _device: True)
 
     worker = camera_worker.CameraWorker(fake.settings)
     errors: list[str] = []
