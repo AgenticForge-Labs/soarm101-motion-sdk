@@ -1059,11 +1059,11 @@ class RobotWorker(QObject):
                 teleop["overruns"] += 1
             else:
                 teleop["overruns"] = 0
-            if teleop["overruns"] >= 3:
-                raise RuntimeError(
-                    "follower teleop processing exceeded the selected stream period "
-                    "for three consecutive samples; reduce the teleop rate before retrying"
-                )
+            # Processing time is diagnostic, not itself proof of unsafe backlog.
+            # The sample-age guard above measures the actual queued-command hazard
+            # directly and stops/holds when leader data becomes stale. A few
+            # slightly-long cycles can otherwise trip smooth 20 Hz teleoperation
+            # even while queued age remains near zero.
             if teleop["samples"] % 5 == 0:
                 self.sequence_progress.emit(
                     {
