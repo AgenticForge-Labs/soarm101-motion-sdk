@@ -475,6 +475,19 @@ streaming, richer mesh collision models, and show-level orchestration in the app
 Robo Puppeteer/Director repositories.
 
 
+## GUI control contrast — visual validation
+
+1. Launch Motion Studio with the normal desktop theme.
+2. Check every tab with both enabled and disabled controls visible.
+3. Confirm ordinary buttons have a distinct filled surface and border rather than appearing
+   as label text.
+4. Confirm primary task actions such as Connect, Find Arms, Align/Start, Save, Run, and
+   Cartesian Move use the accent-filled primary treatment when enabled.
+5. Confirm STOP / HOLD uses the danger treatment when enabled.
+6. Confirm disabled controls remain visibly button-shaped while reading as unavailable.
+7. Hover/focus several controls and confirm the state change is obvious without changing
+   layout size.
+
 ## Workstation + multi-camera validation — workstation / hardware
 
 Camera capture is independent of powered robot motion, but USB/UVC enumeration, concurrent

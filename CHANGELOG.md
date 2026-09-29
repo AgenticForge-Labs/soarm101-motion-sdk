@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Increased Motion Studio button contrast using colors computed from the active Qt palette,
+  added explicit primary/danger action roles, and kept disabled controls visibly button-shaped
+  instead of allowing Ubuntu palette roles to collapse into the page background.
+
 - Added one machine-local workstation profile shared by GUI, CLI, and agents for follower/
   leader ports, robot/calibration identities, and named cameras.
 - Added named multi-camera GUI sessions: profiles such as `overhead` and `wrist` can run

@@ -369,3 +369,24 @@ def test_teleop_fault_is_prominent_and_requires_explicit_restart(window):
     assert "63 ms at 20 Hz" in window.teleop_status.text()
     assert "Select 10 Hz" in window.teleop_status.text()
     assert "#fee2e2" in window.teleop_status.styleSheet()
+
+
+
+def test_gui_buttons_have_explicit_visual_roles_and_contrast(window):
+    from PySide6.QtWidgets import QPushButton
+
+    assert window.connect_button.property("buttonRole") == "primary"
+    assert window.leader_connect_button.property("buttonRole") == "primary"
+    assert window.find_arms_button.property("buttonRole") == "primary"
+    assert window.teleop_button.property("buttonRole") == "primary"
+    assert window.run_sequence_button.property("buttonRole") == "primary"
+    assert window.stop_button.property("buttonRole") == "danger"
+    assert window.stop_sequence_button.property("buttonRole") == "danger"
+
+    buttons = window.findChildren(QPushButton)
+    assert buttons
+    style = window.styleSheet()
+    assert "QPushButton[buttonRole=\"primary\"]" in style
+    assert "QPushButton[buttonRole=\"danger\"]" in style
+    assert "background-color:" in style
+    assert "QPushButton {" in style
