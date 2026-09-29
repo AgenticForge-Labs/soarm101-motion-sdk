@@ -1702,24 +1702,45 @@ class MainWindow(QMainWindow):
 
         camera_box = QGroupBox("Live camera")
         camera_layout = QVBoxLayout(camera_box)
+        camera_selector = QHBoxLayout()
+        camera_selector.addWidget(QLabel("View"))
+        self.teleop_camera_combo = QComboBox()
+        self.teleop_camera_combo.addItems(list(self._workstation_profile.cameras))
+        if self._workstation_profile.selected_camera:
+            self.teleop_camera_combo.setCurrentText(
+                self._workstation_profile.selected_camera
+            )
+        self.teleop_camera_combo.currentTextChanged.connect(
+            self._on_teleop_camera_changed
+        )
+        camera_selector.addWidget(self.teleop_camera_combo, 1)
+        camera_selector.addWidget(
+            self._help_button(
+                "Teleoperation camera",
+                "Select any saved camera by name. Cameras are configured in the Camera "
+                "tab. More than one named camera may be streaming at the same time; this "
+                "selector only chooses which stream is shown here.",
+            )
+        )
+        camera_layout.addLayout(camera_selector)
+
         self.teleop_camera_preview = self._new_camera_preview_label(minimum_height=260)
         camera_layout.addWidget(self.teleop_camera_preview)
         camera_controls = QHBoxLayout()
         self.teleop_camera_status = QLabel(
-            f"Stopped · shared settings: {self._camera_settings.device}"
+            self._camera_status_text(self._teleop_camera_name())
         )
         self.teleop_camera_status.setWordWrap(True)
         camera_controls.addWidget(self.teleop_camera_status, 1)
         self.teleop_camera_toggle_button = QPushButton("Start camera")
-        self.teleop_camera_toggle_button.clicked.connect(self._toggle_camera_stream)
+        self.teleop_camera_toggle_button.clicked.connect(
+            self._toggle_teleop_camera_stream
+        )
         camera_controls.addWidget(self.teleop_camera_toggle_button)
         teleop_capture_button = QPushButton("Capture picture")
-        teleop_capture_button.clicked.connect(self._capture_camera_frame)
+        teleop_capture_button.clicked.connect(self._capture_teleop_camera_frame)
         camera_controls.addWidget(teleop_capture_button)
         camera_layout.addLayout(camera_controls)
-        camera_note = QLabel("Configure device, resolution, FPS, mirroring, and capture folder in Camera.")
-        camera_note.setWordWrap(True)
-        camera_layout.addWidget(camera_note)
         left_layout.addWidget(camera_box)
 
         self.teleop_readout = QLabel("Connect both arms to see live measurements.")
@@ -1744,13 +1765,18 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        note = QLabel(
-            "Teach named positions for deterministic Programs, or record continuous "
-            "demonstration trajectories for replay, editing, and future Robo Puppeteer "
-            "motion data. Both workflows are first-class."
+        teach_heading = QHBoxLayout()
+        teach_heading.addWidget(QLabel("Save positions or record continuous motion."))
+        teach_heading.addStretch(1)
+        teach_heading.addWidget(
+            self._help_button(
+                "Teach / Record",
+                "Saved positions are deterministic destinations for Programs. Continuous "
+                "recordings preserve demonstration paths for replay, editing, and future "
+                "Robo Puppeteer / learning workflows. Neither workflow replaces the other.",
+            )
         )
-        note.setWordWrap(True)
-        left_layout.addWidget(note)
+        left_layout.addLayout(teach_heading)
 
         source = QGroupBox("Teaching source")
         source_grid = QGridLayout(source)
