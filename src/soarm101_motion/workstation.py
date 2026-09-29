@@ -88,7 +88,12 @@ class WorkstationProfile:
             if name in normalized:
                 raise ValueError(f"duplicate camera profile name: {name}")
             settings = raw_settings.validated()
-            device_key = settings.device.strip()
+            device_text = settings.device.strip()
+            device_key = (
+                os.path.realpath(device_text)
+                if device_text.startswith("/")
+                else device_text
+            )
             if device_key in devices:
                 raise ValueError(
                     f"camera profiles {devices[device_key]!r} and {name!r} "
