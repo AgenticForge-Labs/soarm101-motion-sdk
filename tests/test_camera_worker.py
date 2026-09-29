@@ -365,3 +365,99 @@ def test_camera_worker_times_out_waiting_for_missing_device(monkeypatch) -> None
     assert statuses[-1]["recovering"] is False
     assert statuses[-1]["device_missing"] is True
     assert statuses[-1]["wait_timeout_s"] == pytest.approx(0.04)
+
+
+
+def test_camera_worker_retries_v4l2_reopen_failure_after_live_stream(monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from soarm101_motion.gui import camera_worker
+
+    app = QApplication.instance() or QApplication([])
+    frame = np.zeros((12, 16, 3), dtype=np.uint8)
+    factory_calls = {"count": 0}
+
+    class FirstCapture:
+        def __init__(self, settings: CameraSettings) -> None:
+            self.settings = settings
+            self.read_count = 0
+
+        def open(self):
+            return self
+
+        def close(self) -> None:
+            pass
+
+        def actual_format(self) -> dict[str, object]:
+            return {
+                "device": self.settings.device,
+                "width": 16,
+                "height": 12,
+                "fps": 30.0,
+                "fourcc": "MJPG",
+                "mirror": False,
+            }
+
+        def read_bgr(self):
+            self.read_count += 1
+            if self.read_count == 1:
+                return frame
+            raise CameraFrameReadError("camera did not return a frame")
+
+    class FailingReopen:
+        def __init__(self, settings: CameraSettings) -> None:
+            self.settings = settings
+
+        def open(self):
+            raise RuntimeError("could not open camera after V4L2 ENODEV")
+
+        def close(self) -> None:
+            pass
+
+    class RecoveredCapture(FirstCapture):
+        def read_bgr(self):
+            return frame
+
+    def factory(settings: CameraSettings):
+        factory_calls["count"] += 1
+        if factory_calls["count"] == 1:
+            return FirstCapture(settings)
+        if factory_calls["count"] in (2, 3):
+            return FailingReopen(settings)
+        return RecoveredCapture(settings)
+
+    monkeypatch.setattr(camera_worker, "CameraCapture", factory)
+    monkeypatch.setattr(camera_worker, "camera_device_available", lambda _device: True)
+    monkeypatch.setattr(camera_worker, "FRAME_RETRY_DELAY_MS", 1)
+    monkeypatch.setattr(camera_worker, "DEVICE_RETURN_POLL_MS", 5)
+    monkeypatch.setattr(camera_worker, "DEVICE_RETURN_TIMEOUT_MS", 500)
+
+    settings = CameraSettings(
+        device="/dev/v4l/by-id/usb-test-camera-video-index0"
+    )
+    worker = camera_worker.CameraWorker(settings)
+    frames: list[object] = []
+    errors: list[str] = []
+    statuses: list[dict[str, object]] = []
+    worker.frame_ready.connect(frames.append)
+    worker.error_message.connect(errors.append)
+    worker.status_changed.connect(lambda status: statuses.append(dict(status)))
+
+    worker.start_stream()
+    assert _wait_until(app, lambda: len(frames) >= 2, timeout=2.0)
+
+    worker.stop_stream()
+    worker.shutdown()
+    app.processEvents()
+
+    assert errors == []
+    assert factory_calls["count"] >= 4
+    assert any(
+        "USB/V4L2 recovery" in str(status.get("warning", ""))
+        for status in statuses
+    )
+    assert any(
+        status.get("connected") is True and status.get("recovering") is False
+        for status in statuses
+    )
