@@ -57,9 +57,10 @@ DEFAULT_LINEAR_SPEED_M_S = 0.03
 DEFAULT_LINEAR_ACCEL_M_S2 = 0.10
 DEFAULT_COMMAND_FREQUENCY_HZ = 50.0
 # Live leader→follower teleoperation uses a separate clock because each sample
-# performs synchronous hardware safety/feedback reads on the serial bus. Ten
-# hertz is the conservative hardware default; higher rates remain selectable.
-DEFAULT_TELEOP_STREAM_FREQUENCY_HZ = 10.0
+# performs synchronous hardware safety/feedback reads on the serial bus. Twenty
+# hertz is the practical default for smooth hand following; 5/10 Hz remain
+# available for diagnosis and 50 Hz remains experimental.
+DEFAULT_TELEOP_STREAM_FREQUENCY_HZ = 20.0
 DEFAULT_MAX_COMMAND_STEP_RAD = 5.0 * pi / 180.0
 TELEOP_SERVO_SPEED_RAW = 0  # Feetech: zero selects maximum speed.
 TELEOP_SERVO_ACCELERATION_RAW = 254
