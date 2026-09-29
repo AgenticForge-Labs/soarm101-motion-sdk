@@ -573,6 +573,16 @@ soarm101 camera capture --all --json
 13. Only after these checks should an external agent client be given named camera + motion CLI
     access.
 
+## Torque-enable transient status-packet validation — hardware
+
+1. Connect follower with torque off and verify diagnostics are otherwise clean.
+2. Start teleoperation several times from a relaxed follower.
+3. A one-off Feetech status-packet error during `Torque_Enable` or `Lock` should be recovered
+   only when readback confirms the requested bit or one bounded retry succeeds.
+4. Confirm persistent communication errors still abort startup, leave teleoperation inactive,
+   and roll back torque on every motor that may have been enabled.
+5. Confirm no automatic retry is applied to motion-position writes or calibration EEPROM writes.
+
 ## Direct-agent CLI validation — software only
 
 Before giving a coding agent physical serial access, verify the structured command surface
