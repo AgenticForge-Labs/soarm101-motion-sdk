@@ -475,24 +475,47 @@ streaming, richer mesh collision models, and show-level orchestration in the app
 Robo Puppeteer/Director repositories.
 
 
-## Camera validation — workstation / hardware
+## Workstation + multi-camera validation — workstation / hardware
 
-Camera capture is independent of powered robot motion, but it still needs local workstation
-validation because UVC devices negotiate formats differently across drivers.
+Camera capture is independent of powered robot motion, but USB/UVC enumeration, concurrent
+bandwidth, and the visual layout require local workstation validation.
 
-1. Install the GUI or camera extra and run `soarm101 camera list`.
-2. Select the intended USB camera by stable device path when available.
-3. Save 1280×720, 30 FPS, MJPG settings and run `soarm101 camera capture --json`.
-4. Confirm the saved image is fresh, correctly oriented, and reports the expected dimensions.
-5. Open the GUI Camera tab, start the shared camera, and confirm the preview remains responsive.
-6. Switch to Teleoperation and confirm the same live stream is visible there without a
-   second device open or a loss of frames in Camera.
-7. Change resolution/FPS/mirroring in Camera, Save / apply, and confirm both views update.
-8. Capture pictures from both Camera and Teleoperation and confirm they land in the same
-   configured snapshot folder.
-9. Close the GUI and verify the camera device is released so a subsequent CLI capture can open it.
-10. Only after camera capture is stable should an external agent client be given camera +
-    motion CLI access.
+1. Pull this version and run `soarm101 workstation show --json`. Confirm an existing legacy
+   single-camera setting appears as the migrated `camera` profile when appropriate.
+2. Open the GUI. In Setup, connect the follower and leader successfully, then close/reopen the
+   GUI and confirm their ports and robot/calibration IDs are restored from
+   `~/.config/soarm101/workstation.json`.
+3. Open Camera and press **Find cameras**. On Linux, prefer the stable
+   `/dev/v4l/by-id/*-video-index0` entries when shown.
+4. Rename/save one physical camera as `overhead`. Create a second profile named `wrist`
+   and assign a different physical device. Confirm duplicate device assignment is rejected.
+5. Configure each camera's resolution/FPS/FourCC/mirroring and snapshot folder. Save both,
+   close/reopen the GUI, and confirm all settings and names persist.
+6. Start `overhead` and `wrist` individually. Then use **Start all** and confirm both remain
+   live concurrently without repeated device-open errors. If USB bandwidth limits the selected
+   modes, lower format/rate rather than treating driver failure as a motion-SDK issue.
+7. In Camera, switch the selected profile while both streams are live and confirm the preview
+   changes to the selected named stream.
+8. In Teleoperation, switch the camera selector between `overhead` and `wrist` and confirm
+   it reuses the already-running sessions rather than opening duplicate devices.
+9. Capture stills from each named camera and verify the files are fresh and correctly oriented.
+10. Stop the GUI camera sessions or close the GUI, then run:
+
+```bash
+soarm101 camera list --json
+soarm101 camera show --json
+soarm101 camera capture --name overhead --json
+soarm101 camera capture --name wrist --json
+soarm101 camera capture --all --json
+```
+
+11. Confirm CLI JSON reports logical camera names as well as physical devices and that
+    `capture --all` returns one capture record per configured camera.
+12. Review Setup/Camera/Teleoperation/Teach/Manual/Programs visually: push buttons should be
+    clearly distinguishable from labels/fields, while longer explanatory material should be in
+    tooltips or `?` help controls rather than permanently occupying the main layout.
+13. Only after these checks should an external agent client be given named camera + motion CLI
+    access.
 
 ## Direct-agent CLI validation — software only
 

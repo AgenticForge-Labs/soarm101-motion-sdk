@@ -22,7 +22,7 @@ You can begin visually, learn how the robot actually moves, teach useful positio
 - **Calibration you can see and understand.** Guided mechanical-stop calibration visualizes two complete traversals for every joint and the gripper. Discovery verifies the SO-101 servo bus and uses measured voltage as a clue for distinguishing a typical low-voltage leader from the powered follower, while still requiring the user to confirm the hardware.
 - **Safety and provenance live below the application layer.** Motion requests remain subject to calibration, joint, rate, acceleration, following-error, fault, effort, and other guards. Calibrations are versioned, and saved physical motion artifacts can be bound to the calibration under which they were created so stale motion can fail closed after a hardware or calibration change.
 - **GUI, CLI, and Python share the same foundation.** The desktop application is not a separate toy controller. The interfaces reuse the same SDK operations, saved libraries, and camera settings, making it possible to start visually and transition naturally to scripting and automation.
-- **One camera session, several consumers.** Basic USB-camera discovery, configuration, live preview, and still capture are built into the SDK. The Camera tab owns the settings; Teleoperation shows the same live stream, and CLI capture reads the same persisted configuration for agent loops.
+- **Named cameras, shared hardware profile.** Follower/leader addressing and named USB cameras are persisted once in the workstation profile. Multiple uniquely named cameras such as `overhead` and `wrist` can stream concurrently; Camera and Teleoperation reuse those sessions, while CLI/agents address the same names.
 - **Useful before AI, ready for AI.** Many automation tasks are deterministic: move to a known position, operate a tool, wait, move somewhere else, and repeat. The SDK makes those reliable capabilities useful on their own while also providing a constrained layer that higher-level AI systems can call.
 - **A small platform for serious robotics concepts.** Calibration, coordinate systems, FK/IK, Cartesian motion, trajectory generation, teleoperation, motion recording, and sequence programming can all be explored on an inexpensive desktop arm. That makes the project useful for education, research prototyping, laboratories, small-business automation, and agentic robotics experiments.
 
@@ -56,8 +56,9 @@ The SDK exposes a provider-neutral command surface for coding agents and other a
 clients. [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents only the CLI
 contract—commands, units, structured output, coordinate/orientation semantics, and enforced
 guards—without prescribing an agent strategy. The `agent-as-code/` directory remains a
-small machine-local setup and multi-camera capture helper for experiments; agent launchers,
-model selection, and sandboxing are intentionally outside the Motion SDK.
+small experiment helper; machine-local ports, calibration references, and named cameras come
+from the shared workstation profile rather than being duplicated in experiment files. Agent
+launchers, model selection, and sandboxing are intentionally outside the Motion SDK.
 
 ## Get started
 
@@ -117,16 +118,20 @@ soarm101 smoke-test --port /dev/ttyACM0 --robot-id so101 --joint shoulder_pan
 
 Read [Safety](docs/safety.md) before moving hardware. Do not open the same serial port in the GUI and CLI at the same time.
 
+Successful GUI arm connections and saved camera profiles are remembered in the shared
+[machine-local workstation profile](docs/workstation.md), so the GUI, CLI, and external agents
+use the same follower/leader ports, calibration references, and camera names on the next run.
+
 ## Work with the arm
 
 The GUI keeps common tasks separate so you can start with one step and add complexity as you go:
 
 | Tab | What you can do |
 | --- | --- |
-| **Setup** | Find and connect the leader and follower, calibrate either arm, save Home and Rest, and inspect motor status. |
-| **Camera** | Choose the USB camera, set resolution/FPS/FourCC/mirroring, select the snapshot folder, start/stop the shared stream, and capture still images. |
+| **Setup** | Find and connect the leader and follower, persist their local ports/calibration identities, calibrate either arm, save Home and Rest, and inspect motor status. |
+| **Camera** | Create named cameras such as overhead/wrist, assign discovered USB devices, configure each stream, start one or all cameras, and capture still images. |
 | **Manual** | Read current joint positions, switch between angular and Cartesian arm control, keep the gripper tool visible in either mode, park/release the leader, and hand poses between leader and follower. |
-| **Teleoperation** | Move the leader by hand, align the follower or relink the two current poses with no motion, watch the shared live camera feed, capture a picture, and transfer to Manual while parking the leader. |
+| **Teleoperation** | Move the leader by hand, align/relink the follower, choose any named live camera view, capture a picture, and transfer to Manual while parking the leader. |
 | **Teach / Record** | Save named positions from the follower or leader, or record continuous demonstration trajectories for replay/editing and future Robo Puppeteer motion data. |
 | **Edit recordings** | Review and adjust recorded motions with a scrubbed kinematic preview. |
 | **Programs** | Build and run linear programs from saved positions, gripper actions, waits, and optional recorded-motion steps. |
@@ -140,7 +145,15 @@ The GUI automatically keeps displayed joint readings current and provides explic
 
 ### CLI examples
 
+After a successful GUI follower connection has been saved in the workstation profile,
+one-off session commands can omit `--port`; explicit connection arguments still override
+the saved follower.
+
 ```bash
+# Inspect the saved workstation and current follower state
+soarm101 workstation show --json
+soarm101 read --json
+
 # Find arms and inspect their measured voltage and motor status
 soarm101 discover
 soarm101 diagnose --port /dev/ttyACM0 --robot-id so101
@@ -161,10 +174,13 @@ soarm101 pose go home --port /dev/ttyACM0 --robot-id so101 --yes
 # Operate the stock gripper
 soarm101 gripper --port /dev/ttyACM0 --robot-id so101 open --yes
 
-# Discover and configure a USB camera, then acquire one fresh observation
-soarm101 camera list
-soarm101 camera configure --device /dev/video0 --width 1280 --height 720 --fps 30 --fourcc MJPG
-soarm101 camera capture --json
+# Inspect the machine-local hardware profile and named cameras
+soarm101 workstation show --json
+soarm101 camera list --json
+soarm101 camera configure --name overhead --device /dev/v4l/by-id/CAMERA-video-index0 \
+  --width 1280 --height 720 --fps 30 --fourcc MJPG --json
+soarm101 camera capture --name overhead --json
+soarm101 camera capture --all --json
 ```
 
 Run `soarm101 --help` or `soarm101 <command> --help` for more commands and options. The Python SDK is the programmatic motion interface, and the CLI exposes setup, diagnostics, guarded motion, saved poses, trajectory playback, and sequence playback. These interfaces make the same motion capabilities available to scripts and agentic applications. The GUI currently provides the authoring workflow for recording, editing, and live leader-to-follower teleoperation; CLI coverage for those workflows is still developing.

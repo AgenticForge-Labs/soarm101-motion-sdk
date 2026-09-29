@@ -92,6 +92,18 @@ def discover_camera_devices() -> list[str]:
     """Return likely local camera device identifiers without opening robot hardware."""
 
     if sys.platform.startswith("linux"):
+        by_id = Path("/dev/v4l/by-id")
+        if by_id.exists():
+            stable = sorted(
+                (
+                    path
+                    for path in by_id.iterdir()
+                    if path.name.endswith("-video-index0")
+                ),
+                key=lambda path: path.name,
+            )
+            if stable:
+                return [str(path) for path in stable]
         devices = sorted(
             (path for path in Path("/dev").glob("video*") if path.is_char_device()),
             key=lambda path: path.name,

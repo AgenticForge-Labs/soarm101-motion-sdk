@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from math import pi
 from pathlib import Path
 
@@ -17,7 +17,6 @@ from soarm101_motion.calibration import default_calibration_path
 from soarm101_motion.camera import (
     CameraCapture,
     CameraSettings,
-    CameraSettingsStore,
     discover_camera_devices,
 )
 from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, MOTOR_IDS
@@ -29,6 +28,11 @@ from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
 from soarm101_motion.trajectories import TrajectoryLibrary
 from soarm101_motion.types import MotionResult, Pose
+from soarm101_motion.workstation import (
+    ArmConnectionProfile,
+    WorkstationProfile,
+    WorkstationProfileStore,
+)
 
 
 def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101Config:
@@ -47,9 +51,31 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
 def _arm_from_args(args: argparse.Namespace) -> SOARM101:
     if getattr(args, "simulation", False):
         return SOARM101.simulated(realtime=True)
-    if not args.port:
-        raise ValueError("--port is required unless --simulation is selected")
-    return SOARM101(_hardware_config(args))
+    if args.port:
+        return SOARM101(_hardware_config(args))
+
+    follower = WorkstationProfileStore().load().follower
+    if not follower.port:
+        raise ValueError(
+            "--port is required because no follower port is saved in the workstation profile"
+        )
+    requested_robot_id = getattr(args, "robot_id", None)
+    robot_id = (
+        follower.robot_id
+        if requested_robot_id in (None, "", "so101")
+        else str(requested_robot_id)
+    )
+    overrides: dict[str, object] = {
+        "port": follower.port,
+        "robot_id": robot_id,
+    }
+    if (
+        not getattr(args, "calibration", None)
+        and robot_id == follower.robot_id
+        and follower.calibration
+    ):
+        overrides["calibration_path"] = Path(follower.calibration)
+    return SOARM101(_hardware_config(args, **overrides))
 
 
 def _confirm(args: argparse.Namespace, word: str, message: str) -> bool:
@@ -531,9 +557,32 @@ def _cmd_kinematics_check(args: argparse.Namespace) -> int:
 
 
 
-def _camera_settings_from_args(args: argparse.Namespace) -> CameraSettings:
-    store = CameraSettingsStore()
-    settings = store.load()
+def _camera_profile_name(args: argparse.Namespace, profile: WorkstationProfile) -> str:
+    requested = str(getattr(args, "name", "") or "").strip()
+    if requested:
+        return requested
+    if profile.selected_camera:
+        return profile.selected_camera
+    if profile.cameras:
+        return next(iter(profile.cameras))
+    return "camera"
+
+
+def _camera_settings_from_args(
+    args: argparse.Namespace,
+    *,
+    allow_new: bool = False,
+) -> tuple[WorkstationProfileStore, WorkstationProfile, str, CameraSettings]:
+    store = WorkstationProfileStore()
+    profile = store.load()
+    name = _camera_profile_name(args, profile)
+    if name in profile.cameras:
+        settings = profile.cameras[name]
+    elif allow_new:
+        settings = CameraSettings().validated()
+    else:
+        available = ", ".join(profile.cameras) or "none"
+        raise KeyError(f"unknown camera profile {name!r}; configured profiles: {available}")
     overrides: dict[str, object] = {}
     for key in ("device", "width", "height", "fps", "fourcc", "snapshot_dir"):
         value = getattr(args, key, None)
@@ -545,47 +594,181 @@ def _camera_settings_from_args(args: argparse.Namespace) -> CameraSettings:
     auto_start = getattr(args, "auto_start", None)
     if auto_start is not None:
         overrides["auto_start"] = bool(auto_start)
-    return settings.with_overrides(**overrides) if overrides else settings
+    if overrides:
+        settings = settings.with_overrides(**overrides)
+    return store, profile, name, settings
+
+
+def _camera_profile_payload(profile: WorkstationProfile) -> dict[str, object]:
+    return {
+        "selected_camera": profile.selected_camera,
+        "cameras": {
+            name: asdict(settings)
+            for name, settings in profile.cameras.items()
+        },
+    }
 
 
 def _cmd_camera_list(args: argparse.Namespace) -> int:
     devices = discover_camera_devices()
-    if args.json:
-        print(json.dumps({"devices": devices}, indent=2))
-    elif devices:
-        for device in devices:
-            print(device)
-    else:
-        print("No camera devices found.")
-    return 0 if devices else 1
-
-
-def _cmd_camera_show(args: argparse.Namespace) -> int:
-    settings = CameraSettingsStore().load()
-    payload = asdict(settings)
+    profile = WorkstationProfileStore().load()
+    payload = {
+        "devices": devices,
+        **_camera_profile_payload(profile),
+    }
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
+        if devices:
+            print("Discovered devices:")
+            for device in devices:
+                print(f"  {device}")
+        else:
+            print("No camera devices found.")
+        print("Configured camera profiles:")
+        for name, settings in profile.cameras.items():
+            selected = " *" if name == profile.selected_camera else ""
+            print(f"  {name}{selected}: {settings.device}")
+    return 0 if devices or profile.cameras else 1
+
+
+def _cmd_camera_show(args: argparse.Namespace) -> int:
+    profile = WorkstationProfileStore().load()
+    requested = str(getattr(args, "name", "") or "").strip()
+    if requested:
+        payload: object = {
+            "name": requested,
+            **asdict(profile.camera(requested)),
+        }
+    else:
+        payload = _camera_profile_payload(profile)
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    elif isinstance(payload, dict):
         for key, value in payload.items():
             print(f"{key}: {value}")
     return 0
 
 
 def _cmd_camera_configure(args: argparse.Namespace) -> int:
-    settings = _camera_settings_from_args(args)
-    settings = CameraSettingsStore().save(settings)
-    print(json.dumps(asdict(settings), indent=2) if args.json else f"Saved camera settings for {settings.device}")
+    store, profile, name, settings = _camera_settings_from_args(args, allow_new=True)
+    old_name = str(getattr(args, "rename_from", "") or "").strip()
+    if old_name and old_name != name:
+        profile = profile.renamed_camera(old_name, name)
+    profile = profile.with_camera(name, settings, select=True)
+    profile = store.save(profile)
+    payload = {"name": name, **asdict(profile.camera(name))}
+    print(
+        json.dumps(payload, indent=2)
+        if args.json
+        else f"Saved camera profile {name!r} for {settings.device}"
+    )
     return 0
 
 
-def _cmd_camera_capture(args: argparse.Namespace) -> int:
-    settings = _camera_settings_from_args(args)
+def _cmd_camera_select(args: argparse.Namespace) -> int:
+    store = WorkstationProfileStore()
+    profile = store.load()
+    profile.camera(args.name)
+    profile = replace(profile, selected_camera=args.name).validated()
+    store.save(profile)
+    print(args.name)
+    return 0
+
+
+def _cmd_camera_remove(args: argparse.Namespace) -> int:
+    store = WorkstationProfileStore()
+    profile = store.load().without_camera(args.name)
+    store.save(profile)
+    print(args.name)
+    return 0
+
+
+def _capture_named_camera(
+    name: str,
+    settings: CameraSettings,
+    output: str | None = None,
+) -> dict[str, object]:
     with CameraCapture(settings) as camera:
-        path, metadata = camera.snapshot(args.output)
+        path, metadata = camera.snapshot(output)
+    return {"name": name, **metadata}
+
+
+def _cmd_camera_capture(args: argparse.Namespace) -> int:
+    store = WorkstationProfileStore()
+    profile = store.load()
+    if args.all:
+        if args.output:
+            raise ValueError("--output cannot be combined with --all")
+        if not profile.cameras:
+            raise ValueError("no camera profiles are configured")
+        captures = [
+            _capture_named_camera(name, settings)
+            for name, settings in profile.cameras.items()
+        ]
+        if args.json:
+            print(json.dumps({"captures": captures}, indent=2))
+        else:
+            for item in captures:
+                print(f"{item['name']}: {item['path']}")
+        return 0
+
+    _store, _profile, name, settings = _camera_settings_from_args(
+        args,
+        allow_new=bool(getattr(args, "device", None)),
+    )
+    metadata = _capture_named_camera(name, settings, args.output)
     if args.json:
         print(json.dumps(metadata, indent=2))
     else:
-        print(path)
+        print(metadata["path"])
+    return 0
+
+
+def _workstation_payload(profile: WorkstationProfile) -> dict[str, object]:
+    return {
+        "schema_version": profile.schema_version,
+        "follower": asdict(profile.follower),
+        "leader": asdict(profile.leader),
+        **_camera_profile_payload(profile),
+    }
+
+
+def _cmd_workstation_show(args: argparse.Namespace) -> int:
+    profile = WorkstationProfileStore().load()
+    payload = _workstation_payload(profile)
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Follower: {profile.follower.port or 'unset'} · {profile.follower.robot_id}")
+        print(f"Leader:   {profile.leader.port or 'unset'} · {profile.leader.robot_id}")
+        print(f"Selected camera: {profile.selected_camera or 'none'}")
+        for name, settings in profile.cameras.items():
+            print(f"  {name}: {settings.device}")
+    return 0
+
+
+def _cmd_workstation_arm(args: argparse.Namespace) -> int:
+    store = WorkstationProfileStore()
+    profile = store.load()
+    current = profile.follower if args.role == "follower" else profile.leader
+    robot_id = args.robot_id or current.robot_id
+    arm = ArmConnectionProfile(
+        port=current.port if args.port is None else args.port,
+        robot_id=robot_id,
+        calibration=(
+            current.calibration
+            if args.calibration is None
+            else args.calibration
+        ),
+    ).validated()
+    if args.role == "follower":
+        profile = replace(profile, follower=arm).validated()
+    else:
+        profile = replace(profile, leader=arm).validated()
+    store.save(profile)
+    payload = {"role": args.role, **asdict(arm)}
+    print(json.dumps(payload, indent=2) if args.json else f"Saved {args.role} profile")
     return 0
 
 
@@ -637,7 +820,10 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--calibration")
 
     def add_session_options(command: argparse.ArgumentParser) -> None:
-        command.add_argument("--port", help="physical serial port; required without --simulation")
+        command.add_argument(
+            "--port",
+            help="physical serial port; defaults to saved workstation follower without --simulation",
+        )
         command.add_argument("--robot-id", default="so101")
         command.add_argument("--calibration")
         command.add_argument("--simulation", action="store_true")
@@ -797,18 +983,23 @@ def build_parser() -> argparse.ArgumentParser:
     sequence_run.add_argument("--yes", action="store_true")
     sequence_run.set_defaults(func=_cmd_sequence_run)
 
-    camera = sub.add_parser("camera", help="discover, configure, and capture USB camera frames")
+    camera = sub.add_parser("camera", help="discover, configure, and capture named USB cameras")
     camera_sub = camera.add_subparsers(dest="camera_command", required=True)
 
-    camera_list = camera_sub.add_parser("list", help="list likely local camera devices")
+    camera_list = camera_sub.add_parser(
+        "list",
+        help="list discovered devices and configured camera profiles",
+    )
     camera_list.add_argument("--json", action="store_true")
     camera_list.set_defaults(func=_cmd_camera_list)
 
-    camera_show = camera_sub.add_parser("show", help="show persisted camera settings")
+    camera_show = camera_sub.add_parser("show", help="show named persisted camera settings")
+    camera_show.add_argument("--name", help="camera profile name; default shows all profiles")
     camera_show.add_argument("--json", action="store_true")
     camera_show.set_defaults(func=_cmd_camera_show)
 
     def add_camera_settings_options(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--name", help="camera profile name")
         command.add_argument("--device", help="camera index or path, for example /dev/video0")
         command.add_argument("--width", type=int)
         command.add_argument("--height", type=int)
@@ -820,8 +1011,15 @@ def build_parser() -> argparse.ArgumentParser:
         mirror_group.add_argument("--no-mirror", dest="mirror", action="store_false")
         command.set_defaults(mirror=None)
 
-    camera_configure = camera_sub.add_parser("configure", help="persist shared GUI/CLI camera settings")
+    camera_configure = camera_sub.add_parser(
+        "configure",
+        help="create or update a named camera profile",
+    )
     add_camera_settings_options(camera_configure)
+    camera_configure.add_argument(
+        "--rename-from",
+        help="rename an existing profile while saving these settings",
+    )
     start_group = camera_configure.add_mutually_exclusive_group()
     start_group.add_argument("--auto-start", dest="auto_start", action="store_true")
     start_group.add_argument("--no-auto-start", dest="auto_start", action="store_false")
@@ -829,11 +1027,39 @@ def build_parser() -> argparse.ArgumentParser:
     camera_configure.add_argument("--json", action="store_true")
     camera_configure.set_defaults(func=_cmd_camera_configure)
 
-    camera_capture = camera_sub.add_parser("capture", help="acquire one fresh frame and save it")
+    camera_select = camera_sub.add_parser("select", help="select the default camera profile")
+    camera_select.add_argument("name")
+    camera_select.set_defaults(func=_cmd_camera_select)
+
+    camera_remove = camera_sub.add_parser("remove", help="remove a named camera profile")
+    camera_remove.add_argument("name")
+    camera_remove.set_defaults(func=_cmd_camera_remove)
+
+    camera_capture = camera_sub.add_parser(
+        "capture",
+        help="acquire one named camera or all configured cameras",
+    )
     add_camera_settings_options(camera_capture)
-    camera_capture.add_argument("--output", help="output image path; default uses snapshot_dir")
+    camera_capture.add_argument("--all", action="store_true", help="capture every configured camera")
+    camera_capture.add_argument("--output", help="output image path; single camera only")
     camera_capture.add_argument("--json", action="store_true")
     camera_capture.set_defaults(func=_cmd_camera_capture)
+
+    workstation = sub.add_parser(
+        "workstation",
+        help="show or configure persistent local arm/camera addressing",
+    )
+    workstation_sub = workstation.add_subparsers(dest="workstation_command", required=True)
+    workstation_show = workstation_sub.add_parser("show")
+    workstation_show.add_argument("--json", action="store_true")
+    workstation_show.set_defaults(func=_cmd_workstation_show)
+    workstation_arm = workstation_sub.add_parser("arm")
+    workstation_arm.add_argument("role", choices=("follower", "leader"))
+    workstation_arm.add_argument("--port")
+    workstation_arm.add_argument("--robot-id")
+    workstation_arm.add_argument("--calibration")
+    workstation_arm.add_argument("--json", action="store_true")
+    workstation_arm.set_defaults(func=_cmd_workstation_arm)
 
     effort = sub.add_parser("effort", help="read session motor-effort safety status")
     effort_sub = effort.add_subparsers(dest="effort_command", required=True)

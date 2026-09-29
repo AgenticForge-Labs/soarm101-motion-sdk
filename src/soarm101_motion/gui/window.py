@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QToolButton,
     QScrollArea,
     QSlider,
     QSpinBox,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from soarm101_motion.calibration import SO101Calibration, default_calibration_path
-from soarm101_motion.camera import CameraSettingsStore, discover_camera_devices
+from soarm101_motion.camera import CameraSettings, discover_camera_devices
 from soarm101_motion.calibration_live import (
     PROVISIONAL_MINIMUM_TRAVEL_TICKS,
     display_travel_targets,
@@ -47,7 +48,7 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
-from soarm101_motion.gui.camera_worker import CameraWorker
+from soarm101_motion.gui.camera_manager import CameraSessionManager
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
@@ -59,6 +60,11 @@ from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceS
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 from soarm101_motion.gui.session_log import record as record_session
 from soarm101_motion.gui.session_log import current_path as session_log_path
+from soarm101_motion.workstation import (
+    ArmConnectionProfile,
+    WorkstationProfile,
+    WorkstationProfileStore,
+)
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +120,22 @@ class MainWindow(QMainWindow):
         self.resize(1480, 900)
         self.setMinimumSize(1080, 720)
 
+        self._workstation_store = WorkstationProfileStore()
+        self._workstation_load_error: str | None = None
+        try:
+            self._workstation_profile = self._workstation_store.load()
+        except Exception as exc:
+            self._workstation_profile = WorkstationProfile().validated()
+            self._workstation_load_error = str(exc)
+        if not self._workstation_profile.cameras:
+            self._workstation_profile = self._workstation_profile.with_camera(
+                "camera",
+                CameraSettings(),
+            )
+        if port is None and not simulation and self._workstation_profile.follower.port:
+            port = self._workstation_profile.follower.port
+            robot_id = self._workstation_profile.follower.robot_id
+
         self._connected = False
         self._follower_setup_session = False
         self._torque_enabled = False
@@ -158,9 +180,10 @@ class MainWindow(QMainWindow):
         self._coordination_gripper_checks: list[QCheckBox] = []
         self._sync_include_gripper = True
         self._sync_capture_pending: str | None = None
-        self._camera_store = CameraSettingsStore()
-        self._camera_settings = self._camera_store.load()
+        self._camera_settings = self._workstation_profile.camera()
         self._camera_connected = False
+        self._camera_status_by_name: dict[str, dict[str, object]] = {}
+        self._loaded_camera_name = self._workstation_profile.selected_camera or "camera"
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -252,13 +275,13 @@ class MainWindow(QMainWindow):
         self._leader_worker.measured_pose_captured.connect(self._on_measured_pose_captured)
 
         self._build_ui(port=port, robot_id=robot_id, simulation=simulation)
-        self._camera_worker = CameraWorker(self._camera_settings)
-        self._camera_worker.frame_ready.connect(self._on_camera_frame)
-        self._camera_worker.status_changed.connect(self._on_camera_status)
-        self._camera_worker.error_message.connect(self._on_camera_error)
-        self._camera_worker.snapshot_saved.connect(self._on_camera_snapshot_saved)
-        if self._camera_settings.auto_start:
-            self._camera_worker.start_stream()
+        self._camera_manager = CameraSessionManager()
+        self._camera_manager.frame_ready.connect(self._on_camera_frame)
+        self._camera_manager.status_changed.connect(self._on_camera_status)
+        self._camera_manager.error_message.connect(self._on_camera_error)
+        self._camera_manager.snapshot_saved.connect(self._on_camera_snapshot_saved)
+        self._camera_manager.sync(self._workstation_profile.cameras)
+        self._camera_manager.start_auto()
         self._thread.start()
         self._leader_thread.start()
         self._refresh_ports()
@@ -307,20 +330,39 @@ class MainWindow(QMainWindow):
                 background: palette(base);
             }
             QPushButton {
-                min-height: 28px;
-                padding: 5px 11px;
-                border: 1px solid palette(midlight);
-                border-radius: 8px;
+                min-height: 32px;
+                padding: 6px 12px;
+                border: 1px solid palette(mid);
+                border-radius: 9px;
                 background: palette(button);
+                font-weight: 600;
             }
             QPushButton:hover {
-                border-color: palette(highlight);
+                border: 2px solid palette(highlight);
+                padding: 5px 11px;
+                background: palette(alternate-base);
             }
             QPushButton:pressed {
                 background: palette(midlight);
             }
             QPushButton:disabled {
                 color: palette(mid);
+                border-color: palette(midlight);
+                background: palette(window);
+            }
+            QToolButton#helpButton {
+                min-width: 22px;
+                max-width: 22px;
+                min-height: 22px;
+                max-height: 22px;
+                border: 1px solid palette(mid);
+                border-radius: 11px;
+                background: palette(alternate-base);
+                font-weight: 800;
+            }
+            QToolButton#helpButton:hover {
+                border-color: palette(highlight);
+                background: palette(button);
             }
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
                 min-height: 27px;
@@ -352,6 +394,83 @@ class MainWindow(QMainWindow):
             }
             """
         )
+
+    def _help_button(self, title: str, text: str) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("helpButton")
+        button.setText("?")
+        button.setToolTip(text)
+        button.clicked.connect(
+            lambda _checked=False, t=title, body=text: QMessageBox.information(
+                self, t, body
+            )
+        )
+        return button
+
+    def _save_arm_connection_profile(self, role: str) -> None:
+        if role == "leader":
+            port = self.leader_port_combo.currentText().strip()
+            robot_id = self.leader_robot_id_edit.text().strip() or "so101-leader"
+        else:
+            port = self.port_combo.currentText().strip()
+            robot_id = self.robot_id_edit.text().strip() or "so101"
+        arm = ArmConnectionProfile(
+            port=port,
+            robot_id=robot_id,
+            calibration=str(default_calibration_path(robot_id)),
+        ).validated()
+        if role == "leader":
+            self._workstation_profile = replace(
+                self._workstation_profile,
+                leader=arm,
+            ).validated()
+        else:
+            self._workstation_profile = replace(
+                self._workstation_profile,
+                follower=arm,
+            ).validated()
+        self._workstation_profile = self._workstation_store.save(
+            self._workstation_profile
+        )
+
+    def _sync_camera_manager(self) -> None:
+        if hasattr(self, "_camera_manager"):
+            self._camera_manager.sync(self._workstation_profile.cameras)
+
+    def _camera_name(self) -> str:
+        if hasattr(self, "camera_profile_combo"):
+            name = self.camera_profile_combo.currentText().strip()
+            if name:
+                return name
+        return self._workstation_profile.selected_camera or next(
+            iter(self._workstation_profile.cameras)
+        )
+
+    def _teleop_camera_name(self) -> str:
+        if hasattr(self, "teleop_camera_combo"):
+            name = self.teleop_camera_combo.currentText().strip()
+            if name:
+                return name
+        return self._camera_name()
+
+    def _camera_is_connected(self, name: str) -> bool:
+        return bool(self._camera_status_by_name.get(name, {}).get("connected"))
+
+    def _refresh_camera_profile_choices(self, selected: str | None = None) -> None:
+        names = list(self._workstation_profile.cameras)
+        selected = selected or self._workstation_profile.selected_camera
+        for combo_name in ("camera_profile_combo", "teleop_camera_combo"):
+            combo = getattr(self, combo_name, None)
+            if combo is None:
+                continue
+            current = combo.currentText().strip()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(names)
+            target = selected or current
+            if target and combo.findText(target) >= 0:
+                combo.setCurrentText(target)
+            combo.blockSignals(False)
 
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
         self._apply_modern_style()
@@ -612,19 +731,28 @@ class MainWindow(QMainWindow):
             self.port_combo.setCurrentText(port)
         layout.addWidget(self.port_combo, 0, 2)
 
-        self.refresh_ports_button = QPushButton("Refresh")
+        self.refresh_ports_button = QPushButton("Refresh ports")
         self.refresh_ports_button.clicked.connect(self._refresh_ports)
         layout.addWidget(self.refresh_ports_button, 0, 3)
-
-        self.find_arms_button = QPushButton("Find Arms")
-        self.find_arms_button.setToolTip(
-            "Probe serial devices read-only, verify SO-101 servos, and identify leader/follower by voltage."
+        layout.addWidget(
+            self._help_button(
+                "Follower connection",
+                "The follower is the powered arm that executes motion. Find Arms probes "
+                "candidate serial devices read-only. Connect opens the session with torque "
+                "off; Enable hold latches the measured pose before enabling torque. The "
+                "selected port, robot ID, and calibration-file path are saved to the local "
+                "workstation profile after a successful connection.",
+            ),
+            0,
+            4,
         )
-        self.find_arms_button.clicked.connect(self._find_arms)
-        layout.addWidget(self.find_arms_button, 3, 0, 1, 2)
 
         layout.addWidget(QLabel("Calibration profile"), 1, 0, 1, 2)
         self.robot_id_edit = QLineEdit(robot_id)
+        self.robot_id_edit.setToolTip(
+            "Robot/calibration ID. Calibration file: "
+            f"{default_calibration_path(robot_id)}"
+        )
         self.robot_id_edit.textChanged.connect(
             lambda _text: self._on_robot_id_changed()
         )
@@ -632,7 +760,7 @@ class MainWindow(QMainWindow):
 
         self.connect_button = QPushButton("Connect follower")
         self.connect_button.clicked.connect(self._toggle_connection)
-        layout.addWidget(self.connect_button, 1, 3)
+        layout.addWidget(self.connect_button, 1, 3, 1, 2)
 
         self.enable_button = QPushButton("Enable hold")
         self.enable_button.setToolTip("Latch current positions, then enable torque.")
@@ -640,43 +768,43 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.enable_button, 2, 0)
 
         self.stop_button = QPushButton("STOP / HOLD")
-        self.stop_button.setStyleSheet("font-weight: 700; padding: 7px;")
+        self.stop_button.setStyleSheet("font-weight: 800;")
         self.stop_button.setToolTip("Software stop only. Keep physical power accessible.")
         self.stop_button.clicked.connect(lambda _checked=False: self.stop_requested.emit())
 
         self.relax_button = QPushButton("Relax follower")
         self.relax_button.setToolTip("Disable servo torque.")
         self.relax_button.clicked.connect(lambda _checked=False: self.relax_requested.emit())
-        layout.addWidget(self.relax_button, 2, 2)
+        layout.addWidget(self.relax_button, 2, 1)
+
+        self.find_arms_button = QPushButton("Find Arms")
+        self.find_arms_button.setToolTip(
+            "Probe serial devices read-only, verify SO-101 servos, and identify leader/follower by voltage."
+        )
+        self.find_arms_button.clicked.connect(self._find_arms)
+        layout.addWidget(self.find_arms_button, 2, 2)
 
         self.allow_uncalibrated_check = QCheckBox(
-            "Follower setup: allow uncalibrated connection"
+            "Allow uncalibrated setup connection"
         )
         self.allow_uncalibrated_check.setToolTip(
-            "For calibration/setup only. Keep torque off until calibration is complete."
+            "Calibration/setup only. Torque remains off until a valid calibration exists."
         )
-        layout.addWidget(self.allow_uncalibrated_check, 4, 0, 1, 4)
+        layout.addWidget(self.allow_uncalibrated_check, 2, 3, 1, 2)
 
-        self.arm_discovery_status = QLabel(
-            "Arm discovery: not run. Find Arms can identify ~5 V leaders and ~12 V followers."
-        )
-        self.arm_discovery_status.setWordWrap(True)
-        layout.addWidget(self.arm_discovery_status, 5, 0, 1, 4)
-        self.follower_session_status = QLabel("Disconnected · press Connect follower")
-        layout.addWidget(self.follower_session_status, 3, 2, 1, 2)
+        self.follower_session_status = QLabel("Disconnected")
+        self.follower_session_status.setWordWrap(True)
+        layout.addWidget(self.follower_session_status, 3, 0, 1, 2)
         self.follower_device_info = QLabel("Voltage: not measured")
-        layout.addWidget(self.follower_device_info, 6, 0, 1, 4)
-        layout.addWidget(
-            QLabel(
-                "Connect opens the arm session. Enable hold powers the follower at its current pose "
-                "for Manual moves; Teleoperation enables hold when you start. "
-                "Move sends the selected targets."
-            ),
-            7,
-            0,
-            1,
-            4,
+        layout.addWidget(self.follower_device_info, 3, 2, 1, 3)
+
+        self.arm_discovery_status = QLabel("Arm discovery: not run")
+        self.arm_discovery_status.setWordWrap(True)
+        self.arm_discovery_status.setToolTip(
+            "Find Arms identifies likely leader/follower roles from measured voltage; "
+            "confirm the physical hardware before connecting."
         )
+        layout.addWidget(self.arm_discovery_status, 4, 0, 1, 5)
         return box
 
     @staticmethod
@@ -714,12 +842,20 @@ class MainWindow(QMainWindow):
         calibration = QGroupBox("Calibrate arm — mechanical stops")
         calibration.setStyleSheet("QGroupBox { font-weight: 700; }")
         grid = QGridLayout(calibration)
-        explanation = QLabel(
-            "Select the arm, connect with torque off, then start recording. "
-            "Move each joint and the gripper to both stops and back. Never force a stop."
-        )
+        explanation = QLabel("Select arm → connect torque off → run two full sweeps.")
         explanation.setWordWrap(True)
-        grid.addWidget(explanation, 0, 0, 1, 4)
+        grid.addWidget(explanation, 0, 0, 1, 3)
+        grid.addWidget(
+            self._help_button(
+                "Mechanical-stop calibration",
+                "Move each joint and the gripper gently from one printed/mechanical stop "
+                "to the other and back twice. Never force or hold an actuator against a "
+                "stop. All six channels must reach 2/2 before calibration is saved. A "
+                "failed or cancelled sweep preserves the previous calibration.",
+            ),
+            0,
+            3,
+        )
 
         grid.addWidget(QLabel("Calibration target"), 1, 0)
         self.calibration_target_combo = QComboBox()
@@ -745,7 +881,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.setup_connect_button, 2, 1, 1, 2)
 
         self.leader_allow_uncalibrated_check = QCheckBox(
-            "Advanced: allow uncalibrated leader connection from Teach"
+            "Allow uncalibrated leader setup"
         )
         self.leader_allow_uncalibrated_check.setToolTip(
             "Used on the next leader connection for calibration/setup only. "
@@ -1037,42 +1173,57 @@ class MainWindow(QMainWindow):
     def _build_leader_connection(self) -> QWidget:
         leader = QGroupBox("Leader — the arm you move by hand")
         grid = QGridLayout(leader)
+        stored = self._workstation_profile.leader
+
         self.leader_simulation_check = QCheckBox("Simulation")
         self.leader_simulation_check.setChecked(self.simulation_check.isChecked())
         self.leader_simulation_check.toggled.connect(
             lambda _checked: self._update_enabled_state()
         )
         grid.addWidget(self.leader_simulation_check, 0, 0)
+
         grid.addWidget(QLabel("Port"), 0, 1)
         self.leader_port_combo = QComboBox()
         self.leader_port_combo.setEditable(True)
         self.leader_port_combo.currentTextChanged.connect(lambda _: self._refresh_device_hints())
+        if stored.port:
+            self.leader_port_combo.addItem(stored.port)
+            self.leader_port_combo.setCurrentText(stored.port)
         grid.addWidget(self.leader_port_combo, 0, 2)
-        self.leader_refresh_button = QPushButton("Refresh")
+
+        self.leader_refresh_button = QPushButton("Refresh ports")
         self.leader_refresh_button.clicked.connect(self._refresh_leader_ports)
         grid.addWidget(self.leader_refresh_button, 0, 3)
+        grid.addWidget(
+            self._help_button(
+                "Leader connection",
+                "The leader is normally back-drivable with torque off. Park deliberately "
+                "only when you want it to hold a pose. Starting or relinking teleoperation "
+                "releases it again. The selected port, robot ID, and calibration-file path "
+                "are saved after a successful connection.",
+            ),
+            0,
+            4,
+        )
+
         grid.addWidget(QLabel("Calibration profile"), 1, 0, 1, 2)
-        self.leader_robot_id_edit = QLineEdit(
-            (self.robot_id_edit.text().strip() or "so101") + "-leader"
+        self.leader_robot_id_edit = QLineEdit(stored.robot_id or "so101-leader")
+        self.leader_robot_id_edit.setToolTip(
+            "Robot/calibration ID. Calibration file: "
+            f"{stored.calibration or default_calibration_path(stored.robot_id)}"
         )
         grid.addWidget(self.leader_robot_id_edit, 1, 2)
+
         self.leader_connect_button = QPushButton("Connect leader")
         self.leader_connect_button.clicked.connect(self._toggle_leader_connection)
-        grid.addWidget(self.leader_connect_button, 1, 3)
-        note = QLabel(
-            "The leader connects FREE with torque off for hand teaching. Park it "
-            "deliberately when you want it to hold a pose; starting/relinking live "
-            "teleoperation releases it again. The 20 Hz default keeps the follower "
-            "responsive; 50 Hz still requires a timing check."
-        )
-        note.setWordWrap(True)
-        grid.addWidget(note, 2, 0, 1, 4)
-        self.leader_session_status = QLabel("Disconnected · press Connect leader")
+        grid.addWidget(self.leader_connect_button, 1, 3, 1, 2)
+
+        self.leader_session_status = QLabel("Disconnected")
         self.leader_session_status.setWordWrap(True)
-        grid.addWidget(self.leader_session_status, 3, 0, 1, 4)
+        grid.addWidget(self.leader_session_status, 2, 0, 1, 2)
+
         self.leader_device_info = QLabel("Voltage: not measured")
-        grid.addWidget(self.leader_device_info, 4, 0, 1, 4)
-        grid.setRowStretch(5, 1)
+        grid.addWidget(self.leader_device_info, 2, 2, 1, 3)
         return leader
 
     def _new_camera_preview_label(self, *, minimum_height: int = 240) -> QLabel:
@@ -1090,104 +1241,239 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(9)
 
-        settings_box = QGroupBox("Shared USB camera")
+        settings_box = QGroupBox("Named USB cameras")
         grid = QGridLayout(settings_box)
 
-        grid.addWidget(QLabel("Device"), 0, 0)
+        grid.addWidget(QLabel("Camera"), 0, 0)
+        self.camera_profile_combo = QComboBox()
+        self.camera_profile_combo.addItems(list(self._workstation_profile.cameras))
+        if self._workstation_profile.selected_camera:
+            self.camera_profile_combo.setCurrentText(
+                self._workstation_profile.selected_camera
+            )
+        self.camera_profile_combo.currentTextChanged.connect(
+            self._select_camera_profile
+        )
+        grid.addWidget(self.camera_profile_combo, 0, 1)
+
+        grid.addWidget(QLabel("Name"), 0, 2)
+        self.camera_name_edit = QLineEdit(self._loaded_camera_name)
+        self.camera_name_edit.setPlaceholderText("overhead, wrist, side...")
+        grid.addWidget(self.camera_name_edit, 0, 3)
+
+        self.camera_new_button = QPushButton("New camera")
+        self.camera_new_button.clicked.connect(self._new_camera_profile)
+        grid.addWidget(self.camera_new_button, 0, 4)
+        self.camera_delete_button = QPushButton("Delete")
+        self.camera_delete_button.clicked.connect(self._delete_camera_profile)
+        grid.addWidget(self.camera_delete_button, 0, 5)
+        grid.addWidget(
+            self._help_button(
+                "Named cameras",
+                "Each name maps to one physical USB/UVC device and its capture settings. "
+                "Use names such as overhead and wrist. Multiple named cameras may stream "
+                "at the same time, but a physical device can belong to only one profile. "
+                "The same names are available to CLI and agent camera commands.",
+            ),
+            0,
+            6,
+        )
+
+        grid.addWidget(QLabel("Device"), 1, 0)
         self.camera_device_combo = QComboBox()
         self.camera_device_combo.setEditable(True)
         self.camera_device_combo.addItem(self._camera_settings.device)
-        grid.addWidget(self.camera_device_combo, 0, 1, 1, 3)
+        grid.addWidget(self.camera_device_combo, 1, 1, 1, 4)
         self.camera_refresh_button = QPushButton("Find cameras")
         self.camera_refresh_button.clicked.connect(self._refresh_camera_devices)
-        grid.addWidget(self.camera_refresh_button, 0, 4)
+        grid.addWidget(self.camera_refresh_button, 1, 5, 1, 2)
 
-        grid.addWidget(QLabel("Width"), 1, 0)
+        grid.addWidget(QLabel("Width"), 2, 0)
         self.camera_width_spin = QSpinBox()
         self.camera_width_spin.setRange(160, 7680)
-        self.camera_width_spin.setValue(self._camera_settings.width)
-        grid.addWidget(self.camera_width_spin, 1, 1)
+        grid.addWidget(self.camera_width_spin, 2, 1)
 
-        grid.addWidget(QLabel("Height"), 1, 2)
+        grid.addWidget(QLabel("Height"), 2, 2)
         self.camera_height_spin = QSpinBox()
         self.camera_height_spin.setRange(120, 4320)
-        self.camera_height_spin.setValue(self._camera_settings.height)
-        grid.addWidget(self.camera_height_spin, 1, 3)
+        grid.addWidget(self.camera_height_spin, 2, 3)
 
-        grid.addWidget(QLabel("FPS"), 2, 0)
+        grid.addWidget(QLabel("FPS"), 2, 4)
         self.camera_fps_spin = QDoubleSpinBox()
         self.camera_fps_spin.setRange(1.0, 240.0)
         self.camera_fps_spin.setDecimals(1)
-        self.camera_fps_spin.setValue(self._camera_settings.fps)
-        grid.addWidget(self.camera_fps_spin, 2, 1)
+        grid.addWidget(self.camera_fps_spin, 2, 5)
 
-        grid.addWidget(QLabel("FourCC"), 2, 2)
-        self.camera_fourcc_edit = QLineEdit(self._camera_settings.fourcc)
+        grid.addWidget(QLabel("FourCC"), 3, 0)
+        self.camera_fourcc_edit = QLineEdit()
         self.camera_fourcc_edit.setMaxLength(4)
-        grid.addWidget(self.camera_fourcc_edit, 2, 3)
+        grid.addWidget(self.camera_fourcc_edit, 3, 1)
 
-        self.camera_mirror_check = QCheckBox("Mirror preview/captures horizontally")
-        self.camera_mirror_check.setChecked(self._camera_settings.mirror)
-        grid.addWidget(self.camera_mirror_check, 3, 0, 1, 3)
+        self.camera_mirror_check = QCheckBox("Mirror horizontally")
+        grid.addWidget(self.camera_mirror_check, 3, 2, 1, 2)
 
-        self.camera_auto_start_check = QCheckBox("Start camera automatically with GUI")
-        self.camera_auto_start_check.setChecked(self._camera_settings.auto_start)
-        grid.addWidget(self.camera_auto_start_check, 3, 3, 1, 2)
+        self.camera_auto_start_check = QCheckBox("Auto-start with GUI")
+        grid.addWidget(self.camera_auto_start_check, 3, 4, 1, 3)
 
         grid.addWidget(QLabel("Snapshot folder"), 4, 0)
-        self.camera_snapshot_dir_edit = QLineEdit(self._camera_settings.snapshot_dir)
-        grid.addWidget(self.camera_snapshot_dir_edit, 4, 1, 1, 4)
+        self.camera_snapshot_dir_edit = QLineEdit()
+        grid.addWidget(self.camera_snapshot_dir_edit, 4, 1, 1, 6)
 
-        self.camera_apply_button = QPushButton("Save / apply settings")
+        self.camera_apply_button = QPushButton("Save camera")
         self.camera_apply_button.clicked.connect(self._apply_camera_settings)
         grid.addWidget(self.camera_apply_button, 5, 0, 1, 2)
 
-        self.camera_toggle_button = QPushButton("Start camera")
+        self.camera_toggle_button = QPushButton("Start selected")
         self.camera_toggle_button.clicked.connect(self._toggle_camera_stream)
         grid.addWidget(self.camera_toggle_button, 5, 2)
 
-        self.camera_capture_button = QPushButton("Capture picture")
-        self.camera_capture_button.clicked.connect(self._capture_camera_frame)
-        grid.addWidget(self.camera_capture_button, 5, 3, 1, 2)
+        self.camera_start_all_button = QPushButton("Start all")
+        self.camera_start_all_button.clicked.connect(self._start_all_cameras)
+        grid.addWidget(self.camera_start_all_button, 5, 3)
 
-        self.camera_status = QLabel(
-            f"Stopped · {self._camera_settings.device} · "
-            f"{self._camera_settings.width}×{self._camera_settings.height} "
-            f"@ {self._camera_settings.fps:g} FPS"
-        )
+        self.camera_stop_all_button = QPushButton("Stop all")
+        self.camera_stop_all_button.clicked.connect(self._stop_all_cameras)
+        grid.addWidget(self.camera_stop_all_button, 5, 4)
+
+        self.camera_capture_button = QPushButton("Capture selected")
+        self.camera_capture_button.clicked.connect(self._capture_camera_frame)
+        grid.addWidget(self.camera_capture_button, 5, 5, 1, 2)
+
+        self.camera_status = QLabel()
         self.camera_status.setWordWrap(True)
-        grid.addWidget(self.camera_status, 6, 0, 1, 5)
+        grid.addWidget(self.camera_status, 6, 0, 1, 7)
         layout.addWidget(settings_box)
 
         self.camera_preview = self._new_camera_preview_label(minimum_height=420)
         layout.addWidget(self.camera_preview, 1)
 
-        note = QLabel(
-            "This tab owns camera configuration for the application. Teleoperation "
-            "shows the same live session, and CLI camera capture reads the same persisted settings."
-        )
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        self._load_camera_profile_controls(self._camera_name())
         return page
+
+    def _load_camera_profile_controls(self, name: str) -> None:
+        if name not in self._workstation_profile.cameras:
+            return
+        settings = self._workstation_profile.cameras[name]
+        self._loaded_camera_name = name
+        self._camera_settings = settings
+        self.camera_name_edit.setText(name)
+
+        current_device = settings.device
+        self.camera_device_combo.blockSignals(True)
+        if self.camera_device_combo.findText(current_device) < 0:
+            self.camera_device_combo.addItem(current_device)
+        self.camera_device_combo.setCurrentText(current_device)
+        self.camera_device_combo.blockSignals(False)
+
+        self.camera_width_spin.setValue(settings.width)
+        self.camera_height_spin.setValue(settings.height)
+        self.camera_fps_spin.setValue(settings.fps)
+        self.camera_fourcc_edit.setText(settings.fourcc)
+        self.camera_mirror_check.setChecked(settings.mirror)
+        self.camera_auto_start_check.setChecked(settings.auto_start)
+        self.camera_snapshot_dir_edit.setText(settings.snapshot_dir)
+        self._refresh_camera_display(name)
+
+    def _select_camera_profile(self, name: str) -> None:
+        name = str(name).strip()
+        if not name or name not in self._workstation_profile.cameras:
+            return
+        self._workstation_profile = replace(
+            self._workstation_profile,
+            selected_camera=name,
+        ).validated()
+        self._workstation_profile = self._workstation_store.save(
+            self._workstation_profile
+        )
+        self._load_camera_profile_controls(name)
+
+    def _new_camera_profile(self) -> None:
+        index = 1
+        existing = set(self._workstation_profile.cameras)
+        while f"camera-{index}" in existing:
+            index += 1
+        name = f"camera-{index}"
+        used_devices = {
+            settings.device for settings in self._workstation_profile.cameras.values()
+        }
+        try:
+            discovered = discover_camera_devices()
+        except Exception:
+            discovered = []
+        device = next(
+            (candidate for candidate in discovered if candidate not in used_devices),
+            "",
+        )
+        self._loaded_camera_name = ""
+        self._camera_settings = CameraSettings(device=device)
+        self.camera_name_edit.setText(name)
+        self.camera_device_combo.setCurrentText(device)
+        self.camera_width_spin.setValue(self._camera_settings.width)
+        self.camera_height_spin.setValue(self._camera_settings.height)
+        self.camera_fps_spin.setValue(self._camera_settings.fps)
+        self.camera_fourcc_edit.setText(self._camera_settings.fourcc)
+        self.camera_mirror_check.setChecked(False)
+        self.camera_auto_start_check.setChecked(False)
+        self.camera_snapshot_dir_edit.setText(self._camera_settings.snapshot_dir)
+        self.camera_status.setText(
+            "New camera profile · choose a unique device and press Save camera."
+        )
+        self.camera_preview.clear()
+        self.camera_preview.setText("New camera profile is not streaming.")
+
+    def _delete_camera_profile(self) -> None:
+        name = self._camera_name()
+        if len(self._workstation_profile.cameras) <= 1:
+            QMessageBox.information(
+                self,
+                "Keep one camera profile",
+                "Rename the existing profile instead of deleting the final camera entry.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete camera profile?",
+            f"Delete the saved camera profile {name!r}? No image files are deleted.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._workstation_profile = self._workstation_profile.without_camera(name)
+        self._workstation_profile = self._workstation_store.save(
+            self._workstation_profile
+        )
+        self._sync_camera_manager()
+        self._refresh_camera_profile_choices(self._workstation_profile.selected_camera)
+        self._load_camera_profile_controls(self._camera_name())
 
     def _refresh_camera_devices(self) -> None:
         current = self.camera_device_combo.currentText().strip()
         try:
             devices = discover_camera_devices()
         except Exception as exc:
-            self._on_camera_error(str(exc))
+            self._on_camera_error(self._camera_name(), str(exc))
             return
         self.camera_device_combo.clear()
-        for device in devices:
-            self.camera_device_combo.addItem(device)
+        self.camera_device_combo.addItems(devices)
         if current and self.camera_device_combo.findText(current) < 0:
             self.camera_device_combo.addItem(current)
         if current:
             self.camera_device_combo.setCurrentText(current)
-        if not devices:
-            self.camera_status.setText("No camera devices found; enter a device path or index manually.")
+        assigned = {
+            settings.device: name
+            for name, settings in self._workstation_profile.cameras.items()
+        }
+        if devices:
+            summary = ", ".join(
+                f"{device} ({assigned.get(device, 'unassigned')})"
+                for device in devices
+            )
+            self.camera_status.setText(f"Found {len(devices)} camera device(s): {summary}")
+        else:
+            self.camera_status.setText(
+                "No camera devices found; enter a device path or index manually."
+            )
 
-    def _camera_settings_from_controls(self):
+    def _camera_settings_from_controls(self) -> CameraSettings:
         return self._camera_settings.with_overrides(
             device=self.camera_device_combo.currentText().strip(),
             width=self.camera_width_spin.value(),
@@ -1201,48 +1487,112 @@ class MainWindow(QMainWindow):
 
     def _apply_camera_settings(self) -> None:
         try:
+            name = self.camera_name_edit.text().strip()
+            if not name:
+                raise ValueError("camera name cannot be empty")
             settings = self._camera_settings_from_controls()
-            self._camera_settings = self._camera_store.save(settings)
-            self._camera_worker.configure(settings)
+            profile = self._workstation_profile
+            old_name = self._loaded_camera_name
+            if old_name and old_name != name and old_name in profile.cameras:
+                profile = profile.renamed_camera(old_name, name)
+            profile = profile.with_camera(name, settings, select=True)
+            self._workstation_profile = self._workstation_store.save(profile)
+            self._camera_settings = settings
+            self._loaded_camera_name = name
+            self._sync_camera_manager()
+            self._refresh_camera_profile_choices(name)
+            if settings.auto_start and hasattr(self, "_camera_manager"):
+                self._camera_manager.start(name)
         except Exception as exc:
-            self._on_camera_error(str(exc))
+            self._on_camera_error(self.camera_name_edit.text().strip() or "camera", str(exc))
             return
         self.camera_status.setText(
-            f"Settings saved · {settings.device} · {settings.width}×{settings.height} "
+            f"Saved {name!r} · {settings.device} · {settings.width}×{settings.height} "
             f"@ {settings.fps:g} FPS · {settings.fourcc}"
         )
-        self._log(f"Camera settings saved: {settings.device}")
+        self._log(f"Camera profile saved: {name} -> {settings.device}")
+
+    def _camera_status_text(self, name: str) -> str:
+        status = self._camera_status_by_name.get(name, {})
+        settings = self._workstation_profile.cameras.get(name)
+        if bool(status.get("connected")):
+            return (
+                f"Live · {name} · {status.get('device', settings.device if settings else '?')} · "
+                f"{status.get('width', '?')}×{status.get('height', '?')} "
+                f"@ {float(status.get('fps', 0.0)):.1f} FPS"
+            )
+        device = settings.device if settings is not None else "unconfigured"
+        text = f"Stopped · {name} · {device}"
+        if status.get("error"):
+            text += f" · {status['error']}"
+        return text
+
+    def _refresh_camera_display(self, name: str) -> None:
+        if hasattr(self, "camera_status") and name == self._camera_name():
+            self.camera_status.setText(self._camera_status_text(name))
+            self.camera_toggle_button.setText(
+                "Stop selected" if self._camera_is_connected(name) else "Start selected"
+            )
+        if hasattr(self, "teleop_camera_status") and name == self._teleop_camera_name():
+            self.teleop_camera_status.setText(self._camera_status_text(name))
+            self.teleop_camera_toggle_button.setText(
+                "Stop camera" if self._camera_is_connected(name) else "Start camera"
+            )
 
     def _toggle_camera_stream(self) -> None:
-        if self._camera_connected:
-            self._camera_worker.stop_stream()
+        name = self._camera_name()
+        if self._camera_is_connected(name):
+            self._camera_manager.stop(name)
             return
         self._apply_camera_settings()
-        self._camera_worker.start_stream()
-        self.camera_status.setText(f"Opening camera {self._camera_settings.device}…")
+        name = self._camera_name()
+        self._camera_manager.start(name)
+        self.camera_status.setText(f"Opening {name}…")
 
-    def _capture_camera_frame(self) -> None:
-        if not self._camera_connected:
+    def _toggle_teleop_camera_stream(self) -> None:
+        name = self._teleop_camera_name()
+        if self._camera_is_connected(name):
+            self._camera_manager.stop(name)
+        else:
+            self._camera_manager.start(name)
+            self.teleop_camera_status.setText(f"Opening {name}…")
+
+    def _start_all_cameras(self) -> None:
+        self._apply_camera_settings()
+        self._camera_manager.start_all()
+
+    def _stop_all_cameras(self) -> None:
+        self._camera_manager.stop_all()
+
+    def _capture_camera_frame(self, name: str | None = None) -> None:
+        selected = name or self._camera_name()
+        if selected == self._camera_name():
             self._apply_camera_settings()
-            self._camera_worker.request_snapshot()
-            self._camera_worker.start_stream()
-            self.camera_status.setText(
-                f"Opening {self._camera_settings.device} and capturing a fresh frame…"
+            selected = self._camera_name()
+        self._camera_manager.request_snapshot(selected)
+        if not self._camera_is_connected(selected):
+            self._camera_manager.start(selected)
+        if hasattr(self, "camera_status") and selected == self._camera_name():
+            self.camera_status.setText(f"Capturing fresh frame from {selected}…")
+        if hasattr(self, "teleop_camera_status") and selected == self._teleop_camera_name():
+            self.teleop_camera_status.setText(
+                f"Capturing fresh frame from {selected}…"
             )
-            return
-        self._camera_worker.request_snapshot()
 
-    @Slot(object)
-    def _on_camera_frame(self, image: object) -> None:
+    def _capture_teleop_camera_frame(self) -> None:
+        self._capture_camera_frame(self._teleop_camera_name())
+
+    @Slot(str, object)
+    def _on_camera_frame(self, name: str, image: object) -> None:
         if not hasattr(image, "isNull") or image.isNull():
             return
         pixmap = QPixmap.fromImage(image)
-        for preview in (
-            getattr(self, "camera_preview", None),
-            getattr(self, "teleop_camera_preview", None),
-        ):
-            if preview is None:
-                continue
+        targets: list[QLabel] = []
+        if hasattr(self, "camera_preview") and name == self._camera_name():
+            targets.append(self.camera_preview)
+        if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
+            targets.append(self.teleop_camera_preview)
+        for preview in targets:
             scaled = pixmap.scaled(
                 max(preview.width(), 1),
                 max(preview.height(), 1),
@@ -1251,54 +1601,51 @@ class MainWindow(QMainWindow):
             )
             preview.setPixmap(scaled)
 
-    @Slot(object)
-    def _on_camera_status(self, status: object) -> None:
+    @Slot(str, object)
+    def _on_camera_status(self, name: str, status: object) -> None:
         values = dict(status)
-        self._camera_connected = bool(values.get("connected"))
-        if self._camera_connected:
-            text = (
-                f"Live · {values.get('device', self._camera_settings.device)} · "
-                f"{values.get('width', '?')}×{values.get('height', '?')} "
-                f"@ {float(values.get('fps', 0.0)):.1f} FPS"
-            )
-        else:
-            text = f"Stopped · {values.get('device', self._camera_settings.device)}"
-            error = values.get("error")
-            if error:
-                text += f" · {error}"
-        if hasattr(self, "camera_status"):
-            self.camera_status.setText(text)
-            self.camera_toggle_button.setText("Stop camera" if self._camera_connected else "Start camera")
-        if hasattr(self, "teleop_camera_status"):
-            self.teleop_camera_status.setText(text)
-            self.teleop_camera_toggle_button.setText(
-                "Stop camera" if self._camera_connected else "Start camera"
-            )
-        if not self._camera_connected:
-            for preview in (
-                getattr(self, "camera_preview", None),
-                getattr(self, "teleop_camera_preview", None),
-            ):
-                if preview is not None:
-                    preview.clear()
-                    preview.setText("Camera preview is stopped.")
+        self._camera_status_by_name[name] = values
+        self._camera_connected = self._camera_is_connected(self._camera_name())
+        self._refresh_camera_display(name)
+        if not bool(values.get("connected")):
+            if hasattr(self, "camera_preview") and name == self._camera_name():
+                self.camera_preview.clear()
+                self.camera_preview.setText("Camera preview is stopped.")
+            if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
+                self.teleop_camera_preview.clear()
+                self.teleop_camera_preview.setText("Camera preview is stopped.")
 
-    @Slot(str)
-    def _on_camera_error(self, message: str) -> None:
-        if hasattr(self, "camera_status"):
-            self.camera_status.setText(f"Camera error: {message}")
-        if hasattr(self, "teleop_camera_status"):
-            self.teleop_camera_status.setText(f"Camera error: {message}")
+    @Slot(str, str)
+    def _on_camera_error(self, name: str, message: str) -> None:
+        self._camera_status_by_name[name] = {
+            "connected": False,
+            "device": self._workstation_profile.cameras.get(
+                name, self._camera_settings
+            ).device,
+            "error": message,
+        }
+        self._refresh_camera_display(name)
         if hasattr(self, "log"):
-            self._log(f"Camera: {message}")
+            self._log(f"Camera {name}: {message}")
 
-    @Slot(str)
-    def _on_camera_snapshot_saved(self, path: str) -> None:
-        if hasattr(self, "camera_status"):
-            self.camera_status.setText(f"Captured picture: {path}")
-        if hasattr(self, "teleop_camera_status"):
-            self.teleop_camera_status.setText(f"Captured picture: {path}")
-        self._log(f"Camera picture saved: {path}")
+    @Slot(str, str)
+    def _on_camera_snapshot_saved(self, name: str, path: str) -> None:
+        text = f"Captured {name}: {path}"
+        if hasattr(self, "camera_status") and name == self._camera_name():
+            self.camera_status.setText(text)
+        if hasattr(self, "teleop_camera_status") and name == self._teleop_camera_name():
+            self.teleop_camera_status.setText(text)
+        self._log(text)
+
+    def _on_teleop_camera_changed(self, name: str) -> None:
+        name = str(name).strip()
+        if not name:
+            return
+        self.teleop_camera_preview.clear()
+        self.teleop_camera_preview.setText(
+            "Live frames appear here when this camera is running."
+        )
+        self._refresh_camera_display(name)
 
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
@@ -1363,24 +1710,45 @@ class MainWindow(QMainWindow):
 
         camera_box = QGroupBox("Live camera")
         camera_layout = QVBoxLayout(camera_box)
+        camera_selector = QHBoxLayout()
+        camera_selector.addWidget(QLabel("View"))
+        self.teleop_camera_combo = QComboBox()
+        self.teleop_camera_combo.addItems(list(self._workstation_profile.cameras))
+        if self._workstation_profile.selected_camera:
+            self.teleop_camera_combo.setCurrentText(
+                self._workstation_profile.selected_camera
+            )
+        self.teleop_camera_combo.currentTextChanged.connect(
+            self._on_teleop_camera_changed
+        )
+        camera_selector.addWidget(self.teleop_camera_combo, 1)
+        camera_selector.addWidget(
+            self._help_button(
+                "Teleoperation camera",
+                "Select any saved camera by name. Cameras are configured in the Camera "
+                "tab. More than one named camera may be streaming at the same time; this "
+                "selector only chooses which stream is shown here.",
+            )
+        )
+        camera_layout.addLayout(camera_selector)
+
         self.teleop_camera_preview = self._new_camera_preview_label(minimum_height=260)
         camera_layout.addWidget(self.teleop_camera_preview)
         camera_controls = QHBoxLayout()
         self.teleop_camera_status = QLabel(
-            f"Stopped · shared settings: {self._camera_settings.device}"
+            self._camera_status_text(self._teleop_camera_name())
         )
         self.teleop_camera_status.setWordWrap(True)
         camera_controls.addWidget(self.teleop_camera_status, 1)
         self.teleop_camera_toggle_button = QPushButton("Start camera")
-        self.teleop_camera_toggle_button.clicked.connect(self._toggle_camera_stream)
+        self.teleop_camera_toggle_button.clicked.connect(
+            self._toggle_teleop_camera_stream
+        )
         camera_controls.addWidget(self.teleop_camera_toggle_button)
         teleop_capture_button = QPushButton("Capture picture")
-        teleop_capture_button.clicked.connect(self._capture_camera_frame)
+        teleop_capture_button.clicked.connect(self._capture_teleop_camera_frame)
         camera_controls.addWidget(teleop_capture_button)
         camera_layout.addLayout(camera_controls)
-        camera_note = QLabel("Configure device, resolution, FPS, mirroring, and capture folder in Camera.")
-        camera_note.setWordWrap(True)
-        camera_layout.addWidget(camera_note)
         left_layout.addWidget(camera_box)
 
         self.teleop_readout = QLabel("Connect both arms to see live measurements.")
@@ -1405,13 +1773,18 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        note = QLabel(
-            "Teach named positions for deterministic Programs, or record continuous "
-            "demonstration trajectories for replay, editing, and future Robo Puppeteer "
-            "motion data. Both workflows are first-class."
+        teach_heading = QHBoxLayout()
+        teach_heading.addWidget(QLabel("Save positions or record continuous motion."))
+        teach_heading.addStretch(1)
+        teach_heading.addWidget(
+            self._help_button(
+                "Teach / Record",
+                "Saved positions are deterministic destinations for Programs. Continuous "
+                "recordings preserve demonstration paths for replay, editing, and future "
+                "Robo Puppeteer / learning workflows. Neither workflow replaces the other.",
+            )
         )
-        note.setWordWrap(True)
-        left_layout.addWidget(note)
+        left_layout.addLayout(teach_heading)
 
         source = QGroupBox("Teaching source")
         source_grid = QGridLayout(source)
@@ -2334,6 +2707,10 @@ class MainWindow(QMainWindow):
         )
 
     def _on_robot_id_changed(self) -> None:
+        robot_id = self.robot_id_edit.text().strip() or "so101"
+        self.robot_id_edit.setToolTip(
+            f"Robot/calibration ID. Calibration file: {default_calibration_path(robot_id)}"
+        )
         self._pose_library_cache = None
         self._trajectory_library_cache = None
         self._sequence_library_cache = None
@@ -2418,11 +2795,12 @@ class MainWindow(QMainWindow):
     def _update_calibration_guide(self) -> None:
         gripper_ticks = self._current_calibration_display_targets()["so101_gripper"]
         self.calibration_target_note.setText(
-            "The inner ring fills on sweep 1/2 and stays filled while the outer ring "
-            "fills on the return sweep. Both rings mark DONE with a black pop at 2/2. "
-            "The gripper dial uses this arm's saved travel "
-            f"when available (100% ≈ {gripper_ticks} ticks). A servo voltage or "
-            "communication fault stops calibration regardless of dial progress."
+            f"Target: 2/2 on every dial · gripper display ≈ {gripper_ticks} ticks."
+        )
+        self.calibration_target_note.setToolTip(
+            "Inner ring = first sweep; outer ring = return sweep. Both must reach 2/2. "
+            "The gripper display uses saved travel when available. Voltage or communication "
+            "faults stop calibration regardless of dial progress."
         )
 
     def _connect_for_calibration(self) -> None:
@@ -4277,6 +4655,8 @@ class MainWindow(QMainWindow):
             self._leader_busy = False
             self._leader_torque_enabled = False
             self._refresh_sidebar_context()
+        elif not self.leader_simulation_check.isChecked():
+            self._save_arm_connection_profile("leader")
         self.leader_connect_button.setText("Disconnect leader" if connected else "Connect leader")
         self._update_teach_readout()
         self._refresh_sidebar_context()
@@ -4477,6 +4857,8 @@ class MainWindow(QMainWindow):
             self.calibration_status.setText(
                 "Follower connected for calibration with torque off. Start the sweep when ready."
             )
+        if connected and not self.simulation_check.isChecked():
+            self._save_arm_connection_profile("follower")
         self.connect_button.setText("Disconnect follower" if connected else "Connect follower")
         self._refresh_named_pose_status()
         self._refresh_point_list()
@@ -5017,8 +5399,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
-            if hasattr(self, "_camera_worker"):
-                self._camera_worker.shutdown()
+            if hasattr(self, "_camera_manager"):
+                self._camera_manager.shutdown()
             if self._active_calibration_target is not None:
                 # A sweep blocks its worker event loop, so request rollback
                 # before waiting for the queued shutdown slot.

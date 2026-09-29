@@ -1,6 +1,6 @@
 import json
 
-from soarm101_motion.cli.main import build_parser, main
+from soarm101_motion.cli.main import _arm_from_args, build_parser, main
 from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
 
 
@@ -118,3 +118,72 @@ def test_agent_facing_motion_commands_support_json_in_simulation(capsys) -> None
     gripper = json.loads(capsys.readouterr().out)
     assert gripper["accepted"] is True
     assert gripper["completed"] is True
+
+
+
+def test_session_cli_defaults_to_saved_workstation_follower(tmp_path, monkeypatch) -> None:
+    workstation = tmp_path / "workstation.json"
+    calibration = tmp_path / "bench-follower.json"
+    workstation.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "follower": {
+                    "port": "/dev/ttyACM9",
+                    "robot_id": "bench-follower",
+                    "calibration": str(calibration),
+                },
+                "leader": {
+                    "port": "/dev/ttyACM8",
+                    "robot_id": "bench-leader",
+                    "calibration": str(tmp_path / "bench-leader.json"),
+                },
+                "selected_camera": None,
+                "cameras": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SOARM101_WORKSTATION_CONFIG", str(workstation))
+
+    args = build_parser().parse_args(["read", "--json"])
+    arm = _arm_from_args(args)
+
+    assert arm.config.port == "/dev/ttyACM9"
+    assert arm.config.robot_id == "bench-follower"
+    assert arm.config.calibration_path == calibration
+
+
+def test_explicit_session_port_overrides_saved_workstation_follower(
+    tmp_path, monkeypatch
+) -> None:
+    workstation = tmp_path / "workstation.json"
+    workstation.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "follower": {
+                    "port": "/dev/ttyACM9",
+                    "robot_id": "bench-follower",
+                    "calibration": str(tmp_path / "bench-follower.json"),
+                },
+                "leader": {
+                    "port": "",
+                    "robot_id": "bench-leader",
+                    "calibration": str(tmp_path / "bench-leader.json"),
+                },
+                "selected_camera": None,
+                "cameras": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SOARM101_WORKSTATION_CONFIG", str(workstation))
+
+    args = build_parser().parse_args(
+        ["read", "--port", "/dev/ttyUSB3", "--robot-id", "explicit", "--json"]
+    )
+    arm = _arm_from_args(args)
+
+    assert arm.config.port == "/dev/ttyUSB3"
+    assert arm.config.robot_id == "explicit"

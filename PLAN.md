@@ -39,9 +39,11 @@ Robo Director is the primary source of cross-repository integration requirements
   contextual ghost overlays for leader/saved/recorded/program poses.
 - [x] Radial shoulder-pan Program pattern generator that inherits a saved base pose and
   overrides only shoulder pan across an inspectable series of guarded Move steps.
-- [x] Shared USB-camera foundation with persisted device/resolution/FPS/FourCC/mirror settings,
-  one GUI-owned live stream, Camera-tab preview/settings, Teleoperation preview, and CLI
-  discovery/configuration/still capture for constrained agent loops.
+- [x] Shared USB-camera foundation with named persisted camera profiles, one GUI worker per
+  physical device, concurrent multi-camera streaming, Camera/Teleoperation named views, and
+  CLI discovery/configuration/named or all-camera still capture.
+- [x] Shared machine-local workstation profile for follower/leader addressing, calibration
+  references, and named cameras consumed by GUI, CLI, and external agents.
 - [x] Model-agnostic `agent-as-code/` machine setup and multi-view capture helper plus a
   neutral SDK-level agent CLI contract that does not prescribe task strategy.
 

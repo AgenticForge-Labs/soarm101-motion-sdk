@@ -6,6 +6,14 @@ behavior only. It does not prescribe a task-solving strategy or action loop.
 
 The authoritative runtime behavior remains the current CLI help and SDK source.
 
+The machine-local follower/leader addressing and named cameras are exposed through:
+
+```bash
+soarm101 workstation show --json
+```
+
+This reads `~/.config/soarm101/workstation.json` and does not open hardware.
+
 ## Session selection
 
 Commands that support either hardware or simulation accept:
@@ -17,8 +25,11 @@ Commands that support either hardware or simulation accept:
 --simulation
 ```
 
-Use `--simulation` instead of `--port` for software-only execution. Physical commands require
-an active calibration unless the command explicitly documents otherwise.
+Use `--simulation` instead of a physical port for software-only execution. For physical
+session commands, omitting `--port` uses the saved follower entry from
+`~/.config/soarm101/workstation.json`. An explicit `--port`, `--robot-id`, or
+`--calibration` overrides the corresponding saved value. Physical commands require an active
+calibration unless the command explicitly documents otherwise.
 
 The GUI and CLI must not open the same follower serial port at the same time. A GUI-owned USB
 camera stream likewise cannot be opened concurrently by a separate CLI capture process.
@@ -202,38 +213,50 @@ soarm101 gripper --port PORT --robot-id ROBOT_ID 0.5 --json --yes
 
 The normalized numeric range is `0..1`.
 
-## USB camera
+## USB cameras
 
-List likely camera devices:
+List both discovered devices and persisted camera names:
 
 ```bash
 soarm101 camera list --json
 ```
 
-Show persisted camera settings:
+Show the complete registry or one named camera:
 
 ```bash
 soarm101 camera show --json
+soarm101 camera show --name overhead --json
 ```
 
-Capture one still using persisted settings:
+Capture a configured camera by logical name:
 
 ```bash
-soarm101 camera capture --json
+soarm101 camera capture --name overhead --json
+soarm101 camera capture --name wrist --json
 ```
 
-Capture with explicit temporary settings:
+Capture all configured cameras sequentially:
 
 ```bash
-soarm101 camera capture \
-  --device /dev/video0 \
+soarm101 camera capture --all --json
+```
+
+A successful single-camera capture includes the logical `name`, saved `path`, timestamp,
+dimensions, and device. `--all` returns a `captures` array.
+
+Camera profiles can be created or changed explicitly:
+
+```bash
+soarm101 camera configure \
+  --name overhead \
+  --device /dev/v4l/by-id/CAMERA-video-index0 \
   --width 1280 --height 720 --fps 30 --fourcc MJPG \
-  --output observation.jpg \
   --json
 ```
 
-Command-line capture does not rewrite persisted camera settings unless
-`soarm101 camera configure` is used.
+On Linux, discovery prefers stable `/dev/v4l/by-id/*-video-index0` paths when available.
+A physical device may belong to only one saved camera profile. CLI capture must not open a
+camera device currently owned by the GUI.
 
 ## Saved poses
 

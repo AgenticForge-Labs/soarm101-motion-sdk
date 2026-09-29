@@ -9,7 +9,7 @@ applications -> CameraCapture -> OpenCV -> local USB/UVC camera
 
 Rules:
 
-- Basic local USB-camera discovery, persisted capture settings, live preview, and still-frame capture are owned here so CLI, GUI, and constrained agents share one deterministic observation surface.
+- Basic local USB-camera discovery, named persisted capture profiles, live preview, and still-frame capture are owned here so CLI, GUI, and constrained agents share one deterministic observation surface.
 - The arm has five pose joints. The stock motor-6 gripper is an `SO101Gripper` tool.
 - Tools define motion-relevant TCP transforms. Tool/stage camera extrinsics, perception, tracking, OBS, and show-level capture orchestration remain higher-level concerns; this repository only owns the basic camera device session and raw frames.
 - No LeRobot import exists in the runtime package.
@@ -29,16 +29,18 @@ Rules:
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
 
-## Camera session boundary
+## Workstation and camera session boundary
 
-Camera settings are persisted once and consumed by both CLI and GUI. The GUI owns at most
-one live camera session and fans frames out to Camera and Teleoperation views. A view must
-never open the same device independently. CLI commands may open the device for a short-lived
-capture when the GUI is not already using it.
+Machine-local addressing is stored once in the workstation profile: follower/leader ports,
+robot IDs/calibration-file references, and named camera profiles. Calibration contents remain
+authoritative in the calibration files; the workstation profile is only the local addressing
+map consumed by GUI, CLI, and agents.
+
+The GUI may own multiple live camera sessions concurrently, but exactly one worker owns each
+named physical device. Camera and Teleoperation views subscribe to those sessions rather than
+opening their own device handles. CLI commands may open a camera for a short-lived capture
+only when the GUI is not already using that physical device.
 
 The camera layer deliberately stops at raw observation: it does not identify objects, infer
-task state, plan motion, or bypass motion safety. Agentic loops should remain:
-
-```text
-camera observation -> AI reasoning -> constrained motion command -> validated SDK -> hardware
-```
+task state, plan motion, or bypass motion safety. Agent reasoning remains above the same
+constrained SDK primitives used manually.
