@@ -1905,6 +1905,9 @@ class MainWindow(QMainWindow):
     def _camera_status_text(self, name: str) -> str:
         status = self._camera_status_by_name.get(name, {})
         settings = self._workstation_profile.cameras.get(name)
+        if bool(status.get("recovering")):
+            warning = str(status.get("warning") or "camera stream recovering")
+            return f"Recovering · {name} · {warning}"
         if bool(status.get("connected")):
             return (
                 f"Live · {name} · {status.get('device', settings.device if settings else '?')} · "
@@ -1962,7 +1965,7 @@ class MainWindow(QMainWindow):
             self._apply_camera_settings()
             selected = self._camera_name()
         self._camera_manager.request_snapshot(selected)
-        if not self._camera_is_connected(selected):
+        if not self._camera_is_running(selected):
             self._camera_manager.start(selected)
         if hasattr(self, "camera_status") and selected == self._camera_name():
             self.camera_status.setText(f"Capturing fresh frame from {selected}…")
