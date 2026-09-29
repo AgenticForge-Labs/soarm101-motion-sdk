@@ -175,8 +175,7 @@ def _resolve_config(args: argparse.Namespace) -> SOARM101Config:
 
 
 def _capture_corner(arm: SOARM101, name: str, instruction: str) -> CornerSample:
-    print(f"
-{name}: {instruction}")
+    print(f"\n{name}: {instruction}")
     input("Press Enter when the lower finger is exactly on the corner... ")
     pose = arm.get_position()
     joints = dict(arm.get_joint_positions().positions)
@@ -222,8 +221,7 @@ def _move_exact(
     speed_mm_s: float,
     acceleration_mm_s2: float,
 ) -> None:
-    print(f"
-Moving: {name}")
+    print(f"\nMoving: {name}")
     result = arm.move_linear(
         pose,
         orientation_mode="exact",
@@ -319,8 +317,7 @@ def main() -> int:
     print("  B = adjacent to A along the SHORT/WIDTH edge")
     print("  C = adjacent to A along the LONG/HEIGHT edge")
     print("The fourth/farthest corner D will be predicted from A/B/C.")
-    print("
-Keep the GUI disconnected from this follower port.")
+    print("\nKeep the GUI disconnected from this follower port.")
     print("The lower finger is not the SDK's modeled TCP, so keep wrist/tool orientation")
     print("as constant as practical while touching A, B, and C.")
 
@@ -358,8 +355,7 @@ Press Enter to enable torque briefly and open the gripper fully... ")
             drift_c = orientation_delta_deg(a.rotation, c.rotation)
             max_drift = max(drift_b, drift_c)
 
-            print("
-Measured paper geometry from FK")
+            print("\nMeasured paper geometry from FK")
             print(
                 f"  A->B width:  {geometry.measured_width_mm:.1f} mm "
                 f"(expected {args.width_mm:.1f}, error {geometry.width_error_mm:+.1f})"
@@ -416,12 +412,10 @@ Measured paper geometry from FK")
                 "orientation_drift_deg": {"B_from_A": drift_b, "C_from_A": drift_c},
             }
             args.output.write_text(
-                json.dumps(report, indent=2) + "
-",
+                json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
             )
-            print(f"
-Intermediate report written to {args.output}")
+            print(f"\nIntermediate report written to {args.output}")
 
             edge_error = max(
                 abs(geometry.width_error_mm),
@@ -430,8 +424,7 @@ Intermediate report written to {args.output}")
             angle_error = abs(geometry.measured_corner_angle_deg - 90.0)
             if edge_error > args.max_edge_error_mm or angle_error > args.max_angle_error_deg:
                 print(
-                    "
-STOP: the three captured corners do not look enough like the known "
+                    "\nSTOP: the three captured corners do not look enough like the known "
                     "paper rectangle for autonomous motion."
                 )
                 print(
@@ -446,8 +439,7 @@ STOP: the three captured corners do not look enough like the known "
 
             if max_drift > args.max_orientation_drift_deg and not args.allow_orientation_drift:
                 print(
-                    f"
-STOP: probe orientation changed by {max_drift:.2f} deg, above the "
+                    f"\nSTOP: probe orientation changed by {max_drift:.2f} deg, above the "
                     f"{args.max_orientation_drift_deg:.2f} deg limit. Because the lower finger is "
                     "offset from the modeled TCP, that can corrupt the corner geometry. Repeat the "
                     "three touches with a steadier wrist, or deliberately pass "
@@ -482,16 +474,14 @@ STOP: probe orientation changed by {max_drift:.2f} deg, above the "
                 for height in args.z_heights_mm
             ]
 
-            print("
-Preflighting exact-orientation IK with torque still OFF...")
+            print("\nPreflighting exact-orientation IK with torque still OFF...")
             _preflight_exact(arm, "lift above C", lift_c)
             _preflight_exact(arm, "above predicted D", above_d)
             _preflight_exact(arm, "predicted D point", point_d)
             for height, pose in z_targets:
                 _preflight_exact(arm, f"D + {height:.1f} mm paper-Z", pose)
 
-            print("
-AUTONOMOUS MOTION PHASE")
+            print("\nAUTONOMOUS MOTION PHASE")
             print("The arm will preserve the captured C tool orientation, lift from C,")
             print(
                 "traverse above D, descend to the predicted D point, "
@@ -523,8 +513,7 @@ AUTONOMOUS MOTION PHASE")
                 acceleration_mm_s2=args.acceleration_mm_s2,
             )
             input(
-                "
-Inspect alignment with the fourth corner. "
+                "\nInspect alignment with the fourth corner. "
                 "Press Enter for the Z-height test... "
             )
 
@@ -546,12 +535,10 @@ Inspect alignment with the fourth corner. "
             report["completed"] = True
             report["final_tcp_xyz_mm"] = final_xyz
             args.output.write_text(
-                json.dumps(report, indent=2) + "
-",
+                json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
             )
-            print(f"
-Complete. Final report written to {args.output}")
+            print(f"\nComplete. Final report written to {args.output}")
             return 0
         finally:
             try:
