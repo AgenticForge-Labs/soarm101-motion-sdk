@@ -421,3 +421,79 @@ def test_setup_shows_default_detailed_log_option(tmp_path, monkeypatch) -> None:
         window.close()
         app.processEvents()
         session_log.configure(enabled=False)
+
+
+
+def test_teleop_overrun_fault_holds_and_emits_delink_state(monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    from soarm101_motion.config import SOARM101Config
+    from soarm101_motion.gui.worker import RobotWorker
+
+    monkeypatch.setattr(
+        "soarm101_motion.gui.worker.record_session",
+        lambda *args, **kwargs: None,
+    )
+    joints = {name: 0.0 for name in ARM_JOINTS}
+    stop_calls = []
+
+    class FakeArm:
+        is_connected = True
+        config = SOARM101Config()
+        backend = SimpleNamespace()
+        motion = SimpleNamespace(is_streaming=False)
+        tool = SimpleNamespace(get_position=lambda: 0.5)
+
+        def get_joint_positions(self):
+            return SimpleNamespace(positions=joints)
+
+        def get_joint_limits(self):
+            return {name: (-2.0, 2.0) for name in ARM_JOINTS}
+
+        def start_joint_stream(self, *, frequency_hz):
+            assert frequency_hz == 20.0
+            self.motion.is_streaming = True
+
+        def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
+            time.sleep(0.055)
+            return SimpleNamespace(final_positions=dict(command), message="accepted")
+
+        def stop_joint_stream(self, *, hold):
+            stop_calls.append(hold)
+            self.motion.is_streaming = False
+
+    worker = RobotWorker()
+    worker.arm = FakeArm()
+    faults = []
+    errors = []
+    worker.teleop_faulted.connect(faults.append)
+    worker.error_message.connect(errors.append)
+
+    worker.start_teleop(
+        {
+            "mode": "relative",
+            "frequency_hz": 20.0,
+            "leader_joints_rad": joints,
+            "mirror_gripper": True,
+        }
+    )
+    assert worker._teleop is not None
+    worker._teleop["overruns"] = 2
+
+    worker.apply_teleop_sample(
+        {
+            "timestamp": time.perf_counter(),
+            "joints_rad": joints,
+            "gripper": 0.5,
+        }
+    )
+
+    assert worker._teleop is None
+    assert stop_calls == [True]
+    assert len(faults) == 1
+    assert faults[0]["requires_relink"] is True
+    assert faults[0]["follower_holding"] is True
+    assert faults[0]["frequency_hz"] == pytest.approx(20.0)
+    assert faults[0]["recommended_frequency_hz"] == pytest.approx(10.0)
+    assert faults[0]["processing_ms"] >= 50.0
+    assert "processing exceeded" in faults[0]["reason"]
+    assert errors and errors[-1].startswith("live teleoperation:")

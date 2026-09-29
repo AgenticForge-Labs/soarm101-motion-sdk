@@ -56,6 +56,7 @@ class RobotWorker(QObject):
     stream_sample = Signal(object)
     stream_readout_changed = Signal(bool)
     teleop_changed = Signal(bool)
+    teleop_faulted = Signal(object)
     teleop_alignment_adjusted = Signal(object)
     sequence_progress = Signal(object)
     effort_changed = Signal(object)
@@ -1086,14 +1087,39 @@ class RobotWorker(QObject):
                     limited_samples=teleop["limited_samples"],
                 )
         except BaseException as exc:
-            if self._detailed_logging and teleop.get("last_frame") is not None:
+            last_frame = teleop.get("last_frame")
+            if self._detailed_logging and last_frame is not None:
                 record_session(
                     "teleop_fault_context",
-                    **teleop["last_frame"],
+                    **last_frame,
                     error=str(exc),
                 )
-            record_session("teleop_stopped_on_error", worker=self._robot_id, message=str(exc))
+            frequency_hz = float(teleop.get("frequency_hz", 0.0) or 0.0)
+            processing_ms = float(teleop.get("last_processing_s", 0.0) or 0.0) * 1000.0
+            sample_age_ms = (
+                None
+                if not isinstance(last_frame, dict)
+                else float(last_frame.get("sample_age_ms", 0.0))
+            )
+            recommended_hz = (
+                10.0 if frequency_hz >= 20.0 else 5.0 if frequency_hz > 5.0 else frequency_hz
+            )
+            fault = {
+                "reason": str(exc),
+                "frequency_hz": frequency_hz,
+                "processing_ms": processing_ms,
+                "sample_age_ms": sample_age_ms,
+                "recommended_frequency_hz": recommended_hz,
+                "requires_relink": True,
+                "follower_holding": True,
+            }
+            record_session(
+                "teleop_stopped_on_error",
+                worker=self._robot_id,
+                **fault,
+            )
             self._stop_teleop_internal(hold=True)
+            self.teleop_faulted.emit(fault)
             self._report_error("live teleoperation", exc)
 
     @Slot()
