@@ -488,6 +488,20 @@ Robo Puppeteer/Director repositories.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## USB camera disconnect / reconnect recovery — workstation / hardware
+
+1. Save the camera using its stable `/dev/v4l/by-id/...-video-index0` identifier and start the
+   live stream.
+2. Physically unplug that camera while it is streaming. Confirm its preview card changes to
+   **WAITING**, the last good image remains visible, and the GUI stays responsive.
+3. Reconnect the same camera within 30 seconds. Confirm the same logical camera profile
+   automatically reopens and returns to LIVE without pressing Start again.
+4. Repeat with both named cameras running and confirm the unaffected camera continues streaming.
+5. Leave the camera disconnected beyond the 30-second recovery window and confirm the stream
+   becomes STOPPED with a visible terminal error instead of retrying forever.
+6. If practical, reproduce a V4L2 reopen failure such as `VIDIOC_REQBUFS ... ENODEV` and
+   confirm it uses the same bounded reconnect window after the camera had previously been live.
+
 ## Camera transient-drop recovery — workstation / hardware
 
 1. Start one camera and confirm normal live preview.
