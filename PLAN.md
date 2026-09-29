@@ -42,8 +42,8 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] Shared USB-camera foundation with persisted device/resolution/FPS/FourCC/mirror settings,
   one GUI-owned live stream, Camera-tab preview/settings, Teleoperation preview, and CLI
   discovery/configuration/still capture for constrained agent loops.
-- [x] Model-agnostic `agent-as-code/` scaffold with agent-facing CLI instructions, one
-  primary task camera plus arbitrary auxiliary USB cameras, and a multi-view observation helper.
+- [x] Model-agnostic `agent-as-code/` machine setup and multi-view capture helper plus a
+  neutral SDK-level agent CLI contract that does not prescribe task strategy.
 
 ## Director ecosystem integration 0.2
 
@@ -64,7 +64,8 @@ Robo Director is the primary source of cross-repository integration requirements
 The CLI and GUI must call the same SDK operations and saved libraries. The GUI keeps
 its own persistent connection for live controls; it must not launch CLI subprocesses.
 
-- [x] Match basic setup, readout, joint motion, Cartesian jogs, and gripper motion.
+- [x] Match basic setup, structured readout, read-only IK, joint motion, Cartesian jogs,
+  and gripper motion, including simulation-capable one-off CLI checks.
 - [x] Add CLI arm discovery, absolute Cartesian moves, named pose capture/replay,
   trajectory replay, sequence execution, and effort status.
 - [ ] Add CLI trajectory recording, non-destructive editing, and primitive management.

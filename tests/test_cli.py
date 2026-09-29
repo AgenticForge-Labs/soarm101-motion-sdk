@@ -1,3 +1,5 @@
+import json
+
 from soarm101_motion.cli.main import build_parser, main
 from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
 
@@ -55,3 +57,64 @@ def test_discover_reports_role_without_motion(monkeypatch, capsys) -> None:
     )
     assert main(["discover", "/dev/ttyACM0"]) == 0
     assert "follower (12.0 V, 6/6 motors)" in capsys.readouterr().out
+
+
+def test_agent_facing_read_and_ik_json_in_simulation(capsys) -> None:
+    assert main(["read", "--simulation", "--json"]) == 0
+    state = json.loads(capsys.readouterr().out)
+    assert set(state) == {"joint_positions_rad", "tcp_xyz_mm", "tcp_rpy_deg"}
+    assert len(state["joint_positions_rad"]) == 5
+    assert len(state["tcp_xyz_mm"]) == 3
+
+    x_mm, y_mm, z_mm = state["tcp_xyz_mm"]
+    assert (
+        main(
+            [
+                "ik",
+                "--simulation",
+                "--x-mm",
+                str(x_mm),
+                "--y-mm",
+                str(y_mm),
+                "--z-mm",
+                str(z_mm),
+                "--orientation-mode",
+                "position_only",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    solution = json.loads(capsys.readouterr().out)
+    assert solution["success"] is True
+    assert solution["position_error_mm"] <= 0.5
+    assert len(solution["joints_rad"]) == 5
+    assert len(solution["joints_deg"]) == 5
+
+
+def test_agent_facing_motion_commands_support_json_in_simulation(capsys) -> None:
+    assert (
+        main(
+            [
+                "jog",
+                "--simulation",
+                "--x-mm",
+                "2",
+                "--speed-mm-s",
+                "10",
+                "--acceleration-mm-s2",
+                "40",
+                "--json",
+                "--yes",
+            ]
+        )
+        == 0
+    )
+    jog = json.loads(capsys.readouterr().out)
+    assert jog["accepted"] is True
+    assert jog["completed"] is True
+
+    assert main(["gripper", "--simulation", "0.5", "--json", "--yes"]) == 0
+    gripper = json.loads(capsys.readouterr().out)
+    assert gripper["accepted"] is True
+    assert gripper["completed"] is True

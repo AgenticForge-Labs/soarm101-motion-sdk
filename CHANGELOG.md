@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-- Added `agent-as-code/`, a provider-neutral physical-agent experiment scaffold with
-  agent-facing CLI instructions, machine-local robot/camera setup, one required primary
-  task camera, arbitrary auxiliary USB cameras, and a multi-view observation helper.
+- Added a neutral `docs/agent-arm101-cli.md` tool contract for direct coding-agent and
+  automation use without prescribing an agent reasoning or action policy.
+- Added read-only `soarm101 ik` target solving plus JSON output for read, joint motion,
+  Cartesian jog, linear motion, and gripper commands. Read/motion commands now support
+  `--simulation` consistently for software-only agent checks.
+- Simplified `agent-as-code/` to machine-local robot/camera setup and multi-view capture
+  support; agent launchers, model selection, sandboxing, and task policy remain outside the SDK.
 - Added hardware-free setup validation coverage for primary-camera selection and ordering.
 
 - Added first-class local USB camera support shared across SDK, CLI, and GUI. Camera settings

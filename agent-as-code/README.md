@@ -1,89 +1,57 @@
-# Agent as Code
+# Agent-as-code support files
 
-This directory is a small, model-agnostic physical-agent experiment built on the
-SO-ARM101 Motion SDK CLI. The experiment intentionally does not depend on a particular
-agent harness or vision-language model.
+This directory contains machine-local support files for experiments that let an external
+coding agent operate an already configured SO-ARM101 through the public `soarm101` CLI.
 
-The operating contract is:
+The Motion SDK does not define an agent policy, reasoning loop, model, provider, launcher,
+or sandbox. The generic tool contract is documented in
+[`docs/agent-arm101-cli.md`](../docs/agent-arm101-cli.md).
 
-```text
-natural-language task
-        ↓
-agent + any VLM available to that agent
-        ↓
-AGENTS.md + CLI.md + setup.local.json
-        ↓
-soarm101 CLI
-        ↓
-guarded Motion SDK + raw USB cameras
-        ↓
-physical robot
-```
+## Machine setup
 
-The first target task can be as simple as:
-
-> Put the green dragon in the box.
-
-The agent is responsible for deciding when to observe, how to interpret the images,
-which guarded CLI commands to issue, and when the task is complete. The SDK remains
-responsible for deterministic motion, calibration/provenance checks, safety guards, and
-raw camera acquisition.
-
-## Setup
-
-Copy `setup.example.json` to `setup.local.json` and edit the machine-specific
-device paths:
+Copy the example setup and replace the local device identifiers:
 
 ```bash
 cp agent-as-code/setup.example.json agent-as-code/setup.local.json
 soarm101 camera list --json
-python agent-as-code/capture_observation.py --setup agent-as-code/setup.local.json --check
+python agent-as-code/capture_observation.py \
+  --setup agent-as-code/setup.local.json \
+  --check
 ```
 
-Prefer stable Linux device paths under `/dev/v4l/by-id/` when available. Exactly one
-enabled camera must have `"primary": true`. That is the canonical task view presented
-first to the agent/VLM. Any number of additional enabled USB cameras may be listed as
-context views. They can be ordinary webcams.
+The setup file records the robot serial port and camera device paths used by an experiment.
+Prefer stable Linux camera paths under `/dev/v4l/by-id/` when available.
 
-The per-camera settings in this setup are experiment-local. Observation capture passes
-them as command-line overrides to `soarm101 camera capture`; it does **not** rewrite
-the SDK's persisted GUI camera configuration.
+Exactly one enabled camera must have `"primary": true`. Additional enabled cameras are
+optional context views.
 
-The `agent` and `vlm` fields are provenance labels only for now. They deliberately
-do not constrain how the agent or VLM is launched. A run may use a coding agent with
-native vision, an agent connected to a separate VLM, a local model, or a hosted model.
+## Multi-camera capture helper
 
-## Observations
-
-Capture one fresh frame from every enabled camera:
+`capture_observation.py` is only a convenience wrapper around the public camera CLI. It
+opens each configured camera sequentially, captures one fresh frame, closes the device, and
+writes a JSON manifest:
 
 ```bash
 python agent-as-code/capture_observation.py \
   --setup agent-as-code/setup.local.json \
-  --label before-grasp
+  --label test
 ```
 
-The helper calls the public `soarm101 camera capture` CLI once per camera, saves the
-frames under the configured output directory, writes a JSON manifest, and prints the
-manifest path. The primary view appears first in the manifest.
+It is not a second camera implementation and does not alter the persisted GUI camera
+configuration.
 
-Agents may also call `soarm101 camera capture` directly. The helper exists only to make
-a synchronized-enough multi-view observation easy; it is not a second camera
-implementation.
+## Agent runs
 
-## Running an agent
+Agent launch configuration intentionally lives outside this SDK. A run may use Codex,
+Hermes, another coding agent, or a custom harness. The SDK-side inputs are simply:
 
-Launch the agent from this directory or otherwise ensure it receives:
+- the task/goal supplied by the experiment;
+- the public `soarm101` executable;
+- the neutral CLI contract in `docs/agent-arm101-cli.md`; and
+- machine-specific connection information needed to address the configured robot/camera.
 
-- `AGENTS.md` for the physical-operation contract,
-- `CLI.md` for the relevant CLI surface,
-- `setup.local.json` for the robot and camera devices,
-- the natural-language task.
+For runs intended to measure an agent's own task strategy, do not add an SDK-provided
+problem-solving policy to those inputs.
 
-The agent should have access to the `soarm101` executable and to the captured image
-files. A multimodal agent must actually receive or open those image files; a pathname by
-itself is not visual input.
-
-This first scaffold does not choose an agent API, impose an MCP layer, implement an
-evaluator, or claim physical validation. Those can be added after the basic
-observe-reason-act loop has been exercised on the real workstation.
+The GUI and CLI cannot own the same follower serial port simultaneously. Likewise, a CLI
+capture cannot open a USB camera while the GUI owns that camera stream.
