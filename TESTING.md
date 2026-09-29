@@ -488,14 +488,28 @@ Robo Puppeteer/Director repositories.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## Camera transient-drop recovery — workstation / hardware
+
+1. Start one camera and confirm normal live preview.
+2. While streaming, induce a brief USB/frame hiccup if practical (for example, momentary host
+   load or a known camera that occasionally returns an empty frame). A single missed frame
+   must not stop the stream.
+3. Confirm a transient miss shows RECOVERING briefly and the previous preview remains visible.
+4. Request a snapshot during/around a transient miss and confirm the snapshot completes on the
+   next good frame rather than disappearing.
+5. If the device produces repeated consecutive empty frames, confirm the worker attempts to
+   reopen it while keeping the stream in RECOVERING state.
+6. Confirm a genuinely unavailable/unopenable camera eventually stops with a visible terminal
+   error rather than retrying forever.
+
 ## Camera layout / multi-view validation — workstation / hardware
 
 1. Open Camera with one saved camera and confirm the setup controls stay in a compact panel
-   rather than stretching across the whole workspace.
+   (roughly 820 px maximum) rather than stretching across the whole workspace.
 2. Confirm **USB device** is visibly a dropdown and is populated on tab construction; press
    **Find cameras** and verify the same stable devices remain available.
 3. Configure two named cameras such as `overhead` and `wrist`, start both, and confirm the
-   lower preview area splits side-by-side with a name/status card for each camera.
+   lower preview area splits into compact side-by-side cards with name/status visible for each.
 4. Add a third saved camera profile (hardware stream optional) and confirm the preview switches
    to a two-column grid without losing the first two cards.
 5. Rename/delete a camera and confirm the grid follows the saved registry without stale cards.
