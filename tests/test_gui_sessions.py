@@ -390,3 +390,63 @@ def test_gui_buttons_have_explicit_visual_roles_and_contrast(window):
     assert "QPushButton[buttonRole=\"danger\"]" in style
     assert "background-color:" in style
     assert "QPushButton {" in style
+
+
+
+def test_camera_device_is_an_obvious_selector_and_controls_are_compact(window):
+    assert window.camera_device_combo.isEditable() is False
+    assert window.camera_device_combo.objectName() == "cameraDeviceCombo"
+    assert window.camera_settings_box.maximumWidth() == 980
+    assert window.camera_page.isAncestorOf(window.camera_settings_box)
+
+
+def test_camera_preview_grid_splits_two_named_cameras_side_by_side(window):
+    from soarm101_motion.camera import CameraSettings
+
+    existing_names = list(window._workstation_profile.cameras)
+    assert existing_names
+    second_name = "wrist" if "wrist" not in existing_names else "side"
+    window._workstation_profile = window._workstation_profile.with_camera(
+        second_name,
+        CameraSettings(device="/dev/video99", width=640, height=480),
+        select=False,
+    )
+    window._rebuild_camera_preview_grid()
+
+    names = list(window._workstation_profile.cameras)
+    assert len(window.camera_preview_labels) == len(names)
+    assert set(window.camera_preview_cards) == set(names)
+
+    first = names[0]
+    first_index = window.camera_preview_grid.indexOf(window.camera_preview_cards[first])
+    second_index = window.camera_preview_grid.indexOf(
+        window.camera_preview_cards[second_name]
+    )
+    first_row, first_col, _, _ = window.camera_preview_grid.getItemPosition(first_index)
+    second_row, second_col, _, _ = window.camera_preview_grid.getItemPosition(second_index)
+    assert (first_row, first_col) == (0, 0)
+    assert (second_row, second_col) == (0, 1)
+
+
+def test_camera_frame_routes_to_its_named_preview_card(window):
+    from PySide6.QtGui import QImage
+    from soarm101_motion.camera import CameraSettings
+
+    name = "wrist"
+    if name in window._workstation_profile.cameras:
+        name = "side"
+    window._workstation_profile = window._workstation_profile.with_camera(
+        name,
+        CameraSettings(device="/dev/video98", width=320, height=240),
+        select=False,
+    )
+    window._rebuild_camera_preview_grid()
+
+    image = QImage(320, 240, QImage.Format.Format_RGB32)
+    image.fill(0xFF336699)
+    window._on_camera_frame(name, image)
+
+    preview = window.camera_preview_labels[name]
+    assert preview.pixmap() is not None
+    assert not preview.pixmap().isNull()
+    assert name in window._camera_latest_images
