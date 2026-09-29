@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Made GUI camera streams tolerant of transient USB frame drops: one missed frame no longer
+  stops a stream, snapshots survive retry, repeated misses trigger device reopen, and terminal
+  open failures remain explicit.
+- Tightened the multi-camera dashboard with smaller preview cards, recovery-state labeling,
+  friendly device names, and automatic migration from legacy `/dev/videoN` selections to
+  stable Linux `/dev/v4l/by-id/` identifiers when possible.
+
 - Made the Camera tab more compact, turned USB device selection into an explicit discovered-
   device dropdown, and added an adaptive named-camera preview area: one view fills the panel,
   two split side-by-side, and larger sets use a two-column grid.
