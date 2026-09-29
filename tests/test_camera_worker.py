@@ -8,6 +8,7 @@ import pytest
 
 from soarm101_motion.camera import (
     CameraCapture,
+    CameraDeviceUnavailableError,
     CameraFrameReadError,
     CameraSettings,
 )
@@ -228,3 +229,139 @@ def test_camera_worker_stops_after_bounded_empty_frame_recovery(monkeypatch) -> 
     assert statuses[-1]["connected"] is False
     assert statuses[-1]["recovering"] is False
     assert statuses[-1]["error"] == errors[-1]
+
+
+
+def test_camera_capture_marks_disappeared_device_as_unavailable(monkeypatch) -> None:
+    from soarm101_motion import camera as camera_module
+
+    class FakeCapture:
+        def isOpened(self) -> bool:
+            return True
+
+        def read(self):
+            return False, None
+
+    camera = CameraCapture(CameraSettings(device="/dev/v4l/by-id/test-camera"))
+    camera._capture = FakeCapture()
+    monkeypatch.setattr(camera_module, "camera_device_available", lambda _device: False)
+
+    with pytest.raises(CameraDeviceUnavailableError, match="disconnected"):
+        camera.read_bgr()
+
+
+def test_camera_worker_waits_for_saved_device_to_return(monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from soarm101_motion.gui import camera_worker
+
+    app = QApplication.instance() or QApplication([])
+    frame = np.zeros((12, 16, 3), dtype=np.uint8)
+    available = {"value": False}
+
+    class ReappearingCapture:
+        def __init__(self, settings: CameraSettings) -> None:
+            self.settings = settings
+            self.open_count = 0
+
+        def open(self):
+            self.open_count += 1
+            return self
+
+        def close(self) -> None:
+            pass
+
+        def actual_format(self) -> dict[str, object]:
+            return {
+                "device": self.settings.device,
+                "width": 16,
+                "height": 12,
+                "fps": 30.0,
+                "fourcc": "MJPG",
+                "mirror": False,
+            }
+
+        def read_bgr(self):
+            return frame
+
+    fake = ReappearingCapture(
+        CameraSettings(device="/dev/v4l/by-id/usb-test-camera-video-index0")
+    )
+    monkeypatch.setattr(camera_worker, "CameraCapture", lambda settings: fake)
+    monkeypatch.setattr(
+        camera_worker,
+        "camera_device_available",
+        lambda _device: available["value"],
+    )
+    monkeypatch.setattr(camera_worker, "DEVICE_RETURN_POLL_MS", 5)
+    monkeypatch.setattr(camera_worker, "DEVICE_RETURN_TIMEOUT_MS", 500)
+
+    worker = camera_worker.CameraWorker(fake.settings)
+    frames: list[object] = []
+    errors: list[str] = []
+    statuses: list[dict[str, object]] = []
+    worker.frame_ready.connect(frames.append)
+    worker.error_message.connect(errors.append)
+    worker.status_changed.connect(lambda status: statuses.append(dict(status)))
+
+    worker.start_stream()
+    assert _wait_until(
+        app,
+        lambda: any(
+            status.get("recovering") is True
+            and status.get("device_missing") is True
+            for status in statuses
+        ),
+    )
+    assert fake.open_count == 0
+
+    available["value"] = True
+    assert _wait_until(app, lambda: bool(frames))
+
+    worker.stop_stream()
+    worker.shutdown()
+    app.processEvents()
+
+    assert errors == []
+    assert fake.open_count == 1
+    assert any(
+        status.get("connected") is True
+        and status.get("device_missing") is False
+        for status in statuses
+    )
+
+
+def test_camera_worker_times_out_waiting_for_missing_device(monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from soarm101_motion.gui import camera_worker
+
+    app = QApplication.instance() or QApplication([])
+    settings = CameraSettings(
+        device="/dev/v4l/by-id/usb-missing-camera-video-index0"
+    )
+
+    monkeypatch.setattr(camera_worker, "camera_device_available", lambda _device: False)
+    monkeypatch.setattr(camera_worker, "DEVICE_RETURN_POLL_MS", 5)
+    monkeypatch.setattr(camera_worker, "DEVICE_RETURN_TIMEOUT_MS", 40)
+
+    worker = camera_worker.CameraWorker(settings)
+    errors: list[str] = []
+    statuses: list[dict[str, object]] = []
+    worker.error_message.connect(errors.append)
+    worker.status_changed.connect(lambda status: statuses.append(dict(status)))
+
+    worker.start_stream()
+    assert _wait_until(app, lambda: bool(errors), timeout=1.0)
+
+    worker.shutdown()
+    app.processEvents()
+
+    assert "did not return within" in errors[-1]
+    assert "40" not in errors[-1]
+    assert statuses[-1]["connected"] is False
+    assert statuses[-1]["recovering"] is False
+    assert statuses[-1]["device_missing"] is True
+    assert statuses[-1]["wait_timeout_s"] == pytest.approx(0.04)
