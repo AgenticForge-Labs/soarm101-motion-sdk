@@ -928,7 +928,7 @@ class RobotWorker(QObject):
             values = dict(sample)  # type: ignore[arg-type]
             sample_timestamp = float(values.get("timestamp", started))
             sample_age_s = max(0.0, started - sample_timestamp)
-            stale_limit_s = max(0.15, 3.0 * float(teleop["period_s"]))
+            stale_limit_s = teleop_stale_limit_s(float(teleop["period_s"]))
             if sample_age_s > stale_limit_s:
                 raise RuntimeError(
                     f"leader sample is {sample_age_s * 1000.0:.0f} ms old; "
