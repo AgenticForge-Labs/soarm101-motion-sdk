@@ -10,6 +10,15 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
 - Confirm motor voltage, calibration, direction, TCP, and limits on the exact assembly.
 - Inspect voltage, temperature, current, and status using `soarm101 diagnose`.
 
+## Transient torque-control replies
+
+The Feetech transport may occasionally lose or corrupt the status reply to an idempotent
+`Torque_Enable` or `Lock` write even when the servo received the requested value. For these
+two control bits only, the backend performs bounded recovery: read back the register after a
+communication error; if the requested value is already present, continue; otherwise retry the
+same write once. Persistent or unverifiable communication failure still aborts torque enable
+and triggers rollback. Motion targets and other register writes do not inherit this retry.
+
 ## Leader parking and handoff
 
 The leader normally connects with torque off so it can be moved by hand. **Park leader**
