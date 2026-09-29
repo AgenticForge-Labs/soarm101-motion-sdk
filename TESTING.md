@@ -28,6 +28,27 @@ after any failed gate rather than continuing into later capabilities.
    leader→follower teleoperation during the first foundational run unless every preceding
    gate has passed.
 
+### Paper-frame Cartesian validation — after the basic motion gates
+
+Once the mechanical calibration, five one-joint direction checks, small gripper motion,
+STOP/Relax behavior, and basic FK sanity checks have passed, run:
+
+```bash
+python examples/paper_corner_cartesian_test.py
+```
+
+Use a US Letter sheet by default. With the arm relaxed, point the same lower gripper
+finger at A, then B along the 215.9 mm width, then C along the 279.4 mm height, pressing
+Enter at each point. The script must report plausible edge lengths and an approximately
+90° corner before it is allowed to enable torque again.
+
+The autonomous phase must preflight with torque OFF, lift away from C, move above the
+predicted fourth corner, descend only to the configured point height (2 mm above the
+paper by default), then visit the configured +Z heights above that far corner. Keep
+physical power immediately reachable throughout the first run. Because the lower finger
+is not yet a separately calibrated TCP, repeat the three captures if reported tool
+orientation drift is excessive rather than overriding the check casually.
+
 
 ## Batch 1 — Setup, follower control, and leader readout
 
