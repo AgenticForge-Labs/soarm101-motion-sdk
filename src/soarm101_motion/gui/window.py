@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QToolButton,
     QScrollArea,
     QSlider,
     QSpinBox,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from soarm101_motion.calibration import SO101Calibration, default_calibration_path
-from soarm101_motion.camera import CameraSettingsStore, discover_camera_devices
+from soarm101_motion.camera import CameraSettings, discover_camera_devices
 from soarm101_motion.calibration_live import (
     PROVISIONAL_MINIMUM_TRAVEL_TICKS,
     display_travel_targets,
@@ -47,7 +48,7 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
-from soarm101_motion.gui.camera_worker import CameraWorker
+from soarm101_motion.gui.camera_manager import CameraSessionManager
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
@@ -59,6 +60,11 @@ from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceS
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 from soarm101_motion.gui.session_log import record as record_session
 from soarm101_motion.gui.session_log import current_path as session_log_path
+from soarm101_motion.workstation import (
+    ArmConnectionProfile,
+    WorkstationProfile,
+    WorkstationProfileStore,
+)
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +120,22 @@ class MainWindow(QMainWindow):
         self.resize(1480, 900)
         self.setMinimumSize(1080, 720)
 
+        self._workstation_store = WorkstationProfileStore()
+        self._workstation_load_error: str | None = None
+        try:
+            self._workstation_profile = self._workstation_store.load()
+        except Exception as exc:
+            self._workstation_profile = WorkstationProfile().validated()
+            self._workstation_load_error = str(exc)
+        if not self._workstation_profile.cameras:
+            self._workstation_profile = self._workstation_profile.with_camera(
+                "camera",
+                CameraSettings(),
+            )
+        if port is None and not simulation and self._workstation_profile.follower.port:
+            port = self._workstation_profile.follower.port
+            robot_id = self._workstation_profile.follower.robot_id
+
         self._connected = False
         self._follower_setup_session = False
         self._torque_enabled = False
@@ -158,9 +180,10 @@ class MainWindow(QMainWindow):
         self._coordination_gripper_checks: list[QCheckBox] = []
         self._sync_include_gripper = True
         self._sync_capture_pending: str | None = None
-        self._camera_store = CameraSettingsStore()
-        self._camera_settings = self._camera_store.load()
+        self._camera_settings = self._workstation_profile.camera()
         self._camera_connected = False
+        self._camera_status_by_name: dict[str, dict[str, object]] = {}
+        self._loaded_camera_name = self._workstation_profile.selected_camera or "camera"
 
         self._thread = QThread(self)
         self._worker = RobotWorker()
@@ -252,13 +275,13 @@ class MainWindow(QMainWindow):
         self._leader_worker.measured_pose_captured.connect(self._on_measured_pose_captured)
 
         self._build_ui(port=port, robot_id=robot_id, simulation=simulation)
-        self._camera_worker = CameraWorker(self._camera_settings)
-        self._camera_worker.frame_ready.connect(self._on_camera_frame)
-        self._camera_worker.status_changed.connect(self._on_camera_status)
-        self._camera_worker.error_message.connect(self._on_camera_error)
-        self._camera_worker.snapshot_saved.connect(self._on_camera_snapshot_saved)
-        if self._camera_settings.auto_start:
-            self._camera_worker.start_stream()
+        self._camera_manager = CameraSessionManager()
+        self._camera_manager.frame_ready.connect(self._on_camera_frame)
+        self._camera_manager.status_changed.connect(self._on_camera_status)
+        self._camera_manager.error_message.connect(self._on_camera_error)
+        self._camera_manager.snapshot_saved.connect(self._on_camera_snapshot_saved)
+        self._camera_manager.sync(self._workstation_profile.cameras)
+        self._camera_manager.start_auto()
         self._thread.start()
         self._leader_thread.start()
         self._refresh_ports()
@@ -307,20 +330,39 @@ class MainWindow(QMainWindow):
                 background: palette(base);
             }
             QPushButton {
-                min-height: 28px;
-                padding: 5px 11px;
-                border: 1px solid palette(midlight);
-                border-radius: 8px;
+                min-height: 32px;
+                padding: 6px 12px;
+                border: 1px solid palette(mid);
+                border-radius: 9px;
                 background: palette(button);
+                font-weight: 600;
             }
             QPushButton:hover {
-                border-color: palette(highlight);
+                border: 2px solid palette(highlight);
+                padding: 5px 11px;
+                background: palette(alternate-base);
             }
             QPushButton:pressed {
                 background: palette(midlight);
             }
             QPushButton:disabled {
                 color: palette(mid);
+                border-color: palette(midlight);
+                background: palette(window);
+            }
+            QToolButton#helpButton {
+                min-width: 22px;
+                max-width: 22px;
+                min-height: 22px;
+                max-height: 22px;
+                border: 1px solid palette(mid);
+                border-radius: 11px;
+                background: palette(alternate-base);
+                font-weight: 800;
+            }
+            QToolButton#helpButton:hover {
+                border-color: palette(highlight);
+                background: palette(button);
             }
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
                 min-height: 27px;
@@ -352,6 +394,83 @@ class MainWindow(QMainWindow):
             }
             """
         )
+
+    def _help_button(self, title: str, text: str) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("helpButton")
+        button.setText("?")
+        button.setToolTip(text)
+        button.clicked.connect(
+            lambda _checked=False, t=title, body=text: QMessageBox.information(
+                self, t, body
+            )
+        )
+        return button
+
+    def _save_arm_connection_profile(self, role: str) -> None:
+        if role == "leader":
+            port = self.leader_port_combo.currentText().strip()
+            robot_id = self.leader_robot_id_edit.text().strip() or "so101-leader"
+        else:
+            port = self.port_combo.currentText().strip()
+            robot_id = self.robot_id_edit.text().strip() or "so101"
+        arm = ArmConnectionProfile(
+            port=port,
+            robot_id=robot_id,
+            calibration=str(default_calibration_path(robot_id)),
+        ).validated()
+        if role == "leader":
+            self._workstation_profile = replace(
+                self._workstation_profile,
+                leader=arm,
+            ).validated()
+        else:
+            self._workstation_profile = replace(
+                self._workstation_profile,
+                follower=arm,
+            ).validated()
+        self._workstation_profile = self._workstation_store.save(
+            self._workstation_profile
+        )
+
+    def _sync_camera_manager(self) -> None:
+        if hasattr(self, "_camera_manager"):
+            self._camera_manager.sync(self._workstation_profile.cameras)
+
+    def _camera_name(self) -> str:
+        if hasattr(self, "camera_profile_combo"):
+            name = self.camera_profile_combo.currentText().strip()
+            if name:
+                return name
+        return self._workstation_profile.selected_camera or next(
+            iter(self._workstation_profile.cameras)
+        )
+
+    def _teleop_camera_name(self) -> str:
+        if hasattr(self, "teleop_camera_combo"):
+            name = self.teleop_camera_combo.currentText().strip()
+            if name:
+                return name
+        return self._camera_name()
+
+    def _camera_is_connected(self, name: str) -> bool:
+        return bool(self._camera_status_by_name.get(name, {}).get("connected"))
+
+    def _refresh_camera_profile_choices(self, selected: str | None = None) -> None:
+        names = list(self._workstation_profile.cameras)
+        selected = selected or self._workstation_profile.selected_camera
+        for combo_name in ("camera_profile_combo", "teleop_camera_combo"):
+            combo = getattr(self, combo_name, None)
+            if combo is None:
+                continue
+            current = combo.currentText().strip()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(names)
+            target = selected or current
+            if target and combo.findText(target) >= 0:
+                combo.setCurrentText(target)
+            combo.blockSignals(False)
 
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
         self._apply_modern_style()
