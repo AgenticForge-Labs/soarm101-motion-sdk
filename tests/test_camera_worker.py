@@ -41,10 +41,11 @@ def _wait_until(app, predicate, timeout: float = 2.0) -> bool:
 
 def test_camera_worker_recovers_after_one_dropped_frame(monkeypatch) -> None:
     pytest.importorskip("PySide6")
-    from PySide6.QtCore import QCoreApplication
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
     from soarm101_motion.gui import camera_worker
 
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = QApplication.instance() or QApplication([])
     frame = np.zeros((12, 16, 3), dtype=np.uint8)
 
     class FakeCapture:
@@ -109,10 +110,11 @@ def test_camera_worker_keeps_snapshot_request_across_transient_drop(
     monkeypatch, tmp_path
 ) -> None:
     pytest.importorskip("PySide6")
-    from PySide6.QtCore import QCoreApplication
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
     from soarm101_motion.gui import camera_worker
 
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = QApplication.instance() or QApplication([])
     frame = np.zeros((12, 16, 3), dtype=np.uint8)
     output = tmp_path / "snapshot.jpg"
 
@@ -175,10 +177,11 @@ def test_camera_worker_keeps_snapshot_request_across_transient_drop(
 
 def test_camera_worker_stops_after_bounded_empty_frame_recovery(monkeypatch) -> None:
     pytest.importorskip("PySide6")
-    from PySide6.QtCore import QCoreApplication
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
     from soarm101_motion.gui import camera_worker
 
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = QApplication.instance() or QApplication([])
 
     class EmptyCapture:
         def __init__(self, settings: CameraSettings) -> None:
