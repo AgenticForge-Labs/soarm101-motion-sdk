@@ -510,3 +510,24 @@ def test_camera_device_display_keeps_machine_path_as_item_data(window):
         == "/dev/v4l/by-id/usb-Example_Camera-video-index0"
     )
     assert window._camera_device_value().endswith("usb-Example_Camera-video-index0")
+
+
+
+def test_camera_missing_device_shows_waiting_state(window):
+    name = window._camera_name()
+    window._on_camera_status(
+        name,
+        {
+            "connected": False,
+            "recovering": True,
+            "device_missing": True,
+            "waited_s": 4.2,
+            "wait_timeout_s": 30.0,
+            "warning": "camera disconnected",
+        },
+    )
+
+    assert "WAITING" in window.camera_preview_cards[name].title()
+    assert "Waiting for device" in window.camera_preview_status_labels[name].text()
+    assert "4/30 s" in window.camera_preview_status_labels[name].text()
+    assert window.camera_toggle_button.text() == "Stop selected"
