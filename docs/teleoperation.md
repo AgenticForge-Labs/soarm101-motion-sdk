@@ -136,9 +136,12 @@ The GUI worker measures each leader sample's age before execution. A sample is
 rejected and the follower is held if it is older than the larger of 150 ms or three
 selected stream periods.
 
-Follower processing time is also measured. If processing takes longer than the selected
-period for three consecutive samples, teleoperation is terminated and the follower is
-held. The Teleoperation status line reports approximately:
+Follower processing time is also measured and reported, but it is diagnostic rather than
+a stop condition by itself. An individual cycle can exceed the nominal period because of
+serial jitter without creating delayed playback. Teleoperation stops and holds when the
+actual queued leader sample age crosses the stale-data limit, or when another motion,
+communication, hardware-fault, following-error, or effort guard trips. The Teleoperation
+status line reports approximately:
 
 ```text
 Live teleop 20 Hz — 25 samples; follower cycle 28 ms; queued age 3 ms.
@@ -171,14 +174,16 @@ Validate:
 Repeat the same tests. The period is 100 ms. Record cycle times and sample ages during
 single-joint and coordinated slow movements.
 
-Treat 10 Hz as the initial practical target, not as a guaranteed production rate.
+Use 10 Hz as a diagnostic fallback when investigating transport or timing problems. It may
+look visibly stepped during hand-following because commands are only updated every 100 ms.
 
 ### 3. 20 Hz
 
-Only try this after 5 and 10 Hz are repeatable. The period is 50 ms, so the current
-per-sample serial monitoring may become the limiting factor. Any repeated overrun, stale
-sample, growing queue age, or noticeably delayed STOP response means the rate is not
-acceptable with the current transport path.
+This is the practical default for hand-following. The period is 50 ms. Occasional follower
+cycles longer than 50 ms are recorded as timing overruns, but they are not themselves a
+reason to stop if queued sample age remains low. Growing queue age, a stale-sample stop,
+communication error, or noticeably delayed STOP response still means the transport path
+needs attention.
 
 ### 4. 50 Hz
 
