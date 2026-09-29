@@ -51,9 +51,31 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
 def _arm_from_args(args: argparse.Namespace) -> SOARM101:
     if getattr(args, "simulation", False):
         return SOARM101.simulated(realtime=True)
-    if not args.port:
-        raise ValueError("--port is required unless --simulation is selected")
-    return SOARM101(_hardware_config(args))
+    if args.port:
+        return SOARM101(_hardware_config(args))
+
+    follower = WorkstationProfileStore().load().follower
+    if not follower.port:
+        raise ValueError(
+            "--port is required because no follower port is saved in the workstation profile"
+        )
+    requested_robot_id = getattr(args, "robot_id", None)
+    robot_id = (
+        follower.robot_id
+        if requested_robot_id in (None, "", "so101")
+        else str(requested_robot_id)
+    )
+    overrides: dict[str, object] = {
+        "port": follower.port,
+        "robot_id": robot_id,
+    }
+    if (
+        not getattr(args, "calibration", None)
+        and robot_id == follower.robot_id
+        and follower.calibration
+    ):
+        overrides["calibration_path"] = Path(follower.calibration)
+    return SOARM101(_hardware_config(args, **overrides))
 
 
 def _confirm(args: argparse.Namespace, word: str, message: str) -> bool:
@@ -691,7 +713,10 @@ def _cmd_camera_capture(args: argparse.Namespace) -> int:
                 print(f"{item['name']}: {item['path']}")
         return 0
 
-    _store, _profile, name, settings = _camera_settings_from_args(args)
+    _store, _profile, name, settings = _camera_settings_from_args(
+        args,
+        allow_new=bool(getattr(args, "device", None)),
+    )
     metadata = _capture_named_camera(name, settings, args.output)
     if args.json:
         print(json.dumps(metadata, indent=2))
@@ -795,7 +820,10 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--calibration")
 
     def add_session_options(command: argparse.ArgumentParser) -> None:
-        command.add_argument("--port", help="physical serial port; required without --simulation")
+        command.add_argument(
+            "--port",
+            help="physical serial port; defaults to saved workstation follower without --simulation",
+        )
         command.add_argument("--robot-id", default="so101")
         command.add_argument("--calibration")
         command.add_argument("--simulation", action="store_true")
