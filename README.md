@@ -145,7 +145,15 @@ The GUI automatically keeps displayed joint readings current and provides explic
 
 ### CLI examples
 
+After a successful GUI follower connection has been saved in the workstation profile,
+one-off session commands can omit `--port`; explicit connection arguments still override
+the saved follower.
+
 ```bash
+# Inspect the saved workstation and current follower state
+soarm101 workstation show --json
+soarm101 read --json
+
 # Find arms and inspect their measured voltage and motor status
 soarm101 discover
 soarm101 diagnose --port /dev/ttyACM0 --robot-id so101
