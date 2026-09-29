@@ -14,7 +14,9 @@ from soarm101_motion.camera import (
 )
 
 
-def test_camera_capture_marks_empty_frame_as_transient_read_error() -> None:
+def test_camera_capture_marks_empty_frame_as_transient_read_error(monkeypatch) -> None:
+    from soarm101_motion import camera as camera_module
+
     class FakeCapture:
         def isOpened(self) -> bool:
             return True
@@ -24,6 +26,7 @@ def test_camera_capture_marks_empty_frame_as_transient_read_error() -> None:
 
     camera = CameraCapture(CameraSettings())
     camera._capture = FakeCapture()
+    monkeypatch.setattr(camera_module, "camera_device_available", lambda _device: True)
 
     with pytest.raises(CameraFrameReadError, match="did not return a frame"):
         camera.read_bgr()
