@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-- Lowered hardware-facing defaults after physical bench validation: live leader→follower
-  teleoperation now starts at 10 Hz instead of 20 Hz, while 20/50 Hz remain explicit
-  higher-rate options. New camera profiles now default to 640×480 MJPG at 15 FPS to
-  reduce USB bandwidth and host processing load; existing saved camera profiles are
-  preserved unchanged.
+- Restored 20 Hz as the practical live leader→follower teleoperation default after 10 Hz
+  proved visibly stepped during physical hand-following. Follower cycle overruns remain
+  measured, but teleoperation now stops on actual stale queued leader data rather than
+  three nominal-period overruns alone. The existing communication, following-error,
+  hardware-fault, effort, and STOP/HOLD guards remain active.
+- New camera profiles default to 640×480 MJPG at 15 FPS to reduce USB bandwidth and host
+  processing load; existing saved camera profiles are preserved unchanged.
 
 - Added a guided US Letter paper-frame Cartesian validation script. It opens the gripper,
   relaxes for three manual lower-finger corner captures, checks measured dimensions,
