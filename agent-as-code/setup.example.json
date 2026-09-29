@@ -12,35 +12,7 @@
     "model": "replace-with-vlm-model",
     "mode": "agent-native-or-separate"
   },
-  "robot": {
-    "port": "/dev/ttyACM0",
-    "robot_id": "so101",
-    "calibration": null
-  },
-  "cameras": [
-    {
-      "name": "primary",
-      "primary": true,
-      "enabled": true,
-      "device": "/dev/v4l/by-id/REPLACE_WITH_PRIMARY_CAMERA",
-      "width": 1280,
-      "height": 720,
-      "fps": 30,
-      "fourcc": "MJPG",
-      "mirror": false
-    },
-    {
-      "name": "side",
-      "primary": false,
-      "enabled": false,
-      "device": "/dev/video2",
-      "width": 1280,
-      "height": 720,
-      "fps": 30,
-      "fourcc": "MJPG",
-      "mirror": false
-    }
-  ],
+  "camera_names": [],
   "run": {
     "output_dir": "agent-as-code/runs"
   }
