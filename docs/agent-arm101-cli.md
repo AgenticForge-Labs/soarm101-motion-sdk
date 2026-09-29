@@ -25,8 +25,11 @@ Commands that support either hardware or simulation accept:
 --simulation
 ```
 
-Use `--simulation` instead of `--port` for software-only execution. Physical commands require
-an active calibration unless the command explicitly documents otherwise.
+Use `--simulation` instead of a physical port for software-only execution. For physical
+session commands, omitting `--port` uses the saved follower entry from
+`~/.config/soarm101/workstation.json`. An explicit `--port`, `--robot-id`, or
+`--calibration` overrides the corresponding saved value. Physical commands require an active
+calibration unless the command explicitly documents otherwise.
 
 The GUI and CLI must not open the same follower serial port at the same time. A GUI-owned USB
 camera stream likewise cannot be opened concurrently by a separate CLI capture process.
