@@ -7,7 +7,7 @@ from math import ceil, degrees, radians
 from typing import Any
 
 from PySide6.QtCore import QMetaObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QPixmap
+from PySide6.QtGui import QColor, QCloseEvent, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -295,107 +295,219 @@ class MainWindow(QMainWindow):
         self._refresh_sequence_list()
         self._update_enabled_state()
 
+    @staticmethod
+    def _mix_color(first: QColor, second: QColor, weight: float) -> QColor:
+        weight = max(0.0, min(1.0, float(weight)))
+        inverse = 1.0 - weight
+        return QColor(
+            round(first.red() * inverse + second.red() * weight),
+            round(first.green() * inverse + second.green() * weight),
+            round(first.blue() * inverse + second.blue() * weight),
+        )
+
     def _apply_modern_style(self) -> None:
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        text = palette.color(QPalette.ColorRole.WindowText)
+        highlight = palette.color(QPalette.ColorRole.Highlight)
+        highlighted_text = palette.color(QPalette.ColorRole.HighlightedText)
+        dark = window.lightness() < 128
+
+        surface = self._mix_color(window, text, 0.13 if dark else 0.075)
+        surface_hover = self._mix_color(surface, highlight, 0.24 if dark else 0.16)
+        surface_pressed = self._mix_color(surface, highlight, 0.38 if dark else 0.28)
+        border = self._mix_color(window, text, 0.42 if dark else 0.32)
+        disabled_surface = self._mix_color(window, text, 0.07 if dark else 0.035)
+        disabled_border = self._mix_color(window, text, 0.20 if dark else 0.16)
+        disabled_text = self._mix_color(window, text, 0.40)
+
+        primary = highlight
+        primary_hover = self._mix_color(highlight, text, 0.10 if not dark else 0.06)
+        primary_pressed = self._mix_color(highlight, text, 0.18 if not dark else 0.12)
+        danger = QColor("#b91c1c")
+        danger_hover = QColor("#991b1b")
+
         self.setStyleSheet(
-            """
-            QMainWindow, QWidget {
+            f"""
+            QMainWindow, QWidget {{
                 font-size: 12px;
-            }
-            QGroupBox {
+            }}
+            QGroupBox {{
                 font-weight: 700;
                 border: 1px solid palette(midlight);
                 border-radius: 12px;
                 margin-top: 10px;
                 padding-top: 8px;
                 background: palette(base);
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 12px;
                 padding: 0 5px;
-            }
-            QTabWidget::pane {
+            }}
+            QTabWidget::pane {{
                 border: 1px solid palette(midlight);
                 border-radius: 12px;
                 top: -1px;
                 background: palette(window);
-            }
-            QTabBar::tab {
+            }}
+            QTabBar::tab {{
                 min-height: 28px;
                 padding: 7px 13px;
                 margin-right: 2px;
                 border-top-left-radius: 8px;
                 border-top-right-radius: 8px;
-            }
-            QTabBar::tab:selected {
+            }}
+            QTabBar::tab:selected {{
                 font-weight: 700;
                 background: palette(base);
-            }
-            QPushButton {
-                min-height: 32px;
-                padding: 6px 12px;
-                border: 1px solid palette(mid);
+            }}
+            QPushButton {{
+                min-height: 34px;
+                padding: 7px 13px;
+                border: 1px solid {border.name()};
                 border-radius: 9px;
-                background: palette(button);
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                border: 2px solid palette(highlight);
-                padding: 5px 11px;
-                background: palette(alternate-base);
-            }
-            QPushButton:pressed {
-                background: palette(midlight);
-            }
-            QPushButton:disabled {
-                color: palette(mid);
-                border-color: palette(midlight);
-                background: palette(window);
-            }
-            QToolButton#helpButton {
-                min-width: 22px;
-                max-width: 22px;
-                min-height: 22px;
-                max-height: 22px;
-                border: 1px solid palette(mid);
-                border-radius: 11px;
-                background: palette(alternate-base);
+                background-color: {surface.name()};
+                color: {text.name()};
+                font-weight: 650;
+            }}
+            QPushButton:hover {{
+                border: 1px solid {highlight.name()};
+                background-color: {surface_hover.name()};
+            }}
+            QPushButton:focus {{
+                border: 2px solid {highlight.name()};
+                padding: 6px 12px;
+            }}
+            QPushButton:pressed {{
+                background-color: {surface_pressed.name()};
+            }}
+            QPushButton:checked {{
+                border: 2px solid {highlight.name()};
+                padding: 6px 12px;
+                background-color: {surface_pressed.name()};
+            }}
+            QPushButton:disabled {{
+                color: {disabled_text.name()};
+                border: 1px solid {disabled_border.name()};
+                background-color: {disabled_surface.name()};
+            }}
+            QPushButton[buttonRole="primary"] {{
+                border: 1px solid {primary.name()};
+                background-color: {primary.name()};
+                color: {highlighted_text.name()};
+                font-weight: 750;
+            }}
+            QPushButton[buttonRole="primary"]:hover {{
+                border-color: {primary_hover.name()};
+                background-color: {primary_hover.name()};
+            }}
+            QPushButton[buttonRole="primary"]:pressed {{
+                background-color: {primary_pressed.name()};
+            }}
+            QPushButton[buttonRole="primary"]:disabled {{
+                border-color: {disabled_border.name()};
+                background-color: {disabled_surface.name()};
+                color: {disabled_text.name()};
+            }}
+            QPushButton[buttonRole="danger"] {{
+                border: 1px solid {danger.name()};
+                background-color: {danger.name()};
+                color: white;
                 font-weight: 800;
-            }
-            QToolButton#helpButton:hover {
-                border-color: palette(highlight);
-                background: palette(button);
-            }
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+            }}
+            QPushButton[buttonRole="danger"]:hover {{
+                border-color: {danger_hover.name()};
+                background-color: {danger_hover.name()};
+            }}
+            QPushButton[buttonRole="danger"]:disabled {{
+                border-color: {disabled_border.name()};
+                background-color: {disabled_surface.name()};
+                color: {disabled_text.name()};
+            }}
+            QToolButton#helpButton {{
+                min-width: 24px;
+                max-width: 24px;
+                min-height: 24px;
+                max-height: 24px;
+                border: 1px solid {border.name()};
+                border-radius: 12px;
+                background-color: {surface.name()};
+                color: {text.name()};
+                font-weight: 800;
+            }}
+            QToolButton#helpButton:hover {{
+                border-color: {highlight.name()};
+                background-color: {surface_hover.name()};
+            }}
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {{
                 min-height: 27px;
                 padding: 3px 6px;
                 border: 1px solid palette(midlight);
                 border-radius: 7px;
                 background: palette(base);
-            }
-            QListWidget {
+            }}
+            QListWidget {{
                 border: 1px solid palette(midlight);
                 border-radius: 9px;
                 background: palette(base);
                 padding: 4px;
-            }
-            QProgressBar {
+            }}
+            QProgressBar {{
                 min-height: 18px;
                 border: 1px solid palette(midlight);
                 border-radius: 7px;
                 text-align: center;
                 background: palette(alternate-base);
-            }
-            QProgressBar::chunk {
+            }}
+            QProgressBar::chunk {{
                 border-radius: 6px;
                 background: palette(highlight);
-            }
-            QScrollArea {
+            }}
+            QScrollArea {{
                 border: 0;
                 background: transparent;
-            }
+            }}
             """
         )
+
+    def _style_action_buttons(self) -> None:
+        primary_names = (
+            "connect_button",
+            "leader_connect_button",
+            "find_arms_button",
+            "setup_find_arms_button",
+            "setup_connect_button",
+            "run_calibration_button",
+            "camera_apply_button",
+            "camera_toggle_button",
+            "teleop_button",
+            "save_point_button",
+            "record_button",
+            "save_edited_trajectory_button",
+            "save_sequence_button",
+            "run_sequence_button",
+            "move_joints_button",
+            "absolute_move_button",
+        )
+        for name in primary_names:
+            button = getattr(self, name, None)
+            if isinstance(button, QPushButton):
+                button.setProperty("buttonRole", "primary")
+
+        for name in ("stop_button", "stop_sequence_button"):
+            button = getattr(self, name, None)
+            if isinstance(button, QPushButton):
+                button.setProperty("buttonRole", "danger")
+                button.setStyleSheet("")
+
+        for button in self.findChildren(QPushButton):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Dynamic-property selectors are evaluated when the stylesheet is applied.
+        # Reapply after all tabs/buttons have been constructed and roles assigned.
+        self._apply_modern_style()
+
 
     def _help_button(self, title: str, text: str) -> QToolButton:
         button = QToolButton()
@@ -537,6 +649,7 @@ class MainWindow(QMainWindow):
         self.workspace_splitter = workspace
 
         self.setCentralWidget(root)
+        self._style_action_buttons()
         self._refresh_sidebar_context()
 
     def _build_persistent_robot_sidebar(self) -> RobotStatusPanel:
