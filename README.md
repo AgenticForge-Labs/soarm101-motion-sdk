@@ -129,7 +129,7 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 | Tab | What you can do |
 | --- | --- |
 | **Setup** | Find and connect the leader and follower, persist their local ports/calibration identities, calibrate either arm, save Home and Rest, and inspect motor status. |
-| **Camera** | Create named cameras such as overhead/wrist, assign discovered USB devices, configure each stream, start one or all cameras, and capture still images. |
+| **Camera** | Create named cameras such as overhead/wrist, choose discovered USB devices from an explicit selector, configure each stream, start one or all cameras, and watch all configured cameras in an adaptive split/grid preview. |
 | **Manual** | Read current joint positions, switch between angular and Cartesian arm control, keep the gripper tool visible in either mode, park/release the leader, and hand poses between leader and follower. |
 | **Teleoperation** | Move the leader by hand, align/relink the follower, choose any named live camera view, capture a picture, and transfer to Manual while parking the leader. |
 | **Teach / Record** | Save named positions from the follower or leader, or record continuous demonstration trajectories for replay/editing and future Robo Puppeteer motion data. |
