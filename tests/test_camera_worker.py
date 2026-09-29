@@ -170,3 +170,58 @@ def test_camera_worker_keeps_snapshot_request_across_transient_drop(
     assert snapshots == [str(output)]
     assert fake.saved == [str(output)]
     assert fake.read_count >= 2
+
+
+
+def test_camera_worker_stops_after_bounded_empty_frame_recovery(monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QCoreApplication
+    from soarm101_motion.gui import camera_worker
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+
+    class EmptyCapture:
+        def __init__(self, settings: CameraSettings) -> None:
+            self.settings = settings
+            self.open_count = 0
+
+        def open(self):
+            self.open_count += 1
+            return self
+
+        def close(self) -> None:
+            pass
+
+        def actual_format(self) -> dict[str, object]:
+            return {
+                "device": self.settings.device,
+                "width": 640,
+                "height": 480,
+                "fps": 30.0,
+                "fourcc": "MJPG",
+                "mirror": False,
+            }
+
+        def read_bgr(self):
+            raise CameraFrameReadError("camera did not return a frame")
+
+    fake = EmptyCapture(CameraSettings(device="/dev/video-empty"))
+    monkeypatch.setattr(camera_worker, "CameraCapture", lambda settings: fake)
+
+    worker = camera_worker.CameraWorker(fake.settings)
+    errors: list[str] = []
+    statuses: list[dict[str, object]] = []
+    worker.error_message.connect(errors.append)
+    worker.status_changed.connect(lambda status: statuses.append(dict(status)))
+
+    worker.start_stream()
+    assert _wait_until(app, lambda: bool(errors), timeout=3.0)
+
+    worker.shutdown()
+    app.processEvents()
+
+    assert errors[-1] == "camera repeatedly opened but did not return usable frames"
+    assert fake.open_count == camera_worker.MAX_FRAME_RECOVERY_CYCLES
+    assert statuses[-1]["connected"] is False
+    assert statuses[-1]["recovering"] is False
+    assert statuses[-1]["error"] == errors[-1]
