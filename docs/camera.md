@@ -99,12 +99,22 @@ The **Camera** tab is the settings surface for named cameras. Its compact setup 
 
 Camera discovery runs when the tab is built and can also be refreshed manually. The device
 selector is deliberately non-editable in the GUI so a discovered camera looks like a real
-choice rather than an ambiguous text field; custom device paths remain configurable through
-the CLI/workstation profile.
+choice rather than an ambiguous text field. It shows a friendly camera name while keeping the
+actual device path as the stored value. If a legacy `/dev/videoN` selection resolves to a
+discovered stable `/dev/v4l/by-id/...` identifier, the GUI selects the stable identifier and
+prompts the user to save it. Custom device paths remain configurable through the CLI/workstation
+profile.
 
-The lower Camera-tab area shows every configured camera simultaneously: one camera uses the
-full preview area, two cameras split side-by-side, and three or more use a two-column grid.
-Each card is labeled with its logical camera name and live/stopped state.
+The lower Camera-tab area shows every configured camera simultaneously. The cards are kept
+compact: one camera gets a larger single view, two cameras split side-by-side, and three or
+more use a denser two-column grid. Each card is labeled with its logical camera name and
+LIVE / RECOVERING / STOPPED state.
+
+A single missed USB frame is treated as transient rather than terminal. The GUI worker retries
+short read gaps, keeps pending snapshot requests intact, and only reopens the device after
+eight consecutive missed frames. Up to three empty-frame recovery cycles are attempted, and
+camera-open failures are retried three times; after those bounded retries the stream stops and
+surfaces a terminal error instead of retrying forever.
 
 The GUI may own multiple live camera sessions concurrently, one worker per named physical
 device. Camera and Teleoperation views consume those shared named sessions rather than opening

@@ -20,6 +20,10 @@ DEFAULT_CAMERA_CONFIG_PATH = Path.home() / ".config" / "soarm101" / "camera.json
 DEFAULT_CAPTURE_DIR = Path.home() / ".local" / "share" / "soarm101" / "captures"
 
 
+class CameraFrameReadError(RuntimeError):
+    """Transient camera read failure suitable for retry by a live stream owner."""
+
+
 def _opencv() -> Any:
     try:
         import cv2  # type: ignore
@@ -178,7 +182,7 @@ class CameraCapture:
             raise RuntimeError("camera is not open")
         ok, frame = self._capture.read()
         if not ok or frame is None:
-            raise RuntimeError("camera did not return a frame")
+            raise CameraFrameReadError("camera did not return a frame")
         if self.settings.mirror:
             frame = _opencv().flip(frame, 1)
         return frame
