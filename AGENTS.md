@@ -26,9 +26,9 @@ changes require development discipline; robot use requires conservative hardware
 9. Treat calibration IDs as motion provenance; physical replay must fail closed on missing
    or mismatched provenance.
 10. Keep GUI and CLI features on shared SDK operations and saved libraries. The GUI may own
-    persistent hardware and camera sessions, but it must not shell out to CLI subprocesses for
-    robot or camera behavior. Camera settings must have one persisted source of truth and GUI
-    views must reuse one camera session rather than competing for the same device.
+    persistent hardware and named camera sessions, but it must not shell out to CLI subprocesses
+    for robot or camera behavior. Workstation addressing/camera settings have one persisted
+    source of truth; each physical camera has at most one GUI worker and views reuse that session.
 11. Preserve the distinction between planned motion and live-streaming safety. Do not weaken
     joint, step, rate, acceleration, following-error, fault, effort, calibration, or
     provenance checks merely to make a new workflow pass.
