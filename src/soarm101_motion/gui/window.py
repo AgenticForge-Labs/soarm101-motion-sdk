@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from math import ceil, degrees, radians
 from typing import Any
@@ -587,6 +588,46 @@ class MainWindow(QMainWindow):
 
     def _camera_is_connected(self, name: str) -> bool:
         return bool(self._camera_status_by_name.get(name, {}).get("connected"))
+
+    def _camera_is_running(self, name: str) -> bool:
+        status = self._camera_status_by_name.get(name, {})
+        return bool(status.get("connected") or status.get("recovering"))
+
+    @staticmethod
+    def _camera_device_label(device: str) -> str:
+        text = str(device).strip()
+        name = text.rsplit("/", 1)[-1]
+        if name.startswith("usb-"):
+            name = name[4:]
+        if name.endswith("-video-index0"):
+            name = name[: -len("-video-index0")]
+        friendly = name.replace("_", " ").strip()
+        return f"{friendly}  ·  {text}" if friendly and friendly != text else text
+
+    def _set_camera_device_choices(
+        self,
+        devices: list[str],
+        *,
+        selected_device: str | None = None,
+    ) -> None:
+        selected = str(selected_device or "").strip()
+        self.camera_device_combo.blockSignals(True)
+        self.camera_device_combo.clear()
+        for device in devices:
+            self.camera_device_combo.addItem(self._camera_device_label(device), device)
+        if selected:
+            index = self.camera_device_combo.findData(selected)
+            if index < 0:
+                self.camera_device_combo.addItem(self._camera_device_label(selected), selected)
+                index = self.camera_device_combo.findData(selected)
+            self.camera_device_combo.setCurrentIndex(index)
+        elif devices:
+            self.camera_device_combo.setCurrentIndex(0)
+        self.camera_device_combo.blockSignals(False)
+
+    def _camera_device_value(self) -> str:
+        data = self.camera_device_combo.currentData()
+        return str(data if data is not None else self.camera_device_combo.currentText()).strip()
 
     def _refresh_camera_profile_choices(self, selected: str | None = None) -> None:
         names = list(self._workstation_profile.cameras)
@@ -1375,7 +1416,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(9)
 
         settings_box = QGroupBox("Camera setup")
-        settings_box.setMaximumWidth(980)
+        settings_box.setMaximumWidth(820)
         self.camera_settings_box = settings_box
         grid = QGridLayout(settings_box)
         grid.setHorizontalSpacing(10)
@@ -1424,13 +1465,17 @@ class MainWindow(QMainWindow):
         self.camera_device_combo = QComboBox()
         self.camera_device_combo.setObjectName("cameraDeviceCombo")
         self.camera_device_combo.setEditable(False)
-        self.camera_device_combo.setMinimumContentsLength(42)
+        self.camera_device_combo.setMinimumContentsLength(28)
+        self.camera_device_combo.setMaximumWidth(610)
         self.camera_device_combo.setToolTip(
             "Choose a discovered physical camera. Linux stable /dev/v4l/by-id paths "
             "are preferred so the same logical camera survives reboot/replugging."
         )
         if self._camera_settings.device:
-            self.camera_device_combo.addItem(self._camera_settings.device)
+            self._set_camera_device_choices(
+                [self._camera_settings.device],
+                selected_device=self._camera_settings.device,
+            )
         grid.addWidget(self.camera_device_combo, 1, 1, 1, 4)
         self.camera_refresh_button = QPushButton("Find cameras")
         self.camera_refresh_button.setToolTip(
@@ -1527,7 +1572,8 @@ class MainWindow(QMainWindow):
         self.camera_preview_labels: dict[str, QLabel] = {}
         self.camera_preview_cards: dict[str, QGroupBox] = {}
         self.camera_preview_status_labels: dict[str, QLabel] = {}
-        layout.addWidget(self.camera_preview_container, 1)
+        layout.addWidget(self.camera_preview_container, 0)
+        layout.addStretch(1)
 
         self._rebuild_camera_preview_grid()
         self._load_camera_profile_controls(self._camera_name())
@@ -1562,6 +1608,16 @@ class MainWindow(QMainWindow):
     def _camera_card_status(self, name: str) -> str:
         values = self._camera_status_by_name.get(name, {})
         settings = self._workstation_profile.cameras.get(name)
+        if bool(values.get("recovering")):
+            dropped = int(values.get("dropped_frames", 0) or 0)
+            limit = int(values.get("drop_limit", 0) or 0)
+            if dropped and limit:
+                return f"Recovering · dropped frame {dropped}/{limit}"
+            attempt = int(values.get("open_attempt", 0) or 0)
+            attempt_limit = int(values.get("open_attempt_limit", 0) or 0)
+            if attempt and attempt_limit:
+                return f"Recovering · reopen {attempt}/{attempt_limit}"
+            return "Recovering camera stream…"
         if bool(values.get("connected")):
             width = values.get("width", "?")
             height = values.get("height", "?")
@@ -1577,7 +1633,14 @@ class MainWindow(QMainWindow):
         card = getattr(self, "camera_preview_cards", {}).get(name)
         status = getattr(self, "camera_preview_status_labels", {}).get(name)
         if card is not None:
-            state = "LIVE" if self._camera_is_connected(name) else "STOPPED"
+            values = self._camera_status_by_name.get(name, {})
+            state = (
+                "RECOVERING"
+                if bool(values.get("recovering"))
+                else "LIVE"
+                if self._camera_is_connected(name)
+                else "STOPPED"
+            )
             selected = " · selected" if name == self._camera_name() else ""
             card.setTitle(f"{name} · {state}{selected}")
         if status is not None:
@@ -1593,22 +1656,33 @@ class MainWindow(QMainWindow):
 
         names = list(self._workstation_profile.cameras)
         columns = 1 if len(names) <= 1 else 2
-        minimum_height = 360 if len(names) <= 1 else 230
+        if len(names) <= 1:
+            minimum_height, maximum_height = 300, 360
+        elif len(names) == 2:
+            minimum_height, maximum_height = 170, 240
+        else:
+            minimum_height, maximum_height = 140, 190
 
         for index, name in enumerate(names):
             card = QGroupBox(name)
             card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(7, 8, 7, 7)
+            card_layout.setSpacing(4)
             preview = self._new_camera_preview_label(minimum_height=minimum_height)
-            preview.setText("Start this camera to show its live view.")
+            preview.setMaximumHeight(maximum_height)
+            preview.setText("Start camera")
             status = QLabel(self._camera_card_status(name))
-            status.setWordWrap(True)
-            status.setStyleSheet("color: palette(mid); padding: 2px 4px;")
-            card_layout.addWidget(preview, 1)
+            status.setWordWrap(False)
+            status.setStyleSheet(
+                "font-size: 10px; color: palette(mid); padding: 1px 3px;"
+            )
+            card_layout.addWidget(preview)
             card_layout.addWidget(status)
+            card.setMaximumHeight(maximum_height + 70)
             row, column = divmod(index, columns)
             self.camera_preview_grid.addWidget(card, row, column)
             self.camera_preview_grid.setColumnStretch(column, 1)
-            self.camera_preview_grid.setRowStretch(row, 1)
+            self.camera_preview_grid.setRowStretch(row, 0)
             self.camera_preview_labels[name] = preview
             self.camera_preview_cards[name] = card
             self.camera_preview_status_labels[name] = status
@@ -1633,11 +1707,12 @@ class MainWindow(QMainWindow):
         self.camera_name_edit.setText(name)
 
         current_device = settings.device
-        self.camera_device_combo.blockSignals(True)
-        if self.camera_device_combo.findText(current_device) < 0:
-            self.camera_device_combo.addItem(current_device)
-        self.camera_device_combo.setCurrentText(current_device)
-        self.camera_device_combo.blockSignals(False)
+        discovered = [
+            str(self.camera_device_combo.itemData(index))
+            for index in range(self.camera_device_combo.count())
+            if self.camera_device_combo.itemData(index) is not None
+        ]
+        self._set_camera_device_choices(discovered, selected_device=current_device)
 
         self.camera_width_spin.setValue(settings.width)
         self.camera_height_spin.setValue(settings.height)
@@ -1687,9 +1762,14 @@ class MainWindow(QMainWindow):
         self._loaded_camera_name = ""
         self._camera_settings = CameraSettings(device=device)
         self.camera_name_edit.setText(name)
-        if device and self.camera_device_combo.findText(device) < 0:
-            self.camera_device_combo.addItem(device)
-        self.camera_device_combo.setCurrentText(device)
+        discovered = [
+            str(self.camera_device_combo.itemData(index))
+            for index in range(self.camera_device_combo.count())
+            if self.camera_device_combo.itemData(index) is not None
+        ]
+        if device and device not in discovered:
+            discovered.append(device)
+        self._set_camera_device_choices(discovered, selected_device=device)
         self.camera_width_spin.setValue(self._camera_settings.width)
         self.camera_height_spin.setValue(self._camera_settings.height)
         self.camera_fps_spin.setValue(self._camera_settings.fps)
@@ -1727,30 +1807,56 @@ class MainWindow(QMainWindow):
         self._load_camera_profile_controls(self._camera_name())
 
     def _refresh_camera_devices(self) -> None:
-        current = self.camera_device_combo.currentText().strip()
+        current = self._camera_device_value()
         try:
             devices = discover_camera_devices()
         except Exception as exc:
             self._on_camera_error(self._camera_name(), str(exc))
             return
-        self.camera_device_combo.clear()
-        self.camera_device_combo.addItems(devices)
-        if current and self.camera_device_combo.findText(current) < 0:
-            self.camera_device_combo.addItem(current)
-        if current:
-            self.camera_device_combo.setCurrentText(current)
-        elif devices:
-            self.camera_device_combo.setCurrentIndex(0)
-        assigned = {
-            settings.device: name
+
+        migration_note = ""
+        selected = current
+        if current and current.startswith("/"):
+            current_real = os.path.realpath(current)
+            stable_match = next(
+                (
+                    device
+                    for device in devices
+                    if device.startswith("/")
+                    and os.path.realpath(device) == current_real
+                ),
+                None,
+            )
+            if stable_match and stable_match != current:
+                selected = stable_match
+                migration_note = (
+                    f"Mapped {current} to stable camera ID; press Save camera to keep it. "
+                )
+
+        if selected and selected not in devices:
+            devices = [*devices, selected]
+        self._set_camera_device_choices(devices, selected_device=selected)
+
+        assigned_by_real = {
+            os.path.realpath(settings.device): name
             for name, settings in self._workstation_profile.cameras.items()
+            if settings.device.startswith("/")
         }
         if devices:
-            summary = ", ".join(
-                f"{device} ({assigned.get(device, 'unassigned')})"
-                for device in devices
+            labels = []
+            for device in devices:
+                owner = (
+                    assigned_by_real.get(os.path.realpath(device), "unassigned")
+                    if device.startswith("/")
+                    else "unassigned"
+                )
+                short = self._camera_device_label(device).split("  ·  ", 1)[0]
+                labels.append(f"{short} ({owner})")
+            self.camera_status.setText(
+                migration_note
+                + f"Found {len(devices)} camera device(s): "
+                + ", ".join(labels)
             )
-            self.camera_status.setText(f"Found {len(devices)} camera device(s): {summary}")
         else:
             self.camera_status.setText(
                 "No camera devices found. Reconnect the camera or configure a device path through the CLI."
@@ -1758,7 +1864,7 @@ class MainWindow(QMainWindow):
 
     def _camera_settings_from_controls(self) -> CameraSettings:
         return self._camera_settings.with_overrides(
-            device=self.camera_device_combo.currentText().strip(),
+            device=self._camera_device_value(),
             width=self.camera_width_spin.value(),
             height=self.camera_height_spin.value(),
             fps=self.camera_fps_spin.value(),
@@ -1815,19 +1921,19 @@ class MainWindow(QMainWindow):
         if hasattr(self, "camera_status") and name == self._camera_name():
             self.camera_status.setText(self._camera_status_text(name))
             self.camera_toggle_button.setText(
-                "Stop selected" if self._camera_is_connected(name) else "Start selected"
+                "Stop selected" if self._camera_is_running(name) else "Start selected"
             )
         if hasattr(self, "teleop_camera_status") and name == self._teleop_camera_name():
             self.teleop_camera_status.setText(self._camera_status_text(name))
             self.teleop_camera_toggle_button.setText(
-                "Stop camera" if self._camera_is_connected(name) else "Start camera"
+                "Stop camera" if self._camera_is_running(name) else "Start camera"
             )
         if hasattr(self, "camera_preview_cards") and name in self.camera_preview_cards:
             self._refresh_camera_preview_card(name)
 
     def _toggle_camera_stream(self) -> None:
         name = self._camera_name()
-        if self._camera_is_connected(name):
+        if self._camera_is_running(name):
             self._camera_manager.stop(name)
             return
         self._apply_camera_settings()
@@ -1837,7 +1943,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_teleop_camera_stream(self) -> None:
         name = self._teleop_camera_name()
-        if self._camera_is_connected(name):
+        if self._camera_is_running(name):
             self._camera_manager.stop(name)
         else:
             self._camera_manager.start(name)
@@ -1885,14 +1991,14 @@ class MainWindow(QMainWindow):
         self._camera_status_by_name[name] = values
         self._camera_connected = self._camera_is_connected(self._camera_name())
         self._refresh_camera_display(name)
-        if not bool(values.get("connected")):
+        if not bool(values.get("connected")) and not bool(values.get("recovering")):
             preview = getattr(self, "camera_preview_labels", {}).get(name)
             if preview is not None:
                 preview.clear()
-                preview.setText("Camera preview is stopped.")
+                preview.setText("Camera stopped")
             if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
                 self.teleop_camera_preview.clear()
-                self.teleop_camera_preview.setText("Camera preview is stopped.")
+                self.teleop_camera_preview.setText("Camera stopped")
 
     @Slot(str, str)
     def _on_camera_error(self, name: str, message: str) -> None:
