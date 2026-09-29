@@ -1617,6 +1617,10 @@ class MainWindow(QMainWindow):
             attempt_limit = int(values.get("open_attempt_limit", 0) or 0)
             if attempt and attempt_limit:
                 return f"Recovering · reopen {attempt}/{attempt_limit}"
+            cycle = int(values.get("recovery_cycle", 0) or 0)
+            cycle_limit = int(values.get("recovery_cycle_limit", 0) or 0)
+            if cycle and cycle_limit:
+                return f"Recovering · stream reset {cycle}/{cycle_limit}"
             return "Recovering camera stream…"
         if bool(values.get("connected")):
             width = values.get("width", "?")
