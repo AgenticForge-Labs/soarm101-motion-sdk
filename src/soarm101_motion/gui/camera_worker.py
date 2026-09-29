@@ -12,6 +12,7 @@ from soarm101_motion.camera import CameraCapture, CameraFrameReadError, CameraSe
 
 
 MAX_CONSECUTIVE_FRAME_FAILURES = 8
+MAX_FRAME_RECOVERY_CYCLES = 3
 FRAME_RETRY_DELAY_MS = 8
 MAX_OPEN_FAILURES = 3
 OPEN_RETRY_DELAY_MS = 250
@@ -71,6 +72,7 @@ class CameraWorker(QThread):
         consecutive_frame_failures = 0
         open_failures = 0
         recovering = False
+        recovery_cycles = 0
         while True:
             with self._lock:
                 shutdown = self._shutdown
@@ -90,6 +92,7 @@ class CameraWorker(QThread):
                 consecutive_frame_failures = 0
                 open_failures = 0
                 recovering = False
+                recovery_cycles = 0
                 self.msleep(50)
                 continue
 
@@ -155,6 +158,7 @@ class CameraWorker(QThread):
                     )
                 consecutive_frame_failures = 0
                 recovering = False
+                recovery_cycles = 0
 
                 height, width = frame.shape[:2]
                 image = QImage(
@@ -195,11 +199,30 @@ class CameraWorker(QThread):
                 capture = None
                 last_connected = False
                 consecutive_frame_failures = 0
+                recovery_cycles += 1
+                if recovery_cycles >= MAX_FRAME_RECOVERY_CYCLES:
+                    message = (
+                        "camera repeatedly opened but did not return usable frames"
+                    )
+                    with self._lock:
+                        self._streaming = False
+                    self.error_message.emit(message)
+                    self.status_changed.emit(
+                        {
+                            "connected": False,
+                            "device": settings.device,
+                            "recovering": False,
+                            "error": message,
+                        }
+                    )
+                    continue
                 self.status_changed.emit(
                     {
                         "connected": False,
                         "device": settings.device,
                         "recovering": True,
+                        "recovery_cycle": recovery_cycles,
+                        "recovery_cycle_limit": MAX_FRAME_RECOVERY_CYCLES,
                         "warning": (
                             "camera missed several consecutive frames; reopening the device"
                         ),
