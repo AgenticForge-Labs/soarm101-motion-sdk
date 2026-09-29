@@ -184,6 +184,7 @@ class MainWindow(QMainWindow):
         self._camera_settings = self._workstation_profile.camera()
         self._camera_connected = False
         self._camera_status_by_name: dict[str, dict[str, object]] = {}
+        self._camera_latest_images: dict[str, object] = {}
         self._loaded_camera_name = self._workstation_profile.selected_camera or "camera"
 
         self._thread = QThread(self)
@@ -1356,11 +1357,17 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(9)
 
-        settings_box = QGroupBox("Named USB cameras")
+        settings_box = QGroupBox("Camera setup")
+        settings_box.setMaximumWidth(980)
         grid = QGridLayout(settings_box)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
 
         grid.addWidget(QLabel("Camera"), 0, 0)
         self.camera_profile_combo = QComboBox()
+        self.camera_profile_combo.setMinimumWidth(180)
         self.camera_profile_combo.addItems(list(self._workstation_profile.cameras))
         if self._workstation_profile.selected_camera:
             self.camera_profile_combo.setCurrentText(
@@ -1373,97 +1380,230 @@ class MainWindow(QMainWindow):
 
         grid.addWidget(QLabel("Name"), 0, 2)
         self.camera_name_edit = QLineEdit(self._loaded_camera_name)
+        self.camera_name_edit.setMaximumWidth(240)
         self.camera_name_edit.setPlaceholderText("overhead, wrist, side...")
         grid.addWidget(self.camera_name_edit, 0, 3)
 
+        camera_profile_actions = QHBoxLayout()
         self.camera_new_button = QPushButton("New camera")
         self.camera_new_button.clicked.connect(self._new_camera_profile)
-        grid.addWidget(self.camera_new_button, 0, 4)
+        camera_profile_actions.addWidget(self.camera_new_button)
         self.camera_delete_button = QPushButton("Delete")
         self.camera_delete_button.clicked.connect(self._delete_camera_profile)
-        grid.addWidget(self.camera_delete_button, 0, 5)
-        grid.addWidget(
+        camera_profile_actions.addWidget(self.camera_delete_button)
+        camera_profile_actions.addWidget(
             self._help_button(
                 "Named cameras",
                 "Each name maps to one physical USB/UVC device and its capture settings. "
                 "Use names such as overhead and wrist. Multiple named cameras may stream "
                 "at the same time, but a physical device can belong to only one profile. "
                 "The same names are available to CLI and agent camera commands.",
-            ),
-            0,
-            6,
+            )
         )
+        grid.addLayout(camera_profile_actions, 0, 4, 1, 2)
 
-        grid.addWidget(QLabel("Device"), 1, 0)
+        grid.addWidget(QLabel("USB device"), 1, 0)
         self.camera_device_combo = QComboBox()
-        self.camera_device_combo.setEditable(True)
-        self.camera_device_combo.addItem(self._camera_settings.device)
+        self.camera_device_combo.setObjectName("cameraDeviceCombo")
+        self.camera_device_combo.setEditable(False)
+        self.camera_device_combo.setMinimumContentsLength(42)
+        self.camera_device_combo.setToolTip(
+            "Choose a discovered physical camera. Linux stable /dev/v4l/by-id paths "
+            "are preferred so the same logical camera survives reboot/replugging."
+        )
+        if self._camera_settings.device:
+            self.camera_device_combo.addItem(self._camera_settings.device)
         grid.addWidget(self.camera_device_combo, 1, 1, 1, 4)
         self.camera_refresh_button = QPushButton("Find cameras")
+        self.camera_refresh_button.setToolTip(
+            "Refresh the device dropdown from cameras currently visible to Linux."
+        )
         self.camera_refresh_button.clicked.connect(self._refresh_camera_devices)
-        grid.addWidget(self.camera_refresh_button, 1, 5, 1, 2)
+        grid.addWidget(self.camera_refresh_button, 1, 5)
 
-        grid.addWidget(QLabel("Width"), 2, 0)
+        grid.addWidget(QLabel("Resolution"), 2, 0)
+        resolution = QHBoxLayout()
         self.camera_width_spin = QSpinBox()
         self.camera_width_spin.setRange(160, 7680)
-        grid.addWidget(self.camera_width_spin, 2, 1)
-
-        grid.addWidget(QLabel("Height"), 2, 2)
+        self.camera_width_spin.setMaximumWidth(120)
+        resolution.addWidget(self.camera_width_spin)
+        resolution.addWidget(QLabel("×"))
         self.camera_height_spin = QSpinBox()
         self.camera_height_spin.setRange(120, 4320)
-        grid.addWidget(self.camera_height_spin, 2, 3)
+        self.camera_height_spin.setMaximumWidth(120)
+        resolution.addWidget(self.camera_height_spin)
+        resolution.addStretch(1)
+        grid.addLayout(resolution, 2, 1)
 
-        grid.addWidget(QLabel("FPS"), 2, 4)
+        grid.addWidget(QLabel("FPS"), 2, 2)
         self.camera_fps_spin = QDoubleSpinBox()
         self.camera_fps_spin.setRange(1.0, 240.0)
         self.camera_fps_spin.setDecimals(1)
-        grid.addWidget(self.camera_fps_spin, 2, 5)
+        self.camera_fps_spin.setMaximumWidth(120)
+        grid.addWidget(self.camera_fps_spin, 2, 3)
 
-        grid.addWidget(QLabel("FourCC"), 3, 0)
+        grid.addWidget(QLabel("FourCC"), 2, 4)
         self.camera_fourcc_edit = QLineEdit()
         self.camera_fourcc_edit.setMaxLength(4)
-        grid.addWidget(self.camera_fourcc_edit, 3, 1)
+        self.camera_fourcc_edit.setMaximumWidth(100)
+        grid.addWidget(self.camera_fourcc_edit, 2, 5)
 
+        camera_flags = QHBoxLayout()
         self.camera_mirror_check = QCheckBox("Mirror horizontally")
-        grid.addWidget(self.camera_mirror_check, 3, 2, 1, 2)
-
+        camera_flags.addWidget(self.camera_mirror_check)
         self.camera_auto_start_check = QCheckBox("Auto-start with GUI")
-        grid.addWidget(self.camera_auto_start_check, 3, 4, 1, 3)
+        camera_flags.addWidget(self.camera_auto_start_check)
+        camera_flags.addStretch(1)
+        grid.addLayout(camera_flags, 3, 1, 1, 5)
 
         grid.addWidget(QLabel("Snapshot folder"), 4, 0)
         self.camera_snapshot_dir_edit = QLineEdit()
-        grid.addWidget(self.camera_snapshot_dir_edit, 4, 1, 1, 6)
+        grid.addWidget(self.camera_snapshot_dir_edit, 4, 1, 1, 5)
 
+        action_row = QHBoxLayout()
         self.camera_apply_button = QPushButton("Save camera")
         self.camera_apply_button.clicked.connect(self._apply_camera_settings)
-        grid.addWidget(self.camera_apply_button, 5, 0, 1, 2)
-
+        action_row.addWidget(self.camera_apply_button)
         self.camera_toggle_button = QPushButton("Start selected")
         self.camera_toggle_button.clicked.connect(self._toggle_camera_stream)
-        grid.addWidget(self.camera_toggle_button, 5, 2)
-
+        action_row.addWidget(self.camera_toggle_button)
         self.camera_start_all_button = QPushButton("Start all")
         self.camera_start_all_button.clicked.connect(self._start_all_cameras)
-        grid.addWidget(self.camera_start_all_button, 5, 3)
-
+        action_row.addWidget(self.camera_start_all_button)
         self.camera_stop_all_button = QPushButton("Stop all")
         self.camera_stop_all_button.clicked.connect(self._stop_all_cameras)
-        grid.addWidget(self.camera_stop_all_button, 5, 4)
-
+        action_row.addWidget(self.camera_stop_all_button)
         self.camera_capture_button = QPushButton("Capture selected")
         self.camera_capture_button.clicked.connect(self._capture_camera_frame)
-        grid.addWidget(self.camera_capture_button, 5, 5, 1, 2)
+        action_row.addWidget(self.camera_capture_button)
+        action_row.addStretch(1)
+        grid.addLayout(action_row, 5, 0, 1, 6)
 
         self.camera_status = QLabel()
         self.camera_status.setWordWrap(True)
-        grid.addWidget(self.camera_status, 6, 0, 1, 7)
-        layout.addWidget(settings_box)
+        grid.addWidget(self.camera_status, 6, 0, 1, 6)
 
-        self.camera_preview = self._new_camera_preview_label(minimum_height=420)
-        layout.addWidget(self.camera_preview, 1)
+        settings_row = QHBoxLayout()
+        settings_row.addWidget(settings_box)
+        settings_row.addStretch(1)
+        layout.addLayout(settings_row)
 
+        preview_heading = QHBoxLayout()
+        preview_heading.addWidget(QLabel("Live camera views"))
+        preview_heading.addStretch(1)
+        preview_heading.addWidget(
+            self._help_button(
+                "Camera views",
+                "Every saved camera gets its own preview card. One camera fills the "
+                "preview area; two split side-by-side; three or more use a two-column "
+                "grid. Start all cameras to watch the full bench at once.",
+            )
+        )
+        layout.addLayout(preview_heading)
+
+        self.camera_preview_container = QWidget()
+        self.camera_preview_grid = QGridLayout(self.camera_preview_container)
+        self.camera_preview_grid.setContentsMargins(0, 0, 0, 0)
+        self.camera_preview_grid.setHorizontalSpacing(9)
+        self.camera_preview_grid.setVerticalSpacing(9)
+        self.camera_preview_labels: dict[str, QLabel] = {}
+        self.camera_preview_cards: dict[str, QGroupBox] = {}
+        self.camera_preview_status_labels: dict[str, QLabel] = {}
+        layout.addWidget(self.camera_preview_container, 1)
+
+        self._rebuild_camera_preview_grid()
         self._load_camera_profile_controls(self._camera_name())
         return page
+
+    def _clear_layout(self, layout: QGridLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            child = item.layout()
+            if child is not None:
+                while child.count():
+                    nested = child.takeAt(0)
+                    if nested.widget() is not None:
+                        nested.widget().deleteLater()
+
+    def _set_preview_image(self, preview: QLabel, image: object) -> None:
+        if not hasattr(image, "isNull") or image.isNull():
+            return
+        pixmap = QPixmap.fromImage(image)
+        scaled = pixmap.scaled(
+            max(preview.width(), 1),
+            max(preview.height(), 1),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        preview.setPixmap(scaled)
+
+    def _camera_card_status(self, name: str) -> str:
+        values = self._camera_status_by_name.get(name, {})
+        settings = self._workstation_profile.cameras.get(name)
+        if bool(values.get("connected")):
+            width = values.get("width", "?")
+            height = values.get("height", "?")
+            fps = float(values.get("fps", 0.0) or 0.0)
+            return f"Live · {width}×{height} @ {fps:.1f} FPS"
+        if values.get("error"):
+            return f"Stopped · {values['error']}"
+        device = settings.device if settings is not None else ""
+        short_device = device.rsplit("/", 1)[-1] if device else "device not assigned"
+        return f"Stopped · {short_device}"
+
+    def _refresh_camera_preview_card(self, name: str) -> None:
+        card = getattr(self, "camera_preview_cards", {}).get(name)
+        status = getattr(self, "camera_preview_status_labels", {}).get(name)
+        if card is not None:
+            state = "LIVE" if self._camera_is_connected(name) else "STOPPED"
+            selected = " · selected" if name == self._camera_name() else ""
+            card.setTitle(f"{name} · {state}{selected}")
+        if status is not None:
+            status.setText(self._camera_card_status(name))
+
+    def _rebuild_camera_preview_grid(self) -> None:
+        if not hasattr(self, "camera_preview_grid"):
+            return
+        self._clear_layout(self.camera_preview_grid)
+        self.camera_preview_labels = {}
+        self.camera_preview_cards = {}
+        self.camera_preview_status_labels = {}
+
+        names = list(self._workstation_profile.cameras)
+        columns = 1 if len(names) <= 1 else 2
+        minimum_height = 360 if len(names) <= 1 else 230
+
+        for index, name in enumerate(names):
+            card = QGroupBox(name)
+            card_layout = QVBoxLayout(card)
+            preview = self._new_camera_preview_label(minimum_height=minimum_height)
+            preview.setText("Start this camera to show its live view.")
+            status = QLabel(self._camera_card_status(name))
+            status.setWordWrap(True)
+            status.setStyleSheet("color: palette(mid); padding: 2px 4px;")
+            card_layout.addWidget(preview, 1)
+            card_layout.addWidget(status)
+            row, column = divmod(index, columns)
+            self.camera_preview_grid.addWidget(card, row, column)
+            self.camera_preview_grid.setColumnStretch(column, 1)
+            self.camera_preview_grid.setRowStretch(row, 1)
+            self.camera_preview_labels[name] = preview
+            self.camera_preview_cards[name] = card
+            self.camera_preview_status_labels[name] = status
+            cached = self._camera_latest_images.get(name)
+            if cached is not None:
+                self._set_preview_image(preview, cached)
+            self._refresh_camera_preview_card(name)
+
+        selected = self._camera_name() if names else ""
+        self.camera_preview = (
+            self.camera_preview_labels.get(selected)
+            or next(iter(self.camera_preview_labels.values()), self._new_camera_preview_label())
+        )
+
 
     def _load_camera_profile_controls(self, name: str) -> None:
         if name not in self._workstation_profile.cameras:
@@ -1501,6 +1641,12 @@ class MainWindow(QMainWindow):
             self._workstation_profile
         )
         self._load_camera_profile_controls(name)
+        if hasattr(self, "camera_preview_labels"):
+            self.camera_preview = self.camera_preview_labels.get(
+                name, self.camera_preview
+            )
+            for camera_name in self.camera_preview_cards:
+                self._refresh_camera_preview_card(camera_name)
 
     def _new_camera_profile(self) -> None:
         index = 1
@@ -1531,10 +1677,8 @@ class MainWindow(QMainWindow):
         self.camera_auto_start_check.setChecked(False)
         self.camera_snapshot_dir_edit.setText(self._camera_settings.snapshot_dir)
         self.camera_status.setText(
-            "New camera profile · choose a unique device and press Save camera."
+            "New camera profile · choose a device from the USB device dropdown and press Save camera."
         )
-        self.camera_preview.clear()
-        self.camera_preview.setText("New camera profile is not streaming.")
 
     def _delete_camera_profile(self) -> None:
         name = self._camera_name()
@@ -1558,6 +1702,7 @@ class MainWindow(QMainWindow):
         )
         self._sync_camera_manager()
         self._refresh_camera_profile_choices(self._workstation_profile.selected_camera)
+        self._rebuild_camera_preview_grid()
         self._load_camera_profile_controls(self._camera_name())
 
     def _refresh_camera_devices(self) -> None:
@@ -1573,6 +1718,8 @@ class MainWindow(QMainWindow):
             self.camera_device_combo.addItem(current)
         if current:
             self.camera_device_combo.setCurrentText(current)
+        elif devices:
+            self.camera_device_combo.setCurrentIndex(0)
         assigned = {
             settings.device: name
             for name, settings in self._workstation_profile.cameras.items()
@@ -1616,6 +1763,7 @@ class MainWindow(QMainWindow):
             self._loaded_camera_name = name
             self._sync_camera_manager()
             self._refresh_camera_profile_choices(name)
+            self._rebuild_camera_preview_grid()
             if settings.auto_start and hasattr(self, "_camera_manager"):
                 self._camera_manager.start(name)
         except Exception as exc:
@@ -1653,6 +1801,8 @@ class MainWindow(QMainWindow):
             self.teleop_camera_toggle_button.setText(
                 "Stop camera" if self._camera_is_connected(name) else "Start camera"
             )
+        if hasattr(self, "camera_preview_cards") and name in self.camera_preview_cards:
+            self._refresh_camera_preview_card(name)
 
     def _toggle_camera_stream(self) -> None:
         name = self._camera_name()
@@ -1701,20 +1851,12 @@ class MainWindow(QMainWindow):
     def _on_camera_frame(self, name: str, image: object) -> None:
         if not hasattr(image, "isNull") or image.isNull():
             return
-        pixmap = QPixmap.fromImage(image)
-        targets: list[QLabel] = []
-        if hasattr(self, "camera_preview") and name == self._camera_name():
-            targets.append(self.camera_preview)
+        self._camera_latest_images[name] = image
+        preview = getattr(self, "camera_preview_labels", {}).get(name)
+        if preview is not None:
+            self._set_preview_image(preview, image)
         if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
-            targets.append(self.teleop_camera_preview)
-        for preview in targets:
-            scaled = pixmap.scaled(
-                max(preview.width(), 1),
-                max(preview.height(), 1),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            preview.setPixmap(scaled)
+            self._set_preview_image(self.teleop_camera_preview, image)
 
     @Slot(str, object)
     def _on_camera_status(self, name: str, status: object) -> None:
@@ -1723,9 +1865,10 @@ class MainWindow(QMainWindow):
         self._camera_connected = self._camera_is_connected(self._camera_name())
         self._refresh_camera_display(name)
         if not bool(values.get("connected")):
-            if hasattr(self, "camera_preview") and name == self._camera_name():
-                self.camera_preview.clear()
-                self.camera_preview.setText("Camera preview is stopped.")
+            preview = getattr(self, "camera_preview_labels", {}).get(name)
+            if preview is not None:
+                preview.clear()
+                preview.setText("Camera preview is stopped.")
             if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
                 self.teleop_camera_preview.clear()
                 self.teleop_camera_preview.setText("Camera preview is stopped.")
