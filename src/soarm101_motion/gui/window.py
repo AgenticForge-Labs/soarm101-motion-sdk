@@ -441,6 +441,23 @@ class MainWindow(QMainWindow):
                 border-color: {highlight.name()};
                 background-color: {surface_hover.name()};
             }}
+            QComboBox#cameraDeviceCombo {{
+                min-height: 34px;
+                padding: 5px 34px 5px 9px;
+                border: 2px solid {border.name()};
+                border-radius: 8px;
+                background-color: {surface.name()};
+                color: {text.name()};
+                font-weight: 650;
+            }}
+            QComboBox#cameraDeviceCombo:hover {{
+                border-color: {highlight.name()};
+                background-color: {surface_hover.name()};
+            }}
+            QComboBox#cameraDeviceCombo::drop-down {{
+                width: 30px;
+                border-left: 1px solid {border.name()};
+            }}
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {{
                 min-height: 27px;
                 padding: 3px 6px;
@@ -1359,6 +1376,7 @@ class MainWindow(QMainWindow):
 
         settings_box = QGroupBox("Camera setup")
         settings_box.setMaximumWidth(980)
+        self.camera_settings_box = settings_box
         grid = QGridLayout(settings_box)
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
@@ -1513,6 +1531,7 @@ class MainWindow(QMainWindow):
 
         self._rebuild_camera_preview_grid()
         self._load_camera_profile_controls(self._camera_name())
+        self._refresh_camera_devices()
         return page
 
     def _clear_layout(self, layout: QGridLayout) -> None:
@@ -1599,10 +1618,10 @@ class MainWindow(QMainWindow):
             self._refresh_camera_preview_card(name)
 
         selected = self._camera_name() if names else ""
-        self.camera_preview = (
-            self.camera_preview_labels.get(selected)
-            or next(iter(self.camera_preview_labels.values()), self._new_camera_preview_label())
-        )
+        selected_preview = self.camera_preview_labels.get(selected)
+        if selected_preview is None and self.camera_preview_labels:
+            selected_preview = next(iter(self.camera_preview_labels.values()))
+        self.camera_preview = selected_preview or self._new_camera_preview_label()
 
 
     def _load_camera_profile_controls(self, name: str) -> None:
@@ -1668,6 +1687,8 @@ class MainWindow(QMainWindow):
         self._loaded_camera_name = ""
         self._camera_settings = CameraSettings(device=device)
         self.camera_name_edit.setText(name)
+        if device and self.camera_device_combo.findText(device) < 0:
+            self.camera_device_combo.addItem(device)
         self.camera_device_combo.setCurrentText(device)
         self.camera_width_spin.setValue(self._camera_settings.width)
         self.camera_height_spin.setValue(self._camera_settings.height)
@@ -1732,7 +1753,7 @@ class MainWindow(QMainWindow):
             self.camera_status.setText(f"Found {len(devices)} camera device(s): {summary}")
         else:
             self.camera_status.setText(
-                "No camera devices found; enter a device path or index manually."
+                "No camera devices found. Reconnect the camera or configure a device path through the CLI."
             )
 
     def _camera_settings_from_controls(self) -> CameraSettings:
