@@ -62,6 +62,9 @@ changes require development discipline; robot use requires conservative hardware
 10. When scripting with the Python API or CLI, reuse the SDK's guarded operations rather
     than writing directly to servo registers unless the task is explicitly low-level
     hardware development and the safety implications are understood.
+11. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
+    agents; task-solving strategies, observe/action loops, model/provider instructions, and
+    benchmark policy belong outside the SDK-facing CLI reference.
 
 ## Repository boundary
 
