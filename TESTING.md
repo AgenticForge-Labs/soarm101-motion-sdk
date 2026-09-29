@@ -499,8 +499,9 @@ Robo Puppeteer/Director repositories.
    next good frame rather than disappearing.
 5. If the device produces repeated consecutive empty frames, confirm the worker attempts to
    reopen it while keeping the stream in RECOVERING state.
-6. Confirm a genuinely unavailable/unopenable camera eventually stops with a visible terminal
-   error rather than retrying forever.
+6. Confirm a camera that repeatedly opens but never returns usable frames stops after the
+   bounded recovery cycles with a visible terminal error rather than retrying forever.
+7. Confirm a genuinely unavailable/unopenable camera also stops after its bounded open retries.
 
 ## Camera layout / multi-view validation — workstation / hardware
 
