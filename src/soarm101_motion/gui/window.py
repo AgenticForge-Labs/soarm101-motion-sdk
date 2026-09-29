@@ -1233,104 +1233,239 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(9)
 
-        settings_box = QGroupBox("Shared USB camera")
+        settings_box = QGroupBox("Named USB cameras")
         grid = QGridLayout(settings_box)
 
-        grid.addWidget(QLabel("Device"), 0, 0)
+        grid.addWidget(QLabel("Camera"), 0, 0)
+        self.camera_profile_combo = QComboBox()
+        self.camera_profile_combo.addItems(list(self._workstation_profile.cameras))
+        if self._workstation_profile.selected_camera:
+            self.camera_profile_combo.setCurrentText(
+                self._workstation_profile.selected_camera
+            )
+        self.camera_profile_combo.currentTextChanged.connect(
+            self._select_camera_profile
+        )
+        grid.addWidget(self.camera_profile_combo, 0, 1)
+
+        grid.addWidget(QLabel("Name"), 0, 2)
+        self.camera_name_edit = QLineEdit(self._loaded_camera_name)
+        self.camera_name_edit.setPlaceholderText("overhead, wrist, side...")
+        grid.addWidget(self.camera_name_edit, 0, 3)
+
+        self.camera_new_button = QPushButton("New camera")
+        self.camera_new_button.clicked.connect(self._new_camera_profile)
+        grid.addWidget(self.camera_new_button, 0, 4)
+        self.camera_delete_button = QPushButton("Delete")
+        self.camera_delete_button.clicked.connect(self._delete_camera_profile)
+        grid.addWidget(self.camera_delete_button, 0, 5)
+        grid.addWidget(
+            self._help_button(
+                "Named cameras",
+                "Each name maps to one physical USB/UVC device and its capture settings. "
+                "Use names such as overhead and wrist. Multiple named cameras may stream "
+                "at the same time, but a physical device can belong to only one profile. "
+                "The same names are available to CLI and agent camera commands.",
+            ),
+            0,
+            6,
+        )
+
+        grid.addWidget(QLabel("Device"), 1, 0)
         self.camera_device_combo = QComboBox()
         self.camera_device_combo.setEditable(True)
         self.camera_device_combo.addItem(self._camera_settings.device)
-        grid.addWidget(self.camera_device_combo, 0, 1, 1, 3)
+        grid.addWidget(self.camera_device_combo, 1, 1, 1, 4)
         self.camera_refresh_button = QPushButton("Find cameras")
         self.camera_refresh_button.clicked.connect(self._refresh_camera_devices)
-        grid.addWidget(self.camera_refresh_button, 0, 4)
+        grid.addWidget(self.camera_refresh_button, 1, 5, 1, 2)
 
-        grid.addWidget(QLabel("Width"), 1, 0)
+        grid.addWidget(QLabel("Width"), 2, 0)
         self.camera_width_spin = QSpinBox()
         self.camera_width_spin.setRange(160, 7680)
-        self.camera_width_spin.setValue(self._camera_settings.width)
-        grid.addWidget(self.camera_width_spin, 1, 1)
+        grid.addWidget(self.camera_width_spin, 2, 1)
 
-        grid.addWidget(QLabel("Height"), 1, 2)
+        grid.addWidget(QLabel("Height"), 2, 2)
         self.camera_height_spin = QSpinBox()
         self.camera_height_spin.setRange(120, 4320)
-        self.camera_height_spin.setValue(self._camera_settings.height)
-        grid.addWidget(self.camera_height_spin, 1, 3)
+        grid.addWidget(self.camera_height_spin, 2, 3)
 
-        grid.addWidget(QLabel("FPS"), 2, 0)
+        grid.addWidget(QLabel("FPS"), 2, 4)
         self.camera_fps_spin = QDoubleSpinBox()
         self.camera_fps_spin.setRange(1.0, 240.0)
         self.camera_fps_spin.setDecimals(1)
-        self.camera_fps_spin.setValue(self._camera_settings.fps)
-        grid.addWidget(self.camera_fps_spin, 2, 1)
+        grid.addWidget(self.camera_fps_spin, 2, 5)
 
-        grid.addWidget(QLabel("FourCC"), 2, 2)
-        self.camera_fourcc_edit = QLineEdit(self._camera_settings.fourcc)
+        grid.addWidget(QLabel("FourCC"), 3, 0)
+        self.camera_fourcc_edit = QLineEdit()
         self.camera_fourcc_edit.setMaxLength(4)
-        grid.addWidget(self.camera_fourcc_edit, 2, 3)
+        grid.addWidget(self.camera_fourcc_edit, 3, 1)
 
-        self.camera_mirror_check = QCheckBox("Mirror preview/captures horizontally")
-        self.camera_mirror_check.setChecked(self._camera_settings.mirror)
-        grid.addWidget(self.camera_mirror_check, 3, 0, 1, 3)
+        self.camera_mirror_check = QCheckBox("Mirror horizontally")
+        grid.addWidget(self.camera_mirror_check, 3, 2, 1, 2)
 
-        self.camera_auto_start_check = QCheckBox("Start camera automatically with GUI")
-        self.camera_auto_start_check.setChecked(self._camera_settings.auto_start)
-        grid.addWidget(self.camera_auto_start_check, 3, 3, 1, 2)
+        self.camera_auto_start_check = QCheckBox("Auto-start with GUI")
+        grid.addWidget(self.camera_auto_start_check, 3, 4, 1, 3)
 
         grid.addWidget(QLabel("Snapshot folder"), 4, 0)
-        self.camera_snapshot_dir_edit = QLineEdit(self._camera_settings.snapshot_dir)
-        grid.addWidget(self.camera_snapshot_dir_edit, 4, 1, 1, 4)
+        self.camera_snapshot_dir_edit = QLineEdit()
+        grid.addWidget(self.camera_snapshot_dir_edit, 4, 1, 1, 6)
 
-        self.camera_apply_button = QPushButton("Save / apply settings")
+        self.camera_apply_button = QPushButton("Save camera")
         self.camera_apply_button.clicked.connect(self._apply_camera_settings)
         grid.addWidget(self.camera_apply_button, 5, 0, 1, 2)
 
-        self.camera_toggle_button = QPushButton("Start camera")
+        self.camera_toggle_button = QPushButton("Start selected")
         self.camera_toggle_button.clicked.connect(self._toggle_camera_stream)
         grid.addWidget(self.camera_toggle_button, 5, 2)
 
-        self.camera_capture_button = QPushButton("Capture picture")
-        self.camera_capture_button.clicked.connect(self._capture_camera_frame)
-        grid.addWidget(self.camera_capture_button, 5, 3, 1, 2)
+        self.camera_start_all_button = QPushButton("Start all")
+        self.camera_start_all_button.clicked.connect(self._start_all_cameras)
+        grid.addWidget(self.camera_start_all_button, 5, 3)
 
-        self.camera_status = QLabel(
-            f"Stopped · {self._camera_settings.device} · "
-            f"{self._camera_settings.width}×{self._camera_settings.height} "
-            f"@ {self._camera_settings.fps:g} FPS"
-        )
+        self.camera_stop_all_button = QPushButton("Stop all")
+        self.camera_stop_all_button.clicked.connect(self._stop_all_cameras)
+        grid.addWidget(self.camera_stop_all_button, 5, 4)
+
+        self.camera_capture_button = QPushButton("Capture selected")
+        self.camera_capture_button.clicked.connect(self._capture_camera_frame)
+        grid.addWidget(self.camera_capture_button, 5, 5, 1, 2)
+
+        self.camera_status = QLabel()
         self.camera_status.setWordWrap(True)
-        grid.addWidget(self.camera_status, 6, 0, 1, 5)
+        grid.addWidget(self.camera_status, 6, 0, 1, 7)
         layout.addWidget(settings_box)
 
         self.camera_preview = self._new_camera_preview_label(minimum_height=420)
         layout.addWidget(self.camera_preview, 1)
 
-        note = QLabel(
-            "This tab owns camera configuration for the application. Teleoperation "
-            "shows the same live session, and CLI camera capture reads the same persisted settings."
-        )
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        self._load_camera_profile_controls(self._camera_name())
         return page
+
+    def _load_camera_profile_controls(self, name: str) -> None:
+        if name not in self._workstation_profile.cameras:
+            return
+        settings = self._workstation_profile.cameras[name]
+        self._loaded_camera_name = name
+        self._camera_settings = settings
+        self.camera_name_edit.setText(name)
+
+        current_device = settings.device
+        self.camera_device_combo.blockSignals(True)
+        if self.camera_device_combo.findText(current_device) < 0:
+            self.camera_device_combo.addItem(current_device)
+        self.camera_device_combo.setCurrentText(current_device)
+        self.camera_device_combo.blockSignals(False)
+
+        self.camera_width_spin.setValue(settings.width)
+        self.camera_height_spin.setValue(settings.height)
+        self.camera_fps_spin.setValue(settings.fps)
+        self.camera_fourcc_edit.setText(settings.fourcc)
+        self.camera_mirror_check.setChecked(settings.mirror)
+        self.camera_auto_start_check.setChecked(settings.auto_start)
+        self.camera_snapshot_dir_edit.setText(settings.snapshot_dir)
+        self._refresh_camera_display(name)
+
+    def _select_camera_profile(self, name: str) -> None:
+        name = str(name).strip()
+        if not name or name not in self._workstation_profile.cameras:
+            return
+        self._workstation_profile = replace(
+            self._workstation_profile,
+            selected_camera=name,
+        ).validated()
+        self._workstation_profile = self._workstation_store.save(
+            self._workstation_profile
+        )
+        self._load_camera_profile_controls(name)
+
+    def _new_camera_profile(self) -> None:
+        index = 1
+        existing = set(self._workstation_profile.cameras)
+        while f"camera-{index}" in existing:
+            index += 1
+        name = f"camera-{index}"
+        used_devices = {
+            settings.device for settings in self._workstation_profile.cameras.values()
+        }
+        try:
+            discovered = discover_camera_devices()
+        except Exception:
+            discovered = []
+        device = next(
+            (candidate for candidate in discovered if candidate not in used_devices),
+            "",
+        )
+        self._loaded_camera_name = ""
+        self._camera_settings = CameraSettings(device=device)
+        self.camera_name_edit.setText(name)
+        self.camera_device_combo.setCurrentText(device)
+        self.camera_width_spin.setValue(self._camera_settings.width)
+        self.camera_height_spin.setValue(self._camera_settings.height)
+        self.camera_fps_spin.setValue(self._camera_settings.fps)
+        self.camera_fourcc_edit.setText(self._camera_settings.fourcc)
+        self.camera_mirror_check.setChecked(False)
+        self.camera_auto_start_check.setChecked(False)
+        self.camera_snapshot_dir_edit.setText(self._camera_settings.snapshot_dir)
+        self.camera_status.setText(
+            "New camera profile · choose a unique device and press Save camera."
+        )
+        self.camera_preview.clear()
+        self.camera_preview.setText("New camera profile is not streaming.")
+
+    def _delete_camera_profile(self) -> None:
+        name = self._camera_name()
+        if len(self._workstation_profile.cameras) <= 1:
+            QMessageBox.information(
+                self,
+                "Keep one camera profile",
+                "Rename the existing profile instead of deleting the final camera entry.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete camera profile?",
+            f"Delete the saved camera profile {name!r}? No image files are deleted.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._workstation_profile = self._workstation_profile.without_camera(name)
+        self._workstation_profile = self._workstation_store.save(
+            self._workstation_profile
+        )
+        self._sync_camera_manager()
+        self._refresh_camera_profile_choices(self._workstation_profile.selected_camera)
+        self._load_camera_profile_controls(self._camera_name())
 
     def _refresh_camera_devices(self) -> None:
         current = self.camera_device_combo.currentText().strip()
         try:
             devices = discover_camera_devices()
         except Exception as exc:
-            self._on_camera_error(str(exc))
+            self._on_camera_error(self._camera_name(), str(exc))
             return
         self.camera_device_combo.clear()
-        for device in devices:
-            self.camera_device_combo.addItem(device)
+        self.camera_device_combo.addItems(devices)
         if current and self.camera_device_combo.findText(current) < 0:
             self.camera_device_combo.addItem(current)
         if current:
             self.camera_device_combo.setCurrentText(current)
-        if not devices:
-            self.camera_status.setText("No camera devices found; enter a device path or index manually.")
+        assigned = {
+            settings.device: name
+            for name, settings in self._workstation_profile.cameras.items()
+        }
+        if devices:
+            summary = ", ".join(
+                f"{device} ({assigned.get(device, 'unassigned')})"
+                for device in devices
+            )
+            self.camera_status.setText(f"Found {len(devices)} camera device(s): {summary}")
+        else:
+            self.camera_status.setText(
+                "No camera devices found; enter a device path or index manually."
+            )
 
-    def _camera_settings_from_controls(self):
+    def _camera_settings_from_controls(self) -> CameraSettings:
         return self._camera_settings.with_overrides(
             device=self.camera_device_combo.currentText().strip(),
             width=self.camera_width_spin.value(),
@@ -1344,48 +1479,112 @@ class MainWindow(QMainWindow):
 
     def _apply_camera_settings(self) -> None:
         try:
+            name = self.camera_name_edit.text().strip()
+            if not name:
+                raise ValueError("camera name cannot be empty")
             settings = self._camera_settings_from_controls()
-            self._camera_settings = self._camera_store.save(settings)
-            self._camera_worker.configure(settings)
+            profile = self._workstation_profile
+            old_name = self._loaded_camera_name
+            if old_name and old_name != name and old_name in profile.cameras:
+                profile = profile.renamed_camera(old_name, name)
+            profile = profile.with_camera(name, settings, select=True)
+            self._workstation_profile = self._workstation_store.save(profile)
+            self._camera_settings = settings
+            self._loaded_camera_name = name
+            self._sync_camera_manager()
+            self._refresh_camera_profile_choices(name)
+            if settings.auto_start and hasattr(self, "_camera_manager"):
+                self._camera_manager.start(name)
         except Exception as exc:
-            self._on_camera_error(str(exc))
+            self._on_camera_error(self.camera_name_edit.text().strip() or "camera", str(exc))
             return
         self.camera_status.setText(
-            f"Settings saved · {settings.device} · {settings.width}×{settings.height} "
+            f"Saved {name!r} · {settings.device} · {settings.width}×{settings.height} "
             f"@ {settings.fps:g} FPS · {settings.fourcc}"
         )
-        self._log(f"Camera settings saved: {settings.device}")
+        self._log(f"Camera profile saved: {name} -> {settings.device}")
+
+    def _camera_status_text(self, name: str) -> str:
+        status = self._camera_status_by_name.get(name, {})
+        settings = self._workstation_profile.cameras.get(name)
+        if bool(status.get("connected")):
+            return (
+                f"Live · {name} · {status.get('device', settings.device if settings else '?')} · "
+                f"{status.get('width', '?')}×{status.get('height', '?')} "
+                f"@ {float(status.get('fps', 0.0)):.1f} FPS"
+            )
+        device = settings.device if settings is not None else "unconfigured"
+        text = f"Stopped · {name} · {device}"
+        if status.get("error"):
+            text += f" · {status['error']}"
+        return text
+
+    def _refresh_camera_display(self, name: str) -> None:
+        if hasattr(self, "camera_status") and name == self._camera_name():
+            self.camera_status.setText(self._camera_status_text(name))
+            self.camera_toggle_button.setText(
+                "Stop selected" if self._camera_is_connected(name) else "Start selected"
+            )
+        if hasattr(self, "teleop_camera_status") and name == self._teleop_camera_name():
+            self.teleop_camera_status.setText(self._camera_status_text(name))
+            self.teleop_camera_toggle_button.setText(
+                "Stop camera" if self._camera_is_connected(name) else "Start camera"
+            )
 
     def _toggle_camera_stream(self) -> None:
-        if self._camera_connected:
-            self._camera_worker.stop_stream()
+        name = self._camera_name()
+        if self._camera_is_connected(name):
+            self._camera_manager.stop(name)
             return
         self._apply_camera_settings()
-        self._camera_worker.start_stream()
-        self.camera_status.setText(f"Opening camera {self._camera_settings.device}…")
+        name = self._camera_name()
+        self._camera_manager.start(name)
+        self.camera_status.setText(f"Opening {name}…")
 
-    def _capture_camera_frame(self) -> None:
-        if not self._camera_connected:
+    def _toggle_teleop_camera_stream(self) -> None:
+        name = self._teleop_camera_name()
+        if self._camera_is_connected(name):
+            self._camera_manager.stop(name)
+        else:
+            self._camera_manager.start(name)
+            self.teleop_camera_status.setText(f"Opening {name}…")
+
+    def _start_all_cameras(self) -> None:
+        self._apply_camera_settings()
+        self._camera_manager.start_all()
+
+    def _stop_all_cameras(self) -> None:
+        self._camera_manager.stop_all()
+
+    def _capture_camera_frame(self, name: str | None = None) -> None:
+        selected = name or self._camera_name()
+        if selected == self._camera_name():
             self._apply_camera_settings()
-            self._camera_worker.request_snapshot()
-            self._camera_worker.start_stream()
-            self.camera_status.setText(
-                f"Opening {self._camera_settings.device} and capturing a fresh frame…"
+            selected = self._camera_name()
+        self._camera_manager.request_snapshot(selected)
+        if not self._camera_is_connected(selected):
+            self._camera_manager.start(selected)
+        if hasattr(self, "camera_status") and selected == self._camera_name():
+            self.camera_status.setText(f"Capturing fresh frame from {selected}…")
+        if hasattr(self, "teleop_camera_status") and selected == self._teleop_camera_name():
+            self.teleop_camera_status.setText(
+                f"Capturing fresh frame from {selected}…"
             )
-            return
-        self._camera_worker.request_snapshot()
 
-    @Slot(object)
-    def _on_camera_frame(self, image: object) -> None:
+    def _capture_teleop_camera_frame(self) -> None:
+        self._capture_camera_frame(self._teleop_camera_name())
+
+    @Slot(str, object)
+    def _on_camera_frame(self, name: str, image: object) -> None:
         if not hasattr(image, "isNull") or image.isNull():
             return
         pixmap = QPixmap.fromImage(image)
-        for preview in (
-            getattr(self, "camera_preview", None),
-            getattr(self, "teleop_camera_preview", None),
-        ):
-            if preview is None:
-                continue
+        targets: list[QLabel] = []
+        if hasattr(self, "camera_preview") and name == self._camera_name():
+            targets.append(self.camera_preview)
+        if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
+            targets.append(self.teleop_camera_preview)
+        for preview in targets:
             scaled = pixmap.scaled(
                 max(preview.width(), 1),
                 max(preview.height(), 1),
@@ -1394,54 +1593,51 @@ class MainWindow(QMainWindow):
             )
             preview.setPixmap(scaled)
 
-    @Slot(object)
-    def _on_camera_status(self, status: object) -> None:
+    @Slot(str, object)
+    def _on_camera_status(self, name: str, status: object) -> None:
         values = dict(status)
-        self._camera_connected = bool(values.get("connected"))
-        if self._camera_connected:
-            text = (
-                f"Live · {values.get('device', self._camera_settings.device)} · "
-                f"{values.get('width', '?')}×{values.get('height', '?')} "
-                f"@ {float(values.get('fps', 0.0)):.1f} FPS"
-            )
-        else:
-            text = f"Stopped · {values.get('device', self._camera_settings.device)}"
-            error = values.get("error")
-            if error:
-                text += f" · {error}"
-        if hasattr(self, "camera_status"):
-            self.camera_status.setText(text)
-            self.camera_toggle_button.setText("Stop camera" if self._camera_connected else "Start camera")
-        if hasattr(self, "teleop_camera_status"):
-            self.teleop_camera_status.setText(text)
-            self.teleop_camera_toggle_button.setText(
-                "Stop camera" if self._camera_connected else "Start camera"
-            )
-        if not self._camera_connected:
-            for preview in (
-                getattr(self, "camera_preview", None),
-                getattr(self, "teleop_camera_preview", None),
-            ):
-                if preview is not None:
-                    preview.clear()
-                    preview.setText("Camera preview is stopped.")
+        self._camera_status_by_name[name] = values
+        self._camera_connected = self._camera_is_connected(self._camera_name())
+        self._refresh_camera_display(name)
+        if not bool(values.get("connected")):
+            if hasattr(self, "camera_preview") and name == self._camera_name():
+                self.camera_preview.clear()
+                self.camera_preview.setText("Camera preview is stopped.")
+            if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
+                self.teleop_camera_preview.clear()
+                self.teleop_camera_preview.setText("Camera preview is stopped.")
 
-    @Slot(str)
-    def _on_camera_error(self, message: str) -> None:
-        if hasattr(self, "camera_status"):
-            self.camera_status.setText(f"Camera error: {message}")
-        if hasattr(self, "teleop_camera_status"):
-            self.teleop_camera_status.setText(f"Camera error: {message}")
+    @Slot(str, str)
+    def _on_camera_error(self, name: str, message: str) -> None:
+        self._camera_status_by_name[name] = {
+            "connected": False,
+            "device": self._workstation_profile.cameras.get(
+                name, self._camera_settings
+            ).device,
+            "error": message,
+        }
+        self._refresh_camera_display(name)
         if hasattr(self, "log"):
-            self._log(f"Camera: {message}")
+            self._log(f"Camera {name}: {message}")
 
-    @Slot(str)
-    def _on_camera_snapshot_saved(self, path: str) -> None:
-        if hasattr(self, "camera_status"):
-            self.camera_status.setText(f"Captured picture: {path}")
-        if hasattr(self, "teleop_camera_status"):
-            self.teleop_camera_status.setText(f"Captured picture: {path}")
-        self._log(f"Camera picture saved: {path}")
+    @Slot(str, str)
+    def _on_camera_snapshot_saved(self, name: str, path: str) -> None:
+        text = f"Captured {name}: {path}"
+        if hasattr(self, "camera_status") and name == self._camera_name():
+            self.camera_status.setText(text)
+        if hasattr(self, "teleop_camera_status") and name == self._teleop_camera_name():
+            self.teleop_camera_status.setText(text)
+        self._log(text)
+
+    def _on_teleop_camera_changed(self, name: str) -> None:
+        name = str(name).strip()
+        if not name:
+            return
+        self.teleop_camera_preview.clear()
+        self.teleop_camera_preview.setText(
+            "Live frames appear here when this camera is running."
+        )
+        self._refresh_camera_display(name)
 
     def _build_teleop_tab(self) -> QWidget:
         page = QWidget()
