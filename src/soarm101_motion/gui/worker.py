@@ -924,6 +924,7 @@ class RobotWorker(QObject):
         if teleop is None:
             return
         teleop["last_frame"] = None
+        sample_age_s: float | None = None
         try:
             started = time.perf_counter()
             values = dict(sample)  # type: ignore[arg-type]
@@ -1098,9 +1099,9 @@ class RobotWorker(QObject):
             frequency_hz = float(teleop.get("frequency_hz", 0.0) or 0.0)
             processing_ms = float(teleop.get("last_processing_s", 0.0) or 0.0) * 1000.0
             sample_age_ms = (
-                None
-                if not isinstance(last_frame, dict)
-                else float(last_frame.get("sample_age_ms", 0.0))
+                float(last_frame.get("sample_age_ms", 0.0))
+                if isinstance(last_frame, dict)
+                else None if sample_age_s is None else sample_age_s * 1000.0
             )
             recommended_hz = (
                 10.0 if frequency_hz >= 20.0 else 5.0 if frequency_hz > 5.0 else frequency_hz
