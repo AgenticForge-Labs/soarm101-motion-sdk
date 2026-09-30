@@ -418,16 +418,18 @@ class FeetechBackend(_ProtocolFeetechBackend):
             enabled: list[str] = []
             try:
                 for name in selected:
-                    # Lock EEPROM before torque is enabled. Normal operation never
-                    # needs EEPROM writes and should leave the persistent area protected.
-                    self.write_register(name, "Lock", 1)
-                    # A missing status packet does not prove the torque write failed.
+                    # Lock EEPROM before torque is enabled. These idempotent control
+                    # writes use bounded readback/retry recovery because Feetech can
+                    # apply a write even when its returned status packet is lost.
+                    self._write_control_register_confirmed(name, "Lock", 1)
                     enabled.append(name)
-                    self.write_register(name, "Torque_Enable", 1)
+                    self._write_control_register_confirmed(name, "Torque_Enable", 1)
             except BaseException:
                 for name in reversed(enabled):
                     try:
-                        self.write_register(name, "Torque_Enable", 0)
+                        self._write_control_register_confirmed(
+                            name, "Torque_Enable", 0
+                        )
                     except Exception:
                         logger.exception("failed to roll back torque enable for %s", name)
                 self._torque_enabled = False
@@ -447,7 +449,9 @@ class FeetechBackend(_ProtocolFeetechBackend):
             errors: list[str] = []
             for name in selected:
                 try:
-                    self.write_register(name, "Torque_Enable", 0)
+                    self._write_control_register_confirmed(
+                        name, "Torque_Enable", 0
+                    )
                 except Exception as exc:
                     errors.append(f"{name} torque: {exc}")
 
