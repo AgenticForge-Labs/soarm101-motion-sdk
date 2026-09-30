@@ -12,6 +12,48 @@ from soarm101_motion.camera import (
     CameraFrameReadError,
     CameraSettings,
 )
+from soarm101_motion.gui.latest_frame import LatestFrameMailbox
+
+
+def test_preview_mailbox_displays_only_newest_pending_frame() -> None:
+    mailbox = LatestFrameMailbox()
+
+    mailbox.publish("frame-1", acquired_ns=1, capture_fps=14.8)
+    mailbox.publish("frame-2", acquired_ns=2, capture_fps=15.0)
+    mailbox.publish("frame-3", acquired_ns=3, capture_fps=15.1)
+
+    displayed = mailbox.take_latest()
+    assert displayed is not None
+    assert displayed.image == "frame-3"
+    assert displayed.acquired_ns == 3
+    assert displayed.capture_fps == pytest.approx(15.1)
+    assert displayed.superseded_frames == 2
+    assert mailbox.take_latest() is None
+
+
+def test_camera_session_manager_delivers_latest_preview_per_refresh(monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from soarm101_motion.gui.camera_manager import CameraSessionManager
+
+    app = QApplication.instance() or QApplication([])
+    manager = CameraSessionManager()
+    manager.sync({"overhead": CameraSettings(device="/dev/video-test")})
+    delivered: list[object] = []
+    manager.frame_ready.connect(lambda _name, frame: delivered.append(frame))
+    mailbox = manager._preview_mailboxes["overhead"]
+    mailbox.publish("earlier", acquired_ns=10)
+    mailbox.publish("newer", acquired_ns=20)
+
+    manager._deliver_latest_frames()
+    manager.shutdown()
+    app.processEvents()
+
+    assert len(delivered) == 1
+    assert delivered[0].image == "newer"
+    assert delivered[0].acquired_ns == 20
+    assert delivered[0].superseded_frames == 1
 
 
 def test_camera_capture_marks_empty_frame_as_transient_read_error(monkeypatch) -> None:

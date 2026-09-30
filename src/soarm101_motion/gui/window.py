@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import replace
 from math import ceil, degrees, radians
 from typing import Any
@@ -50,6 +51,7 @@ from soarm101_motion.constants import (
 from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
 from soarm101_motion.gui.camera_manager import CameraSessionManager
+from soarm101_motion.gui.latest_frame import PreviewFrame
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
 from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
@@ -1632,7 +1634,16 @@ class MainWindow(QMainWindow):
             width = values.get("width", "?")
             height = values.get("height", "?")
             fps = float(values.get("fps", 0.0) or 0.0)
-            return f"Live · {width}×{height} @ {fps:.1f} FPS"
+            capture_fps = float(values.get("capture_fps", 0.0) or 0.0)
+            age_ms = float(values.get("preview_age_ms", 0.0) or 0.0)
+            superseded = int(values.get("preview_superseded", 0) or 0)
+            rate = f"{fps:.1f} FPS"
+            if capture_fps > 0.0:
+                rate += f" capture {capture_fps:.1f}"
+            return (
+                f"Live · {width}×{height} @ {rate} · age {age_ms:.0f} ms · "
+                f"coalesced {superseded}"
+            )
         if values.get("error"):
             return f"Stopped · {values['error']}"
         device = settings.device if settings is not None else ""
@@ -1998,7 +2009,17 @@ class MainWindow(QMainWindow):
         self._capture_camera_frame(self._teleop_camera_name())
 
     @Slot(str, object)
-    def _on_camera_frame(self, name: str, image: object) -> None:
+    def _on_camera_frame(self, name: str, frame: object) -> None:
+        if isinstance(frame, PreviewFrame):
+            image = frame.image
+            acquired_ns = frame.acquired_ns
+            capture_fps = frame.capture_fps
+            superseded = frame.superseded_frames
+        else:
+            image = frame
+            acquired_ns = time.monotonic_ns()
+            capture_fps = 0.0
+            superseded = 0
         if not hasattr(image, "isNull") or image.isNull():
             return
         self._camera_latest_images[name] = image
@@ -2007,10 +2028,19 @@ class MainWindow(QMainWindow):
             self._set_preview_image(preview, image)
         if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
             self._set_preview_image(self.teleop_camera_preview, image)
+        age_ms = max(0.0, (time.monotonic_ns() - acquired_ns) / 1_000_000)
+        values = self._camera_status_by_name.setdefault(name, {})
+        values["preview_age_ms"] = age_ms
+        values["capture_fps"] = capture_fps
+        values["preview_superseded"] = superseded
+        self._refresh_camera_preview_card(name)
 
     @Slot(str, object)
     def _on_camera_status(self, name: str, status: object) -> None:
-        values = dict(status)
+        values = {
+            **self._camera_status_by_name.get(name, {}),
+            **dict(status),
+        }
         self._camera_status_by_name[name] = values
         self._camera_connected = self._camera_is_connected(self._camera_name())
         self._refresh_camera_display(name)

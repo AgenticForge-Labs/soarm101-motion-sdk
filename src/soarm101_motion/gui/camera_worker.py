@@ -16,6 +16,7 @@ from soarm101_motion.camera import (
     CameraSettings,
     camera_device_available,
 )
+from soarm101_motion.gui.latest_frame import LatestFrameMailbox
 
 
 MAX_CONSECUTIVE_FRAME_FAILURES = 8
@@ -35,7 +36,11 @@ class CameraWorker(QThread):
     error_message = Signal(str)
     snapshot_saved = Signal(str)
 
-    def __init__(self, settings: CameraSettings) -> None:
+    def __init__(
+        self,
+        settings: CameraSettings,
+        preview_mailbox: LatestFrameMailbox | None = None,
+    ) -> None:
         super().__init__()
         self._lock = threading.Lock()
         self._settings = settings.validated()
@@ -43,6 +48,7 @@ class CameraWorker(QThread):
         self._shutdown = False
         self._generation = 0
         self._snapshot_path: str | None = None
+        self._preview_mailbox = preview_mailbox
 
     def settings(self) -> CameraSettings:
         with self._lock:
@@ -86,6 +92,9 @@ class CameraWorker(QThread):
         device_wait_last_second = -1
         observed_generation = -1
         had_good_frame = False
+        measured_capture_fps = 0.0
+        fps_window_started = time.monotonic()
+        fps_window_frames = 0
         while True:
             with self._lock:
                 shutdown = self._shutdown
@@ -304,6 +313,7 @@ class CameraWorker(QThread):
 
             try:
                 frame = capture.read_bgr()
+                frame_acquired_ns = time.monotonic_ns()
                 if consecutive_frame_failures or recovering:
                     self.status_changed.emit(
                         {
@@ -319,6 +329,12 @@ class CameraWorker(QThread):
                 device_wait_started = None
                 device_wait_last_second = -1
                 had_good_frame = True
+                fps_window_frames += 1
+                fps_window_elapsed = time.monotonic() - fps_window_started
+                if fps_window_elapsed >= 1.0:
+                    measured_capture_fps = fps_window_frames / fps_window_elapsed
+                    fps_window_frames = 0
+                    fps_window_started = time.monotonic()
 
                 height, width = frame.shape[:2]
                 image = QImage(
@@ -328,7 +344,14 @@ class CameraWorker(QThread):
                     int(frame.strides[0]),
                     QImage.Format.Format_BGR888,
                 ).copy()
-                self.frame_ready.emit(image)
+                if self._preview_mailbox is None:
+                    self.frame_ready.emit(image)
+                else:
+                    self._preview_mailbox.publish(
+                        image,
+                        acquired_ns=frame_acquired_ns,
+                        capture_fps=measured_capture_fps,
+                    )
 
                 if snapshot_path is not None:
                     output = capture.save_frame(frame, snapshot_path or None)

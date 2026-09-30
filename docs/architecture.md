@@ -41,6 +41,11 @@ named physical device. Camera and Teleoperation views subscribe to those session
 opening their own device handles. CLI commands may open a camera for a short-lived capture
 only when the GUI is not already using that physical device.
 
+Camera workers publish preview frames into one synchronized latest-frame slot per named
+camera. A GUI timer consumes those slots at display cadence, dropping superseded display
+frames instead of queuing them as Qt image events. Snapshot requests remain on the capture
+worker and save a freshly acquired observation.
+
 The camera layer deliberately stops at raw observation: it does not identify objects, infer
 task state, plan motion, or bypass motion safety. Agent reasoning remains above the same
 constrained SDK primitives used manually.

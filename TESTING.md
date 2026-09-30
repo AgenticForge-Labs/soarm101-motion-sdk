@@ -78,9 +78,13 @@ orientation drift is excessive rather than overriding the check casually.
    responsive and show a stopped/unavailable preview rather than failing startup.
 9. Change the gripper speed preset in Manual and confirm the same preset appears in
    Teleoperation, Edit recordings, and Programs.
-10. Save the current simulated follower position as Home and Rest.
-11. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
-12. Close and reopen the GUI and confirm Home and Rest are still present.
+10. With two named cameras active, confirm each live card reports capture FPS, preview age,
+    and preview frames coalesced since the preceding UI refresh. Artificially slow GUI
+    presentation or exercise the deterministic mailbox test; after a burst of camera frames,
+    the next displayed image must be the newest frame rather than an older queued image.
+11. Save the current simulated follower position as Home and Rest.
+12. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
+13. Close and reopen the GUI and confirm Home and Rest are still present.
 
 ### 2. Physical follower connection — DO LATER
 
