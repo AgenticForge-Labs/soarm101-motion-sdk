@@ -519,6 +519,18 @@ Robo Puppeteer/Director repositories.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## Camera stream rate and lifecycle — workstation / hardware
+
+1. Start one named camera at its requested format and confirm the negotiated format and
+   measured capture FPS shown by the GUI.
+2. Confirm preview age stays bounded and note the superseded-frame count while the camera tab
+   is visible.
+3. Stop and restart the stream through the GUI several times while monitoring kernel USB/UVC
+   events; record any disconnects, URB resubmission errors, `-71` errors, or re-enumerations.
+4. When validating camera behavior alongside robot control, first observe both arms with
+   torque disabled and serial state polling active, then exercise only normal guarded motion
+   with no payload and a clear workspace.
+
 ## USB camera disconnect / reconnect recovery — workstation / hardware
 
 1. Save the camera using its stable `/dev/v4l/by-id/...-video-index0` identifier and start the

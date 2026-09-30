@@ -4,7 +4,9 @@ import json
 
 import pytest
 
-from soarm101_motion.camera import CameraSettings, CameraSettingsStore
+from soarm101_motion import camera as camera_module
+from soarm101_motion import workstation as workstation_module
+from soarm101_motion.camera import CameraCapture, CameraSettings, CameraSettingsStore
 from soarm101_motion.cli.main import build_parser
 
 
@@ -39,6 +41,51 @@ def test_camera_settings_round_trip(tmp_path) -> None:
 def test_camera_settings_validation_rejects_bad_fourcc() -> None:
     with pytest.raises(ValueError, match="fourcc"):
         CameraSettings(fourcc="MJ").validated()
+
+
+def test_camera_capture_requests_two_opencv_buffers(monkeypatch) -> None:
+    class FakeCapture:
+        def __init__(self) -> None:
+            self.properties: dict[int, float] = {}
+            self.released = False
+
+        def isOpened(self) -> bool:
+            return True
+
+        def set(self, prop: int, value: float) -> bool:
+            self.properties[prop] = value
+            return True
+
+        def release(self) -> None:
+            self.released = True
+
+    class FakeCV2:
+        CAP_V4L2 = 200
+        CAP_PROP_FOURCC = 1
+        CAP_PROP_FRAME_WIDTH = 2
+        CAP_PROP_FRAME_HEIGHT = 3
+        CAP_PROP_FPS = 4
+        CAP_PROP_BUFFERSIZE = 5
+
+        def __init__(self) -> None:
+            self.capture = FakeCapture()
+
+        @staticmethod
+        def VideoWriter_fourcc(*_: str) -> int:
+            return 0
+
+        def VideoCapture(self, *_: object) -> FakeCapture:
+            return self.capture
+
+    fake_cv2 = FakeCV2()
+    monkeypatch.setattr(camera_module, "_opencv", lambda: fake_cv2)
+    monkeypatch.setattr(camera_module.sys, "platform", "linux")
+    monkeypatch.setattr(camera_module, "camera_device_available", lambda _device: True)
+
+    capture = CameraCapture(CameraSettings(device="/dev/video-test")).open()
+    assert fake_cv2.capture.properties[FakeCV2.CAP_PROP_BUFFERSIZE] == 2.0
+    capture.close()
+    assert fake_cv2.capture.released
 
 
 def test_camera_cli_parser_exposes_basic_agent_tools() -> None:
@@ -78,6 +125,11 @@ def test_named_camera_and_workstation_cli_persist_profiles(tmp_path, monkeypatch
 
     workstation = tmp_path / "workstation.json"
     monkeypatch.setenv("SOARM101_WORKSTATION_CONFIG", str(workstation))
+    monkeypatch.setattr(
+        workstation_module,
+        "DEFAULT_CAMERA_CONFIG_PATH",
+        tmp_path / "legacy-camera.json",
+    )
 
     assert (
         main(

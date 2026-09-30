@@ -193,7 +193,9 @@ class CameraCapture:
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.settings.height))
         capture.set(cv2.CAP_PROP_FPS, float(self.settings.fps))
         if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
-            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # One V4L2 buffer can halve capture throughput on UVC devices.
+            # Preview latency is bounded separately by LatestFrameMailbox.
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         self._capture = capture
         return self
 
