@@ -53,6 +53,44 @@ def test_disable_torque_does_not_unlock_eeprom() -> None:
     assert all(register != "Lock" for _, register, _ in writes)
 
 
+def test_managed_enable_routes_lock_and_torque_through_confirmed_control_writes() -> None:
+    backend = _backend()
+    backend.read_raw_position = lambda _: 2048
+    _install_enable_limits(backend, {"shoulder_pan": (100, 3995)})
+    backend._write_raw_positions = lambda positions, **_: None
+
+    calls: list[tuple[str, str, int]] = []
+    backend._write_control_register_confirmed = (
+        lambda motor, register, value: calls.append((motor, register, value))
+    )
+    backend.write_register = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("managed torque path bypassed confirmed control writes")
+    )
+
+    backend.enable_torque(["shoulder_pan"])
+
+    assert calls == [
+        ("shoulder_pan", "Lock", 1),
+        ("shoulder_pan", "Torque_Enable", 1),
+    ]
+
+
+def test_managed_disable_routes_torque_off_through_confirmed_control_write() -> None:
+    backend = _backend()
+    backend._torque_enabled = True
+    calls: list[tuple[str, str, int]] = []
+    backend._write_control_register_confirmed = (
+        lambda motor, register, value: calls.append((motor, register, value))
+    )
+    backend.write_register = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("managed torque-off path bypassed confirmed control writes")
+    )
+
+    backend.disable_torque(["shoulder_pan"])
+
+    assert calls == [("shoulder_pan", "Torque_Enable", 0)]
+
+
 def test_enable_locks_eeprom_before_enabling_torque() -> None:
     backend = _backend()
     writes: list[tuple[str, str, int]] = []
