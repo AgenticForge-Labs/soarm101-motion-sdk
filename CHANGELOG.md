@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Set the OpenCV camera buffer request to two frames after hardware testing showed that a
+  one-frame V4L2 buffer halved icSpring capture throughput. The GUI's one-frame latest-preview
+  mailbox remains unchanged, and live diagnostics continue to show measured capture FPS and
+  preview age.
+
+- Changed named-camera GUI previews to use a one-frame latest-observation mailbox per camera
+  and a 30 Hz UI refresh. Superseded display frames are discarded, with capture FPS,
+  presentation age, and preview-coalescing counts shown on live camera cards. Snapshot
+  capture remains on the camera worker and retains fresh-observation semantics.
+
 - Restored 20 Hz as the practical live leader→follower teleoperation default after 10 Hz
   proved visibly stepped during physical hand-following. Follower cycle overruns remain
   measured, but teleoperation now stops on actual stale queued leader data rather than

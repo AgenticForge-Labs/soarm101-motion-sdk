@@ -110,6 +110,16 @@ compact: one camera gets a larger single view, two cameras split side-by-side, a
 more use a denser two-column grid. Each card is labeled with its logical camera name and
 LIVE / RECOVERING / STOPPED state.
 
+Preview delivery uses a one-frame mailbox for each named camera and a 30 Hz GUI refresh.
+Capture continues at the camera's negotiated rate; when rendering falls behind, a newer
+observation replaces the pending preview frame so the GUI never plays through a stale frame
+queue. This coalescing applies only to live preview. Still capture continues to save the
+fresh frame read for that request. Live cards show measured capture FPS, preview age at
+presentation, and the number of frames superseded since the prior GUI refresh. OpenCV requests
+a two-frame backend buffer where supported; the separate one-frame GUI mailbox still bounds
+preview backlog. Requested FPS may not match the device-reported or measured capture rate, so
+use the live diagnostics to confirm the actual behavior of each camera.
+
 A single missed USB frame is treated as transient rather than terminal. The GUI worker retries
 short read gaps, keeps pending snapshot requests intact, and only reopens the device after
 eight consecutive missed frames. Up to three empty-frame recovery cycles are attempted for a

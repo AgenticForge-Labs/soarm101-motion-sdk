@@ -78,9 +78,13 @@ orientation drift is excessive rather than overriding the check casually.
    responsive and show a stopped/unavailable preview rather than failing startup.
 9. Change the gripper speed preset in Manual and confirm the same preset appears in
    Teleoperation, Edit recordings, and Programs.
-10. Save the current simulated follower position as Home and Rest.
-11. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
-12. Close and reopen the GUI and confirm Home and Rest are still present.
+10. With two named cameras active, confirm each live card reports capture FPS, preview age,
+    and preview frames coalesced since the preceding UI refresh. Artificially slow GUI
+    presentation or exercise the deterministic mailbox test; after a burst of camera frames,
+    the next displayed image must be the newest frame rather than an older queued image.
+11. Save the current simulated follower position as Home and Rest.
+12. Move away, use Go Home / Go Rest, and confirm the controls target the saved poses.
+13. Close and reopen the GUI and confirm Home and Rest are still present.
 
 ### 2. Physical follower connection — DO LATER
 
@@ -514,6 +518,18 @@ Robo Puppeteer/Director repositories.
 6. Confirm disabled controls remain visibly button-shaped while reading as unavailable.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
+
+## Camera stream rate and lifecycle — workstation / hardware
+
+1. Start one named camera at its requested format and confirm the negotiated format and
+   measured capture FPS shown by the GUI.
+2. Confirm preview age stays bounded and note the superseded-frame count while the camera tab
+   is visible.
+3. Stop and restart the stream through the GUI several times while monitoring kernel USB/UVC
+   events; record any disconnects, URB resubmission errors, `-71` errors, or re-enumerations.
+4. When validating camera behavior alongside robot control, first observe both arms with
+   torque disabled and serial state polling active, then exercise only normal guarded motion
+   with no payload and a clear workspace.
 
 ## USB camera disconnect / reconnect recovery — workstation / hardware
 
