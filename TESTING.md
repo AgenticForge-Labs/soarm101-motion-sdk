@@ -37,9 +37,20 @@ STOP/Relax behavior, and basic FK sanity checks have passed, run:
 python examples/paper_corner_cartesian_test.py
 ```
 
-Use a US Letter sheet by default. With the arm relaxed, point the same lower gripper
-finger at A, then B along the 215.9 mm width, then C along the 279.4 mm height, pressing
-Enter at each point. The script must report plausible edge lengths and an approximately
+Use a US Letter sheet by default. The three captured corners are **not** a clockwise
+walk around the sheet:
+
+```text
+C ---------------- D  (predicted; do not touch)
+|                  |
+|                  |
+A ---------------- B
+```
+
+With the arm relaxed, point the same lower gripper finger at A, then B along the
+215.9 mm width, then C along the 279.4 mm height on the **same side as A**, pressing
+Enter at each point. Going A->B and then up the right side reaches D and invalidates
+the 90° A-corner check. The script must report plausible edge lengths and an approximately
 90° corner before it is allowed to enable torque again.
 
 The autonomous phase must preflight with torque OFF, lift away from C, move above the
@@ -53,6 +64,12 @@ If guarded torque enable reports a one-off missing/corrupt Feetech status packet
 `Lock` or `Torque_Enable`, the managed backend must recover only when bounded register
 readback confirms the requested control value (or one retry succeeds). Persistent
 communication failures must still abort before Cartesian motion and leave torque disabled.
+
+For supervised diagnosis only, `examples/paper_four_corner_hover_demo.py` teaches all four
+corners clockwise (A lower-left, B lower-right, C upper-right, D upper-left), then preflights
+50 mm base-+Z hover targets. It first performs only the D lift and requires the operator to
+verify that the physical motion is upward and clear before traversing D->A->B->C->D. This
+does not mark the paper-frame Cartesian validation gate complete.
 
 
 ## Batch 1 — Setup, follower control, and leader readout

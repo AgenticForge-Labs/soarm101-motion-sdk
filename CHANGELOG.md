@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a supervised four-corner paper hover diagnostic that manually teaches every
+  corner clockwise, preflights 50 mm base-+Z hover targets with torque off, requires a
+  separately confirmed first lift, and then traverses the taught perimeter through the
+  guarded Cartesian planner. The original three-corner validation prompt now explicitly
+  shows that C shares the long edge with A; the far/right-side corner is D.
+
 - Fixed the managed Feetech torque path to use the same bounded readback/retry recovery
   as the protocol backend for idempotent `Lock` and `Torque_Enable` writes. A single
   lost status packet during guarded enable/disable no longer aborts paper/CLI/GUI startup
