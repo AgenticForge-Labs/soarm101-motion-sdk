@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed the managed Feetech torque path to use the same bounded readback/retry recovery
+  as the protocol backend for idempotent `Lock` and `Torque_Enable` writes. A single
+  lost status packet during guarded enable/disable no longer aborts paper/CLI/GUI startup
+  when register readback confirms the requested value; persistent communication failures
+  still fail closed and torque-enable rollback keeps EEPROM locked.
+
 - Set the OpenCV camera buffer request to two frames after hardware testing showed that a
   one-frame V4L2 buffer halved icSpring capture throughput. The GUI's one-frame latest-preview
   mailbox remains unchanged, and live diagnostics continue to show measured capture FPS and
