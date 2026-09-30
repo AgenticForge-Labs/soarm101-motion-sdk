@@ -49,6 +49,11 @@ physical power immediately reachable throughout the first run. Because the lower
 is not yet a separately calibrated TCP, repeat the three captures if reported tool
 orientation drift is excessive rather than overriding the check casually.
 
+If guarded torque enable reports a one-off missing/corrupt Feetech status packet for
+`Lock` or `Torque_Enable`, the managed backend must recover only when bounded register
+readback confirms the requested control value (or one retry succeeds). Persistent
+communication failures must still abort before Cartesian motion and leave torque disabled.
+
 
 ## Batch 1 — Setup, follower control, and leader readout
 
