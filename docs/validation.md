@@ -31,6 +31,20 @@ have passed, `examples/paper_corner_cartesian_test.py` provides a simple physica
 Cartesian-space validation using a known rectangular sheet. US Letter defaults are
 215.9 x 279.4 mm.
 
+The required three-corner layout is:
+
+```text
+C ---------------- D  (predicted; do not touch)
+|                  |
+|                  |
+A ---------------- B
+```
+
+A->B is the 215.9 mm short/width edge. A->C is the 279.4 mm long/height edge and
+**C must be on the same side of the sheet as A**. If the operator goes A->B and then
+up the right side, that point is D, the far corner, and the rectangle-angle check is
+invalid.
+
 The script:
 
 1. briefly enables torque to open the gripper fully, then relaxes the arm;
@@ -61,3 +75,35 @@ the lower finger as a probe is therefore valid only when its pose relative to th
 TCP remains effectively constant. The script reports A/B/C orientation drift and refuses
 autonomous motion above the configured drift threshold unless the override is deliberate.
 A future calibrated lower-finger TCP would remove this approximation.
+
+## Four-corner hover diagnostic
+
+`examples/paper_four_corner_hover_demo.py` is a supervised motion diagnostic for cases
+where the operator wants to observe slow Cartesian motion without predicting an unseen
+corner. It teaches every physical corner manually in clockwise order:
+
+```text
+D ---------------- C
+|                  |
+|                  |
+A ---------------- B
+```
+
+The operator may therefore move A->B left-to-right and then B->C up the right side.
+After all four torque-off captures, the script reports the model-space paper distances
+for diagnosis but does not use them to alter any target. Each hover target is simply
+50 mm by default along SDK base +Z from that corner's captured model TCP, retaining that
+corner's captured orientation as the compatible-IK reference.
+
+All four hover targets are solved with torque off first. Powered execution has two
+separate confirmations: first only the lift from the current D touch to the D hover;
+after the operator verifies that motion went upward and is clear of the table, the
+script traverses D->A->B->C->D at the hover height. Each `move_linear()` segment still
+uses the normal guarded planner and is fully planned before that segment sends motor
+commands. The demo never bypasses joint, calibration, following-error, fault, effort,
+or motion-planning guards.
+
+This demo is deliberately **not** evidence that Cartesian kinematics are calibrated,
+and it does not replace the three-corner validation gate. Keep physical power immediately
+reachable and stop if the first lift is not physically upward and clear.
+
