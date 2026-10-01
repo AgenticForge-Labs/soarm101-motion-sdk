@@ -161,8 +161,8 @@ class MotionController(_BaseMotionController):
                     plan,
                     event,
                     cancellation_message="linear motion cancelled",
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
                     servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
-                    synchronize_servo_arrival=True,
                 )
             )
         return handle.wait() if wait else handle
