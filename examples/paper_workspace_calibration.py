@@ -597,11 +597,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="save the workspace measurement but skip the powered paper demonstration",
     )
     parser.add_argument(
+        "--upgrade-elevated",
+        action="store_true",
+        help=(
+            "reuse a legacy saved A/B/C/D and D_UP teaching, manually teach "
+            "A_UP/B_UP/C_UP/CENTER_UP at the same physical reference height, and save "
+            "the upgraded report without powered replay"
+        ),
+    )
+    parser.add_argument(
         "--replay",
         action="store_true",
         help=(
-            "reuse the saved A/B/C/D/UP teaching in --output and run the Cartesian "
-            "linear sequence from the arm's current resting pose"
+            "reuse saved physically taught A_UP/B_UP/C_UP/D_UP/CENTER_UP endpoints "
+            "and run the Cartesian linear sequence from the arm's current resting pose"
         ),
     )
     return parser
@@ -760,10 +769,13 @@ def main() -> int:
         raise SystemExit("--settle-tolerance-deg must be between 0.1 and 10")
     if args.settle_timeout_s <= 0.0:
         raise SystemExit("--settle-timeout-s must be positive")
-    if args.replay and args.measure_only:
-        raise SystemExit("--replay and --measure-only cannot be used together")
+    modes = sum(bool(value) for value in (args.replay, args.upgrade_elevated, args.measure_only))
+    if modes > 1:
+        raise SystemExit("--replay, --upgrade-elevated, and --measure-only are mutually exclusive")
 
     config = _resolve_config(args)
+    if args.upgrade_elevated:
+        return run_elevated_upgrade(args, config)
     if args.replay:
         return run_saved_replay(args, config)
 
