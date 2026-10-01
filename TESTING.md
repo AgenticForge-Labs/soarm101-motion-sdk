@@ -73,9 +73,16 @@ profile as smooth teleoperation: `speed_raw=0`, `acceleration_raw=254`. The host
 trajectory owns speed/acceleration shaping; do not add a second per-sample servo speed
 trajectory.
 
-If motion remains visibly shakier than teleop, capture the planned joint derivatives,
-encoder-quantized command deltas, measured following error, and actual cycle timing before
-changing motor PID or power settings.
+The host launch profile is intentionally hardware-aware. At the reference paper settings
+(20 Hz, 20 mm/s, 100 mm/s²), the first Cartesian sample should advance about 0.125 mm.
+The superseded zero-acceleration cosine launch advanced only about 0.021 mm in the first
+50 ms, which can disappear into encoder/linkage quantization before later samples jump.
+The new launch remains at or below the requested acceleration ceiling and keeps the
+half-cosine endpoint deceleration.
+
+If motion remains visibly shakier than teleop after this launch change, capture the
+planned joint derivatives, encoder-quantized command deltas, measured following error,
+and actual cycle timing before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
