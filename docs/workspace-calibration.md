@@ -50,9 +50,10 @@ A ---------------- B
 4. D: remaining short/width corner.
 5. UP: the same fixed lower finger at a physically measured height above D.
 
-For UP, use a ruler, rigid spacer, gauge block, or another physical reference. Keep the
-tool orientation as close to the D orientation as practical. The workflow performs no
-autonomous Cartesian arm motion.
+For UP, use a ruler, rigid spacer, paper edge, gauge block, or another physical reference.
+Allow the wrist/tool orientation to change naturally as needed to put the fixed lower
+finger at the measured physical point. The workflow performs no autonomous Cartesian
+arm motion.
 
 ## What is fitted
 
@@ -102,11 +103,10 @@ The workflow writes the measured workspace calibration when:
 - the model displacement produced by the measured UP height has a plausible scale rather
   than collapsing toward zero or expanding implausibly.
 
-D -> UP tool-orientation drift is recorded as a **quality warning**, not an acceptance
-failure. Moving the relaxed arm by hand over a useful vertical distance can naturally
-change wrist orientation. Because the fixed fingertip is offset only modestly from the
-modeled TCP, that drift may add a few millimeters of correspondence error, but it should
-not discard an otherwise informative workspace measurement.
+D -> UP tool-orientation drift is recorded as diagnostic evidence only. With this 5-DOF
+arm and a fixed fingertip used as the physical probe, changing wrist/tool orientation can
+be required simply to place that fingertip at the desired physical point. It therefore
+does not participate in workspace-measurement acceptance.
 
 The angle between the mapped physical-UP vector and the Euclidean normal of the
 model-space paper plane is retained as a diagnostic, **not** as an acceptance condition.
