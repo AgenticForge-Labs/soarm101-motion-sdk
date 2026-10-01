@@ -142,7 +142,9 @@ rise itself: at least 10 mm physical/workspace Z increase is required. This refl
 hardware purpose of the move—clear the surface—without requiring the hobby servos to land
 within a few millimeters of the nominal Cartesian target. The traversal then begins at A_UP and follows A_UP -> B_UP -> C_UP ->
 D_UP -> CENTER_UP; D_UP remains the physical-height calibration reference but is no longer
-visited first merely because it was taught there. The clearance path is validated in the
+visited first merely because it was taught there. CENTER_UP is defined directly in the
+calibrated paper frame as (width/2, height/2, reference height); averaged corner joints are
+used only as an IK seed and never as center geometry. The clearance path is validated in the
 calibrated physical workspace rather than against the generic model-frame Z floor, which
 is known to misrepresent this measured table. The elevated traversal no longer forces
 straight Cartesian IK between endpoints: hardware showed an A_UP->B_UP intermediate pose
