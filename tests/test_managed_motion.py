@@ -62,3 +62,35 @@ def test_invalid_linear_workspace_mode_is_rejected() -> None:
                 current,
                 workspace_check="anything",  # type: ignore[arg-type]
             )
+
+def test_move_linear_uses_responsive_servo_profile() -> None:
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        current = arm.get_position()
+        target = Pose(current.position + [-0.005, 0.0, 0.005], current.rotation)
+        arm.move_linear(target, orientation_mode="position_only", speed=0.01)
+
+    assert calls
+    assert all(
+        speed == TELEOP_SERVO_SPEED_RAW
+        and acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for speed, acceleration in calls
+    )
+
