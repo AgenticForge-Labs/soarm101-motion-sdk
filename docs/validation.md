@@ -98,10 +98,20 @@ corner's captured orientation as the compatible-IK reference.
 All four hover targets are solved with torque off first. Powered execution has two
 separate confirmations: first only the lift from the current D touch to the D hover;
 after the operator verifies that motion went upward and is clear of the table, the
-script traverses D->A->B->C->D at the hover height. Each `move_linear()` segment still
-uses the normal guarded planner and is fully planned before that segment sends motor
-commands. The demo never bypasses joint, calibration, following-error, fault, effort,
-or motion-planning guards.
+script traverses D->A->B->C->D at the hover height.
+
+The manually taught paper touch may place the modeled TCP below the SDK's generic
+base-Z=0 coarse floor even though the physical finger is safely resting on the paper.
+For the **first lift only**, the script opts into guarded floor recovery: any point that
+starts below the configured floor must progress upward without a meaningful downward
+dip, points that start above the floor must remain above it, the normal reach/base/
+self-clearance checks stay active, and the lift must finish entirely inside the ordinary
+workspace envelope. Subsequent perimeter moves use the normal floor rule with no recovery
+exception.
+
+Each `move_linear()` segment still uses the normal guarded planner and is fully planned
+before that segment sends motor commands. The demo never disables workspace checks or
+bypasses joint, calibration, following-error, fault, effort, or motion-planning guards.
 
 This demo is deliberately **not** evidence that Cartesian kinematics are calibrated,
 and it does not replace the three-corner validation gate. Keep physical power immediately
