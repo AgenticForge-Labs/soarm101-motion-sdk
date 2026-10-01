@@ -30,58 +30,50 @@ after any failed gate rather than continuing into later capabilities.
 
 ### Paper/workspace calibration — after the basic motion gates
 
-The paper workflows are currently measurement/calibration only. Do not use them to
-authorize powered Cartesian motion.
-
-First, the three-corner geometry check:
+Run:
 
 ```bash
-python examples/paper_corner_cartesian_test.py
+python examples/paper_workspace_calibration.py --reference-height-mm 107
 ```
 
-Required layout:
+Teach A->B->C->D clockwise, then teach the fixed lower finger at the measured UP point
+above D. Immediately after the UP capture, confirm the countdown ends with torque enabled
+and the arm holding that exact pose instead of sagging.
 
-```text
-C ---------------- D  (predicted; do not touch)
-|                  |
-|                  |
-A ---------------- B
-```
+The workflow keeps the affine workspace fit as diagnostic/calibration evidence, but the
+powered Cartesian endpoints are generated from **known-reachable joint configurations**:
+the taught D->UP joint delta is applied to each taught corner joint pose, then FK defines
+D_UP/A_UP/B_UP/C_UP/D_UP_RETURN and an inferred center endpoint. The actual segments are
+still executed with `move_linear()` and position-only IK, so this tests Cartesian linear
+motion rather than replaying joint trajectories.
 
-This records FK geometry and predicts D, but does not command motion.
+For this supervised paper test, coarse workspace geometry is deliberately target-only on
+each segment. The destination must pass the coarse workspace check, while joint limits,
+IK continuity, command-step/rate/acceleration, following error, motor faults, effort/contact
+guards, communication checks, and motion timeout remain active.
 
-Then run the four-corner workspace calibration:
+After a teaching run, test replay without touching the paper again:
 
 ```bash
-python examples/paper_workspace_calibration.py --reference-height-mm 50
+python examples/paper_workspace_calibration.py --replay
 ```
 
-Teach A->B->C->D clockwise, then manually place the same fixed lower finger at a
-physically measured height above D. This fifth point demonstrates physical UP directly.
-The workflow fits a local physical-paper -> model affine transform and ties it to the
-active motor-calibration ID. If the measurement passes, the default run preflights and,
-after one explicit confirmation, constructs the elevated targets from the measured A/B/C/D positions plus the measured
-D→UP model displacement, then moves
-D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP using position-only IK. Use
-`--measure-only` to skip this powered demonstration.
+Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D/UP teaching,
+counts down and enables torque to hold the current pose, opens the moving jaw, preflights
+the endpoints, then waits for one Enter before running
+D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. It must not require reteaching merely
+because an earlier motion/preflight attempt failed.
 
-Hardware evidence that triggered this gate:
+Use `--measure-only` when a non-moving calibration capture is wanted.
 
-- A four-corner paper capture was nearly coplanar in model coordinates.
-- A requested model +Z hover nevertheless moved physically along the table direction.
-- The finger contacted the table.
-- The motion failed to settle within 5 s with a maximum joint error of about 0.0767 rad,
-  after which the arm relaxed.
+Hardware evidence motivating the relaxed coarse-workspace policy:
 
-Therefore the earlier base-Z floor-recovery/paper-hover behavior is superseded. A
-negative model Z at a physical paper touch is not sufficient reason to lower the
-workspace floor, and model +Z is not accepted as physical up.
-
-A saved workspace calibration remains `motion_validation_status="unvalidated"`. Review
-its fitted UP direction, affine conditioning, residuals, UP/table-normal skew, and
-recorded probe-orientation change before designing the next very-small supervised
-Cartesian direction test. Probe-orientation change is diagnostic only; the wrist may
-need to rotate naturally to place the fixed fingertip at the measured UP point.
+- the real table repeatedly appears below/tilted relative to the generic model floor;
+- a prior model +Z hover moved physically along the table and contacted it;
+- later endpoint preflights failed despite strong table fits and well-conditioned workspace
+  measurements;
+- the paper test is supervised with a deliberately clear physical workspace, so the coarse
+  model is treated as a destination sanity check rather than the primary execution gate.
 
 See `docs/workspace-calibration.md` and `docs/validation.md`.
 
