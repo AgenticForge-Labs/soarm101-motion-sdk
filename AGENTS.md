@@ -74,10 +74,10 @@ changes require development discipline; robot use requires conservative hardware
     linear motion. The paper workflow uses the known-smooth 20 Hz host cadence. Planned
     Cartesian execution must use the same responsive servo-side tracking profile as live
     teleoperation (STS3215 speed_raw=0, acceleration_raw=254); host trajectory planning owns
-    speed and acceleration shaping. The validated host launch uses bounded constant
-    acceleration from rest, optional cruise, and the existing half-cosine deceleration;
-    do not restore a zero-acceleration cosine launch that produces sub-resolution first
-    samples at 20 Hz. The calibrated workspace is authoritative for paper
+    speed and acceleration shaping. Hardware did not show a benefit from the temporary
+    bounded-acceleration launch in #73, so Cartesian timing uses the symmetric half-cosine
+    profile again. Position-only smoothness work belongs in Cartesian-constrained IK
+    reprojection/diagnostics, not motor PID or another unmeasured launch heuristic. The calibrated workspace is authoritative for paper
     height; the generic model workspace may remain destination-only where documented. All
     joint, IK continuity, step/rate/acceleration, following-error, effort, fault,
     communication, settle, provenance, and timing guards remain active. Broader autonomous
