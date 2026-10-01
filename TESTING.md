@@ -754,3 +754,14 @@ minimum-jerk Cartesian progress law. Regression coverage uses a deliberately non
 mapping and requires every emitted command sample to be the direct solution of its
 corresponding Cartesian sample; piecewise interpolation between sparse IK solutions would
 fail this test. Physical smoothness still requires real-arm validation.
+
+
+### Paper replay from a low/resting start
+
+The startup clearance move must be evaluated in the saved calibrated workspace, not by
+assuming raw model Z is physical height. Regression coverage includes a case where the
+clearance target remains at negative model-frame Z while calibrated workspace Z rises
+from 0 to 10 mm. The preflight must accept that case only when workspace X/Y stays fixed,
+physical Z does not descend, IK remains continuous, and all solved joints remain inside
+effective limits. Execution then disables only the generic coarse workspace check for that
+single preflighted startup lift; the normal motion/runtime safety stack remains active.
