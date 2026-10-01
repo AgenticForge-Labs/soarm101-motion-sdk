@@ -445,6 +445,13 @@ def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> No
 
     arm = Arm()
     positions = {"B_UP": np.array([0.200, 0.0, 0.107])}
+    endpoint_seed = {
+        "shoulder_pan": 0.1,
+        "shoulder_lift": -0.2,
+        "elbow_flex": 0.3,
+        "wrist_flex": -0.1,
+        "wrist_roll": 0.2,
+    }
     moves = []
 
     module.run_demo_targets(
@@ -455,6 +462,7 @@ def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> No
         speed_mm_s=20.0,
         acceleration_mm_s2=100.0,
         report_moves=moves,
+        target_seeds={"B_UP": endpoint_seed},
     )
 
     assert len(arm.calls) == 1
@@ -464,7 +472,9 @@ def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> No
     assert kwargs["speed"] == pytest.approx(0.020)
     assert kwargs["acceleration"] == pytest.approx(0.100)
     assert kwargs["workspace_check"] == "target_only"
+    assert kwargs["target_seed"] == endpoint_seed
     assert moves[0]["mode"] == "cartesian_move_linear"
+    assert moves[0]["endpoint_seed_source"] == "endpoint_preflight"
     assert moves[0]["servo_tracking_profile"] == "teleop_authority"
     assert moves[0]["target_workspace_xyz_mm"][2] == pytest.approx(107.0)
 
@@ -524,6 +534,27 @@ def test_endpoint_preflight_prefers_joint_continuity_over_tiny_residual_differen
     assert results[1]["joints_rad"]["shoulder_pan"] == pytest.approx(0.12)
     assert results[1]["chosen_seed_index"] == 1
     assert results[1]["position_error_mm"] == pytest.approx(0.1)
+
+
+def test_preflight_joint_seeds_extracts_exact_endpoint_solutions() -> None:
+    module = _load_example_module()
+    seeds = module.preflight_joint_seeds(
+        [
+            {
+                "name": "A_UP",
+                "joints_rad": {
+                    "shoulder_pan": 0.1,
+                    "shoulder_lift": -0.2,
+                    "elbow_flex": 0.3,
+                    "wrist_flex": -0.1,
+                    "wrist_roll": 0.2,
+                },
+            }
+        ]
+    )
+
+    assert seeds["A_UP"]["shoulder_pan"] == pytest.approx(0.1)
+    assert seeds["A_UP"]["wrist_roll"] == pytest.approx(0.2)
 
 
 def test_startup_clearance_gate_uses_measured_rise_not_target_shortfall() -> None:
