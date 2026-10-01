@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Paper replay now uses one 20 mm calibrated-Z startup clearance move by default,
+  checks the measured endpoint against the existing 5 mm tolerance, and then follows
+  A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. The D_UP sample remains the workspace-height
+  reference but is no longer repeated as the first powered target.
+
 - Hardware replay after #64 still moved laterally toward the base before rising and
   remained much slower/jerkier than teleoperation. Cartesian planning now uses smooth
   half-cosine acceleration/deceleration ramps with constant-speed cruise when distance
