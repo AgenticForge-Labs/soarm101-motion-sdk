@@ -216,59 +216,51 @@ class MotionController:
         return 10 * alpha**3 - 15 * alpha**4 + 6 * alpha**5
 
     @staticmethod
-    def _responsive_cruise_profile(
+    def _cosine_cruise_profile(
         delta: float,
         speed: float,
         acceleration: float,
-    ) -> tuple[float, float, float, float]:
-        """Return peak speed, launch time, cruise time, and smooth decel time.
+    ) -> tuple[float, float, float]:
+        """Return peak speed, ramp time, and cruise time for a smooth S-curve.
 
-        Hardware validation showed that the previous zero-acceleration cosine launch
-        produced sub-encoder-resolution Cartesian commands during the first few 20 Hz
-        samples. This profile uses bounded constant acceleration from rest so the launch
-        becomes resolvable sooner, while retaining the existing half-cosine deceleration
-        that already behaves smoothly near the endpoint.
-
-        Requested speed and acceleration remain hard ceilings.
+        Velocity uses half-cosine acceleration/deceleration ramps with zero
+        acceleration at the transitions to and from constant-speed cruise. The
+        requested speed and acceleration are true ceilings rather than minimum-jerk
+        peak values.
         """
 
         if delta < 1e-12:
-            return 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0
         requested_speed = max(float(speed), 1e-12)
         requested_acceleration = max(float(acceleration), 1e-12)
-        launch_time = requested_speed / requested_acceleration
-        decel_time = math.pi * requested_speed / (2.0 * requested_acceleration)
-        launch_distance = requested_speed * launch_time / 2.0
-        decel_distance = requested_speed * decel_time / 2.0
-        ramp_distance = launch_distance + decel_distance
-        if delta >= ramp_distance:
-            cruise_time = (delta - ramp_distance) / requested_speed
-            return requested_speed, launch_time, cruise_time, decel_time
+        full_ramp_time = math.pi * requested_speed / (2.0 * requested_acceleration)
+        full_ramp_distance = requested_speed * full_ramp_time
+        if delta >= full_ramp_distance:
+            cruise_time = (delta - full_ramp_distance) / requested_speed
+            return requested_speed, full_ramp_time, cruise_time
 
-        ramp_factor = 0.5 + math.pi / 4.0
-        peak_speed = math.sqrt(
-            delta * requested_acceleration / ramp_factor
-        )
-        launch_time = peak_speed / requested_acceleration
-        decel_time = math.pi * peak_speed / (2.0 * requested_acceleration)
-        return peak_speed, launch_time, 0.0, decel_time
+        peak_speed = math.sqrt(2.0 * requested_acceleration * delta / math.pi)
+        ramp_time = math.pi * peak_speed / (2.0 * requested_acceleration)
+        return peak_speed, ramp_time, 0.0
 
     @classmethod
-    def _responsive_cruise_duration(
+    def _cosine_cruise_duration(
         cls,
         delta: float,
         speed: float,
         acceleration: float,
     ) -> float:
-        peak_speed, launch_time, cruise_time, decel_time = (
-            cls._responsive_cruise_profile(delta, speed, acceleration)
+        peak_speed, ramp_time, cruise_time = cls._cosine_cruise_profile(
+            delta,
+            speed,
+            acceleration,
         )
         if peak_speed <= 0.0:
             return 0.0
-        return launch_time + cruise_time + decel_time
+        return 2.0 * ramp_time + cruise_time
 
     @classmethod
-    def _responsive_cruise_progress(
+    def _cosine_cruise_progress(
         cls,
         delta: float,
         speed: float,
@@ -277,31 +269,35 @@ class MotionController:
     ) -> float:
         if delta < 1e-12:
             return 1.0
-        peak_speed, launch_time, cruise_time, decel_time = (
-            cls._responsive_cruise_profile(delta, speed, acceleration)
+        peak_speed, ramp_time, cruise_time = cls._cosine_cruise_profile(
+            delta,
+            speed,
+            acceleration,
         )
-        total = launch_time + cruise_time + decel_time
+        total = 2.0 * ramp_time + cruise_time
         if elapsed <= 0.0:
             return 0.0
         if elapsed >= total:
             return 1.0
 
-        launch_acceleration = peak_speed / launch_time
-        launch_distance = peak_speed * launch_time / 2.0
-        if elapsed < launch_time:
-            position = 0.5 * launch_acceleration * elapsed**2
-        elif elapsed <= launch_time + cruise_time:
-            position = launch_distance + peak_speed * (elapsed - launch_time)
+        ramp_distance = peak_speed * ramp_time / 2.0
+        if elapsed < ramp_time:
+            position = 0.5 * peak_speed * (
+                elapsed
+                - ramp_time / math.pi * math.sin(math.pi * elapsed / ramp_time)
+            )
+        elif elapsed <= ramp_time + cruise_time:
+            position = ramp_distance + peak_speed * (elapsed - ramp_time)
         else:
-            tau = elapsed - launch_time - cruise_time
+            tau = elapsed - ramp_time - cruise_time
             position = (
-                launch_distance
+                ramp_distance
                 + peak_speed * cruise_time
                 + 0.5
                 * peak_speed
                 * (
                     tau
-                    + decel_time / math.pi * math.sin(math.pi * tau / decel_time)
+                    + ramp_time / math.pi * math.sin(math.pi * tau / ramp_time)
                 )
             )
         return min(1.0, max(0.0, position / delta))
@@ -343,6 +339,89 @@ class MotionController:
         max_acceleration = float(np.max(np.abs(acceleration))) if acceleration.size else 0.0
         max_step = float(np.max(np.abs(np.diff(matrix, axis=0)))) if len(matrix) > 1 else 0.0
         return max_speed, max_acceleration, max_step
+
+    @staticmethod
+    def _joint_path_roughness(samples: Sequence[Mapping[str, float]]) -> float:
+        """Return RMS discrete joint jerk for comparing equivalent IK paths."""
+
+        if len(samples) < 4:
+            return 0.0
+        matrix = np.array([[sample[name] for name in ARM_JOINTS] for sample in samples])
+        jerk = np.diff(matrix, n=3, axis=0)
+        return float(np.sqrt(np.mean(jerk**2))) if jerk.size else 0.0
+
+    def _smooth_position_only_cartesian_samples(
+        self,
+        samples: tuple[dict[str, float], ...],
+        cartesian: tuple[Pose, ...],
+        *,
+        tcp: Pose | None,
+        limits: Mapping[str, tuple[float, float]],
+    ) -> tuple[dict[str, float], ...]:
+        """Reproject a smoothed redundant IK path back onto the same Cartesian samples.
+
+        Position-only IK leaves tool orientation free, so sequential numerical solves can
+        wander slightly in redundant joint directions even when the Cartesian samples are
+        smooth. Use a five-tap binomial filter only to create better IK seeds, then solve
+        every interior Cartesian sample again at the unchanged hard position tolerance.
+        The Cartesian path therefore remains authoritative. The refined path is accepted
+        only when it is continuous and has lower discrete joint jerk.
+        """
+
+        if len(samples) < 5 or len(samples) != len(cartesian):
+            return samples
+
+        matrix = np.array([[sample[name] for name in ARM_JOINTS] for sample in samples])
+        padded = np.pad(matrix, ((2, 2), (0, 0)), mode="edge")
+        kernel = np.array([1.0, 4.0, 6.0, 4.0, 1.0]) / 16.0
+        smooth_matrix = np.vstack(
+            [
+                np.sum(padded[index : index + 5] * kernel[:, None], axis=0)
+                for index in range(len(matrix))
+            ]
+        )
+
+        refined: list[dict[str, float]] = [dict(samples[0])]
+        for index in range(1, len(samples) - 1):
+            smooth_seed = {
+                name: float(smooth_matrix[index, joint_index])
+                for joint_index, name in enumerate(ARM_JOINTS)
+            }
+            try:
+                solution = self.ik.solve_or_raise(
+                    cartesian[index],
+                    seed=smooth_seed,
+                    tcp=tcp,
+                    options=IKOptions(
+                        orientation_mode="position_only",
+                        position_tolerance_m=self.config.cartesian_position_tolerance_m,
+                        multi_start=False,
+                    ),
+                )
+            except IKError:
+                return samples
+            candidate = validate_joint_targets(solution.joints, limits=limits)
+            jump = max(
+                abs(candidate[name] - refined[-1][name])
+                for name in ARM_JOINTS
+            )
+            if jump > self.config.max_ik_waypoint_jump_radians:
+                return samples
+            refined.append(candidate)
+
+        final_sample = dict(samples[-1])
+        final_jump = max(
+            abs(final_sample[name] - refined[-1][name])
+            for name in ARM_JOINTS
+        )
+        if final_jump > self.config.max_ik_waypoint_jump_radians:
+            return samples
+        refined.append(final_sample)
+        refined_tuple = tuple(refined)
+
+        if self._joint_path_roughness(refined_tuple) < self._joint_path_roughness(samples):
+            return refined_tuple
+        return samples
 
     def _validate_samples(
         self,
@@ -451,11 +530,10 @@ class MotionController:
     ) -> tuple[tuple[dict[str, float], ...], tuple[Pose, ...]]:
         """Solve the smooth Cartesian trajectory directly at command-rate samples.
 
-        The scalar path uses a bounded constant-acceleration launch, optional
-        constant-speed cruise, and a half-cosine deceleration. The more assertive launch
-        avoids sub-resolution early setpoints on real STS3215 hardware while every
-        command sample still gets its own sequential IK solution. There is no secondary
-        piecewise-linear interpolation between sparse joint-space knots.
+        The scalar path uses symmetric half-cosine acceleration/deceleration ramps with
+        an optional constant-speed cruise. Every command sample gets its own sequential
+        IK solution; there is no secondary piecewise-linear interpolation between sparse
+        joint-space knots.
         """
 
         steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
@@ -469,7 +547,7 @@ class MotionController:
         seed = dict(start_joints)
 
         for index, time_fraction in enumerate(fractions[1:], start=1):
-            progress = self._responsive_cruise_progress(
+            progress = self._cosine_cruise_progress(
                 1.0,
                 normalized_speed,
                 normalized_acceleration,
@@ -522,7 +600,16 @@ class MotionController:
             joint_samples.append(candidate)
             cartesian_samples.append(pose)
 
-        return tuple(joint_samples), tuple(cartesian_samples)
+        solved_samples = tuple(joint_samples)
+        solved_cartesian = tuple(cartesian_samples)
+        if orientation_mode == "position_only":
+            solved_samples = self._smooth_position_only_cartesian_samples(
+                solved_samples,
+                solved_cartesian,
+                tcp=tcp,
+                limits=limits,
+            )
+        return solved_samples, solved_cartesian
 
     def plan_linear(
         self,
@@ -577,7 +664,7 @@ class MotionController:
         if normalized_speed_limits:
             normalized_speed = min(normalized_speed_limits)
             normalized_acceleration = min(normalized_acceleration_limits)
-            profile_duration = self._responsive_cruise_duration(
+            profile_duration = self._cosine_cruise_duration(
                 1.0,
                 normalized_speed,
                 normalized_acceleration,
