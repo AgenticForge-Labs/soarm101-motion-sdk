@@ -4,11 +4,16 @@ The operator teaches all four paper corners on the table, then manually teaches 
 known physical height above corner D. Those five physical correspondences are used to
 fit a local affine map from paper/workspace coordinates into the SDK kinematic model.
 
-After an accepted measurement, all elevated paper targets are preflighted with torque
-off. With one explicit operator confirmation, the script then uses the measured
-physical->model mapping to traverse D-up -> A-up -> B-up -> C-up -> D-up and finish at
-the elevated paper center. Cartesian targets use position-only IK so wrist/tool
-orientation may change naturally.
+After the final UP teaching sample, the script counts down and enables torque so the arm
+holds that exact pose instead of sagging. Elevated Cartesian endpoints are then built
+from known-reachable joint configurations inferred from the taught corners plus the
+taught D->UP posture change. The actual motion between those endpoints is still executed
+with Cartesian move_linear() and position-only IK.
+
+A saved teaching can also be replayed later from any ordinary resting pose with --replay.
+The first Cartesian move to D_UP validates the destination but relaxes the coarse
+workspace-path model for the unknown starting pose; subsequent paper segments use the
+normal full workspace path checks.
 
 The resulting calibration records:
 - where the taught table plane lies in model coordinates;
