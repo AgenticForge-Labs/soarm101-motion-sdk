@@ -819,7 +819,6 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 minimum_lift_m=args.startup_lift_mm / 1000.0,
             )
             startup_needed = startup_target_z > float(current_physical[2]) + 1e-6
-            startup_position = current_pose.position.copy()
             startup_preflight: dict[str, object] | None = None
             if startup_needed:
                 startup_preflight = preflight_calibrated_workspace_z_lift(
@@ -829,10 +828,6 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     start_joints=current_joints,
                     target_workspace_z_m=startup_target_z,
                 )
-                startup_position = np.asarray(
-                    startup_preflight["target_model_xyz_mm"],
-                    dtype=float,
-                ) / 1000.0
 
             print("\nRead-only endpoint preflight while holding the current pose...")
             if startup_needed:
