@@ -678,6 +678,7 @@ class MotionController:
                 limits=limits,
             )
         return solved_samples, solved_cartesian
+
     def plan_linear(
         self,
         target: Pose,
