@@ -1275,11 +1275,12 @@ class MotionController:
                     plan,
                     event,
                     cancellation_message="linear motion cancelled",
-                    # Host-side trajectory generation owns Cartesian/joint
-                    # speed and acceleration. Match smooth teleoperation on calibrated
-                    # hardware instead of adding per-sample servo-side speed throttling.
-                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    # The host trajectory owns Cartesian/joint speed and
+                    # acceleration. Give each calibrated servo a proportional position-
+                    # mode speed for the next command interval so lightly loaded joints
+                    # do not race ahead of gravity-loaded joints.
                     servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                    synchronize_servo_arrival=True,
                 )
             )
         return handle.wait() if wait else handle
