@@ -132,10 +132,13 @@ a local paper/workspace mapping under `~/.config/soarm101/workspace/`. The manua
 measured UP point is required because SDK/model +Z is **not assumed to be physical up**.
 Wrist/tool rotation while manually reaching the UP point is expected to change
 naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
-not gate workspace-measurement acceptance. After an accepted measurement, the default workflow preflights and then, with one
-explicit confirmation, traverses the elevated paper perimeter and finishes at its center
-using each measured corner translated by the directly measured D→UP model displacement,
-with position-only IK. `--measure-only`
+not gate workspace-measurement acceptance. After the final UP sample, the workflow counts down and enables torque so the arm
+holds the taught pose instead of sagging. Elevated Cartesian endpoints are generated
+from known-reachable FK poses inferred from the taught corner joints plus the taught
+D→UP posture change; the segments themselves still run through `move_linear()` with
+position-only IK. `--replay` reuses the saved teaching from any ordinary resting pose:
+the first move to D_UP uses destination-only coarse workspace validation, then the
+paper perimeter and center use the normal full workspace checks. `--measure-only`
 skips powered motion. The historical `paper_four_corner_hover_demo.py` filename remains
 only as a compatibility wrapper.
 
