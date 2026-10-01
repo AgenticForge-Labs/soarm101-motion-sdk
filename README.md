@@ -137,9 +137,10 @@ uses the saved physical-workspace transform to level every paper endpoint to tha
 workspace Z while preserving each endpoint's calibrated workspace X/Y; no extra elevated
 teaching is required. Before the first long move from an ordinary resting pose, replay
 preflights a straight calibrated-workspace-Z move to at least the paper reference/
-transport height before any lateral travel. After execution, measured workspace Z must
-reach that transport target within 5 mm or replay refuses to continue; corrective lift
-attempts are separately preflighted. That clearance path is validated in the calibrated
+transport height before any lateral travel. The climb is executed in separately
+preflighted and settled 10 mm Z stages, with workspace Z remeasured after every stage.
+Measured workspace Z must reach the transport target within 5 mm or replay refuses to
+continue. That clearance path is validated in the calibrated
 physical workspace rather than against the generic model-frame Z floor, which is known to
 misrepresent this measured table. For this hardware validation the paper workflow uses a
 20 Hz host command cadence, matching the proven teleoperation cadence, while the SDK-wide
