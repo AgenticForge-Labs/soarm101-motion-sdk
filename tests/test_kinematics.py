@@ -54,3 +54,62 @@ def test_jacobian_shape() -> None:
     jacobian = SO101KinematicModel().jacobian(TARGET_JOINTS)
     assert jacobian.shape == (6, 5)
     assert np.all(np.isfinite(jacobian))
+
+
+def test_ik_task_refinement_can_recover_from_regularization_tradeoff() -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.types import Pose
+
+    class FakeModel:
+        joint_names = (
+            "shoulder_pan",
+            "shoulder_lift",
+            "elbow_flex",
+            "wrist_flex",
+            "wrist_roll",
+        )
+        lower_bounds = np.full(5, -1.0)
+        upper_bounds = np.full(5, 1.0)
+
+        @staticmethod
+        def vector(values):
+            if isinstance(values, dict):
+                return np.array([float(values[name]) for name in FakeModel.joint_names])
+            return np.asarray(values, dtype=float)
+
+        @staticmethod
+        def mapping(values):
+            vector = np.asarray(values, dtype=float)
+            return {
+                name: float(vector[index])
+                for index, name in enumerate(FakeModel.joint_names)
+            }
+
+        @staticmethod
+        def forward(values, tcp=None):
+            del tcp
+            vector = FakeModel.vector(values)
+            return Pose(
+                np.array([vector[0], 0.0, 0.0]),
+                np.eye(3),
+            )
+
+    target = Pose(np.array([0.2, 0.0, 0.0]), np.eye(3))
+    seed = {name: 0.0 for name in FakeModel.joint_names}
+    result = IKSolver(FakeModel()).solve(
+        target,
+        seed=seed,
+        options=IKOptions(
+            orientation_mode="position_only",
+            position_tolerance_m=1e-5,
+            position_weight=1.0,
+            continuity_weight=20.0,
+            joint_center_weight=0.0,
+            multi_start=False,
+        ),
+    )
+
+    assert result.success is True
+    assert result.position_error_m <= 1e-5
+    assert result.joints["shoulder_pan"] == pytest.approx(0.2, abs=1e-5)
