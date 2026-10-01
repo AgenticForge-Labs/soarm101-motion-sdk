@@ -299,7 +299,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
         self,
         positions: Mapping[str, float],
         *,
-        speed_raw: int | None = None,
+        speed_raw: int | Mapping[str, int] | None = None,
         acceleration_raw: int | None = None,
     ) -> None:
         """Reject direct joint writes while an effort safety trip is latched."""
@@ -317,7 +317,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
         actuator: str,
         position: float,
         *,
-        speed_raw: int | None = None,
+        speed_raw: int | Mapping[str, int] | None = None,
         acceleration_raw: int | None = None,
     ) -> None:
         """Reject direct tool writes while an effort safety trip is latched."""
