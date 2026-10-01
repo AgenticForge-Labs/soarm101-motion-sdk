@@ -617,8 +617,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
-    report, samples, up = load_saved_teaching(args.output)
-    corner_samples = {sample.name: sample for sample in samples}
+    report, samples, elevated = load_saved_teaching(args.output)
     reference_height = float(report.get("reference_height_mm", 0.0))
     if reference_height <= 0.0:
         raise RuntimeError("saved report has no valid reference_height_mm")
@@ -642,15 +641,14 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 f"{args.settle_timeout_s:.1f} s."
             )
             print(
-                f"Replay uses the taught D->UP joint change (trained at "
-                f"{saved.reference_height_m * 1000.0:.1f} mm) applied to each taught corner, "
-                "then FK to obtain known-reachable Cartesian endpoints. "
-                f"Cartesian IK knots are limited to "
-                f"{PAPER_CARTESIAN_WAYPOINT_SPACING_M * 1000.0:.1f} mm spacing."
+                f"Replay uses physically taught elevated endpoints at "
+                f"{saved.reference_height_m * 1000.0:.1f} mm: "
+                "A_UP, B_UP, C_UP, D_UP, and CENTER_UP. "
+                "No elevated endpoint is inferred from another corner."
             )
             print(
-                "Only D_UP was physically measured at the reference height; estimated workspace "
-                "Z for the other reachable endpoints is diagnostic, not a guaranteed constant height."
+                "Cartesian move_linear() now solves the minimum-jerk Cartesian trajectory "
+                "directly at host command-rate IK samples."
             )
             print(
                 "The arm may start from any ordinary resting pose. This supervised paper "
@@ -660,34 +658,27 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             _countdown_hold(arm)
             arm.tool.open()
 
-            demo_positions, preferred_seeds = reachable_demo_targets(
-                arm,
-                corners=corner_samples,
-                up_sample=up,
-            )
+            demo_positions, preferred_seeds = measured_demo_targets(elevated)
             print("\nRead-only endpoint preflight while holding the current pose...")
             preflight = preflight_demo_targets(
                 arm,
                 demo_positions,
                 preferred_seeds=preferred_seeds,
-                rotation=up.rotation,
+                rotation=elevated["D_UP"].rotation,
             )
             for item in preflight:
                 xyz = item["target_model_xyz_mm"]
                 assert isinstance(xyz, list)
-                physical = saved.physical_position_from_model(
-                    np.asarray(xyz, dtype=float) / 1000.0
-                )
                 print(
                     f"  {item['name']}: model "
                     f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
-                    f"estimated workspace Z={physical[2] * 1000.0:.1f} mm; "
+                    f"physically taught Z={reference_height:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
 
             report["replayed_at"] = datetime.now(timezone.utc).isoformat()
             report["demo_target_strategy"] = (
-                "known_reachable_fk_from_taught_corner_plus_joint_lift"
+                "direct_physically_taught_elevated_endpoints"
             )
             report["demo_preflight"] = preflight
             report["demo_targets_model_xyz_mm"] = {
@@ -711,7 +702,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 run_demo_targets(
                     arm,
                     demo_positions,
-                    rotation=up.rotation,
+                    rotation=elevated["D_UP"].rotation,
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
