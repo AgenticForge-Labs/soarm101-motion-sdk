@@ -99,6 +99,8 @@ class SOARM101Config:
 
     hardware_speed_raw: int = 250
     hardware_acceleration_raw: int = 20
+    # STS3215 factory position P gain. P=16 has been observed to leave a
+    # several-degree static/gravity deadband on SO-family follower arms.
     position_p_coefficient: int = 32
     position_i_coefficient: int = 0
     position_d_coefficient: int = 32
