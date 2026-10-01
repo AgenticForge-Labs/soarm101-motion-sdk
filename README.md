@@ -145,12 +145,14 @@ workspace.
 Planned Cartesian motion uses the same responsive Feetech servo-side tracking profile as
 smooth live teleoperation: the host trajectory owns velocity/acceleration shaping while
 the servo receives `speed_raw=0` (maximum tracking authority) and
-`acceleration_raw=254`. The host profile uses bounded constant acceleration at launch,
-then optional constant-speed cruise and a smooth half-cosine deceleration. This makes the
-first 20 Hz setpoints large enough to be useful on quantized hobby servos without
-exceeding the requested acceleration ceiling, while retaining the already-smooth endpoint
-deceleration. This avoids the previous per-sample servo speed throttling that could
-produce visible stick-slip on gravity-loaded joints. The normal joint, IK,
+`acceleration_raw=254`. The host path uses symmetric half-cosine acceleration/
+deceleration with optional constant-speed cruise. Position-only Cartesian paths then get
+one deterministic smooth-seed IK reprojection pass: joint-space seeds are filtered, every
+interior Cartesian sample is re-solved at the unchanged hard position tolerance, and the
+refined path is used only when it lowers discrete joint jerk. This keeps the Cartesian
+line authoritative while reducing redundant-joint numerical wander. The previous
+per-sample servo speed throttling remains superseded because it could produce visible
+stick-slip on gravity-loaded joints. The normal joint, IK,
 rate/acceleration, following-error, fault, effort/contact, communication, settle,
 provenance, and timing guards remain active. The measured workspace owns paper height;
 the generic model workspace is used only where explicitly documented as a secondary
