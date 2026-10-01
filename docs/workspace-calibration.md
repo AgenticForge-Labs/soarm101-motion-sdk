@@ -100,7 +100,9 @@ The workflow only writes the authoritative workspace calibration when:
 - the manually demonstrated physical-UP direction agrees with that plane's normal within
   the configured tolerance; and
 - D -> UP tool-orientation drift is small enough that the fixed-finger probe approximation
-  is not obviously corrupted by a changing TCP offset.
+  is not obviously corrupted by a changing TCP offset; and
+- the model displacement produced by the measured UP height has a plausible scale rather
+  than collapsing toward zero or expanding implausibly.
 
 Even when saved, a newly measured calibration has:
 
