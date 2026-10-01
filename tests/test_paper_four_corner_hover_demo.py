@@ -544,3 +544,60 @@ def test_run_demo_targets_uses_preflighted_joint_endpoint_and_teleop_profile() -
     assert kwargs["servo_speed_raw"] == module.TELEOP_SERVO_SPEED_RAW
     assert kwargs["servo_acceleration_raw"] == module.TELEOP_SERVO_ACCELERATION_RAW
     assert moves[0]["mode"] == "joint_space_endpoint_replay"
+
+
+def test_endpoint_preflight_prefers_joint_continuity_over_tiny_residual_difference() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    joint_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    )
+    zero = {name: 0.0 for name in joint_names}
+    preferred_a = dict(zero)
+    preferred_a["shoulder_pan"] = 0.10
+    preferred_b = dict(zero)
+    preferred_b["shoulder_pan"] = 1.00
+
+    class Arm:
+        def solve_ik(self, pose, *, seed, orientation_mode):
+            assert orientation_mode == "position_only"
+            joints = dict(zero)
+            if float(pose.position[0]) < 0.5:
+                joints["shoulder_pan"] = 0.10
+                error = 0.0
+            elif float(seed["shoulder_pan"]) > 0.5:
+                joints["shoulder_pan"] = 1.00
+                error = 0.0
+            else:
+                joints["shoulder_pan"] = 0.12
+                error = 0.0001
+            return SimpleNamespace(
+                success=True,
+                joints=joints,
+                position_error_m=error,
+                message="ok",
+            )
+
+    results = module.preflight_demo_targets(
+        Arm(),
+        {
+            "A_UP": np.array([0.0, 0.0, 0.1]),
+            "B_UP": np.array([1.0, 0.0, 0.1]),
+        },
+        preferred_seeds={
+            "A_UP": preferred_a,
+            "B_UP": preferred_b,
+        },
+        rotation=np.eye(3),
+    )
+
+    # B's preferred seed gives the mathematically smaller residual, but the solution
+    # seeded from A is on the continuous arm branch and must win.
+    assert results[1]["joints_rad"]["shoulder_pan"] == pytest.approx(0.12)
+    assert results[1]["chosen_seed_index"] == 1
+    assert results[1]["position_error_mm"] == pytest.approx(0.1)
