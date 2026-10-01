@@ -135,12 +135,14 @@ target must pass read-only IK preflight before motion. No additional elevated te
 required.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
-resting pose. For this supervised paper-linear validation, every segment uses
-**target-only coarse workspace validation**: the destination must pass the coarse model,
-but intermediate coarse floor/base/self-clearance checks are not allowed to veto a
-physically supervised clear path. Joint limits, IK continuity, command-step/rate/
-acceleration, faults, following-error, effort/contact, communication, and timing guards
-remain active.
+resting pose. Before the first long move, software constructs a pure calibrated-workspace-Z
+clearance lift from the measured current pose. That startup path is accepted only when
+calibrated workspace X/Y stays fixed, physical Z is nondecreasing, sequential IK stays
+continuous, and effective joint limits hold. The generic model-frame floor is bypassed
+only for that already-preflighted clearance move because it is known to disagree with the
+measured table. The later paper segments use **target-only coarse workspace validation**.
+Joint limits, command-step/rate/acceleration, faults, following-error, effort/contact,
+communication, and timing guards remain active.
 
 ## Relationship to the coarse floor guard
 
