@@ -491,6 +491,7 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         workspace_check: Literal["full", "target_only", "off"] = "full",
+        target_seed: Mapping[str, float] | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         look_at_array = np.asarray(look_at, dtype=float) if look_at is not None else None
         if workspace_check not in {"full", "target_only", "off"}:
@@ -505,6 +506,7 @@ class SOARM101:
                 look_at=look_at_array,
                 speed=speed,
                 acceleration=acceleration,
+                target_seed=target_seed,
             )
             if workspace_check == "full":
                 validate_workspace_path(
@@ -528,6 +530,7 @@ class SOARM101:
             speed=speed,
             acceleration=acceleration,
             wait=wait,
+            target_seed=target_seed,
         )
 
     def get_servo_angle(self, *, is_radian: bool = True) -> list[float]:
