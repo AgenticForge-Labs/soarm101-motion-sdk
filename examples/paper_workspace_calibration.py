@@ -52,7 +52,6 @@ from soarm101_motion import Pose, SOARM101, SOARM101Config
 from soarm101_motion.constants import (
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     TELEOP_SERVO_ACCELERATION_RAW,
-    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.kinematics import IKOptions
 from soarm101_motion.workstation import WorkstationProfileStore
@@ -700,6 +699,7 @@ def run_demo_targets(
             {
                 "name": name,
                 "mode": "joint_space_endpoint_replay",
+                "synchronized_servo_arrival": True,
                 "target_model_xyz_mm": [
                     float(value * 1000.0) for value in position
                 ],
@@ -948,7 +948,8 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             print(
                 "Startup clearance uses Cartesian move_linear(); elevated paper traversal "
                 "uses preflighted smooth joint-space endpoint replay at "
-                f"{config.command_frequency_hz:.0f} Hz with the teleoperation servo profile."
+                f"{config.command_frequency_hz:.0f} Hz with synchronized per-joint "
+                "servo arrival pacing."
             )
             print(
                 f"Before paper travel, replay will command one straight calibrated-workspace "
