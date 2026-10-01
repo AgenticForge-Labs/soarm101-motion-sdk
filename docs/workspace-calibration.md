@@ -143,8 +143,8 @@ The saved teaching can be reused with `--replay`. Replay may start from an ordin
 resting pose. Before entering the paper path, software requests one 20 mm calibrated-
 workspace-Z rise by default from the measured current pose. The clearance is preflighted
 for fixed calibrated workspace X/Y, nondecreasing physical Z, sequential IK continuity,
-and effective joint limits. Measured workspace Z must land within 5 mm of the requested
-clearance target or replay refuses paper travel. The traversal then begins at A_UP. The generic
+and effective joint limits. With the default 20 mm command, measured workspace Z must
+increase by at least 10 mm or replay refuses paper travel. The traversal then begins at A_UP. The generic
 model-frame floor is bypassed only for those already-preflighted clearance moves because
 it is known to disagree with the measured table. The later paper segments use
 **target-only coarse workspace validation**. Joint limits, command-step/rate/acceleration,
