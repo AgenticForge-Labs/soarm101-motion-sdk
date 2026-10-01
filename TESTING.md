@@ -75,8 +75,9 @@ negative model Z at a physical paper touch is not sufficient reason to lower the
 workspace floor, and model +Z is not accepted as physical up.
 
 A saved workspace calibration remains `motion_validation_status="unvalidated"`. Review
-its fitted UP direction, table-normal agreement, residuals, and probe-orientation drift
-before designing the next very-small supervised Cartesian direction test.
+its fitted UP direction, affine conditioning, residuals, UP/table-normal skew, and
+probe-orientation drift before designing the next very-small supervised Cartesian
+direction test.
 
 See `docs/workspace-calibration.md` and `docs/validation.md`.
 
