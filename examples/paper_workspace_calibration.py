@@ -169,48 +169,130 @@ def evaluate_measurement_acceptance(
 
 
 def elevated_demo_positions(
-    calibration: WorkspaceCalibration,
     *,
-    width_m: float,
-    height_m: float,
-    elevation_m: float,
+    corners: dict[str, Sample],
+    up_sample: Sample,
 ) -> dict[str, np.ndarray]:
-    """Return elevated perimeter + center targets in model coordinates."""
+    """Translate each measured paper corner by the measured D->UP model displacement.
 
-    physical = {
-        "D_UP": (0.0, height_m, elevation_m),
-        "A_UP": (0.0, 0.0, elevation_m),
-        "B_UP": (width_m, 0.0, elevation_m),
-        "C_UP": (width_m, height_m, elevation_m),
-        "D_UP_RETURN": (0.0, height_m, elevation_m),
-        "CENTER_UP": (width_m / 2.0, height_m / 2.0, elevation_m),
+    This deliberately avoids extrapolating the global affine fit into the powered
+    demonstration. The table corners and D->UP displacement are all direct measurements.
+    """
+
+    required = {"A", "B", "C", "D"}
+    if set(corners) != required:
+        raise ValueError(f"expected corners {sorted(required)}, got {sorted(corners)}")
+
+    up_delta = up_sample.position_m - corners["D"].position_m
+    elevated = {
+        "D_UP": corners["D"].position_m + up_delta,
+        "A_UP": corners["A"].position_m + up_delta,
+        "B_UP": corners["B"].position_m + up_delta,
+        "C_UP": corners["C"].position_m + up_delta,
+        "D_UP_RETURN": corners["D"].position_m + up_delta,
     }
-    return {
-        name: calibration.model_position_from_physical(*point)
-        for name, point in physical.items()
-    }
+    elevated["CENTER_UP"] = np.mean(
+        np.stack(
+            [
+                elevated["A_UP"],
+                elevated["B_UP"],
+                elevated["C_UP"],
+                elevated["D_UP"],
+            ]
+        ),
+        axis=0,
+    )
+    return elevated
+
+
+def _joint_delta(first: dict[str, float], second: dict[str, float]) -> dict[str, float]:
+    return {name: float(second[name] - first[name]) for name in first}
+
+
+def _offset_seed(
+    base: dict[str, float],
+    delta: dict[str, float],
+) -> dict[str, float]:
+    return {name: float(base[name] + delta[name]) for name in base}
+
+
+def _unique_seeds(seeds: list[dict[str, float]]) -> list[dict[str, float]]:
+    unique: list[dict[str, float]] = []
+    fingerprints: set[tuple[tuple[str, float], ...]] = set()
+    for seed in seeds:
+        fingerprint = tuple(sorted((name, round(value, 10)) for name, value in seed.items()))
+        if fingerprint in fingerprints:
+            continue
+        fingerprints.add(fingerprint)
+        unique.append(seed)
+    return unique
 
 
 def preflight_demo_targets(
     arm: SOARM101,
     positions: dict[str, np.ndarray],
     *,
-    seed: dict[str, float],
+    corners: dict[str, Sample],
+    up_sample: Sample,
     rotation: np.ndarray,
 ) -> list[dict[str, object]]:
-    """Solve all demo waypoints read-only, chaining each IK solution as the next seed."""
+    """Solve all demo waypoints read-only using measured-pose-derived seed candidates."""
+
+    up_joint_delta = _joint_delta(corners["D"].joints_rad, up_sample.joints_rad)
+    corner_for_target = {
+        "D_UP": "D",
+        "A_UP": "A",
+        "B_UP": "B",
+        "C_UP": "C",
+        "D_UP_RETURN": "D",
+    }
 
     results: list[dict[str, object]] = []
-    current_seed = dict(seed)
+    previous_solution = dict(up_sample.joints_rad)
+
     for name, position in positions.items():
-        target = Pose(position, rotation)
-        solution = arm.solve_ik(
-            target,
-            seed=current_seed,
-            orientation_mode="position_only",
-        )
-        if not solution.success:
-            raise RuntimeError(f"{name} preflight IK failed: {solution.message}")
+        seed_candidates: list[dict[str, float]] = [previous_solution, dict(up_sample.joints_rad)]
+        corner_name = corner_for_target.get(name)
+        if corner_name is not None:
+            corner = corners[corner_name]
+            seed_candidates.insert(0, _offset_seed(corner.joints_rad, up_joint_delta))
+            seed_candidates.append(dict(corner.joints_rad))
+        else:
+            # CENTER_UP starts from the preceding D_UP_RETURN solution, but the
+            # elevated-corner seeds provide additional branches if needed.
+            for corner in corners.values():
+                seed_candidates.append(_offset_seed(corner.joints_rad, up_joint_delta))
+
+        attempts: list[dict[str, object]] = []
+        successes: list[tuple[float, object, int]] = []
+        for seed_index, seed in enumerate(_unique_seeds(seed_candidates)):
+            target = Pose(position, rotation)
+            solution = arm.solve_ik(
+                target,
+                seed=seed,
+                orientation_mode="position_only",
+            )
+            attempts.append(
+                {
+                    "seed_index": seed_index,
+                    "success": solution.success,
+                    "position_error_mm": float(solution.position_error_m * 1000.0),
+                    "message": solution.message,
+                }
+            )
+            if solution.success:
+                successes.append((float(solution.position_error_m), solution, seed_index))
+
+        if not successes:
+            best = min(attempts, key=lambda item: float(item["position_error_mm"]))
+            raise RuntimeError(
+                f"{name} preflight IK failed for all {len(attempts)} seeds; "
+                f"best position error={float(best['position_error_mm']):.2f} mm; "
+                f"{best['message']}"
+            )
+
+        _, solution, chosen_seed_index = min(successes, key=lambda item: item[0])
+        previous_solution = dict(solution.joints)
         results.append(
             {
                 "name": name,
@@ -219,11 +301,11 @@ def preflight_demo_targets(
                 ],
                 "position_error_mm": float(solution.position_error_m * 1000.0),
                 "joints_rad": dict(solution.joints),
+                "chosen_seed_index": chosen_seed_index,
+                "attempts": attempts,
             }
         )
-        current_seed = dict(solution.joints)
     return results
-
 
 def run_demo_targets(
     arm: SOARM101,
@@ -597,15 +679,18 @@ def main() -> int:
                 )
                 return 0
 
-            width_m = args.width_mm / 1000.0
-            height_m = args.height_mm / 1000.0
-            elevation_m = args.reference_height_mm / 1000.0
+            corner_samples = {sample.name: sample for sample in samples}
             demo_positions = elevated_demo_positions(
-                calibration,
-                width_m=width_m,
-                height_m=height_m,
-                elevation_m=elevation_m,
+                corners=corner_samples,
+                up_sample=up,
             )
+            report["demo_target_strategy"] = (
+                "measured_corner_plus_measured_D_to_UP_translation"
+            )
+            report["measured_up_delta_model_mm"] = [
+                float(value * 1000.0)
+                for value in (up.position_m - d.position_m)
+            ]
             report["demo_targets_model_xyz_mm"] = {
                 name: [float(value * 1000.0) for value in position]
                 for name, position in demo_positions.items()
@@ -618,7 +703,8 @@ def main() -> int:
             preflight = preflight_demo_targets(
                 arm,
                 demo_positions,
-                seed=up.joints_rad,
+                corners=corner_samples,
+                up_sample=up,
                 rotation=up.rotation,
             )
             report["demo_preflight"] = preflight
@@ -639,12 +725,14 @@ def main() -> int:
                 "\nThe arm is currently relaxed at the manually taught UP point above D."
             )
             print(
-                "The powered path will use the calibrated physical workspace, NOT model +Z:"
+                "The powered path will use the measured paper corners plus the measured "
+                "D->UP displacement, NOT model +Z and not affine extrapolation:"
             )
             print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                f"All points are at physical z={args.reference_height_mm:.1f} mm "
-                "above the taught paper plane."
+                f"The D->UP displacement was taught at {args.reference_height_mm:.1f} mm "
+                "physical height and is translated to each measured corner; CENTER_UP is "
+                "the mean of the four elevated measured corners."
             )
             input(
                 "\nPress Enter to enable torque and run the full supervised path, "
