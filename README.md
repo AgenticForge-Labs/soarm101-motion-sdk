@@ -150,9 +150,11 @@ is known to misrepresent this measured table. The elevated traversal no longer f
 straight Cartesian IK between endpoints: hardware showed an A_UP->B_UP intermediate pose
 that missed the unchanged 0.5 mm IK tolerance even though both endpoints solved exactly.
 Instead, replay uses those preflighted endpoint joint solutions with smooth joint-space
-motion and the teleoperation servo profile. Before each move, the complete joint-space
-locus is FK-sampled and rejected if calibrated workspace Z would dip more than 5 mm below
-the lower endpoint. The paper workflow uses a 20 Hz host command cadence; the SDK-wide
+motion. On calibrated Feetech hardware, each 20 Hz joint sample derives proportional
+per-joint servo speeds from the planned encoder-tick increments so all joints target the
+next sample on a common arrival horizon instead of racing at unrestricted speed. Before
+each move, the complete joint-space locus is FK-sampled and rejected if calibrated
+workspace Z would dip more than 5 mm below the lower endpoint. The paper workflow uses a 20 Hz host command cadence; the SDK-wide
 planned-motion default remains 50 Hz. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper validation, the startup clearance remains Cartesian while elevated
 endpoint traversal is joint-space.

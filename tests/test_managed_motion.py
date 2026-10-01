@@ -275,3 +275,79 @@ def test_cartesian_execution_uses_per_joint_synchronized_servo_speeds() -> None:
         "wrist_roll",
     } for speed in mapped)
     assert all(all(1 <= value <= 3400 for value in speed.values()) for speed in mapped)
+
+
+def test_joint_move_can_use_per_joint_synchronized_servo_speeds() -> None:
+    from types import SimpleNamespace
+
+    class FakeMotor:
+        radians_limits = (-3.0, 3.0)
+
+        @staticmethod
+        def radians_to_raw(value):
+            return int(round(2048 + float(value) * 1000.0))
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: FakeMotor()
+                for name in (
+                    "shoulder_pan",
+                    "shoulder_lift",
+                    "elbow_flex",
+                    "wrist_flex",
+                    "wrist_roll",
+                )
+            }
+        )
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.08
+        target["shoulder_lift"] += 0.04
+        arm.move_joints(
+            target,
+            speed=0.20,
+            acceleration=0.60,
+            servo_acceleration_raw=254,
+            synchronize_servo_arrival=True,
+        )
+
+    mapped = [speed for speed, _ in calls if isinstance(speed, dict)]
+    assert mapped
+    assert all(
+        set(speed)
+        == {
+            "shoulder_pan",
+            "shoulder_lift",
+            "elbow_flex",
+            "wrist_flex",
+            "wrist_roll",
+        }
+        for speed in mapped
+    )
+    assert all(all(1 <= value <= 3400 for value in speed.values()) for speed in mapped)
+
+
+def test_joint_move_rejects_fixed_and_synchronized_servo_speed_together() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.02
+        with pytest.raises(InvalidCommandError, match="cannot be combined"):
+            arm.move_joints(
+                target,
+                servo_speed_raw=0,
+                synchronize_servo_arrival=True,
+            )

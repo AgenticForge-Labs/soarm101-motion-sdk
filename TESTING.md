@@ -116,8 +116,10 @@ motion. This directly tests whether the saved workspace mapping can level physic
 without reteaching additional elevated points. Hardware then showed that the straight
 A_UP->B_UP Cartesian segment contains an intermediate pose that cannot satisfy the
 unchanged 0.5 mm IK tolerance despite valid endpoints. The elevated traversal therefore
-reuses the preflighted endpoint joint solutions with smooth joint-space interpolation and
-the teleoperation servo profile. Before each powered move, dense FK sampling must show the
+reuses the preflighted endpoint joint solutions with smooth joint-space interpolation.
+On calibrated hardware, joint replay enables synchronized servo arrival so each 20 Hz
+sample uses per-joint Feetech speed limits derived from encoder-tick distance and the
+shared command interval. Before each powered move, dense FK sampling must show the
 joint-space locus stays within 5 mm of the lower endpoint's calibrated workspace Z.
 Joint limits, command-step/rate/acceleration, following error, motor faults, effort/contact
 guards, communication checks, and motion timeout remain active.
