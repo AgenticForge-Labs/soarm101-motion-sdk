@@ -132,8 +132,11 @@ a local paper/workspace mapping under `~/.config/soarm101/workspace/`. The manua
 measured UP point is required because SDK/model +Z is **not assumed to be physical up**.
 Wrist/tool rotation while manually reaching the UP point is expected to change
 naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
-not gate workspace-measurement acceptance. The historical `paper_four_corner_hover_demo.py` filename remains only
-as a compatibility wrapper and no longer performs a hover.
+not gate workspace-measurement acceptance. After an accepted measurement, the default workflow preflights and then, with one
+explicit confirmation, traverses the elevated paper perimeter and finishes at its center
+using calibrated physical-paper coordinates and position-only IK. `--measure-only`
+skips powered motion. The historical `paper_four_corner_hover_demo.py` filename remains
+only as a compatibility wrapper.
 
 Hardware testing found a case where a numerically valid +Z hover moved laterally and
 contacted the table, so paper-derived normals no longer authorize powered Cartesian
