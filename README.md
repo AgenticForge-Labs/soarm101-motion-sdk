@@ -136,7 +136,9 @@ not gate workspace-measurement acceptance. The paper workflow physically teaches
 uses the saved physical-workspace transform to level every paper endpoint to that same
 workspace Z while preserving each endpoint's calibrated workspace X/Y; no extra elevated
 teaching is required. Before the first long move from an ordinary resting pose, replay
-preflights and performs a small workspace-Z clearance lift (10 mm by default). The
+preflights and performs a small workspace-Z clearance lift (10 mm by default). That
+clearance path is validated in the calibrated physical workspace rather than against the
+generic model-frame Z floor, which is known to misrepresent this measured table. The
 segments still run through `move_linear()` with position-only IK, using command-rate
 sequential IK on the minimum-jerk Cartesian path. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper-linear validation, each segment uses destination-only coarse workspace

@@ -69,9 +69,13 @@ changes require development discipline; robot use requires conservative hardware
     previous reachable FK endpoints may be used only as X/Y/IK-branch anchors; their
     inferred heights are not execution targets. Read-only IK preflight must accept every
     corrected target before powered replay. Replay also performs a small preflighted
-    workspace-Z clearance lift before the first long move from a low/resting pose.
-    Broader autonomous Cartesian use remains unvalidated until hardware evidence is
-    reviewed.
+    workspace-Z clearance lift before the first long move from a low/resting pose. That
+    startup lift is validated in calibrated workspace coordinates (fixed X/Y, nondecreasing
+    physical Z, bounded IK continuity and joint limits); the generic model-frame Z floor is
+    not authoritative for this one clearance move because it is known to disagree with the
+    measured table frame. All runtime joint/dynamic/following-error/effort/fault/timing
+    guards remain active. Broader autonomous Cartesian use remains unvalidated until
+    hardware evidence is reviewed.
 12. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
     agents; task-solving strategies, observe/action loops, model/provider instructions, and
     benchmark policy belong outside the SDK-facing CLI reference.

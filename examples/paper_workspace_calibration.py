@@ -44,6 +44,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
+from soarm101_motion.kinematics import IKOptions
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
 
@@ -296,6 +297,143 @@ def workspace_z_offset_target(
         float(physical_target[2]),
     )
     return model_target, physical_start, physical_target
+
+
+def preflight_calibrated_workspace_z_lift(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    start_pose: Pose,
+    start_joints: dict[str, float],
+    target_workspace_z_m: float,
+) -> dict[str, object]:
+    """Preflight a pure calibrated-workspace-Z lift without the generic model-Z floor.
+
+    The generic coarse workspace envelope is expressed in model coordinates and is known
+    not to represent the measured table frame for this paper validation. For the initial
+    clearance move, validate the intended path in the calibrated physical workspace
+    instead: X/Y must stay fixed, workspace Z must not descend, sequential IK must remain
+    continuous, and every solution must remain inside the arm's effective joint limits.
+
+    The actual move is still executed through move_linear(), which retains its normal
+    joint-step, rate/acceleration, following-error, effort, fault, communication, and
+    timing guards.
+    """
+
+    start_physical = calibration.physical_position_from_model(start_pose.position)
+    target_z = float(target_workspace_z_m)
+    if target_z <= float(start_physical[2]):
+        raise ValueError("startup lift target must be above the current workspace Z")
+
+    distance = target_z - float(start_physical[2])
+    segments = max(1, int(np.ceil(distance / PAPER_CARTESIAN_WAYPOINT_SPACING_M)))
+    limits = arm.get_joint_limits()
+    seed = dict(start_joints)
+    max_position_error_m = 0.0
+    max_xy_error_m = 0.0
+    previous_z = float(start_physical[2])
+    z_tolerance_m = max(0.001, 2.0 * arm.config.cartesian_position_tolerance_m)
+    xy_tolerance_m = z_tolerance_m
+    final_model_position = start_pose.position.copy()
+
+    for index, fraction in enumerate(np.linspace(0.0, 1.0, segments + 1)[1:], start=1):
+        workspace_z = float(start_physical[2] + distance * fraction)
+        model_position = calibration.model_position_from_physical(
+            float(start_physical[0]),
+            float(start_physical[1]),
+            workspace_z,
+        )
+        solution = arm.ik.solve(
+            Pose(model_position, start_pose.rotation),
+            seed=seed,
+            tcp=arm.active_tcp,
+            options=IKOptions(
+                orientation_mode="position_only",
+                position_tolerance_m=arm.config.cartesian_position_tolerance_m,
+                multi_start=index == 1,
+            ),
+        )
+        if not solution.success:
+            raise RuntimeError(
+                "startup workspace-Z lift IK failed; "
+                f"workspace Z={workspace_z * 1000.0:.1f} mm; "
+                f"position error={solution.position_error_m * 1000.0:.2f} mm; "
+                f"{solution.message}"
+            )
+
+        candidate = {name: float(value) for name, value in solution.joints.items()}
+        for joint_name, value in candidate.items():
+            lower, upper = limits[joint_name]
+            if not lower <= value <= upper:
+                raise RuntimeError(
+                    f"startup workspace-Z lift {joint_name}={value:.4f} rad is outside "
+                    f"{lower:.4f}..{upper:.4f}"
+                )
+        jump = max(abs(candidate[name] - seed[name]) for name in candidate)
+        if jump > arm.config.max_ik_waypoint_jump_radians:
+            raise RuntimeError(
+                f"startup workspace-Z lift IK discontinuity {jump:.3f} rad exceeds "
+                f"{arm.config.max_ik_waypoint_jump_radians:.3f} rad"
+            )
+
+        actual_pose = arm.model.forward(candidate, tcp=arm.active_tcp)
+        actual_physical = calibration.physical_position_from_model(actual_pose.position)
+        xy_error = float(np.linalg.norm(actual_physical[:2] - start_physical[:2]))
+        max_xy_error_m = max(max_xy_error_m, xy_error)
+        max_position_error_m = max(max_position_error_m, float(solution.position_error_m))
+        if xy_error > xy_tolerance_m:
+            raise RuntimeError(
+                "startup workspace-Z lift drifts laterally in calibrated workspace by "
+                f"{xy_error * 1000.0:.2f} mm"
+            )
+        if float(actual_physical[2]) < previous_z - z_tolerance_m:
+            raise RuntimeError(
+                "startup workspace-Z lift would descend in calibrated workspace "
+                f"({previous_z * 1000.0:.1f} -> {actual_physical[2] * 1000.0:.1f} mm)"
+            )
+
+        previous_z = float(actual_physical[2])
+        seed = candidate
+        final_model_position = model_position
+
+    if abs(previous_z - target_z) > z_tolerance_m:
+        raise RuntimeError(
+            "startup workspace-Z lift final calibrated height does not match target: "
+            f"{previous_z * 1000.0:.1f} vs {target_z * 1000.0:.1f} mm"
+        )
+
+    return {
+        "start_workspace_z_mm": float(start_physical[2] * 1000.0),
+        "target_workspace_z_mm": float(target_z * 1000.0),
+        "target_model_xyz_mm": [
+            float(value * 1000.0) for value in final_model_position
+        ],
+        "sample_count": segments + 1,
+        "max_position_error_mm": float(max_position_error_m * 1000.0),
+        "max_workspace_xy_drift_mm": float(max_xy_error_m * 1000.0),
+        "generic_model_workspace_floor_bypassed": True,
+    }
+
+
+def execute_preflighted_workspace_z_lift(
+    arm: SOARM101,
+    *,
+    target_model_position_m: np.ndarray,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+):
+    """Execute only a startup lift already validated in calibrated workspace coordinates."""
+
+    return arm.move_linear(
+        Pose(target_model_position_m, rotation),
+        orientation_mode="position_only",
+        speed=min(speed_mm_s, 10.0) / 1000.0,
+        acceleration=acceleration_mm_s2 / 1000.0,
+        # The calibrated-workspace preflight is authoritative for this one clearance move.
+        # The generic model-Z floor is intentionally not authoritative here.
+        workspace_check="off",
+    )
 
 
 def preflight_demo_targets(
@@ -656,32 +794,17 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             startup_position = current_pose.position.copy()
             startup_preflight: dict[str, object] | None = None
             if startup_needed:
-                startup_position = saved.model_position_from_physical(
-                    float(current_physical[0]),
-                    float(current_physical[1]),
-                    startup_target_z,
+                startup_preflight = preflight_calibrated_workspace_z_lift(
+                    arm,
+                    saved,
+                    start_pose=current_pose,
+                    start_joints=current_joints,
+                    target_workspace_z_m=startup_target_z,
                 )
-                startup_solution = arm.solve_ik(
-                    Pose(startup_position, current_pose.rotation),
-                    seed=current_joints,
-                    orientation_mode="position_only",
-                )
-                startup_preflight = {
-                    "start_workspace_z_mm": float(current_physical[2] * 1000.0),
-                    "target_workspace_z_mm": float(startup_target_z * 1000.0),
-                    "target_model_xyz_mm": [
-                        float(value * 1000.0) for value in startup_position
-                    ],
-                    "success": bool(startup_solution.success),
-                    "position_error_mm": float(startup_solution.position_error_m * 1000.0),
-                    "message": startup_solution.message,
-                }
-                if not startup_solution.success:
-                    raise RuntimeError(
-                        "startup workspace-Z lift preflight failed; "
-                        f"position error={startup_solution.position_error_m * 1000.0:.2f} mm; "
-                        f"{startup_solution.message}"
-                    )
+                startup_position = np.asarray(
+                    startup_preflight["target_model_xyz_mm"],
+                    dtype=float,
+                ) / 1000.0
 
             print("\nRead-only endpoint preflight while holding the current pose...")
             if startup_needed:
@@ -690,7 +813,8 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     f"  START_LIFT: workspace Z "
                     f"{startup_preflight['start_workspace_z_mm']:.1f} -> "
                     f"{startup_preflight['target_workspace_z_mm']:.1f} mm; "
-                    f"IK error {startup_preflight['position_error_mm']:.2f} mm"
+                    f"max IK error {startup_preflight['max_position_error_mm']:.2f} mm; "
+                    f"max XY drift {startup_preflight['max_workspace_xy_drift_mm']:.2f} mm"
                 )
             else:
                 print(
@@ -747,12 +871,12 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                         f"\nLifting first in workspace Z to "
                         f"{startup_target_z * 1000.0:.1f} mm..."
                     )
-                    result = arm.move_linear(
-                        Pose(startup_position, current_pose.rotation),
-                        orientation_mode="position_only",
-                        speed=min(args.speed_mm_s, 10.0) / 1000.0,
-                        acceleration=args.acceleration_mm_s2 / 1000.0,
-                        workspace_check="target_only",
+                    result = execute_preflighted_workspace_z_lift(
+                        arm,
+                        target_model_position_m=startup_position,
+                        rotation=current_pose.rotation,
+                        speed_mm_s=args.speed_mm_s,
+                        acceleration_mm_s2=args.acceleration_mm_s2,
                     )
                     if not result.accepted or not result.completed:
                         raise RuntimeError(f"startup lift did not complete: {result}")
