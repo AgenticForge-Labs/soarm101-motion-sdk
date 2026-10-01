@@ -36,6 +36,20 @@ you want relative teleoperation without moving either into alignment. The follow
 enables torque by latching its own current measured pose before streaming begins. Starting
 live teleoperation releases a parked leader so it is back-drivable again.
 
+## Servo hold authority
+
+The recommended STS3215 position P coefficient is 32, matching the motor factory default.
+A lower P gain can leave a gravity/static-friction deadband where a joint approaches a
+target but cannot settle within the SDK tolerance. Do not compensate for visible sag or
+several-degree final error merely by extending motion timeouts.
+
+The explicit `soarm101 configure` command applies recommended servo settings with torque
+disabled; normal connections remain configuration-neutral.
+
+For supervised paper Cartesian validation, a motion exception transitions to STOP/HOLD
+and waits for the operator before relaxing, so a failed gravity-loaded move does not
+immediately drop the arm.
+
 ## Runtime safeguards
 
 - Normal connection and read-only diagnosis do not rewrite motor configuration.
