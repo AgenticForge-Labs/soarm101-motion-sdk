@@ -94,15 +94,19 @@ The diagnostic report is also written in the working directory.
 
 ## Measurement acceptance gate
 
-The workflow only writes the authoritative workspace calibration when:
+The workflow writes the measured workspace calibration when:
 
 - the four taught corners form a sufficiently consistent plane;
 - the full physical-to-model affine fit has a sufficiently small residual;
-- the 3-D linear mapping is well-conditioned enough to invert reliably;
-- D -> UP tool-orientation drift is small enough that the fixed-finger probe approximation
-  is not obviously corrupted by a changing TCP offset; and
+- the 3-D linear mapping is well-conditioned enough to invert reliably; and
 - the model displacement produced by the measured UP height has a plausible scale rather
   than collapsing toward zero or expanding implausibly.
+
+D -> UP tool-orientation drift is recorded as a **quality warning**, not an acceptance
+failure. Moving the relaxed arm by hand over a useful vertical distance can naturally
+change wrist orientation. Because the fixed fingertip is offset only modestly from the
+modeled TCP, that drift may add a few millimeters of correspondence error, but it should
+not discard an otherwise informative workspace measurement.
 
 The angle between the mapped physical-UP vector and the Euclidean normal of the
 model-space paper plane is retained as a diagnostic, **not** as an acceptance condition.
