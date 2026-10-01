@@ -113,12 +113,13 @@ then inverse-maps each endpoint into physical workspace coordinates, preserves X
 workspace Z to the measured reference height, and maps that corrected coordinate back
 into model space. Read-only IK preflight must accept every corrected endpoint before
 motion. This directly tests whether the saved workspace mapping can level physical height
-without reteaching additional elevated points. The segments are still executed with
-`move_linear()` and position-only IK.
-
-For this supervised paper test, coarse workspace geometry is deliberately target-only on
-each segment. The destination must pass the coarse workspace check, while joint limits,
-IK continuity, command-step/rate/acceleration, following error, motor faults, effort/contact
+without reteaching additional elevated points. Hardware then showed that the straight
+A_UP->B_UP Cartesian segment contains an intermediate pose that cannot satisfy the
+unchanged 0.5 mm IK tolerance despite valid endpoints. The elevated traversal therefore
+reuses the preflighted endpoint joint solutions with smooth joint-space interpolation and
+the teleoperation servo profile. Before each powered move, dense FK sampling must show the
+joint-space locus stays within 5 mm of the lower endpoint's calibrated workspace Z.
+Joint limits, command-step/rate/acceleration, following error, motor faults, effort/contact
 guards, communication checks, and motion timeout remain active.
 
 After a teaching run, test replay without touching the paper again:
