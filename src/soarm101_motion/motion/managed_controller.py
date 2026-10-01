@@ -10,6 +10,7 @@ import numpy as np
 
 from soarm101_motion.constants import (
     TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.exceptions import InvalidCommandError
 from soarm101_motion.kinematics import OrientationMode
