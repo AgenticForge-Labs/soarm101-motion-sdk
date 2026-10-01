@@ -91,11 +91,14 @@ its own persistent connection for live controls; it must not launch CLI subproce
   one calibrated-Z startup clearance move, then constant-height Cartesian
   `move_linear()` replay A_UP→B_UP→C_UP→D_UP→CENTER_UP at 20 Hz. Verify all targets
   share the trained workspace Z and compare physical smoothness directly with teleoperation.
-- [ ] Validate the teleop-style Cartesian servo tracking profile on hardware
-  (speed_raw=0, acceleration_raw=254) together with Cartesian-constrained smooth-seed IK
-  reprojection. Confirm A_UP->B_UP preplans at the unchanged 0.5 mm tolerance and compare
-  visible shake with the #72/#73 runs; inspect planned joint derivatives, encoder
-  quantization, following error, and cycle timing if residual shake remains.
+- [ ] Validate the corrected teleop-style Cartesian servo tracking profile on hardware
+  (speed_raw=0, acceleration_raw=254) after discovering that calibrated `move_linear()`
+  was still applying the superseded per-sample synchronized speed caps. Confirm the severe
+  shake is reduced, and confirm A_UP->B_UP can use the endpoint-preflight solution as a
+  reverse-planning boundary when forward sequential IK hits the observed ~0.8 mm numerical
+  pocket. The 0.5 mm hard tolerance remains unchanged. If residual shake remains, inspect
+  planned joint derivatives, encoder-quantized command deltas, following error, and cycle
+  timing before changing motor tuning.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
