@@ -98,8 +98,12 @@ measured reference height. The corrected model-space targets must all pass read-
 preflight. No additional elevated teaching is required. The resulting endpoint joint
 solutions are reused for powered traversal. Before each endpoint move, dense FK sampling
 of the smooth joint interpolation must keep calibrated workspace Z within 5 mm of the
-lower endpoint. This avoids forcing the known-infeasible straight A_UP->B_UP Cartesian
-segment while preserving the endpoint geometry.
+lower endpoint. On calibrated Feetech hardware, each 20 Hz joint sample also uses
+synchronized per-joint arrival pacing derived from encoder-tick distance and the common
+command interval; the host joint trajectory and its speed/acceleration limits remain
+authoritative. This avoids forcing the known-infeasible straight A_UP->B_UP Cartesian
+segment while preserving endpoint geometry and reducing servo-side race/catch-up between
+joints.
 
 `--replay` reuses the saved A/B/C/D plus D_UP teaching without touching the arm manually again and can begin
 from an ordinary resting pose. Before entering the paper path, replay requests one 20 mm
