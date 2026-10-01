@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed CENTER_UP geometry in the supervised paper replay. The previous target came
+  from averaging the four corner joint states and applying FK, which is not the physical
+  midpoint because FK is nonlinear. CENTER_UP is now generated directly from the calibrated
+  paper frame at (physical_width/2, physical_height/2, reference_height); the averaged-joint
+  pose is retained only as an IK seed.
+
 - Startup clearance acceptance is now based on measured rise rather than Cartesian
   endpoint shortfall. Replay still commands 20 mm by default, but requires at least
   10 mm measured workspace-Z increase before paper travel. Hardware evidence motivating
