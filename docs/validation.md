@@ -87,63 +87,52 @@ when quality gates pass, under:
 ```
 
 After the final UP sample, the workflow counts down and enables torque to hold that
-taught pose. It then preflights the elevated Cartesian endpoints and asks once for
-confirmation before motion. Replay first makes one calibrated-Z clearance lift, then the
-paper path is `A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
+taught pose. It preflights the leveled A_UP/B_UP/C_UP/D_UP/CENTER_UP endpoints and asks
+once for confirmation before motion. Replay first makes one separately preflighted
+calibrated-workspace-Z clearance move, then executes
+`A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
 
-The operator teaches A/B/C/D and one physical D_UP reference. Replay first reconstructs
-the previously known-reachable endpoint branch, inverse-maps each endpoint into calibrated
-workspace coordinates, preserves workspace X/Y, and sets workspace Z to the single
-measured reference height. The corrected model-space targets must all pass read-only IK
-preflight. No additional elevated teaching is required. The resulting endpoint joint
-solutions are reused for powered traversal. Before each endpoint move, dense FK sampling
-of the smooth joint interpolation must keep calibrated workspace Z within 5 mm of the
-lower endpoint. On calibrated Feetech hardware, each 20 Hz joint sample also uses
-synchronized per-joint arrival pacing derived from encoder-tick distance and the common
-command interval; the host joint trajectory and its speed/acceleration limits remain
-authoritative. This avoids forcing the known-infeasible straight A_UP->B_UP Cartesian
-segment while preserving endpoint geometry and reducing servo-side race/catch-up between
-joints.
+The single D_UP measurement defines the replay height. For each paper endpoint, software
+keeps its calibrated workspace X/Y and replaces workspace Z with that same measured
+reference height before mapping the point back into model coordinates. CENTER_UP is the
+true calibrated paper midpoint. Because the workspace mapping is affine, straight
+model-space interpolation between two equal-workspace-Z leveled endpoints maps back to a
+straight constant-height line in the calibrated workspace.
 
-`--replay` reuses the saved A/B/C/D plus D_UP teaching without touching the arm manually again and can begin
-from an ordinary resting pose. Before entering the paper path, replay requests one 20 mm
-calibrated-workspace-Z clearance rise by default. That path is preflighted at <=1 mm
-spacing; X/Y must remain fixed in the calibrated model, physical Z must not descend,
-sequential IK must remain continuous, and all solved joints must remain inside effective
-limits. With the default 20 mm command, measured workspace Z must rise by at least 10 mm
-before motion continues to A_UP. This separates the safety purpose of the clearance from
-servo endpoint accuracy. Because the generic model-frame floor is known to
-disagree with the measured table, only that preflighted startup lift executes with the
-coarse workspace check disabled. Elevated joint-space traversal first validates the full
-locus in calibrated workspace coordinates and then executes with
-`workspace_check="target_only"` in the generic model envelope. This retains destination
-sanity checking while avoiding a false failure on a measured starting pose below model
-Z=0. The
-dynamic/joint/hardware safety stack remains active.
-Use `--measure-only` to retain the non-moving behavior.
+The elevated segments are executed with the SDK's Cartesian `move_linear()` primitive and
+position-only IK at the paper workflow's 20 Hz host cadence. Endpoint IK is read-only
+preflighted before powered motion; each `move_linear()` segment still plans and validates
+its full sequential-IK trajectory before issuing motor commands. The generic model
+workspace is used only as a destination sanity check for the paper segments because its
+table floor is known to disagree with the measured workspace. Joint limits, command
+step/rate/acceleration, following error, motor faults, effort/contact guards, communication
+checks, and motion timeout remain active.
+
+`--replay` reuses the saved A/B/C/D plus D_UP teaching without touching the paper again
+and can begin from an ordinary resting pose. Use `--measure-only` to retain the non-moving
+behavior.
 
 See [Workspace calibration](workspace-calibration.md) for the persisted contract,
 quality gates, and provenance.
 
 ## Linear-motion smoothness
 
-Live teleoperation is an important control comparison because it uses the same motors and
-position loop without Cartesian IK. Teleoperation sends host-shaped joint samples with
-Feetech speed_raw=0 (unrestricted) and acceleration_raw=254. Cartesian
-`move_linear()` retains the responsive acceleration setting but now gives calibrated
-Feetech joints proportional per-sample speed limits so synchronized writes target a common
-arrival horizon. The SDK-wide planned-motion default remains 50 Hz, while the supervised
-paper validation uses a 20 Hz host command cadence to match the known-smooth teleoperation
-timing on this hardware.
+Live teleoperation is the control baseline because it uses the same motors and position
+loop without Cartesian IK. Teleoperation streams host-limited joint targets at 20 Hz with
+Feetech `speed_raw=0` (maximum tracking authority) and
+`acceleration_raw=254`.
 
-The paper workflow retains a 1 mm Cartesian planning-density bound. Every emitted command
-sample is a direct sequential-IK solution of a cosine-ramped trajectory with constant-speed
-cruise when distance permits. Position-only paths ignore target orientation for timing. If a
-single-start intermediate solve misses the unchanged 0.5 mm tolerance, that sample is
-retried with multi-start before the path fails. If teleoperation remains smooth but linear
-motion remains shaky at the same 20 Hz cadence, inspect encoder-quantized command deltas,
-measured following error, and the planned joint derivatives before changing motor PID or
-power settings.
+Planned Cartesian `move_linear()` now uses the same servo-side tracking profile. The host
+trajectory remains authoritative for Cartesian and joint speed/acceleration; the servo no
+longer receives an additional tiny per-sample speed cap. Hardware testing showed that the
+old synchronized-arrival speed throttling could make gravity-loaded Cartesian motion visibly
+stick-slip/shake even though teleoperation on the same arm was smooth.
+
+The paper workflow also uses a 20 Hz host cadence and a 1 mm Cartesian planning-density
+bound. Every emitted command sample is a sequential-IK solution of the Cartesian trajectory.
+If teleoperation is smooth but `move_linear()` remains shaky with the same servo profile
+and cadence, the next comparison should be the planned joint derivatives and measured
+following error; that would isolate IK/Jacobian/quantization effects from servo tracking.
 
 ## Current hardware finding
 

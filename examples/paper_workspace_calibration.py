@@ -5,25 +5,24 @@ known physical height above corner D. Those five physical correspondences are us
 fit a local affine map from paper/workspace coordinates into the SDK kinematic model.
 
 After the final UP teaching sample, the script counts down and enables torque so the arm
-holds that exact pose instead of sagging. For replay, a known-reachable FK construction is
-used only to identify each endpoint's calibrated workspace X/Y and preferred IK branch.
-The software then replaces each endpoint's workspace Z with the single measured reference
-height and maps that corrected physical coordinate back into model space. Every corrected
-target must pass read-only IK preflight before motion.
+holds that exact pose instead of sagging. The saved workspace calibration then software-
+levels A/B/C/D/center to the single measured physical workspace Z. Reachable FK
+constructions are retained only as X/Y and IK-branch anchors; their inferred heights are
+not execution targets.
 
-A saved teaching can also be replayed later from any ordinary resting pose with --replay.
-Before any lateral move, replay preflights and performs one straight 20 mm clearance
-lift in calibrated workspace Z by default. Measured workspace Z must land within the
-configured tolerance of that requested rise before lateral travel is allowed. Replay
-then enters the leveled paper path at A_UP.
-For this fixed supervised paper sequence, the one-shot startup clearance remains a
-Cartesian calibrated-Z move. The elevated A/B/C/D/center traversal then uses the already
-preflighted endpoint joint solutions with smooth joint-space interpolation. Each 20 Hz
-joint sample uses calibrated per-joint servo speed pacing so all joints target the next
-sample on the same arrival horizon rather than racing at unrestricted speed. Before each
-powered joint move, the complete joint-space locus is FK-sampled and rejected if calibrated workspace Z would dip more than
-5 mm below the lower endpoint. The normal joint, dynamic, following-error, fault, effort,
-and timing guards remain active.
+A saved teaching can be replayed later from an ordinary resting pose with --replay.
+Replay first performs the separately preflighted calibrated-workspace-Z startup clearance.
+The elevated paper path then runs A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP using the
+SDK's Cartesian move_linear() primitive at the paper workflow's known-smooth 20 Hz host
+cadence. The model-space endpoints come from the calibrated workspace transform, so a
+linear interpolation between equal-workspace-Z endpoints remains a constant-height line in
+that calibrated workspace.
+
+Cartesian execution uses the same responsive STS3215 servo-side tracking profile as live
+teleoperation: the host trajectory owns velocity/acceleration shaping while servo
+speed_raw=0 and acceleration_raw=254 provide enough authority to follow streamed setpoints.
+The normal joint, IK, dynamic, following-error, fault, effort, endpoint-workspace,
+communication, settle, and timing guards remain active.
 
 The resulting calibration records:
 - where the taught table plane lies in model coordinates;
@@ -50,10 +49,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import (
-    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
-    TELEOP_SERVO_ACCELERATION_RAW,
-)
+from soarm101_motion.constants import DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
 from soarm101_motion.kinematics import IKOptions
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
@@ -590,103 +586,38 @@ def preflight_demo_targets(
     return results
 
 
-def preflight_joint_space_workspace_path(
-    arm: SOARM101,
-    calibration: WorkspaceCalibration,
-    *,
-    start_joints: dict[str, float],
-    target_joints: dict[str, float],
-    minimum_z_margin_m: float = 0.005,
-) -> dict[str, object]:
-    """Validate the geometric locus of a smooth joint interpolation before motion."""
-
-    max_delta = max(
-        abs(float(target_joints[name]) - float(start_joints[name]))
-        for name in target_joints
-    )
-    sample_count = max(21, int(np.ceil(max_delta / np.deg2rad(1.0))) + 1)
-    start_pose = arm.model.forward(start_joints, tcp=arm.active_tcp)
-    target_pose = arm.model.forward(target_joints, tcp=arm.active_tcp)
-    start_physical = calibration.physical_position_from_model(start_pose.position)
-    target_physical = calibration.physical_position_from_model(target_pose.position)
-    minimum_allowed_z = (
-        min(float(start_physical[2]), float(target_physical[2]))
-        - float(minimum_z_margin_m)
-    )
-
-    minimum_z = float("inf")
-    maximum_chord_deviation = 0.0
-    chord_xy = target_physical[:2] - start_physical[:2]
-    for alpha in np.linspace(0.0, 1.0, sample_count):
-        progress = 10.0 * alpha**3 - 15.0 * alpha**4 + 6.0 * alpha**5
-        joints = {
-            name: float(start_joints[name])
-            + (float(target_joints[name]) - float(start_joints[name])) * progress
-            for name in target_joints
-        }
-        pose = arm.model.forward(joints, tcp=arm.active_tcp)
-        physical = calibration.physical_position_from_model(pose.position)
-        minimum_z = min(minimum_z, float(physical[2]))
-        chord_point = start_physical[:2] + chord_xy * progress
-        maximum_chord_deviation = max(
-            maximum_chord_deviation,
-            float(np.linalg.norm(physical[:2] - chord_point)),
-        )
-
-    if minimum_z < minimum_allowed_z:
-        raise RuntimeError(
-            "joint-space paper path would dip too low in calibrated workspace: "
-            f"minimum Z={minimum_z * 1000.0:.1f} mm, "
-            f"allowed>={minimum_allowed_z * 1000.0:.1f} mm"
-        )
-    return {
-        "start_workspace_z_mm": float(start_physical[2] * 1000.0),
-        "target_workspace_z_mm": float(target_physical[2] * 1000.0),
-        "minimum_workspace_z_mm": float(minimum_z * 1000.0),
-        "maximum_xy_chord_deviation_mm": float(maximum_chord_deviation * 1000.0),
-        "sample_count": sample_count,
-    }
-
-
 def run_demo_targets(
     arm: SOARM101,
     calibration: WorkspaceCalibration,
     positions: dict[str, np.ndarray],
     *,
-    endpoint_preflight: list[dict[str, object]],
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
     report_moves: list[dict[str, object]],
 ) -> None:
-    solutions = {
-        str(item["name"]): {
-            str(joint): float(value)
-            for joint, value in dict(item["joints_rad"]).items()
-        }
-        for item in endpoint_preflight
-    }
+    """Execute the leveled paper path with the SDK's Cartesian linear primitive."""
 
     for name, position in positions.items():
-        target_joints = solutions[name]
-        start_joints = dict(arm.get_joint_positions().positions)
-        path_check = preflight_joint_space_workspace_path(
-            arm,
-            calibration,
-            start_joints=start_joints,
-            target_joints=target_joints,
-        )
+        start_pose = arm.get_position()
+        start_physical = calibration.physical_position_from_model(start_pose.position)
+        target_physical = calibration.physical_position_from_model(position)
         print(
-            f"\nMoving to {name} with smooth joint-space replay... "
-            f"workspace Z min {path_check['minimum_workspace_z_mm']:.1f} mm"
+            f"\nMoving linearly to {name}... "
+            f"workspace Z {start_physical[2] * 1000.0:.1f} -> "
+            f"{target_physical[2] * 1000.0:.1f} mm"
         )
-        result = arm.move_joints(
-            target_joints,
-            speed=arm.config.default_joint_speed,
-            acceleration=arm.config.default_joint_acceleration,
-            servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
-            synchronize_servo_arrival=True,
+        result = arm.move_linear(
+            Pose(position, rotation),
+            orientation_mode="position_only",
+            speed=speed_mm_s / 1000.0,
+            acceleration=acceleration_mm_s2 / 1000.0,
+            # The measured calibrated workspace is authoritative for this experiment.
+            # Keep the generic coarse model as a destination sanity check only.
             workspace_check="target_only",
         )
         if not result.accepted or not result.completed:
-            raise RuntimeError(f"{name} joint motion did not complete: {result}")
+            raise RuntimeError(f"{name} Cartesian linear motion did not complete: {result}")
 
         actual = arm.get_position()
         actual_physical = calibration.physical_position_from_model(actual.position)
@@ -700,16 +631,22 @@ def run_demo_targets(
         report_moves.append(
             {
                 "name": name,
-                "mode": "joint_space_endpoint_replay",
-                "synchronized_servo_arrival": True,
+                "mode": "cartesian_move_linear",
+                "servo_tracking_profile": "teleop_authority",
                 "generic_workspace_check": "target_only",
+                "requested_start_workspace_xyz_mm": [
+                    float(value * 1000.0) for value in start_physical
+                ],
+                "target_workspace_xyz_mm": [
+                    float(value * 1000.0) for value in target_physical
+                ],
                 "target_model_xyz_mm": [
                     float(value * 1000.0) for value in position
                 ],
-                "target_joints_rad": target_joints,
-                "joint_path_preflight": path_check,
                 "actual_model_xyz_mm": actual_xyz_mm,
-                "actual_workspace_z_mm": float(actual_physical[2] * 1000.0),
+                "actual_workspace_xyz_mm": [
+                    float(value * 1000.0) for value in actual_physical
+                ],
             }
         )
 
@@ -949,10 +886,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 "endpoint's calibrated workspace X/Y."
             )
             print(
-                "Startup clearance uses Cartesian move_linear(); elevated paper traversal "
-                "uses preflighted smooth joint-space endpoint replay at "
-                f"{config.command_frequency_hz:.0f} Hz with synchronized per-joint "
-                "servo arrival pacing."
+                "Startup clearance and elevated paper traversal both use Cartesian "
+                f"move_linear() at {config.command_frequency_hz:.0f} Hz. Servo tracking "
+                "uses the same high-authority speed/acceleration profile as smooth teleoperation."
             )
             print(
                 f"Before paper travel, replay will command one straight calibrated-workspace "
@@ -1113,7 +1049,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     arm,
                     saved,
                     demo_positions,
-                    endpoint_preflight=preflight,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
                 )
             except Exception as exc:
@@ -1483,9 +1421,8 @@ def main() -> int:
             )
             print("  A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                "The motion between elevated endpoints now reuses the preflighted joint "
-                "solutions with smooth joint-space interpolation; no extra elevated "
-                "teaching is required."
+                "The elevated endpoints are connected with Cartesian move_linear() at "
+                "constant calibrated workspace height; no extra elevated teaching is required."
             )
             input(
                 "\nPress Enter to run the full Cartesian linear path, "
@@ -1504,7 +1441,9 @@ def main() -> int:
                     arm,
                     saved,
                     demo_positions,
-                    endpoint_preflight=preflight,
+                    rotation=d_up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
                 )
             except Exception as exc:

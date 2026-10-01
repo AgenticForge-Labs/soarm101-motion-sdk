@@ -66,16 +66,16 @@ layers a second slow motor trajectory under the host trajectory and can appear a
 lag/catch-up shaking.
 
 On hardware, compare the same broad workspace motion with smooth 20 Hz teleoperation and
-a 20 mm/s, 100 mm/s² paper replay. The supervised paper script uses a 20 Hz host command
-cadence and 1 mm Cartesian planning-density bound. Every emitted command sample is a
-direct sequential-IK solution of a cosine-ramped, cruise-speed Cartesian path; no sparse
-joint-space interpolation is reintroduced. On calibrated Feetech hardware, the controller
-also computes proportional per-joint position-mode speed limits for each synchronous write
-so the motors target the next sample on the same time horizon. If a sequential
-single-start IK solve misses the unchanged 0.5 mm Cartesian tolerance, that sample is
-retried with multi-start before failing. If motion remains visibly shakier than teleop,
-capture commanded raw tick deltas, per-joint servo speeds, and measured following behavior
-before changing motor PID or power settings.
+a 20 mm/s, 100 mm/s² paper replay. The supervised paper script uses a 20 Hz host command cadence and 1 mm Cartesian
+planning-density bound. Every emitted command sample is a direct sequential-IK solution
+of the Cartesian path. Planned Cartesian execution must use the same Feetech servo-side
+profile as smooth teleoperation: `speed_raw=0`, `acceleration_raw=254`. The host
+trajectory owns speed/acceleration shaping; do not add a second per-sample servo speed
+trajectory.
+
+If motion remains visibly shakier than teleop, capture the planned joint derivatives,
+encoder-quantized command deltas, measured following error, and actual cycle timing before
+changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
@@ -103,53 +103,31 @@ Run:
 python examples/paper_workspace_calibration.py --reference-height-mm 107
 ```
 
-Teach A->B->C->D clockwise, then teach the fixed lower finger at the measured UP point
-above D. Immediately after the UP capture, confirm the countdown ends with torque enabled
-and the arm holding that exact pose instead of sagging.
+Teach A->B->C->D clockwise, then teach the fixed lower finger at the measured D_UP point.
+The saved workspace calibration levels A_UP/B_UP/C_UP/D_UP/CENTER_UP to that same physical
+workspace Z while preserving calibrated workspace X/Y. CENTER_UP must be exactly the
+calibrated paper midpoint.
 
-The workflow uses A/B/C/D plus one manually measured D_UP reference. A known-reachable
-FK construction supplies an initial endpoint branch and observed workspace X/Y. Replay
-then inverse-maps each endpoint into physical workspace coordinates, preserves X/Y, sets
-workspace Z to the measured reference height, and maps that corrected coordinate back
-into model space. Read-only IK preflight must accept every corrected endpoint before
-motion. This directly tests whether the saved workspace mapping can level physical height
-without reteaching additional elevated points. Hardware then showed that the straight
-A_UP->B_UP Cartesian segment contains an intermediate pose that cannot satisfy the
-unchanged 0.5 mm IK tolerance despite valid endpoints. The elevated traversal therefore
-reuses the preflighted endpoint joint solutions with smooth joint-space interpolation.
-On calibrated hardware, joint replay enables synchronized servo arrival so each 20 Hz
-sample uses per-joint Feetech speed limits derived from encoder-tick distance and the
-shared command interval. Before each powered move, dense FK sampling must show the
-joint-space locus stays within 5 mm of the lower endpoint's calibrated workspace Z.
-Joint limits, command-step/rate/acceleration, following error, motor faults, effort/contact
-guards, communication checks, and motion timeout remain active.
+After endpoint preflight and the separately validated startup clearance, the powered
+sequence must use `move_linear()` for
+`A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`. Assert that the requested target workspace
+Z is the same for all five targets and record achieved workspace Z after each segment.
 
-After a teaching run, test replay without touching the paper again:
+Compare physical smoothness directly with 20 Hz teleoperation. Cartesian execution should
+use `speed_raw=0` and `acceleration_raw=254` just like teleop while the host path limits
+speed and acceleration. There must be no calibrated-hardware branch that silently replaces
+those values with proportional per-sample speed caps.
+
+After a teaching run, test:
 
 ```bash
-python examples/paper_workspace_calibration.py --replay
+python examples/paper_workspace_calibration.py --replay \
+  --speed-mm-s 20 \
+  --acceleration-mm-s2 100
 ```
 
-Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D plus the single physically measured D_UP reference,
-counts down and enables torque to hold the current pose, opens the moving jaw, preflights
-the endpoints, then waits for one Enter before running one 20 mm calibrated-Z clearance
-move followed by A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. D_UP remains the physical
-height reference but is not revisited first merely because it was the teaching point.
-CENTER_UP must inverse-map to exactly half the calibrated paper width and half the
-calibrated paper height at the reference Z; averaging corner joint angles is not accepted
-as target geometry. It
-must not require reteaching merely because an earlier motion/preflight attempt failed.
-
-Use `--measure-only` when a non-moving calibration capture is wanted.
-
-Hardware evidence motivating the relaxed coarse-workspace policy:
-
-- the real table repeatedly appears below/tilted relative to the generic model floor;
-- a prior model +Z hover moved physically along the table and contacted it;
-- later endpoint preflights failed despite strong table fits and well-conditioned workspace
-  measurements;
-- the paper test is supervised with a deliberately clear physical workspace, so the coarse
-  model is treated as a destination sanity check rather than the primary execution gate.
+Replay may begin from an ordinary resting pose and must not require reteaching after a
+later preflight/motion failure. Use `--measure-only` when a non-moving capture is wanted.
 
 See `docs/workspace-calibration.md` and `docs/validation.md`.
 
@@ -783,7 +761,8 @@ the default 20 mm command, replay requires at least 10 mm measured rise before p
 begins at A_UP. Hardware evidence for this threshold is explicit: the dragging case rose
 only about 5.4 mm, while the later visually acceptable startup rose about 14.0 mm. The
 generic coarse workspace check is disabled only for that verified startup-lift execution.
-For elevated joint-space replay, the calibrated full joint locus is validated first and
-the SDK then uses `workspace_check="target_only"` for the generic model envelope. This
-retains a generic destination check without re-rejecting sample 0 solely because the
-measured table lies below model Z=0. The normal motion/runtime safety stack remains active.
+For elevated paper traversal, the calibrated workspace defines the constant-height
+Cartesian targets and the SDK uses `move_linear(..., workspace_check="target_only")` for
+the generic model envelope. This retains a generic destination check without allowing the
+known-invalid model table floor to veto the measured paper frame. The full joint/IK/
+dynamic/following-error/effort/fault/communication/timing safety stack remains active.

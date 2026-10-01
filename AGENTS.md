@@ -63,33 +63,22 @@ changes require development discipline; robot use requires conservative hardware
     than writing directly to servo registers unless the task is explicitly low-level
     hardware development and the safety implications are understood.
 11. Do not infer physical up or table height from model/base +Z. The supervised
-    elevated-paper replay uses the single manually measured D_UP point to calibrate the
-    physical workspace Z axis, then software-levels every paper endpoint to the same
-    workspace Z while preserving that endpoint's inverse-mapped workspace X/Y. The
-    previous reachable FK endpoints may be used only as X/Y/IK-branch anchors; their
-    inferred heights are not execution targets. Read-only IK preflight must accept every
-    corrected target before powered replay. Replay performs one preflighted calibrated-
-    workspace-Z clearance move of 20 mm by default before entering the paper path. The
-    measured endpoint must show at least the configured minimum clearance rise (10 mm by
-    default after a 20 mm command) before paper travel. The fixed traversal then starts at A_UP and proceeds A_UP -> B_UP -> C_UP ->
-    D_UP -> CENTER_UP; D_UP remains calibration evidence, not the first motion target.
-    Elevated endpoint motion reuses the read-only preflight joint solutions rather than
-    forcing straight Cartesian IK through an infeasible intermediate pose. Before each
-    endpoint move, deterministic FK sampling of the joint-space locus must show calibrated
-    workspace Z stays within 5 mm of the lower endpoint height. After that calibrated
-    full-path validation, paper joint replay may use the SDK's explicit `target_only`
-    generic workspace mode so a known-invalid model-frame table floor at the starting pose
-    does not veto the move; the generic destination workspace check must still pass. Paper
-    joint replay should use the SDK's calibrated synchronized-servo-arrival option rather
-    than a fixed unrestricted servo speed so all joints share the planned sample horizon. The startup clearance is
-    validated in calibrated workspace coordinates (fixed X/Y, nondecreasing physical Z,
-    bounded IK continuity and joint limits); the generic model-frame Z floor is not
-    authoritative for that verified clearance move
-    because it is known to disagree with the measured table frame. The supervised paper
-    validation uses the known-smooth 20 Hz host cadence while SDK-wide planned motion stays
-    at 50 Hz. All runtime joint/dynamic/following-error/effort/fault/timing guards remain
-    active. Broader autonomous Cartesian use remains unvalidated until hardware evidence
-    is reviewed.
+    elevated-paper validation uses the manually measured D_UP point to calibrate physical
+    workspace Z and software-levels A/B/C/D/center to that same workspace height while
+    preserving calibrated workspace X/Y. Read-only IK endpoint preflight must accept every
+    corrected target before powered replay. Replay performs one separately preflighted
+    calibrated-workspace-Z startup clearance before lateral travel, then validates the
+    actual Cartesian primitive with A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP through
+    `move_linear()` and position-only IK. Do not replace those paper segments with joint
+    replay merely to avoid Cartesian behavior: the experiment exists to validate Cartesian
+    linear motion. The paper workflow uses the known-smooth 20 Hz host cadence. Planned
+    Cartesian execution must use the same responsive servo-side tracking profile as live
+    teleoperation (STS3215 speed_raw=0, acceleration_raw=254); host trajectory planning owns
+    speed and acceleration shaping. The calibrated workspace is authoritative for paper
+    height; the generic model workspace may remain destination-only where documented. All
+    joint, IK continuity, step/rate/acceleration, following-error, effort, fault,
+    communication, settle, provenance, and timing guards remain active. Broader autonomous
+    Cartesian use remains unvalidated until the hardware evidence is reviewed.
 12. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
     agents; task-solving strategies, observe/action loops, model/provider instructions, and
     benchmark policy belong outside the SDK-facing CLI reference.

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Restored the supervised elevated-paper experiment to its intended purpose: validating
+  Cartesian `move_linear()` at one calibrated physical height. The newer workspace
+  leveling and true paper-center geometry remain, but A_UP→B_UP→C_UP→D_UP→CENTER_UP
+  is again executed as Cartesian linear segments rather than the temporary joint-space
+  endpoint replay introduced in #67–#71.
+- Planned Cartesian Feetech tracking now matches the physically smooth leader/follower
+  strategy: host-side trajectory generation remains the sole speed/acceleration shaper,
+  while each streamed setpoint uses `speed_raw=0` and `acceleration_raw=254`.
+  This supersedes the calibrated per-sample proportional servo-speed caps, which added a
+  second quantized trajectory on top of the Cartesian IK stream and are the leading
+  explanation for the observed stick-slip/shaking.
+- Added regressions requiring calibrated `move_linear()` to retain the teleoperation
+  servo profile and requiring the paper perimeter to call `move_linear()`, not
+  `move_joints()`.
+
 - Fixed paper joint replay after the first synchronized-servo hardware test reached
   A_UP preflight but was rejected before motion by the generic model-frame workspace floor
   at sample 0 (model TCP z=-2 mm), despite the calibrated paper path reporting a safe

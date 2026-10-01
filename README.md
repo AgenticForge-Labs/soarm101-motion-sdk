@@ -124,52 +124,39 @@ three manually pointed US Letter corners with torque off, reports FK geometry, a
 predicts the fourth corner in model coordinates, but it does not command Cartesian
 motion.
 
-`examples/paper_workspace_calibration.py` now performs the machine-local workspace
-calibration. It teaches all four corners clockwise (A lower-left -> B lower-right ->
-C upper-right -> D upper-left), then asks the operator to manually place the same fixed
-finger at a measured physical height above D. Those five correspondences fit and persist
-a local paper/workspace mapping under `~/.config/soarm101/workspace/`. The manually
-measured UP point is required because SDK/model +Z is **not assumed to be physical up**.
-Wrist/tool rotation while manually reaching the UP point is expected to change
-naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
-not gate workspace-measurement acceptance. The paper workflow physically teaches A/B/C/D plus one measured D_UP reference. Replay
-uses the saved physical-workspace transform to level every paper endpoint to that same
-workspace Z while preserving each endpoint's calibrated workspace X/Y; no extra elevated
-teaching is required. Before entering the paper path from an ordinary resting pose,
-replay preflights one straight calibrated-workspace-Z clearance move of 20 mm by default.
-Replay commands a 20 mm clearance rise by default but gates continuation on the measured
-rise itself: at least 10 mm physical/workspace Z increase is required. This reflects the
-hardware purpose of the move—clear the surface—without requiring the hobby servos to land
-within a few millimeters of the nominal Cartesian target. The traversal then begins at A_UP and follows A_UP -> B_UP -> C_UP ->
-D_UP -> CENTER_UP; D_UP remains the physical-height calibration reference but is no longer
-visited first merely because it was taught there. CENTER_UP is defined directly in the
-calibrated paper frame as (width/2, height/2, reference height); averaged corner joints are
-used only as an IK seed and never as center geometry. The clearance path is validated in the
-calibrated physical workspace rather than against the generic model-frame Z floor, which
-is known to misrepresent this measured table. The elevated traversal no longer forces
-straight Cartesian IK between endpoints: hardware showed an A_UP->B_UP intermediate pose
-that missed the unchanged 0.5 mm IK tolerance even though both endpoints solved exactly.
-Instead, replay uses those preflighted endpoint joint solutions with smooth joint-space
-motion. On calibrated Feetech hardware, each 20 Hz joint sample derives proportional
-per-joint servo speeds from the planned encoder-tick increments so all joints target the
-next sample on a common arrival horizon instead of racing at unrestricted speed. Before
-each move, the complete joint-space locus is FK-sampled and rejected if calibrated
-workspace Z would dip more than 5 mm below the lower endpoint. Because the generic
-model-frame table floor can disagree with the measured paper frame, powered endpoint
-moves use the SDK's explicit `target_only` generic workspace mode after that calibrated
-full-path validation: the destination still passes the generic workspace sanity check,
-but the already-validated path is not rejected merely because its measured starting pose
-lies below model Z=0. The paper workflow uses a 20 Hz host command cadence; the SDK-wide
-planned-motion default remains 50 Hz. `--replay` reuses the saved teaching from any ordinary resting pose. During this
-supervised paper validation, the startup clearance remains Cartesian while elevated
-endpoint traversal is joint-space.
-validation while the normal joint, IK-continuity, rate/acceleration, following-error,
-fault, effort/contact, communication, and timeout guards remain active. Because this is
-a qualitative hobby-arm line-motion test rather than precision metrology, its local
-completion criterion defaults to 3.0° per joint with an 8 s settle window; SDK-wide
-motion defaults remain stricter. `--measure-only`
-skips powered motion. The historical `paper_four_corner_hover_demo.py` filename remains
-only as a compatibility wrapper.
+`examples/paper_workspace_calibration.py` performs the machine-local paper/workspace
+calibration. It teaches A/B/C/D on the table plus one measured D_UP reference. Those
+observations persist a physical-paper -> model mapping under
+`~/.config/soarm101/workspace/`; SDK/model +Z is not assumed to be physical up.
+
+Replay software-levels A_UP/B_UP/C_UP/D_UP/CENTER_UP to the single calibrated reference
+workspace Z while preserving calibrated workspace X/Y. CENTER_UP is the true calibrated
+paper midpoint `(width/2, height/2, reference_height)`. A separately preflighted
+calibrated-workspace-Z startup clearance is performed before lateral travel and must show
+the configured minimum measured rise.
+
+The elevated sequence is a **Cartesian linear-motion validation**:
+`A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP` is executed with `move_linear()` and
+position-only IK at the paper workflow's 20 Hz host cadence. The leveled model endpoints
+come from one affine workspace transform, so a model-space straight line between two
+equal-workspace-Z endpoints maps back to a straight constant-height line in the calibrated
+workspace.
+
+Planned Cartesian motion uses the same responsive Feetech servo-side tracking profile as
+smooth live teleoperation: the host trajectory owns velocity/acceleration shaping while
+the servo receives `speed_raw=0` (maximum tracking authority) and
+`acceleration_raw=254`. This avoids the previous per-sample servo speed throttling that
+could produce visible stick-slip on gravity-loaded joints. The normal joint, IK,
+rate/acceleration, following-error, fault, effort/contact, communication, settle,
+provenance, and timing guards remain active. The measured workspace owns paper height;
+the generic model workspace is used only where explicitly documented as a secondary
+sanity check.
+
+`--replay` reuses the saved teaching from an ordinary resting pose, and
+`--measure-only` skips powered motion. The paper workflow keeps its local 3.0°/8 s
+settle criterion for this qualitative hardware validation; SDK-wide defaults remain
+stricter. The historical `paper_four_corner_hover_demo.py` filename remains only as a
+compatibility wrapper.
 
 Hardware testing found a case where a numerically valid +Z hover moved laterally and
 contacted the table, so paper-derived normals no longer authorize powered Cartesian

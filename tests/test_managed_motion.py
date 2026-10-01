@@ -222,8 +222,13 @@ def test_position_only_linear_timing_ignores_target_rotation() -> None:
     assert len(arbitrary_rotation.command_samples) == len(unchanged.command_samples)
 
 
-def test_cartesian_execution_uses_per_joint_synchronized_servo_speeds() -> None:
+def test_cartesian_execution_uses_teleop_servo_profile_even_with_calibration() -> None:
     from types import SimpleNamespace
+
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
 
     class FakeMotor:
         radians_limits = (-3.0, 3.0)
@@ -235,13 +240,16 @@ def test_cartesian_execution_uses_per_joint_synchronized_servo_speeds() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
         arm.backend.calibration = SimpleNamespace(
-            motors={name: FakeMotor() for name in (
-                "shoulder_pan",
-                "shoulder_lift",
-                "elbow_flex",
-                "wrist_flex",
-                "wrist_roll",
-            )}
+            motors={
+                name: FakeMotor()
+                for name in (
+                    "shoulder_pan",
+                    "shoulder_lift",
+                    "elbow_flex",
+                    "wrist_flex",
+                    "wrist_roll",
+                )
+            }
         )
         calls = []
         original = arm.backend.write_joint_positions
@@ -265,16 +273,11 @@ def test_cartesian_execution_uses_per_joint_synchronized_servo_speeds() -> None:
         )
 
     assert calls
-    mapped = [speed for speed, _ in calls if isinstance(speed, dict)]
-    assert mapped
-    assert all(set(speed) == {
-        "shoulder_pan",
-        "shoulder_lift",
-        "elbow_flex",
-        "wrist_flex",
-        "wrist_roll",
-    } for speed in mapped)
-    assert all(all(1 <= value <= 3400 for value in speed.values()) for speed in mapped)
+    assert all(
+        speed == TELEOP_SERVO_SPEED_RAW
+        and acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for speed, acceleration in calls
+    )
 
 
 def test_joint_move_can_use_per_joint_synchronized_servo_speeds() -> None:
