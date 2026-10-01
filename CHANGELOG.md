@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added an explicit monotonic floor-recovery path check for a Cartesian move that starts
+  outside the coarse model floor but ends back inside the normal workspace. The four-corner
+  paper hover demo uses it only for the initial upward D lift, fixing a fail-closed case
+  where the taught paper touch had model TCP Z below zero; normal perimeter moves retain
+  the standard floor check.
+
 - Added a supervised four-corner paper hover diagnostic that manually teaches every
   corner clockwise, preflights 50 mm base-+Z hover targets with torque off, requires a
   separately confirmed first lift, and then traverses the taught perimeter through the
