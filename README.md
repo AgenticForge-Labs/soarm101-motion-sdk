@@ -137,8 +137,10 @@ uses the saved physical-workspace transform to level every paper endpoint to tha
 workspace Z while preserving each endpoint's calibrated workspace X/Y; no extra elevated
 teaching is required. Before entering the paper path from an ordinary resting pose,
 replay preflights one straight calibrated-workspace-Z clearance move of 20 mm by default.
-Measured workspace Z must land within 5 mm of that requested clearance target or replay
-refuses to continue. The traversal then begins at A_UP and follows A_UP -> B_UP -> C_UP ->
+Replay commands a 20 mm clearance rise by default but gates continuation on the measured
+rise itself: at least 10 mm physical/workspace Z increase is required. This reflects the
+hardware purpose of the move—clear the surface—without requiring the hobby servos to land
+within a few millimeters of the nominal Cartesian target. The traversal then begins at A_UP and follows A_UP -> B_UP -> C_UP ->
 D_UP -> CENTER_UP; D_UP remains the physical-height calibration reference but is no longer
 visited first merely because it was taught there. The clearance path is validated in the
 calibrated physical workspace rather than against the generic model-frame Z floor, which
