@@ -67,12 +67,15 @@ lag/catch-up shaking.
 
 On hardware, compare the same broad workspace motion with smooth 20 Hz teleoperation and
 a 20 mm/s, 100 mm/s² paper replay. The supervised paper script uses a 20 Hz host command
-cadence and 1 mm Cartesian planning-density bound. Every emitted command sample is still
-a direct sequential-IK solution of the minimum-jerk Cartesian path; no sparse joint-space
-interpolation is reintroduced. If a sequential single-start IK solve misses the unchanged
-0.5 mm Cartesian tolerance, the planner retries that sample with multi-start before
-failing. If linear motion remains visibly shakier, inspect commanded/quantized joint
-increments and measured following behavior before changing motor PID or power settings.
+cadence and 1 mm Cartesian planning-density bound. Every emitted command sample is a
+direct sequential-IK solution of a cosine-ramped, cruise-speed Cartesian path; no sparse
+joint-space interpolation is reintroduced. On calibrated Feetech hardware, the controller
+also computes proportional per-joint position-mode speed limits for each synchronous write
+so the motors target the next sample on the same time horizon. If a sequential
+single-start IK solve misses the unchanged 0.5 mm Cartesian tolerance, that sample is
+retried with multi-start before failing. If motion remains visibly shakier than teleop,
+capture commanded raw tick deltas, per-joint servo speeds, and measured following behavior
+before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
