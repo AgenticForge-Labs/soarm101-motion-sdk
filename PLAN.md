@@ -85,12 +85,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
   physical direction before Cartesian motion.
 - [ ] Validate stop, completion timeout, and torque-safe enable on hardware.
 - [ ] Validate FK against measured TCP positions.
-- [ ] Complete the manual paper/workspace calibration: four table corners plus a
-  physically measured UP reference tied to the active motor calibration.
-- [ ] Resolve the physical/model Cartesian-direction mismatch exposed when a model +Z
-  paper hover moved laterally into the table.
-- [ ] Only after that, validate very-small supervised Cartesian direction tests and
-  then low-speed linear paths/tolerances.
+- [ ] Complete the paper/workspace calibration: four table corners plus a physically
+  measured UP reference tied to the active motor calibration.
+- [ ] Run the supervised elevated-paper traversal generated from that measured workspace
+  mapping (D_UP→A_UP→B_UP→C_UP→D_UP→CENTER_UP) and review the recorded evidence.
+- [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
+  low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
   leader-readout loss, gripper mirroring, and stream safety trips.
 - [ ] Validate sequence execution and edited motion primitives on hardware.

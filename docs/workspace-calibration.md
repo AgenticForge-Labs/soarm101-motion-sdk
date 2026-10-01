@@ -50,9 +50,10 @@ A ---------------- B
 4. D: remaining short/width corner.
 5. UP: the same fixed lower finger at a physically measured height above D.
 
-For UP, use a ruler, rigid spacer, gauge block, or another physical reference. Keep the
-tool orientation as close to the D orientation as practical. The workflow performs no
-autonomous Cartesian arm motion.
+For UP, use a ruler, rigid spacer, paper edge, gauge block, or another physical reference.
+Allow the wrist/tool orientation to change naturally as needed to put the fixed lower
+finger at the measured physical point. The workflow performs no autonomous Cartesian
+arm motion.
 
 ## What is fitted
 
@@ -94,29 +95,36 @@ The diagnostic report is also written in the working directory.
 
 ## Measurement acceptance gate
 
-The workflow only writes the authoritative workspace calibration when:
+The workflow writes the measured workspace calibration when:
 
 - the four taught corners form a sufficiently consistent plane;
 - the full physical-to-model affine fit has a sufficiently small residual;
-- the 3-D linear mapping is well-conditioned enough to invert reliably;
-- D -> UP tool-orientation drift is small enough that the fixed-finger probe approximation
-  is not obviously corrupted by a changing TCP offset; and
+- the 3-D linear mapping is well-conditioned enough to invert reliably; and
 - the model displacement produced by the measured UP height has a plausible scale rather
   than collapsing toward zero or expanding implausibly.
+
+D -> UP tool-orientation drift is recorded as diagnostic evidence only. With this 5-DOF
+arm and a fixed fingertip used as the physical probe, changing wrist/tool orientation can
+be required simply to place that fingertip at the desired physical point. It therefore
+does not participate in workspace-measurement acceptance.
 
 The angle between the mapped physical-UP vector and the Euclidean normal of the
 model-space paper plane is retained as a diagnostic, **not** as an acceptance condition.
 A skewed local affine mapping can legitimately make those directions non-parallel; that
 skew is part of what this calibration is intended to measure.
 
-Even when saved, a newly measured calibration has:
+A newly measured calibration is initially saved with:
 
 ```text
 motion_validation_status = "unvalidated"
 ```
 
-That is deliberate. Measurement of the workspace frame is not the same thing as proving
-that autonomous Cartesian interpolation is physically safe.
+The same workflow may then run the supervised demonstration
+`D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`, all at the measured physical
+reference height. These targets are generated through the calibrated physical-to-model
+mapping and use position-only IK; they are not model +Z offsets. The report records
+preflight results and achieved TCP evidence. This demonstration is still narrower than
+general autonomous Cartesian validation.
 
 ## Relationship to the coarse floor guard
 
