@@ -49,6 +49,24 @@ position-hold authority, supply voltage, faults, and effort/current behavior.
 On a paper-motion error, verify the script holds the current position and waits for an
 explicit operator release instead of immediately relaxing.
 
+### Paper linear-motion settle criterion
+
+The paper experiment is a supervised qualitative Cartesian-line validation, not a
+high-precision metrology test. It therefore uses a local completion tolerance of 3.0°
+per joint and an 8 s final settle window. The SDK-wide defaults remain stricter.
+
+The defaults can be overridden explicitly:
+
+```bash
+python examples/paper_workspace_calibration.py --replay \
+  --settle-tolerance-deg 3 \
+  --settle-timeout-s 8
+```
+
+Do not increase these further merely to make a failing arm pass. If a move still times
+out, use the emitted worst-joint/per-joint errors plus voltage/current/moving/status
+diagnostics to distinguish servo authority, power, friction/load, or model problems.
+
 ### Paper/workspace calibration — after the basic motion gates
 
 Run:
