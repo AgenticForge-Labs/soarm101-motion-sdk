@@ -139,6 +139,63 @@ def test_failed_enable_rolls_back_torque_without_unlocking_eeprom() -> None:
     assert all(not (register == "Lock" and value == 0) for _, register, value in writes)
 
 
+def test_enable_clamps_small_endpoint_excursions_before_torque_enable() -> None:
+    backend = _backend()
+    raw_positions = {
+        "shoulder_pan": 98,
+        "shoulder_lift": 3997,
+    }
+    backend.read_raw_position = lambda motor: raw_positions[motor]
+    _install_enable_limits(
+        backend,
+        {
+            "shoulder_pan": (100, 3995),
+            "shoulder_lift": (100, 3995),
+        },
+    )
+
+    latched: list[dict[str, int]] = []
+    calls: list[tuple[str, str, int]] = []
+    backend._write_raw_positions = lambda positions, **_: latched.append(dict(positions))
+    backend._write_control_register_confirmed = (
+        lambda motor, register, value: calls.append((motor, register, value))
+    )
+
+    backend.enable_torque(["shoulder_pan", "shoulder_lift"])
+
+    assert latched == [{"shoulder_pan": 100, "shoulder_lift": 3995}]
+    assert calls == [
+        ("shoulder_pan", "Lock", 1),
+        ("shoulder_pan", "Torque_Enable", 1),
+        ("shoulder_lift", "Lock", 1),
+        ("shoulder_lift", "Torque_Enable", 1),
+    ]
+
+
+def test_enable_accepts_excursions_exactly_at_eight_tick_tolerance() -> None:
+    backend = _backend()
+    raw_positions = {
+        "shoulder_pan": 92,
+        "shoulder_lift": 4003,
+    }
+    backend.read_raw_position = lambda motor: raw_positions[motor]
+    _install_enable_limits(
+        backend,
+        {
+            "shoulder_pan": (100, 3995),
+            "shoulder_lift": (100, 3995),
+        },
+    )
+
+    latched: list[dict[str, int]] = []
+    backend._write_raw_positions = lambda positions, **_: latched.append(dict(positions))
+    backend._write_control_register_confirmed = lambda *_args: None
+
+    backend.enable_torque(["shoulder_pan", "shoulder_lift"])
+
+    assert latched == [{"shoulder_pan": 100, "shoulder_lift": 3995}]
+
+
 def test_enable_refuses_out_of_range_position_before_any_goal_or_torque_write() -> None:
     backend = _backend()
     raw_positions = {
