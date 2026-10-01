@@ -1016,7 +1016,12 @@ class MotionController:
         wait: bool = True,
         servo_speed_raw: int | None = None,
         servo_acceleration_raw: int | None = None,
+        synchronize_servo_arrival: bool = False,
     ) -> MotionResult | MotionHandle[MotionResult]:
+        if synchronize_servo_arrival and servo_speed_raw is not None:
+            raise InvalidCommandError(
+                "servo_speed_raw cannot be combined with synchronize_servo_arrival"
+            )
         if servo_speed_raw is not None and (
             not isinstance(servo_speed_raw, int) or not 0 <= servo_speed_raw <= 32767
         ):
@@ -1071,6 +1076,7 @@ class MotionController:
                     cancellation_message="joint motion cancelled",
                     servo_speed_raw=servo_speed_raw,
                     servo_acceleration_raw=servo_acceleration_raw,
+                    synchronize_servo_arrival=synchronize_servo_arrival,
                 )
             )
         return handle.wait() if wait else handle
