@@ -124,15 +124,14 @@ The same workflow may then run the supervised demonstration
 sample, a short countdown is followed by torque enable so the current pose is held before
 the operator starts motion.
 
-For the powered demonstration, the fixed D/A/B/C/center sequence is constructed from
-known-reachable inferred joint poses. The taught D→UP **joint** change is applied to each
-taught corner joint pose and FK defines the Cartesian endpoint; joint limits are checked
-before motion. This deliberately avoids using either a translated Cartesian D→UP vector or
-the fitted affine surface as endpoint geometry, because physical preflight showed B_UP
-remained 10.09 mm outside IK tolerance with both Cartesian constructions. Only D_UP was
-physically measured at the reference height. The affine fit therefore reports estimated
-workspace Z for the other endpoints as a diagnostic, not as proof of equal physical
-height. Motion between endpoints is still commanded with `move_linear()` and
+For the powered demonstration, A_UP, B_UP, C_UP, D_UP, and CENTER_UP are each physically
+taught at the requested height. Replay uses those measured model positions directly, with
+the corresponding taught joint states as preferred IK seeds. This replaces both failed
+single-UP inference strategies: the fitted affine surface and translated D→UP Cartesian
+vector each placed B_UP 10.09 mm outside IK tolerance, while copying the D→UP joint delta
+produced reachable but physically wrong heights (~30 mm at A/B in the observed run).
+Legacy one-UP reports can be completed with `--upgrade-elevated` without reteaching the
+paper corners. Motion between endpoints is still commanded with `move_linear()` and
 position-only IK.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
