@@ -416,6 +416,27 @@ def preflight_calibrated_workspace_z_lift(
     }
 
 
+def execute_preflighted_workspace_z_lift(
+    arm: SOARM101,
+    *,
+    target_model_position_m: np.ndarray,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+):
+    """Execute only a startup lift already validated in calibrated workspace coordinates."""
+
+    return arm.move_linear(
+        Pose(target_model_position_m, rotation),
+        orientation_mode="position_only",
+        speed=min(speed_mm_s, 10.0) / 1000.0,
+        acceleration=acceleration_mm_s2 / 1000.0,
+        # The calibrated-workspace preflight is authoritative for this one clearance move.
+        # The generic model-Z floor is intentionally not authoritative here.
+        workspace_check="off",
+    )
+
+
 def preflight_demo_targets(
     arm: SOARM101,
     positions: dict[str, np.ndarray],
@@ -851,14 +872,12 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                         f"\nLifting first in workspace Z to "
                         f"{startup_target_z * 1000.0:.1f} mm..."
                     )
-                    result = arm.move_linear(
-                        Pose(startup_position, current_pose.rotation),
-                        orientation_mode="position_only",
-                        speed=min(args.speed_mm_s, 10.0) / 1000.0,
-                        acceleration=args.acceleration_mm_s2 / 1000.0,
-                        # The startup path was preflighted in calibrated physical workspace.
-                        # The generic model-Z floor is intentionally not authoritative here.
-                        workspace_check="off",
+                    result = execute_preflighted_workspace_z_lift(
+                        arm,
+                        target_model_position_m=startup_position,
+                        rotation=current_pose.rotation,
+                        speed_mm_s=args.speed_mm_s,
+                        acceleration_mm_s2=args.acceleration_mm_s2,
                     )
                     if not result.accepted or not result.completed:
                         raise RuntimeError(f"startup lift did not complete: {result}")
