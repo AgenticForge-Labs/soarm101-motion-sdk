@@ -88,12 +88,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Complete the paper/workspace calibration: four table corners plus a physically
   measured UP reference tied to the active motor calibration.
 - [ ] Run the supervised paper traversal using the existing A/B/C/D + D_UP calibration:
-  one 20 mm calibrated-Z clearance move, then preflighted joint-space endpoint replay
-  A_UP→B_UP→C_UP→D_UP→CENTER_UP. Verify that the clearance rises physically, each
-  FK-sampled joint-space path passes the 5 mm lower-endpoint Z margin, and motion is smooth.
-- [ ] Keep Cartesian `move_linear()` physical validation separate: the real A_UP→B_UP
-  straight segment exposed an infeasible intermediate pose at the unchanged 0.5 mm IK
-  tolerance, so paper replay is no longer evidence that arbitrary Cartesian lines work.
+  one calibrated-Z startup clearance move, then constant-height Cartesian
+  `move_linear()` replay A_UP→B_UP→C_UP→D_UP→CENTER_UP at 20 Hz. Verify all targets
+  share the trained workspace Z and compare physical smoothness directly with teleoperation.
+- [ ] Validate the teleop-style Cartesian servo tracking profile on hardware
+  (speed_raw=0, acceleration_raw=254) and inspect planned joint derivatives/following error
+  if `move_linear()` remains shakier than leader/follower teleoperation.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
