@@ -140,7 +140,7 @@ def evaluate_measurement_acceptance(
     max_linear_condition_number: float,
     min_up_scale: float,
     max_up_scale: float,
-) -> tuple[bool, dict[str, object], list[str]]:
+) -> tuple[bool, dict[str, object]]:
     table_ok = calibration.table_plane_rms_m * 1000.0 <= max_table_fit_rms_mm
     affine_ok = calibration.affine_fit_rms_m * 1000.0 <= max_affine_fit_rms_mm
     condition_ok = calibration.linear_condition_number <= max_linear_condition_number
