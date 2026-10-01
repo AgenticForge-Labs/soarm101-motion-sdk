@@ -171,6 +171,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--min-up-scale",
+        type=float,
+        default=0.25,
+        help="minimum model displacement / physical displacement scale for the UP reference",
+    )
+    parser.add_argument(
+        "--max-up-scale",
+        type=float,
+        default=2.0,
+        help="maximum model displacement / physical displacement scale for the UP reference",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("paper-workspace-calibration-report.json"),
@@ -198,6 +210,8 @@ def main() -> int:
         raise SystemExit("--max-up-vs-normal-angle-deg must be between 0 and 90")
     if args.max_up_orientation_drift_deg <= 0.0:
         raise SystemExit("--max-up-orientation-drift-deg must be positive")
+    if not 0.0 < args.min_up_scale < args.max_up_scale:
+        raise SystemExit("--min-up-scale must be positive and below --max-up-scale")
 
     config = _resolve_config(args)
 
@@ -363,17 +377,21 @@ def main() -> int:
                 <= args.max_up_vs_normal_angle_deg
             )
             orientation_ok = up_orientation_drift <= args.max_up_orientation_drift_deg
-            activation_ok = table_ok and up_angle_ok and orientation_ok
+            up_scale_ok = args.min_up_scale <= calibration.model_up_scale <= args.max_up_scale
+            activation_ok = table_ok and up_angle_ok and orientation_ok and up_scale_ok
 
             report["activation_checks"] = {
                 "table_fit_ok": table_ok,
                 "up_direction_consistent_with_table_normal": up_angle_ok,
                 "up_probe_orientation_ok": orientation_ok,
+                "up_scale_plausible": up_scale_ok,
                 "activated": activation_ok,
                 "limits": {
                     "max_table_fit_rms_mm": args.max_table_fit_rms_mm,
                     "max_up_vs_normal_angle_deg": args.max_up_vs_normal_angle_deg,
                     "max_up_orientation_drift_deg": args.max_up_orientation_drift_deg,
+                    "min_up_scale": args.min_up_scale,
+                    "max_up_scale": args.max_up_scale,
                 },
             }
 
@@ -395,6 +413,11 @@ def main() -> int:
                     print(
                         "  D->UP tool orientation changed too much for the lower-finger "
                         "probe approximation"
+                    )
+                if not up_scale_ok:
+                    print(
+                        "  the model displacement for the measured UP height is implausibly "
+                        "small or large"
                     )
                 print(
                     "No workspace calibration was saved for runtime use, and no powered "
