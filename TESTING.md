@@ -58,9 +58,11 @@ python examples/paper_workspace_calibration.py --reference-height-mm 50
 
 Teach A->B->C->D clockwise, then manually place the same fixed lower finger at a
 physically measured height above D. This fifth point demonstrates physical UP directly.
-The workflow fits a local physical-paper -> model affine transform, records the table
-plane and UP mapping, ties it to the active motor-calibration ID, and performs no
-autonomous Cartesian arm motion.
+The workflow fits a local physical-paper -> model affine transform and ties it to the
+active motor-calibration ID. If the measurement passes, the default run preflights and,
+after one explicit confirmation, moves at that same physical height through
+D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP using position-only IK. Use
+`--measure-only` to skip this powered demonstration.
 
 Hardware evidence that triggered this gate:
 
