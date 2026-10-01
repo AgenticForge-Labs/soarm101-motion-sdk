@@ -118,7 +118,7 @@ After a teaching run, test replay without touching the paper again:
 python examples/paper_workspace_calibration.py --replay
 ```
 
-Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D/UP teaching,
+Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D plus physically taught A_UP/B_UP/C_UP/D_UP/CENTER_UP samples,
 counts down and enables torque to hold the current pose, opens the moving jaw, preflights
 the endpoints, then waits for one Enter before running
 D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. It must not require reteaching merely
