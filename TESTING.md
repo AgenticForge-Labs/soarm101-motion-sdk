@@ -761,7 +761,8 @@ the default 20 mm command, replay requires at least 10 mm measured rise before p
 begins at A_UP. Hardware evidence for this threshold is explicit: the dragging case rose
 only about 5.4 mm, while the later visually acceptable startup rose about 14.0 mm. The
 generic coarse workspace check is disabled only for that verified startup-lift execution.
-For elevated joint-space replay, the calibrated full joint locus is validated first and
-the SDK then uses `workspace_check="target_only"` for the generic model envelope. This
-retains a generic destination check without re-rejecting sample 0 solely because the
-measured table lies below model Z=0. The normal motion/runtime safety stack remains active.
+For elevated paper traversal, the calibrated workspace defines the constant-height
+Cartesian targets and the SDK uses `move_linear(..., workspace_check="target_only")` for
+the generic model envelope. This retains a generic destination check without allowing the
+known-invalid model table floor to veto the measured paper frame. The full joint/IK/
+dynamic/following-error/effort/fault/communication/timing safety stack remains active.
