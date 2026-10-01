@@ -51,8 +51,10 @@ explicit operator release instead of immediately relaxing.
 
 ### Cartesian servo-profile comparison with teleoperation
 
-The host already time-parameterizes `move_linear()` at 50 Hz. Its servo writes should
-therefore use the same responsive Feetech profile as teleoperation:
+The SDK-wide planned-motion default remains 50 Hz. The supervised paper hardware
+validation intentionally configures `move_linear()` at 20 Hz to match the known-smooth
+teleoperation host cadence while retaining the same trajectory limits and guards. Servo
+writes should use the same responsive Feetech profile as teleoperation:
 
 ```text
 speed_raw = 0
