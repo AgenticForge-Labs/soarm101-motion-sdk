@@ -2,10 +2,11 @@
 
 ## Unreleased
 
-- Relaxed paper workspace measurement acceptance: D→UP wrist/tool-orientation drift is
-  now retained as a quality warning instead of discarding an otherwise good manual
-  calibration. Table fit, affine residual, mapping conditioning, and plausible UP scale
-  remain the acceptance gates; saved workspaces remain unvalidated for autonomous motion.
+- Corrected paper workspace measurement acceptance: D→UP wrist/tool-orientation change
+  is now diagnostic only. With a 5-DOF arm and the fixed fingertip as the probe, wrist
+  rotation may be required to reach the measured UP point. Table fit, affine residual,
+  mapping conditioning, and plausible UP scale remain the acceptance gates; saved
+  workspaces remain unvalidated for autonomous motion.
 
 - Fixed the managed Feetech torque-enable precheck to actually implement the documented
   calibrated-endpoint tolerance: a measured relaxed position up to 8 encoder ticks beyond
