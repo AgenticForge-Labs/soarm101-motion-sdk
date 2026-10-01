@@ -136,13 +136,11 @@ target must pass read-only IK preflight before motion. No additional elevated te
 required.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
-resting pose. Before any lateral travel, software climbs in bounded calibrated-workspace-Z
-stages to at least the paper reference/transport height from the measured current pose.
-Each stage (10 mm maximum by default) is separately preflighted, executed, settled, and
-remeasured. Calibrated workspace X/Y must stay fixed in the model, physical Z must be
-nondecreasing, sequential IK must stay continuous, and effective joint limits must hold.
-Measured workspace Z must be within 5 mm of the transport target or replay refuses
-lateral travel. The generic
+resting pose. Before entering the paper path, software requests one 20 mm calibrated-
+workspace-Z rise by default from the measured current pose. The clearance is preflighted
+for fixed calibrated workspace X/Y, nondecreasing physical Z, sequential IK continuity,
+and effective joint limits. Measured workspace Z must land within 5 mm of the requested
+clearance target or replay refuses paper travel. The traversal then begins at A_UP. The generic
 model-frame floor is bypassed only for those already-preflighted clearance moves because
 it is known to disagree with the measured table. The later paper segments use
 **target-only coarse workspace validation**. Joint limits, command-step/rate/acceleration,
