@@ -18,9 +18,10 @@ configured tolerance of that requested rise before lateral travel is allowed. Re
 then enters the leveled paper path at A_UP.
 For this fixed supervised paper sequence, the one-shot startup clearance remains a
 Cartesian calibrated-Z move. The elevated A/B/C/D/center traversal then uses the already
-preflighted endpoint joint solutions with smooth joint-space interpolation, matching the
-known-smooth teleoperation execution profile. Before each powered joint move, the complete
-joint-space locus is FK-sampled and rejected if calibrated workspace Z would dip more than
+preflighted endpoint joint solutions with smooth joint-space interpolation. Each 20 Hz
+joint sample uses calibrated per-joint servo speed pacing so all joints target the next
+sample on the same arrival horizon rather than racing at unrestricted speed. Before each
+powered joint move, the complete joint-space locus is FK-sampled and rejected if calibrated workspace Z would dip more than
 5 mm below the lower endpoint. The normal joint, dynamic, following-error, fault, effort,
 and timing guards remain active.
 
