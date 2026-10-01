@@ -668,6 +668,7 @@ def main() -> int:
                 "UP",
                 f"touch/hold the measured point {args.reference_height_mm:.1f} mm above D",
             )
+            _countdown_hold(arm)
 
             report["samples"] = [asdict(sample) for sample in [*samples, up]]
             points = {sample.name: sample.position_m for sample in samples}
@@ -828,12 +829,13 @@ def main() -> int:
                 return 0
 
             corner_samples = {sample.name: sample for sample in samples}
-            demo_positions = elevated_demo_positions(
+            demo_positions, preferred_seeds = reachable_demo_targets(
+                arm,
                 corners=corner_samples,
                 up_sample=up,
             )
             report["demo_target_strategy"] = (
-                "measured_corner_plus_measured_D_to_UP_translation"
+                "reachable_FK_endpoints_from_taught_corner_joints_plus_taught_lift_delta"
             )
             report["measured_up_delta_model_mm"] = [
                 float(value * 1000.0)
@@ -845,14 +847,13 @@ def main() -> int:
             }
 
             print(
-                f"\nPreflighting elevated paper demonstration at "
-                f"{args.reference_height_mm:.1f} mm physical height with torque OFF..."
+                f"\nRead-only endpoint preflight at the taught "
+                f"{args.reference_height_mm:.1f} mm reference height while holding UP..."
             )
             preflight = preflight_demo_targets(
                 arm,
                 demo_positions,
-                corners=corner_samples,
-                up_sample=up,
+                preferred_seeds=preferred_seeds,
                 rotation=up.rotation,
             )
             report["demo_preflight"] = preflight
@@ -870,21 +871,21 @@ def main() -> int:
             )
 
             print(
-                "\nThe arm is currently relaxed at the manually taught UP point above D."
+                "\nThe arm is holding the manually taught UP pose."
             )
             print(
-                "The powered path will use the measured paper corners plus the measured "
-                "D->UP displacement, NOT model +Z and not affine extrapolation:"
+                "The Cartesian endpoints come from known-reachable FK poses inferred from "
+                "the taught corners plus the taught D->UP joint change:"
             )
             print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                f"The D->UP displacement was taught at {args.reference_height_mm:.1f} mm "
-                "physical height and is translated to each measured corner; CENTER_UP is "
-                "the mean of the four elevated measured corners."
+                f"The D->UP posture change was taught at {args.reference_height_mm:.1f} mm "
+                "physical height. Each endpoint is reachable by construction; the motion "
+                "between endpoints is still Cartesian move_linear()."
             )
             input(
-                "\nPress Enter to enable torque and run the full supervised path, "
-                "or Ctrl+C to leave the arm relaxed... "
+                "\nPress Enter to run the full Cartesian linear path, "
+                "or Ctrl+C to stop while holding... "
             )
 
             report["autonomous_motion_attempted"] = True
@@ -892,7 +893,6 @@ def main() -> int:
                 json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
             )
-            arm.enable()
             moves = report["demo_moves"]
             assert isinstance(moves, list)
             try:
