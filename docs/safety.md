@@ -46,13 +46,6 @@ live teleoperation releases a parked leader so it is back-drivable again.
   enable before any goal or torque write.
 - Feetech transport and synchronized writes use one reentrant lock.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
-- A Cartesian move may opt into floor recovery only when the measured starting
-  configuration is already below the configured coarse floor. In that mode, every
-  initially violating guarded point must move monotonically upward (within a 1 mm
-  numeric/path tolerance), points that start valid may never cross below the floor,
-  ordinary reach/base/self-clearance checks remain active, and the final configuration
-  must be fully back inside the normal workspace envelope. Ordinary Cartesian moves do
-  not enable this recovery behavior.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.
 - Active trajectories monitor faults, following error, unexpected direction, and deadline overruns.
 - Motion failures issue a best-effort hold.
@@ -117,6 +110,18 @@ The SDK checks every requested joint path against a conservative centerline mode
 - distal points stay outside a base keep-out cylinder;
 - nonadjacent link centerlines maintain a minimum clearance.
 
-These checks catch gross fold-back and table/base hazards. They are not mesh-level collision detection and cannot model printed-part variation, cables, payloads, external fixtures, backlash, or compliance. They remain opt-in for live joint streaming through `teleop_workspace_checks` until the robot-specific table frame and tool geometry are calibrated. Other joint, step, rate, acceleration, following-error, fault, and effort checks remain active.
+These checks catch gross fold-back and table/base hazards. They are not mesh-level collision detection and cannot model printed-part variation, cables, payloads, external fixtures, backlash, compliance, or a wrong physical/model Cartesian mapping.
+
+The default coarse floor is a **model-space assumption**, not a measured physical table.
+Do not lower it merely because a manually touched table point reports negative model Z,
+and do not assume model +Z is physical up. Hardware testing produced a case where a
+numerically valid +Z hover physically moved laterally into the table. Use the manual
+paper/workspace calibration to measure the table and a physical-UP reference first; a
+new workspace calibration remains unvalidated for autonomous Cartesian motion until a
+separate supervised direction test passes.
+
+Live-stream workspace checks remain opt-in through `teleop_workspace_checks` until the
+robot-specific table frame and tool geometry are calibrated. Other joint, step, rate,
+acceleration, following-error, fault, and effort checks remain active.
 
 The API uses `stop()` and `software_stop()`. It intentionally does not expose `emergency_stop()` because a Python command cannot replace a physical power or enable circuit.
