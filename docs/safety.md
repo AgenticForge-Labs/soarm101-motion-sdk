@@ -46,6 +46,13 @@ live teleoperation releases a parked leader so it is back-drivable again.
   enable before any goal or torque write.
 - Feetech transport and synchronized writes use one reentrant lock.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
+- A Cartesian move may opt into floor recovery only when the measured starting
+  configuration is already below the configured coarse floor. In that mode, every
+  initially violating guarded point must move monotonically upward (within a 1 mm
+  numeric/path tolerance), points that start valid may never cross below the floor,
+  ordinary reach/base/self-clearance checks remain active, and the final configuration
+  must be fully back inside the normal workspace envelope. Ordinary Cartesian moves do
+  not enable this recovery behavior.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.
 - Active trajectories monitor faults, following error, unexpected direction, and deadline overruns.
 - Motion failures issue a best-effort hold.
