@@ -43,7 +43,7 @@ class SO101HardwareBackend(ABC):
         actuator: str,
         position: float,
         *,
-        speed_raw: int | Mapping[str, int] | None = None,
+        speed_raw: int | None = None,
         acceleration_raw: int | None = None,
     ) -> None: ...
 
