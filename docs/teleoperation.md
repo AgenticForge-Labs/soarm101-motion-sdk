@@ -82,7 +82,9 @@ Each streamed follower sample still performs the normal safety work:
 The GUI smooths leader samples to fit the configured joint step, speed, and
 acceleration limits before sending them to the guarded stream. Servo speed is no longer
 additionally capped at the generic 250 ticks/s hardware setting, which had limited
-follower motion below the host-side rate. The Teleoperation
+follower motion below the host-side rate. Cartesian `move_linear()` now follows the
+same principle: its host-side 50 Hz trajectory owns speed/acceleration shaping, while
+the servo receives the responsive 0/254 profile instead of a second slower trajectory. The Teleoperation
 tab reports how many samples were smoothed. Abrupt leader motion can therefore
 make the follower lag briefly; the controller still rejects any command that
 violates its limits.
