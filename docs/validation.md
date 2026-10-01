@@ -95,8 +95,11 @@ The operator teaches A/B/C/D and one physical D_UP reference. Replay first recon
 the previously known-reachable endpoint branch, inverse-maps each endpoint into calibrated
 workspace coordinates, preserves workspace X/Y, and sets workspace Z to the single
 measured reference height. The corrected model-space targets must all pass read-only IK
-preflight. No additional elevated teaching is required. The segment itself is still
-executed with `move_linear()` and position-only IK.
+preflight. No additional elevated teaching is required. The resulting endpoint joint
+solutions are reused for powered traversal. Before each endpoint move, dense FK sampling
+of the smooth joint interpolation must keep calibrated workspace Z within 5 mm of the
+lower endpoint. This avoids forcing the known-infeasible straight A_UP->B_UP Cartesian
+segment while preserving the endpoint geometry.
 
 `--replay` reuses the saved A/B/C/D plus D_UP teaching without touching the arm manually again and can begin
 from an ordinary resting pose. Before entering the paper path, replay requests one 20 mm
