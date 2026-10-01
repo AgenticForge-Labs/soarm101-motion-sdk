@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Paper joint-space replay now enables calibrated synchronized servo arrival on each
+  20 Hz planned sample. The joint trajectory and timing are unchanged; only the servo-side
+  pacing changes from fixed unrestricted speed to proportional per-joint speed limits so
+  all joints target the next sample on the same arrival horizon. This is a targeted
+  smoothness change built on the physically successful joint-space replay.
+
 - Fixed CENTER_UP geometry in the supervised paper replay. The previous target came
   from averaging the four corner joint states and applying FK, which is not the physical
   midpoint because FK is nonlinear. CENTER_UP is now generated directly from the calibrated
