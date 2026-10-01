@@ -89,8 +89,10 @@ when quality gates pass, under:
 After the measurement passes its geometry checks, the default workflow preflights an
 elevated paper path with torque off and asks once for confirmation before powered motion.
 The path is `D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`, all at the physical
-reference height. Targets are transformed from physical paper coordinates through the
-measured workspace map and use position-only IK. Use `--measure-only` to retain the
+reference height. Powered targets are constructed by adding the directly measured D→UP model displacement
+to each directly measured paper corner; CENTER_UP is the mean elevated corner position.
+The affine workspace fit remains calibration evidence but is not extrapolated to create
+the powered elevated targets. Position-only IK is used. Use `--measure-only` to retain the
 measurement-only behavior.
 
 See [Workspace calibration](workspace-calibration.md) for the persisted contract,
