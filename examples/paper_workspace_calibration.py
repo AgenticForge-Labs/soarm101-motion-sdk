@@ -302,6 +302,20 @@ def workspace_z_offset_target(
     return model_target, physical_start, physical_target
 
 
+def startup_transport_height_m(
+    *,
+    current_workspace_z_m: float,
+    reference_height_m: float,
+    minimum_lift_m: float,
+) -> float:
+    """Return a transport height that clears before any lateral travel."""
+
+    return max(
+        float(reference_height_m),
+        float(current_workspace_z_m) + float(minimum_lift_m),
+    )
+
+
 def preflight_calibrated_workspace_z_lift(
     arm: SOARM101,
     calibration: WorkspaceCalibration,
@@ -798,9 +812,10 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             current_joints = dict(arm.get_joint_positions().positions)
             current_physical = saved.physical_position_from_model(current_pose.position)
             target_height_m = float(saved.reference_height_m)
-            startup_target_z = max(
-                target_height_m,
-                float(current_physical[2]) + args.startup_lift_mm / 1000.0,
+            startup_target_z = startup_transport_height_m(
+                current_workspace_z_m=float(current_physical[2]),
+                reference_height_m=target_height_m,
+                minimum_lift_m=args.startup_lift_mm / 1000.0,
             )
             startup_needed = startup_target_z > float(current_physical[2]) + 1e-6
             startup_position = current_pose.position.copy()
