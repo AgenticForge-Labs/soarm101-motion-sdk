@@ -131,8 +131,11 @@ For a deliberately simpler supervised motion diagnostic,
 `examples/paper_four_corner_hover_demo.py` teaches all four corners clockwise
 (A lower-left -> B lower-right -> C upper-right -> D upper-left), preflights 50 mm
 base-+Z hover targets, performs one separately confirmed lift above D, then traverses
-the taught perimeter. It does not predict or rescale corners and is not a substitute
-for passing the Cartesian validation gate.
+the taught perimeter. If the manually taught D pose starts below the generic model
+Z=0 floor, that first lift alone may use the guarded monotonic floor-recovery path and
+must finish back inside the normal workspace before any perimeter move. It does not
+predict or rescale corners and is not a substitute for passing the Cartesian validation
+gate.
 
 Successful GUI arm connections and saved camera profiles are remembered in the shared
 [machine-local workstation profile](docs/workstation.md), so the GUI, CLI, and external agents
