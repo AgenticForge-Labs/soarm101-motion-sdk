@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import numpy as np
 import pytest
 
-from examples.paper_workspace_calibration import Sample, constant_height_demo_targets
 from soarm101_motion.workspace import fit_paper_workspace
+
+_EXAMPLE_PATH = Path(__file__).parents[1] / "examples" / "paper_workspace_calibration.py"
+_SPEC = importlib.util.spec_from_file_location("paper_workspace_calibration_example", _EXAMPLE_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+_MODULE = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_MODULE)
+Sample = _MODULE.Sample
+constant_height_demo_targets = _MODULE.constant_height_demo_targets
 
 
 def _sample(name: str, position: np.ndarray, joints: dict[str, float]) -> Sample:
