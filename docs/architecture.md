@@ -27,10 +27,7 @@ Rules:
   overlays are visualization only and never authorize or execute motion.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
 - Motor calibration and workspace calibration are separate authorities. Motor calibration maps encoder state to joint coordinates; machine-local workspace calibration records measured physical-workspace correspondences tied to one motor-calibration ID.
-- A workspace calibration is measurement evidence until physical motion validation succeeds. The paper workflow's supervised elevated traversal is a narrow validation stage: targets are generated from directly measured paper corners plus the directly measured
-  D→UP displacement and executed through the ordinary guarded Cartesian primitives; the
-  fitted affine workspace transform remains calibration evidence rather than an execution
-  target generator until broader validation succeeds. A numerically good paper/table fit alone must not silently redefine joint calibration or authorize broader autonomous motion.
+- A workspace calibration is measurement evidence until physical motion validation succeeds. The paper workflow's supervised elevated traversal is a narrow linear-motion validation stage: known-reachable Cartesian endpoints are derived from taught corner joints plus the taught D→UP joint delta and are connected with the ordinary `move_linear()` primitive. The fitted affine workspace transform remains calibration evidence rather than an execution target generator until broader validation succeeds. Because the generic coarse workspace model is known to misrepresent the measured table, this specific supervised validation may use target-only coarse workspace checks while preserving the deterministic joint/dynamic/hardware guard stack. A numerically good paper/table fit alone must not authorize broader autonomous motion.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
 
