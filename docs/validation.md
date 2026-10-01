@@ -91,12 +91,12 @@ taught pose. It then preflights the elevated Cartesian endpoints and asks once f
 confirmation before motion. The path is
 `D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
 
-Each replay endpoint is physically measured at the requested height. The operator teaches
-A_UP, B_UP, C_UP, D_UP, and CENTER_UP with the same fixed finger and physical height
-reference, and replay uses those model positions directly with their taught joint states as
-preferred IK seeds. A legacy one-UP report must be completed with `--upgrade-elevated`
-before replay. The segment itself is still executed with `move_linear()` and
-position-only IK.
+The operator teaches A/B/C/D and one physical D_UP reference. Replay first reconstructs
+the previously known-reachable endpoint branch, inverse-maps each endpoint into calibrated
+workspace coordinates, preserves workspace X/Y, and sets workspace Z to the single
+measured reference height. The corrected model-space targets must all pass read-only IK
+preflight. No additional elevated teaching is required. The segment itself is still
+executed with `move_linear()` and position-only IK.
 
 `--replay` reuses the saved base and elevated teaching without touching A/B/C/D/A_UP/B_UP/C_UP/D_UP/CENTER_UP again and can begin
 from an ordinary resting pose. For this supervised paper-linear test, every segment uses
