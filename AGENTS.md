@@ -63,8 +63,10 @@ changes require development discipline; robot use requires conservative hardware
     than writing directly to servo registers unless the task is explicitly low-level
     hardware development and the safety implications are understood.
 11. Do not infer physical up or table height from model/base +Z. Use the measured workspace
-    calibration workflow, and treat a newly measured workspace as unvalidated for autonomous
-    Cartesian motion until a separate supervised direction test passes.
+    calibration workflow. Its supervised elevated-paper demonstration must generate targets
+    from the measured physical->model mapping (not model-axis offsets) and use the same guarded
+    Cartesian primitives. Broader autonomous Cartesian use remains unvalidated until that
+    hardware demonstration succeeds and its evidence is reviewed.
 12. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
     agents; task-solving strategies, observe/action loops, model/provider instructions, and
     benchmark policy belong outside the SDK-facing CLI reference.
