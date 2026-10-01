@@ -773,7 +773,9 @@ default from the measured starting pose. Regression coverage also includes a cas
 the target remains at negative model-frame Z while calibrated workspace Z rises.
 Preflight accepts the clearance only when workspace X/Y stays fixed, physical Z does not
 descend, IK remains continuous, and all solved joints remain inside effective limits.
-After execution, measured workspace Z must be within 5 mm of the requested clearance
-target before paper travel begins at A_UP. The generic coarse workspace check is disabled
+After execution, the measured workspace Z rise itself is the acceptance criterion. With
+the default 20 mm command, replay requires at least 10 mm measured rise before paper travel
+begins at A_UP. Hardware evidence for this threshold is explicit: the dragging case rose
+only about 5.4 mm, while the later visually acceptable startup rose about 14.0 mm. The generic coarse workspace check is disabled
 only for that verified startup-lift execution; the normal motion/runtime safety stack
 remains active.
