@@ -91,10 +91,11 @@ taught pose. It then preflights the elevated Cartesian endpoints and asks once f
 confirmation before motion. The path is
 `D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
 
-Each endpoint is generated from a known-reachable joint configuration: the taught D→UP
-joint delta is applied to the taught A/B/C/D joint poses and FK supplies the Cartesian
-endpoint. The segment itself is still executed with `move_linear()` and position-only
-IK, so this remains a Cartesian-linear-motion test rather than a joint-replay test.
+Each endpoint is generated from the persisted physical/workspace transform at one
+constant physical Z equal to the taught reference height. The taught D→UP joint delta is
+used only to seed IK near a demonstrated posture; it no longer defines target geometry.
+The segment itself is still executed with `move_linear()` and position-only IK, so this
+remains a Cartesian-linear-motion test rather than a joint-replay test.
 
 `--replay` reuses the saved teaching without touching A/B/C/D/UP again and can begin
 from an ordinary resting pose. For this supervised paper-linear test, every segment uses
@@ -114,10 +115,12 @@ Feetech speed_raw=0 (unrestricted) and acceleration_raw=254. Cartesian
 `move_linear()` now uses that same servo-side profile while retaining its independently
 planned 50 Hz minimum-jerk Cartesian trajectory.
 
-If teleoperation remains smooth but linear motion remains shaky after this change, inspect
-the planned IK joint sequence itself: per-waypoint joint deltas/velocity/acceleration and
-branch continuity. That would isolate kinematic/path-parameterization effects from
-servo-side trajectory filtering.
+For the supervised paper replay, Cartesian IK waypoint spacing is tightened to 1 mm from
+the generic 5 mm default. At the 20 mm/s comparison speed this produces roughly 20 IK
+knots/s before the normal 50 Hz command resampling, reducing piecewise joint-slope changes
+while preserving the same deterministic safety stack. If teleoperation remains smooth
+but linear motion remains shaky, inspect the planned IK joint sequence itself:
+per-waypoint joint deltas/velocity/acceleration and branch continuity.
 
 ## Current hardware finding
 

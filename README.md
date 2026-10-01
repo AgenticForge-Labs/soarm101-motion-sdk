@@ -134,9 +134,10 @@ Wrist/tool rotation while manually reaching the UP point is expected to change
 naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
 not gate workspace-measurement acceptance. After the final UP sample, the workflow counts down and enables torque so the arm
 holds the taught pose instead of sagging. Elevated Cartesian endpoints are generated
-from known-reachable FK poses inferred from the taught corner joints plus the taught
-D→UP posture change; the segments themselves still run through `move_linear()` with
-position-only IK. `--replay` reuses the saved teaching from any ordinary resting pose. During this
+from the accepted workspace transform at one constant physical height equal to the taught
+UP reference; the taught D→UP posture change is used only as an IK seed. The segments
+themselves still run through `move_linear()` with position-only IK, with 1 mm IK waypoint
+spacing for this supervised replay. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper-linear validation, each segment uses destination-only coarse workspace
 validation while the normal joint, IK-continuity, rate/acceleration, following-error,
 fault, effort/contact, communication, and timeout guards remain active. Because this is

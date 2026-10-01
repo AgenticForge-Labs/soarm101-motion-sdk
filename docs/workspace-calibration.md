@@ -124,12 +124,14 @@ The same workflow may then run the supervised demonstration
 sample, a short countdown is followed by torque enable so the current pose is held before
 the operator starts motion.
 
-For the powered demonstration, the global affine fit is calibration evidence rather than
-the endpoint generator. The taught D→UP **joint** change is applied to each taught paper
-corner joint pose, and FK of those known-reachable configurations defines the Cartesian
-endpoints. The motion between endpoints is still commanded with `move_linear()` and
-position-only IK. This separates endpoint reachability from the thing being tested:
-whether the physical arm follows the requested Cartesian straight-line segments.
+For the powered demonstration, the accepted affine workspace fit generates the fixed
+D/A/B/C/center sequence at one constant physical Z equal to the manually taught reference
+height. A 107 mm teaching therefore means every target has workspace Z=107 mm, even when
+the corresponding model/base-frame Z values differ. The taught D→UP **joint** change is
+retained only as an IK seed near the demonstrated posture; it no longer defines target
+geometry. Motion between endpoints is still commanded with `move_linear()` and
+position-only IK. This keeps the test focused on Cartesian straight-line execution while
+preserving the measured physical workspace as the target authority.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
 resting pose. For this supervised paper-linear validation, every segment uses
