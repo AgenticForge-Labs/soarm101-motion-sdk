@@ -445,7 +445,7 @@ def execute_preflighted_workspace_z_lift(
     return arm.move_linear(
         Pose(target_model_position_m, rotation),
         orientation_mode="position_only",
-        speed=min(speed_mm_s, 10.0) / 1000.0,
+        speed=speed_mm_s / 1000.0,
         acceleration=acceleration_mm_s2 / 1000.0,
         # The calibrated-workspace preflight is authoritative for this one clearance move.
         # The generic model-Z floor is intentionally not authoritative here.
