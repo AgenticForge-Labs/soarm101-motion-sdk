@@ -139,7 +139,10 @@ D→UP posture change; the segments themselves still run through `move_linear()`
 position-only IK. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper-linear validation, each segment uses destination-only coarse workspace
 validation while the normal joint, IK-continuity, rate/acceleration, following-error,
-fault, effort/contact, communication, and timeout guards remain active. `--measure-only`
+fault, effort/contact, communication, and timeout guards remain active. Because this is
+a qualitative hobby-arm line-motion test rather than precision metrology, its local
+completion criterion defaults to 3.0° per joint with an 8 s settle window; SDK-wide
+motion defaults remain stricter. `--measure-only`
 skips powered motion. The historical `paper_four_corner_hover_demo.py` filename remains
 only as a compatibility wrapper.
 

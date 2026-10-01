@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Relaxed only the supervised paper-linear experiment's completion criterion to 3.0°
+  per joint with an 8 s settle window (SDK-wide defaults remain unchanged). The previous
+  P=32 hardware replay reached within 2.18° but was still rejected by the global 1.43°
+  precision criterion.
+- Settle timeouts now identify the worst joint, report all per-joint target-minus-measured
+  errors, and include best-effort live motor voltage/current/moving/status diagnostics.
+
 - Restored the STS3215 follower position P gain to the factory value 32 instead of 16.
   Hardware testing showed a slow/shaky gravity-loaded Cartesian climb that stopped about
   0.071 rad from target, and an upstream SO-arm report independently documents a P=16

@@ -93,6 +93,8 @@ def _resolve_config(args: argparse.Namespace) -> SOARM101Config:
             calibration_path=calibration,
             configure_motors_on_connect=False,
             auto_enable_torque=False,
+            joint_position_tolerance_rad=np.deg2rad(args.settle_tolerance_deg),
+            motion_completion_timeout_s=args.settle_timeout_s,
         )
 
     follower = WorkstationProfileStore().load().follower
@@ -112,6 +114,8 @@ def _resolve_config(args: argparse.Namespace) -> SOARM101Config:
         calibration_path=calibration,
         configure_motors_on_connect=False,
         auto_enable_torque=False,
+        joint_position_tolerance_rad=np.deg2rad(args.settle_tolerance_deg),
+        motion_completion_timeout_s=args.settle_timeout_s,
     )
 
 
@@ -467,6 +471,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="supervised elevated-paper demonstration acceleration",
     )
     parser.add_argument(
+        "--settle-tolerance-deg",
+        type=float,
+        default=3.0,
+        help=(
+            "paper-demo joint completion tolerance in degrees; default 3.0 is intentionally "
+            "looser than the SDK-wide precision default for this supervised hobby-arm test"
+        ),
+    )
+    parser.add_argument(
+        "--settle-timeout-s",
+        type=float,
+        default=8.0,
+        help="paper-demo final settle timeout per Cartesian segment",
+    )
+    parser.add_argument(
         "--measure-only",
         action="store_true",
         help="save the workspace measurement but skip the powered paper demonstration",
@@ -502,6 +521,10 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             print(
                 f"Loaded saved teaching at {reference_height:.1f} mm reference height from "
                 f"{args.output}."
+            )
+            print(
+                f"Paper-demo settle criterion: {args.settle_tolerance_deg:.1f} deg for "
+                f"{args.settle_timeout_s:.1f} s."
             )
             print(
                 "The arm may start from any ordinary resting pose. This supervised paper "
@@ -612,6 +635,10 @@ def main() -> int:
         raise SystemExit("--speed-mm-s must be positive")
     if args.acceleration_mm_s2 <= 0.0:
         raise SystemExit("--acceleration-mm-s2 must be positive")
+    if not 0.1 <= args.settle_tolerance_deg <= 10.0:
+        raise SystemExit("--settle-tolerance-deg must be between 0.1 and 10")
+    if args.settle_timeout_s <= 0.0:
+        raise SystemExit("--settle-timeout-s must be positive")
     if args.replay and args.measure_only:
         raise SystemExit("--replay and --measure-only cannot be used together")
 
