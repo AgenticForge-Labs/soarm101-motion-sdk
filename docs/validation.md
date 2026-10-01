@@ -91,14 +91,14 @@ taught pose. It then preflights the elevated Cartesian endpoints and asks once f
 confirmation before motion. The path is
 `D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
 
-Each endpoint is derived from a known-reachable inferred joint configuration. The taught
-D→UP joint delta is applied to each taught A/B/C/D joint pose, joint limits are checked,
-and FK defines the corresponding Cartesian endpoint. Only D_UP was physically measured at
-the requested reference height; affine-inverse workspace Z at A_UP/B_UP/C_UP/center is
-reported as a diagnostic estimate, not as proof of constant physical height. The segment
-itself is still executed with `move_linear()` and position-only IK.
+Each replay endpoint is physically measured at the requested height. The operator teaches
+A_UP, B_UP, C_UP, D_UP, and CENTER_UP with the same fixed finger and physical height
+reference, and replay uses those model positions directly with their taught joint states as
+preferred IK seeds. A legacy one-UP report must be completed with `--upgrade-elevated`
+before replay. The segment itself is still executed with `move_linear()` and
+position-only IK.
 
-`--replay` reuses the saved teaching without touching A/B/C/D/UP again and can begin
+`--replay` reuses the saved base and elevated teaching without touching A/B/C/D/A_UP/B_UP/C_UP/D_UP/CENTER_UP again and can begin
 from an ordinary resting pose. For this supervised paper-linear test, every segment uses
 destination-only coarse workspace validation. The dynamic/joint/hardware safety stack
 remains active; only the coarse intermediate workspace geometry is relaxed because that

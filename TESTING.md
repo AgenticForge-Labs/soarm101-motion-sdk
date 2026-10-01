@@ -100,13 +100,12 @@ Teach A->B->C->D clockwise, then teach the fixed lower finger at the measured UP
 above D. Immediately after the UP capture, confirm the countdown ends with torque enabled
 and the arm holding that exact pose instead of sagging.
 
-The workflow generates powered endpoints from **known-reachable inferred joint poses**:
-the taught D→UP joint delta is applied to each taught A/B/C/D joint configuration, then FK
-defines D_UP/A_UP/B_UP/C_UP and the elevated-center target. This is the construction that
-previously passed endpoint preflight on the physical arm. Only D_UP was physically measured
-at the reference height, so the affine inverse is used to report estimated workspace Z for
-the other endpoints; those values are diagnostics and are not claimed to be exactly
-107 mm. The segments are still executed with `move_linear()` and position-only IK.
+The workflow requires **physically taught elevated endpoints** at A_UP, B_UP, C_UP, D_UP,
+and CENTER_UP. Each point is manually placed at the requested physical reference height
+with a ruler/spacer/gauge and its measured model pose plus joint state is stored. Replay
+uses those measured endpoint positions directly; it does not infer height from a single
+D_UP sample, an affine transform, or a copied joint delta. The segments are still executed
+with `move_linear()` and position-only IK.
 
 For this supervised paper test, coarse workspace geometry is deliberately target-only on
 each segment. The destination must pass the coarse workspace check, while joint limits,
@@ -119,7 +118,7 @@ After a teaching run, test replay without touching the paper again:
 python examples/paper_workspace_calibration.py --replay
 ```
 
-Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D/UP teaching,
+Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D plus physically taught A_UP/B_UP/C_UP/D_UP/CENTER_UP samples,
 counts down and enables torque to hold the current pose, opens the moving jaw, preflights
 the endpoints, then waits for one Enter before running
 D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. It must not require reteaching merely

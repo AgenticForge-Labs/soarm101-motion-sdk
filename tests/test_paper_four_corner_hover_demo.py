@@ -36,6 +36,7 @@ def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
     assert "--hover-height-mm" in result.stdout
     assert "--workspace-output" in result.stdout
     assert "--measure-only" in result.stdout
+    assert "--upgrade-elevated" in result.stdout
     assert "--replay" in result.stdout
     assert "--speed-mm-s" in result.stdout
     assert "--settle-tolerance-deg" in result.stdout
@@ -102,86 +103,71 @@ def test_workspace_orientation_drift_is_diagnostic_only() -> None:
     assert checks["measurement_accepted"] is True
     assert checks["diagnostic_up_orientation_drift_deg"] == pytest.approx(16.52)
 
-def test_reachable_demo_targets_use_taught_lift_delta_and_fk() -> None:
+def test_measured_demo_targets_use_exact_taught_elevated_samples() -> None:
     module = _load_example_module()
     rotation = tuple(tuple(float(value) for value in row) for row in np.eye(3))
 
-    def sample(name, joints):
+    def sample(name, xyz, shoulder_pan):
         return module.Sample(
             name=name,
-            tcp_xyz_mm=(0.0, 0.0, 0.0),
+            tcp_xyz_mm=tuple(float(value) for value in xyz),
             tcp_rpy_deg=(0.0, 0.0, 0.0),
             rotation_matrix=rotation,
-            joints_rad=dict(joints),
+            joints_rad={
+                "shoulder_pan": shoulder_pan,
+                "shoulder_lift": 0.1,
+                "elbow_flex": -0.2,
+                "wrist_flex": 0.3,
+                "wrist_roll": -0.4,
+            },
         )
 
-    base = {
-        "shoulder_pan": 0.0,
-        "shoulder_lift": 0.0,
-        "elbow_flex": 0.0,
-        "wrist_flex": 0.0,
-        "wrist_roll": 0.0,
+    elevated = {
+        "A_UP": sample("A_UP", (10.0, 20.0, 30.0), -0.4),
+        "B_UP": sample("B_UP", (40.0, 50.0, 60.0), -0.2),
+        "C_UP": sample("C_UP", (70.0, 80.0, 90.0), 0.1),
+        "D_UP": sample("D_UP", (100.0, 110.0, 120.0), 0.3),
+        "CENTER_UP": sample("CENTER_UP", (55.0, 65.0, 75.0), 0.0),
     }
-    corners = {
-        "A": sample("A", {**base, "shoulder_pan": -0.4, "shoulder_lift": -0.3}),
-        "B": sample("B", {**base, "shoulder_pan": 0.4, "shoulder_lift": -0.2}),
-        "C": sample("C", {**base, "shoulder_pan": 0.3, "shoulder_lift": 0.4}),
-        "D": sample("D", {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.5}),
+
+    positions, seeds = module.measured_demo_targets(elevated)
+
+    assert positions["D_UP"] == pytest.approx(np.array([0.100, 0.110, 0.120]))
+    assert positions["A_UP"] == pytest.approx(np.array([0.010, 0.020, 0.030]))
+    assert positions["B_UP"] == pytest.approx(np.array([0.040, 0.050, 0.060]))
+    assert positions["C_UP"] == pytest.approx(np.array([0.070, 0.080, 0.090]))
+    assert positions["D_UP_RETURN"] == pytest.approx(np.array([0.100, 0.110, 0.120]))
+    assert positions["CENTER_UP"] == pytest.approx(np.array([0.055, 0.065, 0.075]))
+    assert seeds["B_UP"] == pytest.approx(elevated["B_UP"].joints_rad)
+    assert seeds["D_UP_RETURN"] == pytest.approx(elevated["D_UP"].joints_rad)
+
+
+def test_legacy_up_sample_can_seed_elevated_upgrade() -> None:
+    module = _load_example_module()
+    payload = {
+        "samples": [
+            {
+                "name": "UP",
+                "tcp_xyz_mm": [1.0, 2.0, 3.0],
+                "tcp_rpy_deg": [4.0, 5.0, 6.0],
+                "rotation_matrix": np.eye(3).tolist(),
+                "joints_rad": {
+                    "shoulder_pan": 0.1,
+                    "shoulder_lift": 0.2,
+                    "elbow_flex": 0.3,
+                    "wrist_flex": 0.4,
+                    "wrist_roll": 0.5,
+                },
+            }
+        ]
     }
-    up = sample(
-        "UP",
-        {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.35, "wrist_flex": 0.1},
-    )
 
-    class Model:
-        @staticmethod
-        def forward(joints, tcp=None):
-            del tcp
-            return module.Pose(
-                np.array(
-                    [
-                        joints["shoulder_pan"],
-                        joints["shoulder_lift"],
-                        joints["wrist_flex"],
-                    ],
-                    dtype=float,
-                ),
-                np.eye(3),
-            )
+    d_up = module._load_d_up_for_upgrade(payload)
 
-    class Arm:
-        model = Model()
-        active_tcp = None
+    assert d_up.name == "D_UP"
+    assert d_up.tcp_xyz_mm == pytest.approx((1.0, 2.0, 3.0))
+    assert d_up.joints_rad["wrist_roll"] == pytest.approx(0.5)
 
-        @staticmethod
-        def get_joint_limits():
-            return {name: (-3.0, 3.0) for name in base}
-
-    positions, seeds = module.reachable_demo_targets(
-        Arm(),
-        corners=corners,
-        up_sample=up,
-    )
-
-    lift = {
-        name: up.joints_rad[name] - corners["D"].joints_rad[name]
-        for name in base
-    }
-    expected_b = {
-        name: corners["B"].joints_rad[name] + lift[name]
-        for name in base
-    }
-    assert seeds["D_UP"] == pytest.approx(up.joints_rad)
-    assert seeds["B_UP"] == pytest.approx(expected_b)
-    assert positions["B_UP"] == pytest.approx(
-        np.array(
-            [
-                expected_b["shoulder_pan"],
-                expected_b["shoulder_lift"],
-                expected_b["wrist_flex"],
-            ]
-        )
-    )
 
 def test_hold_until_operator_release_stops_before_waiting(monkeypatch) -> None:
     module = _load_example_module()

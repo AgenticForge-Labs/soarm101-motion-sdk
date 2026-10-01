@@ -62,18 +62,16 @@ changes require development discipline; robot use requires conservative hardware
 10. When scripting with the Python API or CLI, reuse the SDK's guarded operations rather
     than writing directly to servo registers unless the task is explicitly low-level
     hardware development and the safety implications are understood.
-11. Do not infer physical up or table height from model/base +Z. Use the measured workspace
-    calibration workflow. Its supervised elevated-paper replay currently derives
-    **known-reachable** endpoints by applying the taught D→UP joint delta to each taught
-    A/B/C/D joint configuration and taking FK. Only D_UP was physically measured at the
-    reference height; with one UP sample the other endpoint heights are diagnostic estimates,
-    not guaranteed equal physical heights. The affine workspace fit remains measurement
-    evidence/diagnostics, not execution authority. Because the generic coarse workspace model
-    is known to misrepresent this measured table, this specific supervised validation may use
-    destination-only coarse workspace checks while retaining joint, IK continuity,
-    rate/acceleration, following-error, fault, effort/contact, communication, and timeout
-    guards. Broader autonomous Cartesian use remains unvalidated until hardware evidence is
-    reviewed.
+11. Do not infer physical up or table height from model/base +Z or from one elevated
+    correspondence. The supervised elevated-paper replay requires A_UP, B_UP, C_UP, D_UP,
+    and CENTER_UP to be physically taught at the requested reference height and uses those
+    measured endpoints directly. Legacy one-UP reports must be upgraded before replay.
+    The affine workspace fit remains measurement evidence/diagnostics, not execution
+    authority. Because the generic coarse workspace model is known to misrepresent this
+    measured table, this specific supervised validation may use destination-only coarse
+    workspace checks while retaining joint, IK continuity, rate/acceleration,
+    following-error, fault, effort/contact, communication, and timeout guards. Broader
+    autonomous Cartesian use remains unvalidated until hardware evidence is reviewed.
 12. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
     agents; task-solving strategies, observe/action loops, model/provider instructions, and
     benchmark policy belong outside the SDK-facing CLI reference.

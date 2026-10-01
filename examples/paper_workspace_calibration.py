@@ -183,70 +183,34 @@ def evaluate_measurement_acceptance(
     return measurement_ok, checks
 
 
-def _joint_delta(first: dict[str, float], second: dict[str, float]) -> dict[str, float]:
-    return {name: float(second[name] - first[name]) for name in first}
-
-
-def _offset_joints(
-    base: dict[str, float],
-    delta: dict[str, float],
-) -> dict[str, float]:
-    return {name: float(base[name] + delta[name]) for name in base}
-
-
-def reachable_demo_targets(
-    arm: SOARM101,
-    *,
-    corners: dict[str, Sample],
-    up_sample: Sample,
+def measured_demo_targets(
+    elevated: dict[str, Sample],
 ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float]]]:
-    """Build Cartesian endpoints from known-reachable inferred joint configurations.
+    """Use physically taught elevated points directly as replay endpoints."""
 
-    The taught D->UP joint delta is applied to each taught paper corner. FK of those
-    joint configurations defines the Cartesian endpoints. The demonstration still uses
-    move_linear() between endpoints; this construction only makes each endpoint itself
-    reachable by definition.
-
-    With only one physically measured UP sample, this does not prove that every elevated
-    endpoint is exactly the same physical height above the paper. The saved affine workspace
-    transform is therefore used only to report an estimated physical Z for diagnostics.
-    """
-
-    required = {"A", "B", "C", "D"}
-    if set(corners) != required:
-        raise ValueError(f"expected corners {sorted(required)}, got {sorted(corners)}")
-
-    lift_delta = _joint_delta(corners["D"].joints_rad, up_sample.joints_rad)
-    elevated_joints = {
-        "D_UP": dict(up_sample.joints_rad),
-        "A_UP": _offset_joints(corners["A"].joints_rad, lift_delta),
-        "B_UP": _offset_joints(corners["B"].joints_rad, lift_delta),
-        "C_UP": _offset_joints(corners["C"].joints_rad, lift_delta),
-        "D_UP_RETURN": dict(up_sample.joints_rad),
-    }
-    center_base = {
-        name: float(
-            np.mean([corners[label].joints_rad[name] for label in ("A", "B", "C", "D")])
+    required = {"A_UP", "B_UP", "C_UP", "D_UP", "CENTER_UP"}
+    if set(elevated) != required:
+        raise ValueError(
+            f"expected elevated samples {sorted(required)}, got {sorted(elevated)}"
         )
-        for name in up_sample.joints_rad
-    }
-    elevated_joints["CENTER_UP"] = _offset_joints(center_base, lift_delta)
-
-    limits = arm.get_joint_limits()
-    for target_name, joints in elevated_joints.items():
-        for joint_name, value in joints.items():
-            lower, upper = limits[joint_name]
-            if not lower <= value <= upper:
-                raise RuntimeError(
-                    f"{target_name} inferred {joint_name}={value:.4f} rad is outside "
-                    f"{lower:.4f}..{upper:.4f}"
-                )
 
     positions = {
-        name: arm.model.forward(joints, tcp=arm.active_tcp).position.copy()
-        for name, joints in elevated_joints.items()
+        "D_UP": elevated["D_UP"].position_m.copy(),
+        "A_UP": elevated["A_UP"].position_m.copy(),
+        "B_UP": elevated["B_UP"].position_m.copy(),
+        "C_UP": elevated["C_UP"].position_m.copy(),
+        "D_UP_RETURN": elevated["D_UP"].position_m.copy(),
+        "CENTER_UP": elevated["CENTER_UP"].position_m.copy(),
     }
-    return positions, elevated_joints
+    preferred_seeds = {
+        "D_UP": dict(elevated["D_UP"].joints_rad),
+        "A_UP": dict(elevated["A_UP"].joints_rad),
+        "B_UP": dict(elevated["B_UP"].joints_rad),
+        "C_UP": dict(elevated["C_UP"].joints_rad),
+        "D_UP_RETURN": dict(elevated["D_UP"].joints_rad),
+        "CENTER_UP": dict(elevated["CENTER_UP"].joints_rad),
+    }
+    return positions, preferred_seeds
 
 
 def preflight_demo_targets(
@@ -393,14 +357,147 @@ def _sample_from_payload(payload: dict[str, object], name: str) -> Sample:
     raise ValueError(f"saved report is missing sample {name}")
 
 
-def load_saved_teaching(path: Path) -> tuple[dict[str, object], list[Sample], Sample]:
+def _load_report(path: Path) -> dict[str, object]:
     payload_obj = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload_obj, dict):
         raise ValueError("saved report root must be a JSON object")
-    payload = dict(payload_obj)
-    corners = [_sample_from_payload(payload, name) for name in ("A", "B", "C", "D")]
-    up = _sample_from_payload(payload, "UP")
-    return payload, corners, up
+    return dict(payload_obj)
+
+
+def _load_corners(payload: dict[str, object]) -> list[Sample]:
+    return [_sample_from_payload(payload, name) for name in ("A", "B", "C", "D")]
+
+
+def _load_d_up_for_upgrade(payload: dict[str, object]) -> Sample:
+    try:
+        return _sample_from_payload(payload, "D_UP")
+    except ValueError:
+        legacy = _sample_from_payload(payload, "UP")
+        return Sample(
+            name="D_UP",
+            tcp_xyz_mm=legacy.tcp_xyz_mm,
+            tcp_rpy_deg=legacy.tcp_rpy_deg,
+            rotation_matrix=legacy.rotation_matrix,
+            joints_rad=dict(legacy.joints_rad),
+        )
+
+
+def load_saved_teaching(
+    path: Path,
+) -> tuple[dict[str, object], list[Sample], dict[str, Sample]]:
+    payload = _load_report(path)
+    corners = _load_corners(payload)
+    elevated: dict[str, Sample] = {}
+    missing: list[str] = []
+    for name in ("A_UP", "B_UP", "C_UP", "D_UP", "CENTER_UP"):
+        try:
+            elevated[name] = _sample_from_payload(payload, name)
+        except ValueError:
+            missing.append(name)
+    if missing:
+        raise ValueError(
+            "saved paper report does not contain physically taught elevated targets "
+            f"({', '.join(missing)} missing). Run this script once with "
+            "--upgrade-elevated before --replay."
+        )
+    return payload, corners, elevated
+
+
+def _merge_samples(
+    payload: dict[str, object],
+    samples: list[Sample],
+) -> None:
+    payload["samples"] = [asdict(sample) for sample in samples]
+
+
+def run_elevated_upgrade(args: argparse.Namespace, config: SOARM101Config) -> int:
+    """Add physically measured elevated A/B/C/center targets to a legacy report."""
+
+    report = _load_report(args.output)
+    corners = _load_corners(report)
+    d_up = _load_d_up_for_upgrade(report)
+    reference_height = float(report.get("reference_height_mm", 0.0))
+    if reference_height <= 0.0:
+        raise RuntimeError("saved report has no valid reference_height_mm")
+
+    print("Paper elevated-target teaching upgrade")
+    print(
+        f"Reusing saved A/B/C/D and the physically measured D_UP at "
+        f"{reference_height:.1f} mm from {args.output}."
+    )
+    print(
+        "You will manually teach A_UP, B_UP, C_UP, and CENTER_UP at that same "
+        "physical height. Use the same rigid spacer/ruler/gauge method used for D_UP."
+    )
+    print("Mark or measure the paper center before teaching CENTER_UP.")
+    print("Keep the GUI disconnected from this follower port.")
+
+    with SOARM101(config) as arm:
+        try:
+            store = WorkspaceCalibrationStore(config.robot_id, path=args.workspace_output)
+            saved = store.load()
+            if arm.calibration_id and saved.arm_calibration_id != arm.calibration_id:
+                raise RuntimeError(
+                    "saved workspace calibration does not match the active motor calibration"
+                )
+
+            input("\nPress Enter to enable torque briefly and open the moving jaw... ")
+            arm.enable()
+            arm.tool.open()
+            print("Moving jaw is open. Relaxing all motors for manual teaching.")
+            arm.relax()
+
+            elevated = {
+                "D_UP": d_up,
+                "A_UP": _capture(
+                    arm,
+                    "A_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above A",
+                ),
+                "B_UP": _capture(
+                    arm,
+                    "B_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above B",
+                ),
+                "C_UP": _capture(
+                    arm,
+                    "C_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above C",
+                ),
+                "CENTER_UP": _capture(
+                    arm,
+                    "CENTER_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above paper center",
+                ),
+            }
+
+            all_samples = [*corners, *[elevated[name] for name in (
+                "A_UP", "B_UP", "C_UP", "D_UP", "CENTER_UP"
+            )]]
+            _merge_samples(report, all_samples)
+            report["schema_version"] = 3
+            report["elevated_targets_completed_at"] = datetime.now(timezone.utc).isoformat()
+            report["elevated_target_strategy"] = "physically_taught_at_each_replay_endpoint"
+            report["demo_target_strategy"] = "direct_physically_taught_elevated_endpoints"
+            report["autonomous_motion_attempted"] = False
+            report["demo_completed"] = False
+            report["demo_moves"] = []
+            report.pop("demo_error", None)
+            report.pop("demo_preflight", None)
+            report.pop("demo_targets_model_xyz_mm", None)
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+            print(
+                f"\nElevated teaching saved to {args.output}. "
+                "No powered Cartesian replay was attempted."
+            )
+            print("Next run with --replay to preflight and execute the measured targets.")
+            return 0
+        finally:
+            try:
+                arm.relax()
+            except Exception as exc:
+                print(f"WARNING: could not confirm relax during cleanup: {exc}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -500,19 +597,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="save the workspace measurement but skip the powered paper demonstration",
     )
     parser.add_argument(
+        "--upgrade-elevated",
+        action="store_true",
+        help=(
+            "reuse a legacy saved A/B/C/D and D_UP teaching, manually teach "
+            "A_UP/B_UP/C_UP/CENTER_UP at the same physical reference height, and save "
+            "the upgraded report without powered replay"
+        ),
+    )
+    parser.add_argument(
         "--replay",
         action="store_true",
         help=(
-            "reuse the saved A/B/C/D/UP teaching in --output and run the Cartesian "
-            "linear sequence from the arm's current resting pose"
+            "reuse saved physically taught A_UP/B_UP/C_UP/D_UP/CENTER_UP endpoints "
+            "and run the Cartesian linear sequence from the arm's current resting pose"
         ),
     )
     return parser
 
 
 def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
-    report, samples, up = load_saved_teaching(args.output)
-    corner_samples = {sample.name: sample for sample in samples}
+    report, samples, elevated = load_saved_teaching(args.output)
     reference_height = float(report.get("reference_height_mm", 0.0))
     if reference_height <= 0.0:
         raise RuntimeError("saved report has no valid reference_height_mm")
@@ -536,15 +641,14 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 f"{args.settle_timeout_s:.1f} s."
             )
             print(
-                f"Replay uses the taught D->UP joint change (trained at "
-                f"{saved.reference_height_m * 1000.0:.1f} mm) applied to each taught corner, "
-                "then FK to obtain known-reachable Cartesian endpoints. "
-                f"Cartesian IK knots are limited to "
-                f"{PAPER_CARTESIAN_WAYPOINT_SPACING_M * 1000.0:.1f} mm spacing."
+                f"Replay uses physically taught elevated endpoints at "
+                f"{saved.reference_height_m * 1000.0:.1f} mm: "
+                "A_UP, B_UP, C_UP, D_UP, and CENTER_UP. "
+                "No elevated endpoint is inferred from another corner."
             )
             print(
-                "Only D_UP was physically measured at the reference height; estimated workspace "
-                "Z for the other reachable endpoints is diagnostic, not a guaranteed constant height."
+                "Cartesian move_linear() now solves the minimum-jerk Cartesian trajectory "
+                "directly at host command-rate IK samples."
             )
             print(
                 "The arm may start from any ordinary resting pose. This supervised paper "
@@ -554,34 +658,27 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             _countdown_hold(arm)
             arm.tool.open()
 
-            demo_positions, preferred_seeds = reachable_demo_targets(
-                arm,
-                corners=corner_samples,
-                up_sample=up,
-            )
+            demo_positions, preferred_seeds = measured_demo_targets(elevated)
             print("\nRead-only endpoint preflight while holding the current pose...")
             preflight = preflight_demo_targets(
                 arm,
                 demo_positions,
                 preferred_seeds=preferred_seeds,
-                rotation=up.rotation,
+                rotation=elevated["D_UP"].rotation,
             )
             for item in preflight:
                 xyz = item["target_model_xyz_mm"]
                 assert isinstance(xyz, list)
-                physical = saved.physical_position_from_model(
-                    np.asarray(xyz, dtype=float) / 1000.0
-                )
                 print(
                     f"  {item['name']}: model "
                     f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
-                    f"estimated workspace Z={physical[2] * 1000.0:.1f} mm; "
+                    f"physically taught Z={reference_height:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
 
             report["replayed_at"] = datetime.now(timezone.utc).isoformat()
             report["demo_target_strategy"] = (
-                "known_reachable_fk_from_taught_corner_plus_joint_lift"
+                "direct_physically_taught_elevated_endpoints"
             )
             report["demo_preflight"] = preflight
             report["demo_targets_model_xyz_mm"] = {
@@ -605,7 +702,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 run_demo_targets(
                     arm,
                     demo_positions,
-                    rotation=up.rotation,
+                    rotation=elevated["D_UP"].rotation,
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
@@ -663,10 +760,13 @@ def main() -> int:
         raise SystemExit("--settle-tolerance-deg must be between 0.1 and 10")
     if args.settle_timeout_s <= 0.0:
         raise SystemExit("--settle-timeout-s must be positive")
-    if args.replay and args.measure_only:
-        raise SystemExit("--replay and --measure-only cannot be used together")
+    modes = sum(bool(value) for value in (args.replay, args.upgrade_elevated, args.measure_only))
+    if modes > 1:
+        raise SystemExit("--replay, --upgrade-elevated, and --measure-only are mutually exclusive")
 
     config = _resolve_config(args)
+    if args.upgrade_elevated:
+        return run_elevated_upgrade(args, config)
     if args.replay:
         return run_saved_replay(args, config)
 
@@ -688,8 +788,8 @@ def main() -> int:
     print("B->C and D->A are the LONG/HEIGHT edges.")
     print()
     print(
-        f"After D, you will MANUALLY place the same fixed finger exactly "
-        f"{args.reference_height_mm:.1f} mm physically above D."
+        f"After the table corners, you will MANUALLY teach A_UP, B_UP, C_UP, D_UP, "
+        f"and CENTER_UP exactly {args.reference_height_mm:.1f} mm above the paper."
     )
     print(
         "Use a ruler, rigid spacer, paper edge, gauge block, or another physical reference. "
@@ -697,12 +797,13 @@ def main() -> int:
         "finger at the measured physical point."
     )
     print(
-        "That manual UP point is required because model +Z is not assumed to mean physical up."
+        "These measured elevated points are required because model +Z and a single UP "
+        "measurement are not assumed to define constant physical height across the paper."
     )
     print("Keep the GUI disconnected from this follower port.")
 
     report: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "robot_id": config.robot_id,
         "port": config.port,
@@ -731,20 +832,48 @@ def main() -> int:
             samples = [a, b, c, d]
 
             print(
-                f"\nUP: manually raise the SAME fixed finger {args.reference_height_mm:.1f} mm "
-                "physically straight away from the table above D."
+                f"\nNow teach the replay endpoints at exactly "
+                f"{args.reference_height_mm:.1f} mm physical height."
             )
             print(
-                "Do not infer direction from the SDK axes. Measure the physical height directly."
+                "Use the same ruler, rigid spacer, gauge block, or other physical reference "
+                "at every point. Do not infer physical up from SDK/model axes."
             )
-            up = _capture(
+            d_up = _capture(
                 arm,
-                "UP",
-                f"touch/hold the measured point {args.reference_height_mm:.1f} mm above D",
+                "D_UP",
+                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above D",
             )
+            a_up = _capture(
+                arm,
+                "A_UP",
+                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above A",
+            )
+            b_up = _capture(
+                arm,
+                "B_UP",
+                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above B",
+            )
+            c_up = _capture(
+                arm,
+                "C_UP",
+                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above C",
+            )
+            center_up = _capture(
+                arm,
+                "CENTER_UP",
+                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above paper center",
+            )
+            elevated = {
+                sample.name: sample
+                for sample in (a_up, b_up, c_up, d_up, center_up)
+            }
             _countdown_hold(arm)
 
-            report["samples"] = [asdict(sample) for sample in [*samples, up]]
+            report["samples"] = [
+                asdict(sample)
+                for sample in [*samples, a_up, b_up, c_up, d_up, center_up]
+            ]
             points = {sample.name: sample.position_m for sample in samples}
             distances = perimeter_distances_mm(points)
             report["model_distances_mm"] = distances
@@ -768,14 +897,14 @@ def main() -> int:
 
             calibration = fit_paper_workspace(
                 {sample.name: sample.position_m for sample in samples},
-                up.position_m,
+                d_up.position_m,
                 robot_id=config.robot_id,
                 arm_calibration_id=calibration_id,
                 width_m=args.width_mm / 1000.0,
                 height_m=args.height_mm / 1000.0,
                 reference_height_m=args.reference_height_mm / 1000.0,
             )
-            up_orientation_drift = orientation_delta_deg(d.rotation, up.rotation)
+            up_orientation_drift = orientation_delta_deg(d.rotation, d_up.rotation)
 
             metrics = {
                 "workspace_id": calibration.workspace_id,
@@ -902,18 +1031,13 @@ def main() -> int:
                 )
                 return 0
 
-            corner_samples = {sample.name: sample for sample in samples}
-            demo_positions, preferred_seeds = reachable_demo_targets(
-                arm,
-                corners=corner_samples,
-                up_sample=up,
-            )
+            demo_positions, preferred_seeds = measured_demo_targets(elevated)
             report["demo_target_strategy"] = (
-                "known_reachable_fk_from_taught_corner_plus_joint_lift"
+                "direct_physically_taught_elevated_endpoints"
             )
             report["measured_up_delta_model_mm"] = [
                 float(value * 1000.0)
-                for value in (up.position_m - d.position_m)
+                for value in (d_up.position_m - d.position_m)
             ]
             report["demo_targets_model_xyz_mm"] = {
                 name: [float(value * 1000.0) for value in position]
@@ -928,7 +1052,7 @@ def main() -> int:
                 arm,
                 demo_positions,
                 preferred_seeds=preferred_seeds,
-                rotation=up.rotation,
+                rotation=d_up.rotation,
             )
             report["demo_preflight"] = preflight
             for item in preflight:
@@ -945,17 +1069,15 @@ def main() -> int:
             )
 
             print(
-                "\nThe arm is holding the manually taught UP pose."
+                "\nThe arm is holding the manually taught CENTER_UP pose."
             )
             print(
-                "The Cartesian endpoints come from known-reachable FK poses inferred from "
-                "the taught corners plus the taught D->UP joint change:"
+                "Every replay endpoint was physically taught at the requested height:"
             )
             print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                f"The D->UP posture change was taught at {args.reference_height_mm:.1f} mm "
-                "physical height. Each endpoint is reachable by construction; the motion "
-                "between endpoints is still Cartesian move_linear()."
+                f"Each endpoint was measured at {args.reference_height_mm:.1f} mm physical "
+                "height. The motion between endpoints is still Cartesian move_linear()."
             )
             input(
                 "\nPress Enter to run the full Cartesian linear path, "
@@ -973,7 +1095,7 @@ def main() -> int:
                 run_demo_targets(
                     arm,
                     demo_positions,
-                    rotation=up.rotation,
+                    rotation=d_up.rotation,
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
