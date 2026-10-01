@@ -12,9 +12,10 @@ motion between those endpoints is still executed with Cartesian move_linear() an
 position-only IK.
 
 A saved teaching can also be replayed later from any ordinary resting pose with --replay.
-The first Cartesian move to D_UP validates the destination but relaxes the coarse
-workspace-path model for the unknown starting pose; subsequent paper segments use the
-normal full workspace path checks.
+For this fixed supervised paper sequence, every Cartesian segment uses target-only coarse
+workspace checking because the generic model envelope is not yet calibrated to the
+measured table; the normal joint, dynamic, following-error, fault, effort, and timing
+guards remain active.
 
 The resulting calibration records:
 - where the taught table plane lies in model coordinates;
