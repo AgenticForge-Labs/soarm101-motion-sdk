@@ -79,6 +79,7 @@ class WorkspaceCalibration:
     model_x_scale: float
     model_y_scale: float
     model_up_scale: float
+    linear_condition_number: float
     model_xy_angle_deg: float
     up_vs_table_normal_angle_deg: float
     up_reference_plane_height_m: float
@@ -106,6 +107,7 @@ class WorkspaceCalibration:
             "model_x_scale",
             "model_y_scale",
             "model_up_scale",
+            "linear_condition_number",
         ):
             value = float(getattr(self, name))
             if not math.isfinite(value) or value <= 0.0:
@@ -176,6 +178,17 @@ class WorkspaceCalibration:
         origin = np.asarray(calibration.model_origin_m, dtype=float)
         physical = np.asarray([x_m, y_m, z_m], dtype=float)
         return origin + linear @ physical
+
+    def physical_position_from_model(self, model_position_m: Sequence[float]) -> FloatArray:
+        """Invert the local affine map back into measured physical paper coordinates."""
+        calibration = self.validated()
+        linear = np.asarray(calibration.physical_to_model_linear, dtype=float)
+        origin = np.asarray(calibration.model_origin_m, dtype=float)
+        model_position = np.asarray(
+            _vector3(model_position_m, label="model_position_m"),
+            dtype=float,
+        )
+        return np.linalg.solve(linear, model_position - origin)
 
 
 def _workspace_fingerprint(payload: Mapping[str, object]) -> str:
@@ -251,7 +264,12 @@ def fit_paper_workspace(
     model_x_scale = float(np.linalg.norm(x_column))
     model_y_scale = float(np.linalg.norm(y_column))
     model_up_scale = float(np.linalg.norm(up_column))
-    if min(model_x_scale, model_y_scale, model_up_scale) <= 1e-9:
+    linear = np.asarray(coefficients[:3, :].T, dtype=float)
+    linear_condition_number = float(np.linalg.cond(linear))
+    if (
+        min(model_x_scale, model_y_scale, model_up_scale) <= 1e-9
+        or not math.isfinite(linear_condition_number)
+    ):
         raise ValueError("paper workspace fit is degenerate")
 
     x_unit = x_column / model_x_scale
@@ -300,6 +318,7 @@ def fit_paper_workspace(
         "model_x_scale": model_x_scale,
         "model_y_scale": model_y_scale,
         "model_up_scale": model_up_scale,
+        "linear_condition_number": linear_condition_number,
         "model_xy_angle_deg": model_xy_angle_deg,
         "up_vs_table_normal_angle_deg": up_vs_table_normal_angle_deg,
         "up_reference_plane_height_m": up_reference_plane_height_m,
