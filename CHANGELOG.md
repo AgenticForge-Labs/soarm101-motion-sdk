@@ -2,12 +2,14 @@
 
 ## Unreleased
 
-- Paper height validation now requires direct physical teaching of A_UP, B_UP, C_UP,
-  D_UP, and CENTER_UP at the requested reference height. The observed one-UP replay
-  produced ~30 mm estimated physical height at A/B despite a 107 mm D_UP teaching, so
-  replay no longer infers elevated endpoints from affine geometry, Cartesian translation,
-  or copied joint deltas. Legacy reports can be completed with `--upgrade-elevated`
-  without reteaching the paper corners; old incomplete reports fail closed on `--replay`.
+- Superseded the temporary multi-height teaching approach from #61. The original
+  A/B/C/D + one physically measured D_UP workflow remains authoritative. Hardware showed
+  that the reachable FK replay landed at ~30 mm workspace Z at A/B and ~107 mm at C/D;
+  replay now preserves each reachable endpoint's calibrated workspace X/Y and explicitly
+  sets workspace Z to the single measured reference height before mapping back to model
+  coordinates. Every corrected endpoint is read-only IK-preflighted before motion.
+  Replay also preflights and performs a 10 mm calibrated workspace-Z clearance lift before
+  the first long move from a low/resting pose. No additional elevated teaching is required.
 
 - Cartesian `move_linear()` no longer solves sparse IK waypoints and then linearly
   interpolates between those joint-space knots. Hardware testing showed that reducing the
