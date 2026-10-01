@@ -199,8 +199,6 @@ def test_cosine_cruise_profile_uses_requested_speed_as_cruise_ceiling() -> None:
 def test_position_only_cartesian_reprojection_reduces_joint_jerk(monkeypatch) -> None:
     from types import SimpleNamespace
 
-    import numpy as np
-
     with SOARM101.simulated() as arm:
         arm.enable()
         start = dict(arm.get_joint_positions().positions)
