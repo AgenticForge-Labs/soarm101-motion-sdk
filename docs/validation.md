@@ -60,9 +60,10 @@ Use:
 python examples/paper_workspace_calibration.py --reference-height-mm 50
 ```
 
-Despite the historical filename, this workflow is now **manual workspace calibration**,
-not a hover demo. The old `--hover-height-mm` spelling remains as an alias for
-`--reference-height-mm`; it does not command motion.
+This is **manual workspace calibration**, not a hover demo. The historical
+`examples/paper_four_corner_hover_demo.py` filename remains only as a safe compatibility
+wrapper. The old `--hover-height-mm` spelling also remains as an alias for
+`--reference-height-mm`; neither compatibility path commands Cartesian motion.
 
 Teach:
 
