@@ -125,30 +125,26 @@ the physical-height teaching reference. After the final UP teaching sample, a sh
 countdown is followed by torque enable so the current pose is held before the operator
 starts motion.
 
-For the powered demonstration, the single D_UP measurement remains the physical-height
-reference. The earlier copied D→UP joint-delta path was useful because it stayed on a
-reachable IK branch, but hardware showed its estimated physical heights varied from about
-30 mm at A/B to about 107 mm at C/D. The current replay therefore uses those reachable
-endpoints only as anchors: each endpoint is inverse-mapped into calibrated workspace
-coordinates, its workspace X/Y is retained, workspace Z is replaced by the measured
-reference height, and the corrected point is mapped back into model space. Every corrected
-target must pass read-only IK preflight before motion. No additional elevated teaching is
-required. Hardware showed that a straight Cartesian segment between valid A_UP and B_UP
-endpoints still contains an intermediate pose outside the unchanged IK tolerance. Powered
-paper traversal therefore reuses the endpoint joint solutions with smooth joint-space
-interpolation. Each joint-space locus is FK-sampled in calibrated coordinates before
-execution and must not dip more than 5 mm below the lower endpoint.
+For replay, the known-reachable FK construction is used only to preserve each endpoint's
+calibrated workspace X/Y and provide useful IK seeds. Every endpoint's workspace Z is
+replaced with the single measured D_UP reference height, and CENTER_UP is generated at the
+true calibrated paper midpoint. Each corrected endpoint must pass read-only IK preflight.
 
-The saved teaching can be reused with `--replay`. Replay may start from an ordinary
-resting pose. Before entering the paper path, software requests one 20 mm calibrated-
-workspace-Z rise by default from the measured current pose. The clearance is preflighted
-for fixed calibrated workspace X/Y, nondecreasing physical Z, sequential IK continuity,
-and effective joint limits. With the default 20 mm command, measured workspace Z must
-increase by at least 10 mm or replay refuses paper travel. The traversal then begins at A_UP. The generic
-model-frame floor is bypassed only for those already-preflighted clearance moves because
-it is known to disagree with the measured table. The later paper segments use
-**target-only coarse workspace validation**. Joint limits, command-step/rate/acceleration,
-faults, following-error, effort/contact, communication, and timing guards remain active.
+The powered perimeter is then executed with Cartesian `move_linear()`, not joint replay.
+Because the workspace mapping is affine, the straight model-space segment connecting two
+leveled endpoints corresponds to a straight constant-height segment in calibrated
+workspace coordinates. The paper workflow uses a 20 Hz host cadence, and planned Cartesian
+execution uses the same responsive servo-side profile as teleoperation
+(`speed_raw=0`, `acceleration_raw=254`). Host-side trajectory planning remains
+authoritative for motion speed and acceleration.
+
+The saved teaching can be reused with `--replay` from an ordinary resting pose. Before
+entering the paper path, software performs the separately preflighted calibrated-workspace-Z
+clearance and requires the configured measured rise. The generic model-frame floor is not
+authoritative for that calibrated startup move, and paper segments use only the documented
+generic destination sanity check. Joint limits, IK continuity, command-step/rate/
+acceleration, faults, following-error, effort/contact, communication, settling, and timing
+guards remain active.
 
 ## Relationship to the coarse floor guard
 
