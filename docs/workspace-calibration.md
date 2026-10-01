@@ -92,17 +92,22 @@ The calibration is content-addressed with a workspace ID and stored by default a
 
 The diagnostic report is also written in the working directory.
 
-## Activation gate
+## Measurement acceptance gate
 
 The workflow only writes the authoritative workspace calibration when:
 
 - the four taught corners form a sufficiently consistent plane;
-- the manually demonstrated physical-UP direction agrees with that plane's normal within
-  the configured tolerance; and
+- the full physical-to-model affine fit has a sufficiently small residual;
+- the 3-D linear mapping is well-conditioned enough to invert reliably;
 - D -> UP tool-orientation drift is small enough that the fixed-finger probe approximation
   is not obviously corrupted by a changing TCP offset; and
 - the model displacement produced by the measured UP height has a plausible scale rather
   than collapsing toward zero or expanding implausibly.
+
+The angle between the mapped physical-UP vector and the Euclidean normal of the
+model-space paper plane is retained as a diagnostic, **not** as an acceptance condition.
+A skewed local affine mapping can legitimately make those directions non-parallel; that
+skew is part of what this calibration is intended to measure.
 
 Even when saved, a newly measured calibration has:
 
