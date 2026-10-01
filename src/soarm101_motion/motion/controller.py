@@ -604,9 +604,39 @@ class MotionController:
             else:
                 stable_since = None
             if now >= deadline:
+                errors = {
+                    name: float(target[name] - actual[name])
+                    for name in ARM_JOINTS
+                }
+                worst_joint = max(ARM_JOINTS, key=lambda name: abs(errors[name]))
+                detail = ", ".join(
+                    f"{name}={errors[name]:+.4f}"
+                    for name in ARM_JOINTS
+                )
+                diagnostic_detail = ""
+                try:
+                    diagnostics = {
+                        item.name: item
+                        for item in self.backend.diagnostics()
+                        if item.name in ARM_JOINTS
+                    }
+                    parts = []
+                    for name in ARM_JOINTS:
+                        item = diagnostics.get(name)
+                        if item is None:
+                            continue
+                        parts.append(
+                            f"{name}[V={item.voltage_v},I={item.current_raw},"
+                            f"moving={item.moving},status={item.status}]"
+                        )
+                    if parts:
+                        diagnostic_detail = "; diagnostics: " + ", ".join(parts)
+                except Exception:
+                    diagnostic_detail = ""
                 raise MotionTimeoutError(
                     f"motion did not settle within {self.config.motion_completion_timeout_s:.2f}s; "
-                    f"maximum joint error is {error:.4f} rad"
+                    f"worst={worst_joint} error={abs(errors[worst_joint]):.4f} rad; "
+                    f"joint errors(target-measured): {detail}{diagnostic_detail}"
                 )
             time.sleep(self.config.feedback_poll_interval_s)
 
