@@ -130,21 +130,30 @@ stick-slip/shake even though teleoperation on the same arm was smooth.
 
 The paper workflow also uses a 20 Hz host cadence and a 1 mm Cartesian planning-density
 bound. Every emitted command sample is a sequential-IK solution of the Cartesian
-trajectory. The #73 launch-only experiment did not remove the visible shake and A_UP->B_UP
-again failed at an intermediate numerical IK miss (0.812 mm against the unchanged 0.5 mm
-tolerance), so that launch change is superseded.
+trajectory. The #73 launch-only experiment did not remove the visible shake. After #74,
+hardware was still very shaky and A_UP->B_UP again failed before motion, now at 0.794 mm
+against the unchanged 0.5 mm tolerance.
 
-Position-only paths now receive a deterministic smooth-seed reprojection pass. A five-tap
-joint filter produces seeds only; every interior Cartesian sample is re-solved at the same
-hard tolerance, and the refined sequence is used only if discrete joint jerk decreases.
+That run exposed a separate implementation regression: calibrated `move_linear()` still
+enabled the older per-sample synchronized servo-speed caps even though the documented
+contract and teleoperation baseline require fixed `speed_raw=0`,
+`acceleration_raw=254`. Cartesian execution now explicitly uses the fixed teleoperation
+profile; synchronized per-joint servo arrival remains available for joint-space moves.
+
+Position-only paths retain deterministic smooth-seed reprojection. In addition, if forward
+sequential IK hits a numerical pocket, the planner can use an exact reachable endpoint
+solution as a second boundary condition and solve the same Cartesian samples backward.
+The paper workflow reuses its read-only endpoint-preflight joint solution for this purpose.
+A reverse path is accepted only if it reconnects continuously to the measured start and
+every sample satisfies the same hard tolerance, joint limits, and dynamic guards.
 Separately, when soft IK continuity/joint-centering regularization prevents a geometrically
 reachable sample from meeting the hard tolerance, a task-space-only refinement is attempted
 without relaxing that tolerance.
 
-If teleoperation is smooth but `move_linear()` remains shaky after this change, the next
+If `move_linear()` remains shaky after the actual servo-profile correction, the next
 comparison should be planned joint derivatives, encoder-quantized command deltas, measured
-following error, and actual cycle timing; that would isolate IK/Jacobian/quantization
-effects from servo tracking.
+following error, and actual cycle timing; that would isolate remaining
+IK/Jacobian/quantization effects from servo tracking.
 
 ## Current hardware finding
 
