@@ -55,6 +55,7 @@ class MotionController(_BaseMotionController):
         look_at: np.ndarray | None,
         speed: float | None,
         acceleration: float | None,
+        target_seed: Mapping[str, float] | None,
     ) -> tuple[Any, ...]:
         return (
             cls._pose_key(target),
@@ -63,6 +64,11 @@ class MotionController(_BaseMotionController):
             None if look_at is None else tuple(float(value) for value in look_at.ravel()),
             speed,
             acceleration,
+            (
+                None
+                if target_seed is None
+                else tuple(sorted((str(name), float(value)) for name, value in target_seed.items()))
+            ),
         )
 
     def plan_linear(
@@ -74,6 +80,7 @@ class MotionController(_BaseMotionController):
         look_at: np.ndarray | None = None,
         speed: float | None = None,
         acceleration: float | None = None,
+        target_seed: Mapping[str, float] | None = None,
     ) -> PlannedPath:
         with self._state_lock:
             self._ensure_idle_locked()
@@ -84,6 +91,7 @@ class MotionController(_BaseMotionController):
                 look_at=look_at,
                 speed=speed,
                 acceleration=acceleration,
+                target_seed=target_seed,
             )
             key = self._linear_key(
                 target,
@@ -92,6 +100,7 @@ class MotionController(_BaseMotionController):
                 look_at=look_at,
                 speed=speed,
                 acceleration=acceleration,
+                target_seed=target_seed,
             )
             self._cached_linear = (key, plan)
             return plan
@@ -125,6 +134,7 @@ class MotionController(_BaseMotionController):
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        target_seed: Mapping[str, float] | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         with self._state_lock:
             self._ensure_idle_locked()
@@ -136,6 +146,7 @@ class MotionController(_BaseMotionController):
                 look_at=look_at,
                 speed=speed,
                 acceleration=acceleration,
+                target_seed=target_seed,
             )
             cached = self._cached_linear
             self._cached_linear = None
@@ -156,6 +167,7 @@ class MotionController(_BaseMotionController):
                     look_at=look_at,
                     speed=speed,
                     acceleration=acceleration,
+                    target_seed=target_seed,
                 )
             handle = self._start_locked(
                 lambda event: self._execute_plan(
