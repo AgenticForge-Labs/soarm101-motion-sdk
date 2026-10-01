@@ -136,9 +136,10 @@ not gate workspace-measurement acceptance. After the final UP sample, the workfl
 holds the taught pose instead of sagging. Elevated Cartesian endpoints are generated
 from known-reachable FK poses inferred from the taught corner joints plus the taught
 D→UP posture change; the segments themselves still run through `move_linear()` with
-position-only IK. `--replay` reuses the saved teaching from any ordinary resting pose:
-the first move to D_UP uses destination-only coarse workspace validation, then the
-paper perimeter and center use the normal full workspace checks. `--measure-only`
+position-only IK. `--replay` reuses the saved teaching from any ordinary resting pose. During this
+supervised paper-linear validation, each segment uses destination-only coarse workspace
+validation while the normal joint, IK-continuity, rate/acceleration, following-error,
+fault, effort/contact, communication, and timeout guards remain active. `--measure-only`
 skips powered motion. The historical `paper_four_corner_hover_demo.py` filename remains
 only as a compatibility wrapper.
 
