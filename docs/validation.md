@@ -99,12 +99,13 @@ preflight. No additional elevated teaching is required. The segment itself is st
 executed with `move_linear()` and position-only IK.
 
 `--replay` reuses the saved A/B/C/D plus D_UP teaching without touching the arm manually again and can begin
-from an ordinary resting pose. Before any lateral travel, a pure calibrated-workspace-Z
-move to at least the paper reference/transport height is preflighted at <=1 mm spacing.
-Its X/Y must remain fixed, physical Z must not descend, sequential IK must remain
-continuous, and all solved joints must remain inside effective limits. After execution,
-measured workspace Z must reach the transport target within 5 mm; otherwise separately
-preflighted corrective lifts are attempted and lateral travel remains blocked. Because the
+from an ordinary resting pose. Before any lateral travel, replay climbs to at least the
+paper reference/transport height in separately settled calibrated-workspace-Z stages
+(10 mm maximum by default). Each stage is preflighted at <=1 mm spacing, executed, and
+remeasured before the next. X/Y must remain fixed in the calibrated model, physical Z must
+not descend, sequential IK must remain continuous, and all solved joints must remain
+inside effective limits. Measured workspace Z must reach the transport target within 5 mm
+before lateral travel is allowed. Because the
 generic model-frame floor is known to disagree with the measured table, only those
 preflighted startup lifts execute with the coarse workspace check disabled. The paper
 traversal endpoints continue to use destination-only coarse workspace validation. The
