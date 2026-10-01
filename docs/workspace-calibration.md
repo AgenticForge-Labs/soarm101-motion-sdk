@@ -124,15 +124,15 @@ The same workflow may then run the supervised demonstration
 sample, a short countdown is followed by torque enable so the current pose is held before
 the operator starts motion.
 
-For the powered demonstration, A_UP, B_UP, C_UP, D_UP, and CENTER_UP are each physically
-taught at the requested height. Replay uses those measured model positions directly, with
-the corresponding taught joint states as preferred IK seeds. This replaces both failed
-single-UP inference strategies: the fitted affine surface and translated D→UP Cartesian
-vector each placed B_UP 10.09 mm outside IK tolerance, while copying the D→UP joint delta
-produced reachable but physically wrong heights (~30 mm at A/B in the observed run).
-Legacy one-UP reports can be completed with `--upgrade-elevated` without reteaching the
-paper corners. Motion between endpoints is still commanded with `move_linear()` and
-position-only IK.
+For the powered demonstration, the single D_UP measurement remains the physical-height
+reference. The earlier copied D→UP joint-delta path was useful because it stayed on a
+reachable IK branch, but hardware showed its estimated physical heights varied from about
+30 mm at A/B to about 107 mm at C/D. The current replay therefore uses those reachable
+endpoints only as anchors: each endpoint is inverse-mapped into calibrated workspace
+coordinates, its workspace X/Y is retained, workspace Z is replaced by the measured
+reference height, and the corrected point is mapped back into model space. Every corrected
+target must pass read-only IK preflight before motion. No additional elevated teaching is
+required.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
 resting pose. For this supervised paper-linear validation, every segment uses
