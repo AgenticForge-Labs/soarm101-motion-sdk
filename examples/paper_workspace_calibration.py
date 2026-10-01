@@ -6,10 +6,10 @@ fit a local affine map from paper/workspace coordinates into the SDK kinematic m
 
 After the final UP teaching sample, the script counts down and enables torque so the arm
 holds that exact pose instead of sagging. Elevated Cartesian endpoints are built from the
-persisted physical/workspace transform at one constant physical Z equal to the taught
-reference height. Taught corner/lift joint poses are used only as IK seeds. The actual
-motion between those endpoints is still executed with Cartesian move_linear() and
-position-only IK.
+directly taught A/B/C/D model positions plus the directly measured D->UP displacement.
+That displacement represents the trained physical reference height on this exact setup.
+Taught corner/lift joint poses are also used as IK seeds. The actual motion between those
+endpoints is still executed with Cartesian move_linear() and position-only IK.
 
 A saved teaching can also be replayed later from any ordinary resting pose with --replay.
 For this fixed supervised paper sequence, every Cartesian segment uses target-only coarse
@@ -200,37 +200,51 @@ def constant_height_demo_targets(
     corners: dict[str, Sample],
     up_sample: Sample,
 ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float]]]:
-    """Build demo endpoints at one constant taught physical/workspace height.
+    """Build targets by applying the measured physical-UP displacement to taught corners.
 
-    Target geometry comes from the persisted physical->model workspace transform:
-    every perimeter point uses the same physical Z equal to the taught reference
-    height. The former D->UP joint-delta construction is retained only to provide
-    continuity-friendly IK seeds; it no longer defines Cartesian target positions.
+    The four table-plane corner positions are direct measurements from this exact arm/setup.
+    The taught D->UP displacement is the direct model-space observation of the requested
+    physical reference height. Applying that same displacement to A/B/C/D preserves the
+    trained physical lift without asking the approximate global affine fit to extrapolate
+    corner positions that may be outside the arm's reachable model geometry.
+
+    The affine calibration remains authoritative evidence for workspace interpretation and
+    provenance, but the fixed supervised paper traversal is anchored to the measured points.
     """
 
     required = {"A", "B", "C", "D"}
     if set(corners) != required:
         raise ValueError(f"expected corners {sorted(required)}, got {sorted(corners)}")
 
-    width = float(calibration.physical_width_m)
-    height = float(calibration.physical_height_m)
-    z = float(calibration.reference_height_m)
-    physical_targets = {
-        "D_UP": (0.0, height, z),
-        "A_UP": (0.0, 0.0, z),
-        "B_UP": (width, 0.0, z),
-        "C_UP": (width, height, z),
-        "D_UP_RETURN": (0.0, height, z),
-        "CENTER_UP": (width / 2.0, height / 2.0, z),
+    if calibration.reference_height_m <= 0.0:
+        raise ValueError("workspace reference height must be positive")
+
+    up_delta = up_sample.position_m - corners["D"].position_m
+    elevated_corners = {
+        f"{name}_UP": corners[name].position_m + up_delta
+        for name in ("A", "B", "C", "D")
     }
     positions = {
-        name: calibration.model_position_from_physical(*physical)
-        for name, physical in physical_targets.items()
+        "D_UP": up_sample.position_m.copy(),
+        "A_UP": elevated_corners["A_UP"],
+        "B_UP": elevated_corners["B_UP"],
+        "C_UP": elevated_corners["C_UP"],
+        "D_UP_RETURN": up_sample.position_m.copy(),
+        "CENTER_UP": np.mean(
+            np.stack(
+                [
+                    elevated_corners["A_UP"],
+                    elevated_corners["B_UP"],
+                    elevated_corners["C_UP"],
+                    elevated_corners["D_UP"],
+                ]
+            ),
+            axis=0,
+        ),
     }
 
     # Seeds are hints only. Keeping the taught lift posture as an initial guess
-    # helps the bounded IK solver stay on the demonstrated branch without letting
-    # that approximation redefine the requested physical workspace geometry.
+    # helps the bounded IK solver stay on the demonstrated branch.
     lift_delta = _joint_delta(corners["D"].joints_rad, up_sample.joints_rad)
     center_base = {
         name: float(
@@ -536,8 +550,8 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 f"{args.settle_timeout_s:.1f} s."
             )
             print(
-                f"Every paper target uses the same taught physical/workspace height: "
-                f"{saved.reference_height_m * 1000.0:.1f} mm. "
+                f"Every paper target uses the same measured trained lift: "
+                f"{saved.reference_height_m * 1000.0:.1f} mm above its taught table point. "
                 f"Cartesian IK knots are limited to "
                 f"{PAPER_CARTESIAN_WAYPOINT_SPACING_M * 1000.0:.1f} mm spacing."
             )
@@ -570,13 +584,14 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 print(
                     f"  {item['name']}: model "
                     f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
-                    f"workspace Z={physical[2] * 1000.0:.1f} mm; "
+                    f"trained lift={saved.reference_height_m * 1000.0:.1f} mm; "
+                    f"affine diagnostic Z={physical[2] * 1000.0:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
 
             report["replayed_at"] = datetime.now(timezone.utc).isoformat()
             report["demo_target_strategy"] = (
-                "constant_taught_workspace_height_via_saved_affine_transform"
+                "measured_corners_plus_measured_trained_up_displacement"
             )
             report["demo_preflight"] = preflight
             report["demo_targets_model_xyz_mm"] = {

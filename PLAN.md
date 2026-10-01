@@ -87,11 +87,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Validate FK against measured TCP positions.
 - [ ] Complete the paper/workspace calibration: four table corners plus a physically
   measured UP reference tied to the active motor calibration.
-- [ ] Run the supervised elevated-paper Cartesian-linear traversal with every endpoint at
-  the single taught physical/workspace height through the accepted workspace transform
+- [ ] Run the supervised elevated-paper Cartesian-linear traversal with every endpoint
+  using the same directly measured trained lift applied to the taught A/B/C/D positions
   (D_UP→A_UP→B_UP→C_UP→D_UP→CENTER_UP), including replay from an arbitrary ordinary
-  resting pose, and review the recorded evidence. Taught lift/corner joints are IK seeds
-  only, not target geometry.
+  resting pose, and review the recorded evidence. The affine workspace fit is diagnostic;
+  taught lift/corner joints are IK seeds only.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,

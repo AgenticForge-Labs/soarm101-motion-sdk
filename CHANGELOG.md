@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-- Paper workspace replay now commands every D/A/B/C/center endpoint at the same taught
-  physical/workspace height through the persisted affine transform. The former D→UP
-  joint-delta construction is retained only as an IK seed, not as target geometry.
-  The supervised paper run also tightens Cartesian IK waypoint spacing from the generic
-  5 mm default to 1 mm to reduce visible joint-slope changes during linear replay.
+- Corrected the constant-height paper replay after hardware preflight showed that the
+  global affine transform placed B_UP 10.09 mm outside IK tolerance. The fixed supervised
+  traversal now anchors A/B/C/D to their directly taught model positions and adds the
+  directly measured D→UP displacement to each corner; CENTER_UP is the mean of those
+  elevated measured corners. This preserves the trained physical lift without letting
+  affine fit residuals move measured endpoints. The affine transform remains diagnostic
+  workspace evidence. The 1 mm Cartesian IK waypoint spacing remains in effect.
 
 - Cartesian `move_linear()` now uses the same responsive Feetech servo-side profile as
   live teleoperation (speed_raw=0 / unrestricted, acceleration_raw=254). The host-side

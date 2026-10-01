@@ -63,9 +63,11 @@ changes require development discipline; robot use requires conservative hardware
     than writing directly to servo registers unless the task is explicitly low-level
     hardware development and the safety implications are understood.
 11. Do not infer physical up or table height from model/base +Z. Use the measured workspace
-    calibration workflow. Its supervised elevated-paper test derives known-reachable
-    Cartesian endpoints from the taught corner joints plus the taught D→UP joint delta,
-    then tests the same `move_linear()` primitive used elsewhere. Because the generic
+    calibration workflow. Its supervised elevated-paper test anchors Cartesian endpoints to
+    the directly taught A/B/C/D positions plus the directly measured D→UP displacement for
+    the trained reference height; taught joint poses are IK seeds only. The approximate
+    global affine fit remains workspace evidence/diagnostics and must not move a measured
+    endpoint merely to make inverse-mapped workspace coordinates exact. Because the generic
     coarse workspace model is known to misrepresent this measured table, this specific
     supervised validation may use destination-only coarse workspace checks while retaining
     joint, IK continuity, rate/acceleration, following-error, fault, effort/contact,
