@@ -32,8 +32,10 @@ def test_paper_four_corner_hover_help_runs_without_hardware() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    assert "--reference-height-mm" in result.stdout
     assert "--hover-height-mm" in result.stdout
-    assert "--speed-mm-s" in result.stdout
+    assert "--workspace-output" in result.stdout
+    assert "no autonomous Cartesian arm motion" in result.stdout.lower()
 
 
 def test_clockwise_letter_perimeter_distances() -> None:
