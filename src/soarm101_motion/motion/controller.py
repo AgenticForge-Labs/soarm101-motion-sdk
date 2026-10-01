@@ -575,6 +575,7 @@ class MotionController:
             *,
             seed: Mapping[str, float],
             multi_start: bool,
+            enforce_seed_jump: bool = True,
         ) -> dict[str, float]:
             options = IKOptions(
                 orientation_mode=orientation_mode,
@@ -604,12 +605,13 @@ class MotionController:
                     ),
                 )
             candidate = validate_joint_targets(solution.joints, limits=limits)
-            jump = max(abs(candidate[name] - seed[name]) for name in ARM_JOINTS)
-            if jump > self.config.max_ik_waypoint_jump_radians:
-                raise InvalidCommandError(
-                    f"IK path discontinuity of {jump:.3f} rad exceeds "
-                    f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
-                )
+            if enforce_seed_jump:
+                jump = max(abs(candidate[name] - seed[name]) for name in ARM_JOINTS)
+                if jump > self.config.max_ik_waypoint_jump_radians:
+                    raise InvalidCommandError(
+                        f"IK path discontinuity of {jump:.3f} rad exceeds "
+                        f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
+                    )
             return candidate
 
         def solve_forward() -> tuple[dict[str, float], ...]:
@@ -640,6 +642,10 @@ class MotionController:
                     solved_cartesian[-1],
                     seed=boundary_seed,
                     multi_start=True,
+                    # A boundary seed is a target-side solver hint, not the previous
+                    # command sample. Adjacent continuity is checked while walking
+                    # backward and again when reconnecting to the measured start.
+                    enforce_seed_jump=False,
                 )
                 reverse_samples: list[dict[str, float]] = [endpoint]
                 seed = endpoint
