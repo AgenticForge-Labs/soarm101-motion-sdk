@@ -142,16 +142,16 @@ refuses to continue. The traversal then begins at A_UP and follows A_UP -> B_UP 
 D_UP -> CENTER_UP; D_UP remains the physical-height calibration reference but is no longer
 visited first merely because it was taught there. The clearance path is validated in the
 calibrated physical workspace rather than against the generic model-frame Z floor, which
-is known to misrepresent this measured table. For this hardware validation the paper workflow uses a
-20 Hz host command cadence, matching the proven teleoperation cadence, while the SDK-wide
-planned-motion default remains 50 Hz. Cartesian `move_linear()` uses smooth cosine
-acceleration/deceleration ramps with a constant-speed cruise when distance permits, so the
-requested linear speed is an actual cruise ceiling rather than a brief minimum-jerk peak.
-On calibrated Feetech hardware, each synchronized trajectory write also assigns
-proportional per-joint servo speeds so lightly loaded joints do not race ahead of
-gravity-loaded joints. Position-only paths ignore target orientation for timing because
-orientation is unconstrained. `--replay` reuses the saved teaching from any ordinary resting pose. During this
-supervised paper-linear validation, each segment uses destination-only coarse workspace
+is known to misrepresent this measured table. The elevated traversal no longer forces
+straight Cartesian IK between endpoints: hardware showed an A_UP->B_UP intermediate pose
+that missed the unchanged 0.5 mm IK tolerance even though both endpoints solved exactly.
+Instead, replay uses those preflighted endpoint joint solutions with smooth joint-space
+motion and the teleoperation servo profile. Before each move, the complete joint-space
+locus is FK-sampled and rejected if calibrated workspace Z would dip more than 5 mm below
+the lower endpoint. The paper workflow uses a 20 Hz host command cadence; the SDK-wide
+planned-motion default remains 50 Hz. `--replay` reuses the saved teaching from any ordinary resting pose. During this
+supervised paper validation, the startup clearance remains Cartesian while elevated
+endpoint traversal is joint-space.
 validation while the normal joint, IK-continuity, rate/acceleration, following-error,
 fault, effort/contact, communication, and timeout guards remain active. Because this is
 a qualitative hobby-arm line-motion test rather than precision metrology, its local

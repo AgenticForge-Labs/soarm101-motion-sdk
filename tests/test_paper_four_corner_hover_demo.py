@@ -408,3 +408,196 @@ def test_ordered_paper_replay_enters_at_a_and_visits_each_corner_once() -> None:
     )
     assert tuple(ordered_seeds) == tuple(ordered_positions)
     assert "D_UP_RETURN" not in ordered_positions
+
+
+def test_joint_space_workspace_preflight_rejects_midpath_z_dip() -> None:
+    module = _load_example_module()
+    joint_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    )
+
+    class Model:
+        @staticmethod
+        def forward(joints, tcp=None):
+            del tcp
+            q = float(joints["shoulder_pan"])
+            return module.Pose(np.array([0.0, 0.0, q * q]), np.eye(3))
+
+    class Calibration:
+        @staticmethod
+        def physical_position_from_model(position):
+            return np.asarray(position, dtype=float)
+
+    class Arm:
+        model = Model()
+        active_tcp = None
+
+    start = {name: 0.0 for name in joint_names}
+    target = dict(start)
+    start["shoulder_pan"] = -1.0
+    target["shoulder_pan"] = 1.0
+
+    with pytest.raises(RuntimeError, match="dip too low"):
+        module.preflight_joint_space_workspace_path(
+            Arm(),
+            Calibration(),
+            start_joints=start,
+            target_joints=target,
+            minimum_z_margin_m=0.005,
+        )
+
+
+def test_run_demo_targets_uses_preflighted_joint_endpoint_and_teleop_profile() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    joint_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    )
+
+    class Model:
+        @staticmethod
+        def forward(joints, tcp=None):
+            del tcp
+            return module.Pose(
+                np.array(
+                    [
+                        float(joints["shoulder_pan"]),
+                        float(joints["shoulder_lift"]),
+                        0.100 + float(joints["wrist_flex"]) * 0.01,
+                    ]
+                ),
+                np.eye(3),
+            )
+
+    class Calibration:
+        @staticmethod
+        def physical_position_from_model(position):
+            return np.asarray(position, dtype=float)
+
+    class JointRead:
+        def __init__(self, positions):
+            self.positions = positions
+
+    class Arm:
+        model = Model()
+        active_tcp = None
+        config = SimpleNamespace(
+            default_joint_speed=0.45,
+            default_joint_acceleration=1.2,
+        )
+
+        def __init__(self):
+            self.joints = {name: 0.0 for name in joint_names}
+            self.calls = []
+
+        def get_joint_positions(self):
+            return JointRead(dict(self.joints))
+
+        def get_position(self):
+            return self.model.forward(self.joints)
+
+        def move_joints(self, target, **kwargs):
+            self.calls.append((dict(target), dict(kwargs)))
+            self.joints = dict(target)
+            return SimpleNamespace(accepted=True, completed=True)
+
+        def move_linear(self, *args, **kwargs):
+            raise AssertionError("elevated paper traversal must not use move_linear")
+
+    arm = Arm()
+    target_joints = {name: 0.0 for name in joint_names}
+    target_joints["shoulder_pan"] = 0.10
+    target_joints["wrist_flex"] = 0.05
+    target_pose = arm.model.forward(target_joints)
+    positions = {"A_UP": target_pose.position.copy()}
+    endpoint_preflight = [
+        {
+            "name": "A_UP",
+            "joints_rad": target_joints,
+            "position_error_mm": 0.0,
+        }
+    ]
+    moves = []
+
+    module.run_demo_targets(
+        arm,
+        Calibration(),
+        positions,
+        endpoint_preflight=endpoint_preflight,
+        report_moves=moves,
+    )
+
+    assert len(arm.calls) == 1
+    commanded, kwargs = arm.calls[0]
+    assert commanded == pytest.approx(target_joints)
+    assert kwargs["speed"] == pytest.approx(0.45)
+    assert kwargs["acceleration"] == pytest.approx(1.2)
+    assert kwargs["servo_speed_raw"] == module.TELEOP_SERVO_SPEED_RAW
+    assert kwargs["servo_acceleration_raw"] == module.TELEOP_SERVO_ACCELERATION_RAW
+    assert moves[0]["mode"] == "joint_space_endpoint_replay"
+
+
+def test_endpoint_preflight_prefers_joint_continuity_over_tiny_residual_difference() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    joint_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    )
+    zero = {name: 0.0 for name in joint_names}
+    preferred_a = dict(zero)
+    preferred_a["shoulder_pan"] = 0.10
+    preferred_b = dict(zero)
+    preferred_b["shoulder_pan"] = 1.00
+
+    class Arm:
+        def solve_ik(self, pose, *, seed, orientation_mode):
+            assert orientation_mode == "position_only"
+            joints = dict(zero)
+            if float(pose.position[0]) < 0.5:
+                joints["shoulder_pan"] = 0.10
+                error = 0.0
+            elif float(seed["shoulder_pan"]) > 0.5:
+                joints["shoulder_pan"] = 1.00
+                error = 0.0
+            else:
+                joints["shoulder_pan"] = 0.12
+                error = 0.0001
+            return SimpleNamespace(
+                success=True,
+                joints=joints,
+                position_error_m=error,
+                message="ok",
+            )
+
+    results = module.preflight_demo_targets(
+        Arm(),
+        {
+            "A_UP": np.array([0.0, 0.0, 0.1]),
+            "B_UP": np.array([1.0, 0.0, 0.1]),
+        },
+        preferred_seeds={
+            "A_UP": preferred_a,
+            "B_UP": preferred_b,
+        },
+        rotation=np.eye(3),
+    )
+
+    # B's preferred seed gives the mathematically smaller residual, but the solution
+    # seeded from A is on the continuous arm branch and must win.
+    assert results[1]["joints_rad"]["shoulder_pan"] == pytest.approx(0.12)
+    assert results[1]["chosen_seed_index"] == 1
+    assert results[1]["position_error_mm"] == pytest.approx(0.1)

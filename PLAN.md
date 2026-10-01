@@ -87,14 +87,13 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Validate FK against measured TCP positions.
 - [ ] Complete the paper/workspace calibration: four table corners plus a physically
   measured UP reference tied to the active motor calibration.
-- [ ] Run the supervised Cartesian traversal using the existing A/B/C/D + D_UP
-  calibration: one 20 mm calibrated-Z clearance move, then
-  A_UP→B_UP→C_UP→D_UP→CENTER_UP. Verify that the clearance rises physically, its measured
-  endpoint passes the 5 mm completion gate, and the leveled paper traversal remains at the
-  requested height.
-- [ ] Validate the cosine-ramped cruise profile plus per-joint synchronized Feetech speed
-  limits against known-smooth 20 Hz teleoperation. Confirm a 20 mm/s paper edge traverses
-  near the expected cruise-speed timing before declaring linear motion physically smooth.
+- [ ] Run the supervised paper traversal using the existing A/B/C/D + D_UP calibration:
+  one 20 mm calibrated-Z clearance move, then preflighted joint-space endpoint replay
+  A_UP→B_UP→C_UP→D_UP→CENTER_UP. Verify that the clearance rises physically, each
+  FK-sampled joint-space path passes the 5 mm lower-endpoint Z margin, and motion is smooth.
+- [ ] Keep Cartesian `move_linear()` physical validation separate: the real A_UP→B_UP
+  straight segment exposed an infeasible intermediate pose at the unchanged 0.5 mm IK
+  tolerance, so paper replay is no longer evidence that arbitrary Cartesian lines work.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,

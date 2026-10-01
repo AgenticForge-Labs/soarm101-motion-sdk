@@ -16,10 +16,13 @@ Before any lateral move, replay preflights and performs one straight 20 mm clear
 lift in calibrated workspace Z by default. Measured workspace Z must land within the
 configured tolerance of that requested rise before lateral travel is allowed. Replay
 then enters the leveled paper path at A_UP.
-For this fixed supervised paper sequence, every Cartesian segment uses target-only coarse
-workspace checking because the generic model envelope is not yet calibrated to the
-measured table; the normal joint, dynamic, following-error, fault, effort, and timing
-guards remain active.
+For this fixed supervised paper sequence, the one-shot startup clearance remains a
+Cartesian calibrated-Z move. The elevated A/B/C/D/center traversal then uses the already
+preflighted endpoint joint solutions with smooth joint-space interpolation, matching the
+known-smooth teleoperation execution profile. Before each powered joint move, the complete
+joint-space locus is FK-sampled and rejected if calibrated workspace Z would dip more than
+5 mm below the lower endpoint. The normal joint, dynamic, following-error, fault, effort,
+and timing guards remain active.
 
 The resulting calibration records:
 - where the taught table plane lies in model coordinates;
@@ -46,7 +49,11 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+from soarm101_motion.constants import (
+    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
+)
 from soarm101_motion.kinematics import IKOptions
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
@@ -484,7 +491,7 @@ def preflight_demo_targets(
             seeds.append(previous_solution)
 
         attempts: list[dict[str, object]] = []
-        successes: list[tuple[float, object, int]] = []
+        successes: list[tuple[float, float, object, int]] = []
         fingerprints: set[tuple[tuple[str, float], ...]] = set()
         for seed_index, seed in enumerate(seeds):
             fingerprint = tuple(
@@ -507,7 +514,26 @@ def preflight_demo_targets(
                 }
             )
             if solution.success:
-                successes.append((float(solution.position_error_m), solution, seed_index))
+                continuity_reference = (
+                    previous_solution
+                    if previous_solution is not None
+                    else preferred_seeds[name]
+                )
+                max_joint_delta = max(
+                    abs(
+                        float(solution.joints[joint])
+                        - float(continuity_reference[joint])
+                    )
+                    for joint in solution.joints
+                )
+                successes.append(
+                    (
+                        float(max_joint_delta),
+                        float(solution.position_error_m),
+                        solution,
+                        seed_index,
+                    )
+                )
 
         if not successes:
             best = min(attempts, key=lambda item: float(item["position_error_mm"]))
@@ -516,7 +542,10 @@ def preflight_demo_targets(
                 f"{float(best['position_error_mm']):.2f} mm; {best['message']}"
             )
 
-        _, solution, chosen_seed_index = min(successes, key=lambda item: item[0])
+        max_joint_delta, _, solution, chosen_seed_index = min(
+            successes,
+            key=lambda item: (item[0], item[1]),
+        )
         previous_solution = dict(solution.joints)
         results.append(
             {
@@ -527,46 +556,130 @@ def preflight_demo_targets(
                 "position_error_mm": float(solution.position_error_m * 1000.0),
                 "joints_rad": dict(solution.joints),
                 "chosen_seed_index": chosen_seed_index,
+                "max_joint_delta_from_reference_rad": float(max_joint_delta),
                 "attempts": attempts,
             }
         )
     return results
 
 
+def preflight_joint_space_workspace_path(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    start_joints: dict[str, float],
+    target_joints: dict[str, float],
+    minimum_z_margin_m: float = 0.005,
+) -> dict[str, object]:
+    """Validate the geometric locus of a smooth joint interpolation before motion."""
+
+    max_delta = max(
+        abs(float(target_joints[name]) - float(start_joints[name]))
+        for name in target_joints
+    )
+    sample_count = max(21, int(np.ceil(max_delta / np.deg2rad(1.0))) + 1)
+    start_pose = arm.model.forward(start_joints, tcp=arm.active_tcp)
+    target_pose = arm.model.forward(target_joints, tcp=arm.active_tcp)
+    start_physical = calibration.physical_position_from_model(start_pose.position)
+    target_physical = calibration.physical_position_from_model(target_pose.position)
+    minimum_allowed_z = (
+        min(float(start_physical[2]), float(target_physical[2]))
+        - float(minimum_z_margin_m)
+    )
+
+    minimum_z = float("inf")
+    maximum_chord_deviation = 0.0
+    chord_xy = target_physical[:2] - start_physical[:2]
+    for alpha in np.linspace(0.0, 1.0, sample_count):
+        progress = 10.0 * alpha**3 - 15.0 * alpha**4 + 6.0 * alpha**5
+        joints = {
+            name: float(start_joints[name])
+            + (float(target_joints[name]) - float(start_joints[name])) * progress
+            for name in target_joints
+        }
+        pose = arm.model.forward(joints, tcp=arm.active_tcp)
+        physical = calibration.physical_position_from_model(pose.position)
+        minimum_z = min(minimum_z, float(physical[2]))
+        chord_point = start_physical[:2] + chord_xy * progress
+        maximum_chord_deviation = max(
+            maximum_chord_deviation,
+            float(np.linalg.norm(physical[:2] - chord_point)),
+        )
+
+    if minimum_z < minimum_allowed_z:
+        raise RuntimeError(
+            "joint-space paper path would dip too low in calibrated workspace: "
+            f"minimum Z={minimum_z * 1000.0:.1f} mm, "
+            f"allowed>={minimum_allowed_z * 1000.0:.1f} mm"
+        )
+    return {
+        "start_workspace_z_mm": float(start_physical[2] * 1000.0),
+        "target_workspace_z_mm": float(target_physical[2] * 1000.0),
+        "minimum_workspace_z_mm": float(minimum_z * 1000.0),
+        "maximum_xy_chord_deviation_mm": float(maximum_chord_deviation * 1000.0),
+        "sample_count": sample_count,
+    }
+
+
 def run_demo_targets(
     arm: SOARM101,
+    calibration: WorkspaceCalibration,
     positions: dict[str, np.ndarray],
     *,
-    rotation: np.ndarray,
-    speed_mm_s: float,
-    acceleration_mm_s2: float,
+    endpoint_preflight: list[dict[str, object]],
     report_moves: list[dict[str, object]],
 ) -> None:
+    solutions = {
+        str(item["name"]): {
+            str(joint): float(value)
+            for joint, value in dict(item["joints_rad"]).items()
+        }
+        for item in endpoint_preflight
+    }
+
     for name, position in positions.items():
-        print(f"\nMoving to {name}...")
-        result = arm.move_linear(
-            Pose(position, rotation),
-            orientation_mode="position_only",
-            speed=speed_mm_s / 1000.0,
-            acceleration=acceleration_mm_s2 / 1000.0,
-            workspace_check="target_only",
+        target_joints = solutions[name]
+        start_joints = dict(arm.get_joint_positions().positions)
+        path_check = preflight_joint_space_workspace_path(
+            arm,
+            calibration,
+            start_joints=start_joints,
+            target_joints=target_joints,
+        )
+        print(
+            f"\nMoving to {name} with smooth joint-space replay... "
+            f"workspace Z min {path_check['minimum_workspace_z_mm']:.1f} mm"
+        )
+        result = arm.move_joints(
+            target_joints,
+            speed=arm.config.default_joint_speed,
+            acceleration=arm.config.default_joint_acceleration,
+            servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+            servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
         )
         if not result.accepted or not result.completed:
-            raise RuntimeError(f"{name} motion did not complete: {result}")
+            raise RuntimeError(f"{name} joint motion did not complete: {result}")
+
         actual = arm.get_position()
+        actual_physical = calibration.physical_position_from_model(actual.position)
         actual_xyz_mm = [float(value * 1000.0) for value in actual.position]
         print(
             "  model TCP after move = "
             f"({actual_xyz_mm[0]:.1f}, {actual_xyz_mm[1]:.1f}, "
-            f"{actual_xyz_mm[2]:.1f}) mm"
+            f"{actual_xyz_mm[2]:.1f}) mm; "
+            f"workspace Z={actual_physical[2] * 1000.0:.1f} mm"
         )
         report_moves.append(
             {
                 "name": name,
+                "mode": "joint_space_endpoint_replay",
                 "target_model_xyz_mm": [
                     float(value * 1000.0) for value in position
                 ],
+                "target_joints_rad": target_joints,
+                "joint_path_preflight": path_check,
                 "actual_model_xyz_mm": actual_xyz_mm,
+                "actual_workspace_z_mm": float(actual_physical[2] * 1000.0),
             }
         )
 
@@ -782,7 +895,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     "saved workspace calibration does not match the active motor calibration"
                 )
 
-            print("Paper Cartesian linear replay")
+            print("Paper workspace replay")
             print(
                 f"Loaded saved teaching at {reference_height:.1f} mm reference height from "
                 f"{args.output}."
@@ -797,9 +910,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 "endpoint's calibrated workspace X/Y."
             )
             print(
-                "Cartesian move_linear() uses the cosine-ramped cruise trajectory "
-                f"at {config.command_frequency_hz:.0f} Hz with synchronized Feetech "
-                "per-joint arrival speeds for this hardware validation."
+                "Startup clearance uses Cartesian move_linear(); elevated paper traversal "
+                "uses preflighted smooth joint-space endpoint replay at "
+                f"{config.command_frequency_hz:.0f} Hz with the teleoperation servo profile."
             )
             print(
                 f"Before paper travel, replay will make one straight calibrated-workspace "
@@ -946,10 +1059,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
 
                 run_demo_targets(
                     arm,
+                    saved,
                     demo_positions,
-                    rotation=up.rotation,
-                    speed_mm_s=args.speed_mm_s,
-                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    endpoint_preflight=preflight,
                     report_moves=moves,
                 )
             except Exception as exc:
@@ -972,7 +1084,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             _hold_until_operator_release(
                 arm,
-                "Cartesian linear replay completed at CENTER_UP.",
+                "Paper workspace replay completed at CENTER_UP.",
             )
             arm.relax()
             print("Motors relaxed.")
@@ -1310,8 +1422,9 @@ def main() -> int:
             )
             print("  A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                "The motion between endpoints is still Cartesian move_linear(); no extra "
-                "elevated teaching is required."
+                "The motion between elevated endpoints now reuses the preflighted joint "
+                "solutions with smooth joint-space interpolation; no extra elevated "
+                "teaching is required."
             )
             input(
                 "\nPress Enter to run the full Cartesian linear path, "
@@ -1328,10 +1441,9 @@ def main() -> int:
             try:
                 run_demo_targets(
                     arm,
+                    saved,
                     demo_positions,
-                    rotation=d_up.rotation,
-                    speed_mm_s=args.speed_mm_s,
-                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    endpoint_preflight=preflight,
                     report_moves=moves,
                 )
             except Exception as exc:

@@ -73,9 +73,13 @@ changes require development discipline; robot use requires conservative hardware
     measured endpoint must land within the configured completion tolerance before paper
     travel. The fixed traversal then starts at A_UP and proceeds A_UP -> B_UP -> C_UP ->
     D_UP -> CENTER_UP; D_UP remains calibration evidence, not the first motion target.
-    The startup clearance is validated in calibrated workspace coordinates (fixed X/Y,
-    nondecreasing physical Z, bounded IK continuity and joint limits); the generic
-    model-frame Z floor is not authoritative for that verified clearance move
+    Elevated endpoint motion reuses the read-only preflight joint solutions rather than
+    forcing straight Cartesian IK through an infeasible intermediate pose. Before each
+    endpoint move, deterministic FK sampling of the joint-space locus must show calibrated
+    workspace Z stays within 5 mm of the lower endpoint height. The startup clearance is
+    validated in calibrated workspace coordinates (fixed X/Y, nondecreasing physical Z,
+    bounded IK continuity and joint limits); the generic model-frame Z floor is not
+    authoritative for that verified clearance move
     because it is known to disagree with the measured table frame. The supervised paper
     validation uses the known-smooth 20 Hz host cadence while SDK-wide planned motion stays
     at 50 Hz. All runtime joint/dynamic/following-error/effort/fault/timing guards remain

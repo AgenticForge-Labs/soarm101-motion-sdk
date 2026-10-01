@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Hardware replay reached A_UP but the straight A_UP->B_UP Cartesian path still failed
+  at an intermediate pose with 0.782 mm residual against the unchanged 0.5 mm IK
+  tolerance, while both endpoints preflighted at 0.00 mm. Elevated paper traversal now
+  reuses the endpoint IK joint solutions with smooth joint-space interpolation and the
+  teleoperation servo profile. Before each move, dense FK sampling rejects any joint-space
+  locus that would dip more than 5 mm below the lower endpoint in calibrated workspace Z.
+  The one-shot 20 mm Cartesian startup clearance is unchanged.
+
 - Paper replay now uses one 20 mm calibrated-Z startup clearance move by default,
   checks the measured endpoint against the existing 5 mm tolerance, and then follows
   A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. The D_UP sample remains the workspace-height
