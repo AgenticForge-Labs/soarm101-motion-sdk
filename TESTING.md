@@ -100,14 +100,15 @@ Teach A->B->C->D clockwise, then teach the fixed lower finger at the measured UP
 above D. Immediately after the UP capture, confirm the countdown ends with torque enabled
 and the arm holding that exact pose instead of sagging.
 
-The workflow uses the accepted affine workspace fit to generate every powered endpoint at
-the **same taught physical/workspace height**. For a 107 mm teaching, D_UP/A_UP/B_UP/C_UP/
-D_UP_RETURN/CENTER_UP all have workspace Z=107 mm even though their model/base-frame Z
-values may differ because the measured physical axes are skewed relative to model axes.
-The old taught D->UP joint delta is retained only as a continuity-friendly IK seed; it no
-longer defines endpoint geometry. The actual segments are still executed with
-`move_linear()` and position-only IK, so this tests Cartesian linear motion rather than
-replaying joint trajectories.
+The workflow generates powered endpoints from the **directly taught corner measurements**:
+the measured model-space D→UP displacement corresponding to the physical reference height
+is added to the taught A/B/C/D positions, and CENTER_UP is the mean of those elevated
+corners. For a 107 mm teaching, every endpoint therefore uses the same trained physical
+lift even though model/base-frame Z differs around the paper. The accepted global affine
+workspace fit remains diagnostic/provenance evidence; it does not move a directly measured
+corner to force an inverse-mapped workspace Z of exactly 107 mm. Taught joint deltas are
+used only as continuity-friendly IK seeds. The segments are still executed with
+`move_linear()` and position-only IK.
 
 For this supervised paper test, coarse workspace geometry is deliberately target-only on
 each segment. The destination must pass the coarse workspace check, while joint limits,
