@@ -7,7 +7,7 @@ from typing import Literal, Mapping
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import least_squares
+from scipy.optimize import OptimizeResult, least_squares
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion.exceptions import IKError
@@ -103,15 +103,18 @@ class IKSolver:
         center = (self.model.lower_bounds + self.model.upper_bounds) / 2.0
         span = self.model.upper_bounds - self.model.lower_bounds
 
-        def residual(q: FloatArray) -> FloatArray:
+        def task_residual(q: FloatArray) -> FloatArray:
             actual = self.model.forward(q, tcp=tcp)
             position = (actual.position - target.position) * options.position_weight
             orientation = (
                 self._orientation_residual(actual, target, options) * options.orientation_weight
             )
+            return np.concatenate([position, orientation])
+
+        def residual(q: FloatArray) -> FloatArray:
             continuity = (q - seed_vector) * options.continuity_weight
             centered = ((q - center) / span) * options.joint_center_weight
-            return np.concatenate([position, orientation, continuity, centered])
+            return np.concatenate([task_residual(q), continuity, centered])
 
         starts = [seed_vector]
         if options.multi_start:
@@ -141,37 +144,87 @@ class IKSolver:
                 ]
             )
 
-        best = None
-        best_cost = float("inf")
-        for start in starts:
-            result = least_squares(
-                residual,
-                x0=start,
-                bounds=(self.model.lower_bounds, self.model.upper_bounds),
-                method="trf",
-                xtol=1e-10,
-                ftol=1e-10,
-                gtol=1e-10,
-                max_nfev=options.max_evaluations,
+        def evaluate(result: OptimizeResult) -> tuple[float, float, bool]:
+            vector = result.x
+            actual = self.model.forward(vector, tcp=tcp)
+            position_error = float(np.linalg.norm(actual.position - target.position))
+            orientation_residual = self._orientation_residual(actual, target, options)
+            orientation_error = float(np.linalg.norm(orientation_residual))
+            orientation_ok = (
+                options.orientation_mode == "position_only"
+                or orientation_error <= options.orientation_tolerance_rad
             )
-            if result.cost < best_cost:
-                best = result
-                best_cost = float(result.cost)
+            success = bool(
+                result.success
+                and position_error <= options.position_tolerance_m
+                and orientation_ok
+            )
+            return position_error, orientation_error, success
 
-        assert best is not None
-        actual = self.model.forward(best.x, tcp=tcp)
-        position_error = float(np.linalg.norm(actual.position - target.position))
-        orientation_residual = self._orientation_residual(actual, target, options)
-        orientation_error = float(np.linalg.norm(orientation_residual))
-        orientation_ok = (
-            options.orientation_mode == "position_only"
-            or orientation_error <= options.orientation_tolerance_rad
-        )
-        success = bool(
-            best.success
-            and position_error <= options.position_tolerance_m
-            and orientation_ok
-        )
+        regularized_results = []
+        for start in starts:
+            regularized_results.append(
+                least_squares(
+                    residual,
+                    x0=start,
+                    bounds=(self.model.lower_bounds, self.model.upper_bounds),
+                    method="trf",
+                    xtol=1e-10,
+                    ftol=1e-10,
+                    gtol=1e-10,
+                    max_nfev=options.max_evaluations,
+                )
+            )
+
+        feasible = [
+            result
+            for result in regularized_results
+            if evaluate(result)[2]
+        ]
+
+        # Soft continuity/joint-centering terms must never be allowed to turn a
+        # geometrically reachable target into a hard-tolerance failure. If no
+        # regularized candidate satisfies the task tolerance, refine each candidate
+        # against task-space residuals only, starting from the already-smooth solution.
+        refined_results = []
+        if not feasible:
+            for result in regularized_results:
+                refined_results.append(
+                    least_squares(
+                        task_residual,
+                        x0=result.x,
+                        bounds=(self.model.lower_bounds, self.model.upper_bounds),
+                        method="trf",
+                        xtol=1e-10,
+                        ftol=1e-10,
+                        gtol=1e-10,
+                        max_nfev=options.max_evaluations,
+                    )
+                )
+            feasible = [
+                result
+                for result in refined_results
+                if evaluate(result)[2]
+            ]
+
+        candidates = feasible or [*regularized_results, *refined_results]
+
+        def candidate_key(result: OptimizeResult) -> tuple[float, float, float]:
+            position_error, orientation_error, success = evaluate(result)
+            vector = result.x
+            continuity_distance = float(np.linalg.norm(vector - seed_vector))
+            task_score = position_error / max(options.position_tolerance_m, 1e-12)
+            if options.orientation_mode != "position_only":
+                task_score += orientation_error / max(
+                    options.orientation_tolerance_rad,
+                    1e-12,
+                )
+            if success:
+                return (0.0, continuity_distance, task_score)
+            return (1.0, task_score, continuity_distance)
+
+        best = min(candidates, key=candidate_key)
+        position_error, orientation_error, success = evaluate(best)
         message = str(best.message)
         if not success:
             message = (

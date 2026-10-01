@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Superseded the #73 launch-only smoothness experiment after physical replay remained
+  shaky and A_UP->B_UP again failed during read-only planning with a 0.812 mm intermediate
+  IK miss against the unchanged 0.5 mm tolerance. Cartesian timing returns to the symmetric
+  half-cosine profile used before #73; the validated teleoperation-style Feetech tracking
+  profile remains unchanged.
+- Hardened numerical IK against soft-regularization false misses. If continuity/joint-center
+  penalties leave a candidate outside the hard task tolerance, the solver performs a
+  task-space-only bounded refinement from the regularized candidates and still requires the
+  original tolerance.
+- Added Cartesian-constrained smoothing for position-only paths. A five-tap filter creates
+  smoother joint seeds, each interior Cartesian sample is re-solved at the unchanged
+  tolerance, and the refined sequence is accepted only when discrete joint jerk decreases.
+  Cartesian geometry, endpoint targets, workspace policy, host cadence, and servo authority
+  are unchanged.
+
 - Refined Cartesian launch smoothness after hardware replay became faster/error-free
   but remained visibly shakier at the beginning of each line than near the endpoint. The
   host profile now uses bounded constant acceleration from rest, optional cruise, and the

@@ -60,13 +60,13 @@ constrained SDK primitives used manually.
 ### Cartesian linear trajectory parameterization
 
 `move_linear()` owns a Cartesian trajectory, not a sparse joint polyline. The host uses
-bounded constant acceleration from rest, an optional constant-speed cruise region, and a
-half-cosine deceleration into the endpoint, then solves sequential IK directly at the
-actual command-rate samples. This asymmetric launch is deliberate hardware adaptation:
-the earlier zero-acceleration cosine launch produced sub-resolution first samples at the
-validated 20 Hz paper cadence. Requested linear speed and acceleration remain ceilings of
-the profile; position-only paths do not spend time rotating an unconstrained tool
-orientation. It must not introduce a second
+symmetric half-cosine acceleration/deceleration with an optional constant-speed cruise,
+then solves sequential IK directly at the actual command-rate samples. For position-only
+paths, deterministic code may smooth the joint solution sequence only as a source of new
+IK seeds, then re-solve each Cartesian sample at the unchanged hard tolerance and accept
+the refined sequence only if joint jerk is lower. The Cartesian path remains authoritative
+throughout. Requested linear speed and acceleration remain ceilings of the profile;
+position-only paths do not spend time rotating an unconstrained tool orientation. It must not introduce a second
 piecewise-linear joint-space interpolation layer between sparse IK knots.
 
 On calibrated Feetech hardware, planned Cartesian motion uses the same servo-side

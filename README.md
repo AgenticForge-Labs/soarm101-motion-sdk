@@ -145,12 +145,14 @@ workspace.
 Planned Cartesian motion uses the same responsive Feetech servo-side tracking profile as
 smooth live teleoperation: the host trajectory owns velocity/acceleration shaping while
 the servo receives `speed_raw=0` (maximum tracking authority) and
-`acceleration_raw=254`. The host profile uses bounded constant acceleration at launch,
-then optional constant-speed cruise and a smooth half-cosine deceleration. This makes the
-first 20 Hz setpoints large enough to be useful on quantized hobby servos without
-exceeding the requested acceleration ceiling, while retaining the already-smooth endpoint
-deceleration. This avoids the previous per-sample servo speed throttling that could
-produce visible stick-slip on gravity-loaded joints. The normal joint, IK,
+`acceleration_raw=254`. The host path uses symmetric half-cosine acceleration/
+deceleration with optional constant-speed cruise. Position-only Cartesian paths then get
+one deterministic smooth-seed IK reprojection pass: joint-space seeds are filtered, every
+interior Cartesian sample is re-solved at the unchanged hard position tolerance, and the
+refined path is used only when it lowers discrete joint jerk. This keeps the Cartesian
+line authoritative while reducing redundant-joint numerical wander. The previous
+per-sample servo speed throttling remains superseded because it could produce visible
+stick-slip on gravity-loaded joints. The normal joint, IK,
 rate/acceleration, following-error, fault, effort/contact, communication, settle,
 provenance, and timing guards remain active. The measured workspace owns paper height;
 the generic model workspace is used only where explicitly documented as a secondary
@@ -262,10 +264,11 @@ step does not redo mechanical-stop calibration.
 
 Simulation and fake-transport tests cover the motion and hardware interfaces. Physical behavior depends on the specific arm, assembly, calibration, power supply, and payload; test cautiously before relying on a movement or saved trajectory. Leader parking and cross-arm pose matching enable torque and can move a physical arm; treat them as powered-motion operations even though the leader is normally back-drivable with torque off.
 
-Cartesian `move_linear()` trajectories are parameterized in Cartesian space with a
-bounded-acceleration launch, optional cruise, and half-cosine deceleration, then solved by
-sequential IK at the host command rate. This avoids both sub-resolution early setpoints
-and visible joint-slope corrections caused by interpolating between sparse IK knots.
+Cartesian `move_linear()` trajectories are parameterized in Cartesian space with
+half-cosine acceleration/deceleration and optional cruise, then solved by sequential IK
+at the host command rate. Position-only paths may then reproject from smoothed joint seeds
+at the same Cartesian tolerance, reducing redundant-joint jitter without altering the
+requested line.
 
 The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, deterministic sequence programming, simulation, basic local USB-camera capture, and an optional PySide6 GUI. Higher-level perception/tracking, calibrated multi-camera stage systems, ROS integration, and show orchestration remain outside this project. The SDK is intended to provide constrained motion plus a deterministic local observation surface beneath those higher-level systems. See [Architecture](docs/architecture.md) and [Camera](docs/camera.md) for the boundaries.
 

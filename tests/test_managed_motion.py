@@ -182,75 +182,52 @@ def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch
     assert any(calls[index : index + 2] == [False, True] for index in range(len(calls) - 1))
 
 
-def test_responsive_cruise_profile_uses_requested_speed_and_acceleration_ceilings() -> None:
+def test_cosine_cruise_profile_uses_requested_speed_as_cruise_ceiling() -> None:
     from soarm101_motion.motion.controller import MotionController
 
-    distance = 0.220
-    speed = 0.020
-    acceleration = 0.100
-    duration = MotionController._responsive_cruise_duration(
-        distance,
-        speed,
-        acceleration,
-    )
+    duration = MotionController._cosine_cruise_duration(0.220, 0.020, 0.100)
 
-    assert duration == pytest.approx(11.2570796327, rel=1e-6)
-
-    # At the paper workflow's 20 Hz cadence, the previous zero-acceleration
-    # cosine launch advanced only about 0.021 mm in the first sample. The
-    # responsive launch advances 0.125 mm while staying exactly on the
-    # requested 100 mm/s² acceleration ceiling.
-    first_distance = distance * MotionController._responsive_cruise_progress(
-        distance,
-        speed,
-        acceleration,
-        0.050,
-    )
-    second_distance = distance * MotionController._responsive_cruise_progress(
-        distance,
-        speed,
-        acceleration,
+    assert duration == pytest.approx(11.3141592654, rel=1e-6)
+    assert MotionController._cosine_cruise_progress(
+        0.220,
+        0.020,
         0.100,
-    )
-    assert first_distance == pytest.approx(0.000125, abs=1e-12)
-    assert second_distance == pytest.approx(0.000500, abs=1e-12)
-
-    first_velocity = first_distance / 0.050
-    second_velocity = (second_distance - first_distance) / 0.050
-    discrete_acceleration = (second_velocity - first_velocity) / 0.050
-    assert first_velocity < speed
-    assert second_velocity < speed
-    assert discrete_acceleration == pytest.approx(acceleration, rel=1e-9)
+        duration / 2.0,
+    ) == pytest.approx(0.5, abs=1e-8)
 
 
-def test_responsive_cruise_profile_retains_smooth_endpoint_deceleration() -> None:
-    import numpy as np
+def test_position_only_cartesian_reprojection_reduces_joint_jerk(monkeypatch) -> None:
+    from types import SimpleNamespace
 
-    from soarm101_motion.motion.controller import MotionController
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        samples = []
+        poses = []
+        for index in range(7):
+            sample = dict(start)
+            sample["shoulder_pan"] += 0.01 * index
+            sample["wrist_roll"] += [0.0, 0.03, -0.02, 0.04, -0.01, 0.02, 0.0][index]
+            samples.append(sample)
+            poses.append(arm.get_position())
 
-    distance = 0.220
-    speed = 0.020
-    acceleration = 0.100
-    duration = MotionController._responsive_cruise_duration(
-        distance,
-        speed,
-        acceleration,
-    )
-    dt = 0.050
-    positions = [
-        distance
-        * MotionController._responsive_cruise_progress(
-            distance,
-            speed,
-            acceleration,
-            max(0.0, duration - offset),
+        original_roughness = arm.motion._joint_path_roughness(tuple(samples))
+
+        def return_seed(target, *, seed, tcp, options):
+            del target, tcp, options
+            return SimpleNamespace(joints=dict(seed))
+
+        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", return_seed)
+        refined = arm.motion._smooth_position_only_cartesian_samples(
+            tuple(samples),
+            tuple(poses),
+            tcp=None,
+            limits=arm.motion._effective_limits(),
         )
-        for offset in (3 * dt, 2 * dt, dt, 0.0)
-    ]
-    increments = np.diff(positions)
 
-    assert all(value > 0.0 for value in increments)
-    assert increments[2] < increments[1] < increments[0]
+    assert arm.motion._joint_path_roughness(refined) < original_roughness
+    assert refined[0] == samples[0]
+    assert refined[-1] == samples[-1]
 
 
 def test_position_only_linear_timing_ignores_target_rotation() -> None:

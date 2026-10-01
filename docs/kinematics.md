@@ -2,7 +2,7 @@
 
 The native model reproduces the five revolute-joint origins, axes, calibrated limits, and stock gripper TCP from the official SO-101 URDF. It does not require ROS or a URDF parser at runtime.
 
-Inverse kinematics uses bounded `scipy.optimize.least_squares`. The current or previous joint configuration is the seed, which preserves continuity during linear motion. Planned Cartesian paths use a configurable 0.5 mm position tolerance by default; this is a solver acceptance threshold, not a claim of 0.5 mm physical accuracy.
+Inverse kinematics uses bounded `scipy.optimize.least_squares`. The current or previous joint configuration is the seed, which preserves continuity during linear motion. Planned Cartesian paths use a configurable 0.5 mm position tolerance by default; this is a solver acceptance threshold, not a claim of 0.5 mm physical accuracy. Continuity and joint-centering are soft regularizers only: if they leave an otherwise reachable target outside the hard task tolerance, the solver performs a bounded task-space-only refinement from the regularized candidates rather than relaxing the tolerance.
 
 Orientation modes:
 
@@ -11,6 +11,6 @@ Orientation modes:
 - `position_only`: constrain XYZ and allow orientation to float.
 - `look_at`: place the TCP and aim its +Z axis at a target point, leaving roll unconstrained.
 
-`move_linear()` interpolates Cartesian position and orientation, solves IK sequentially, rejects discontinuities, computes a safe total duration, then uniformly resamples the joint path at the command rate.
+`move_linear()` interpolates Cartesian position and orientation, solves IK sequentially at the command rate, and rejects discontinuities. For `position_only` paths, a deterministic joint-space filter may be used only to create smoother IK seeds; every interior Cartesian sample is then re-solved at the same hard tolerance, and the refined sequence is kept only when discrete joint jerk is lower. Cartesian geometry remains the source of truth.
 
 The Manual GUI's joint-center view is generated from this same native model rather than a second visual-only arm definition. It starts in an orthographic X/Z side view and shows joint axes and the TCP, not the printed link housings or gripper mesh. Dragging rotates the view; double-clicking restores the side view. During a jog, the GUI marks the requested TCP target and logs the requested-versus-achieved Cartesian pose. The physical validation sequence in `TESTING.md` uses those diagnostics to distinguish a GUI/planner axis error from a calibration or physical joint-direction mismatch.

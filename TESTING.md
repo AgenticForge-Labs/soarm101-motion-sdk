@@ -73,16 +73,20 @@ profile as smooth teleoperation: `speed_raw=0`, `acceleration_raw=254`. The host
 trajectory owns speed/acceleration shaping; do not add a second per-sample servo speed
 trajectory.
 
-The host launch profile is intentionally hardware-aware. At the reference paper settings
-(20 Hz, 20 mm/s, 100 mm/s²), the first Cartesian sample should advance about 0.125 mm.
-The superseded zero-acceleration cosine launch advanced only about 0.021 mm in the first
-50 ms, which can disappear into encoder/linkage quantization before later samples jump.
-The new launch remains at or below the requested acceleration ceiling and keeps the
-half-cosine endpoint deceleration.
+Hardware replay after #73 remained visibly shaky and again hit an intermediate A_UP->B_UP
+IK miss, so the launch-only experiment is superseded. Keep the symmetric half-cosine host
+profile and the teleoperation servo profile. Position-only Cartesian planning now filters
+the solved joint path only to create smoother IK seeds, re-solves every interior Cartesian
+sample at the unchanged hard tolerance, and accepts the refined path only when discrete
+joint jerk decreases.
 
-If motion remains visibly shakier than teleop after this launch change, capture the
-planned joint derivatives, encoder-quantized command deltas, measured following error,
-and actual cycle timing before changing motor PID or power settings.
+The IK solver also performs a task-space-only refinement when soft continuity/joint-center
+regularization would otherwise leave a target just outside the hard Cartesian tolerance.
+Do not loosen the tolerance to make such a case pass.
+
+If motion remains visibly shakier than teleop after this change, capture the planned joint
+derivatives, encoder-quantized command deltas, measured following error, and actual cycle
+timing before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
