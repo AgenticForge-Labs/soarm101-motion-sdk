@@ -74,7 +74,7 @@ def test_clockwise_letter_perimeter_distances() -> None:
     assert distances["AC"] == pytest.approx(expected_diagonal)
     assert distances["BD"] == pytest.approx(expected_diagonal)
 
-def test_workspace_orientation_drift_is_warning_not_rejection() -> None:
+def test_workspace_orientation_drift_is_diagnostic_only() -> None:
     module = _load_example_module()
 
     class Calibration:
@@ -84,20 +84,17 @@ def test_workspace_orientation_drift_is_warning_not_rejection() -> None:
         model_up_scale = 0.915
         up_vs_table_normal_angle_deg = 16.02
 
-    accepted, checks, warnings = module.evaluate_measurement_acceptance(
+    accepted, checks = module.evaluate_measurement_acceptance(
         Calibration(),
         up_orientation_drift_deg=16.52,
         max_table_fit_rms_mm=5.0,
         max_affine_fit_rms_mm=10.0,
         max_linear_condition_number=20.0,
-        up_orientation_drift_warning_deg=10.0,
         min_up_scale=0.25,
         max_up_scale=2.0,
     )
 
     assert accepted is True
     assert checks["measurement_accepted"] is True
-    assert checks["up_probe_orientation_within_warning_threshold"] is False
-    assert warnings
-    assert "16.52 deg" in warnings[0]
+    assert checks["diagnostic_up_orientation_drift_deg"] == pytest.approx(16.52)
 
