@@ -51,8 +51,10 @@ explicit operator release instead of immediately relaxing.
 
 ### Cartesian servo-profile comparison with teleoperation
 
-The host already time-parameterizes `move_linear()` at 50 Hz. Its servo writes should
-therefore use the same responsive Feetech profile as teleoperation:
+The SDK-wide planned-motion default remains 50 Hz. The supervised paper hardware
+validation intentionally configures `move_linear()` at 20 Hz to match the known-smooth
+teleoperation host cadence while retaining the same trajectory limits and guards. Servo
+writes should use the same responsive Feetech profile as teleoperation:
 
 ```text
 speed_raw = 0
@@ -64,11 +66,13 @@ layers a second slow motor trajectory under the host trajectory and can appear a
 lag/catch-up shaking.
 
 On hardware, compare the same broad workspace motion with smooth 20 Hz teleoperation and
-a 20 mm/s, 100 mm/s² paper replay. The supervised paper script uses 1 mm Cartesian IK
-waypoint spacing instead of the generic 5 mm spacing; at 20 mm/s this gives roughly 20 IK
-knots/s before the 50 Hz command resampling and reduces piecewise joint-slope changes.
-If linear motion remains visibly shakier, capture/analyze the planned IK joint sequence
-before changing motor PID or power settings.
+a 20 mm/s, 100 mm/s² paper replay. The supervised paper script uses a 20 Hz host command
+cadence and 1 mm Cartesian planning-density bound. Every emitted command sample is still
+a direct sequential-IK solution of the minimum-jerk Cartesian path; no sparse joint-space
+interpolation is reintroduced. If a sequential single-start IK solve misses the unchanged
+0.5 mm Cartesian tolerance, the planner retries that sample with multi-start before
+failing. If linear motion remains visibly shakier, inspect commanded/quantized joint
+increments and measured following behavior before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
@@ -759,9 +763,12 @@ fail this test. Physical smoothness still requires real-arm validation.
 ### Paper replay from a low/resting start
 
 The startup clearance move must be evaluated in the saved calibrated workspace, not by
-assuming raw model Z is physical height. Regression coverage includes a case where the
-clearance target remains at negative model-frame Z while calibrated workspace Z rises
-from 0 to 10 mm. The preflight must accept that case only when workspace X/Y stays fixed,
-physical Z does not descend, IK remains continuous, and all solved joints remain inside
-effective limits. Execution then disables only the generic coarse workspace check for that
-single preflighted startup lift; the normal motion/runtime safety stack remains active.
+assuming raw model Z is physical height. From a low/resting pose the target is the full
+paper reference/transport height, not merely a small nominal lift. Regression coverage
+also includes a case where the clearance target remains at negative model-frame Z while
+calibrated workspace Z rises. Preflight accepts the path only when workspace X/Y stays
+fixed, physical Z does not descend, IK remains continuous, and all solved joints remain
+inside effective limits. After execution, measured workspace Z must be within 5 mm of the
+transport target before lateral travel is permitted; up to three corrective lifts may be
+separately preflighted. The generic coarse workspace check is disabled only for those
+verified startup-lift executions; the normal motion/runtime safety stack remains active.

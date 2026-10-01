@@ -99,13 +99,16 @@ preflight. No additional elevated teaching is required. The segment itself is st
 executed with `move_linear()` and position-only IK.
 
 `--replay` reuses the saved A/B/C/D plus D_UP teaching without touching the arm manually again and can begin
-from an ordinary resting pose. Before the first long move, a pure calibrated-workspace-Z
-clearance lift is preflighted at <=1 mm spacing. Its X/Y must remain fixed, physical Z
-must not descend, sequential IK must remain continuous, and all solved joints must remain
-inside effective limits. Because the generic model-frame floor is known to disagree with
-the measured table, only that already-preflighted startup lift executes with the coarse
-workspace check disabled. The paper traversal endpoints continue to use destination-only
-coarse workspace validation. The dynamic/joint/hardware safety stack remains active.
+from an ordinary resting pose. Before any lateral travel, a pure calibrated-workspace-Z
+move to at least the paper reference/transport height is preflighted at <=1 mm spacing.
+Its X/Y must remain fixed, physical Z must not descend, sequential IK must remain
+continuous, and all solved joints must remain inside effective limits. After execution,
+measured workspace Z must reach the transport target within 5 mm; otherwise separately
+preflighted corrective lifts are attempted and lateral travel remains blocked. Because the
+generic model-frame floor is known to disagree with the measured table, only those
+preflighted startup lifts execute with the coarse workspace check disabled. The paper
+traversal endpoints continue to use destination-only coarse workspace validation. The
+dynamic/joint/hardware safety stack remains active.
 Use `--measure-only` to retain the non-moving behavior.
 
 See [Workspace calibration](workspace-calibration.md) for the persisted contract,
@@ -116,15 +119,17 @@ quality gates, and provenance.
 Live teleoperation is an important control comparison because it uses the same motors and
 position loop without Cartesian IK. Teleoperation sends host-shaped joint samples with
 Feetech speed_raw=0 (unrestricted) and acceleration_raw=254. Cartesian
-`move_linear()` now uses that same servo-side profile while retaining its independently
-planned 50 Hz minimum-jerk Cartesian trajectory.
+`move_linear()` uses that same servo-side profile. The SDK-wide planned-motion default
+remains 50 Hz, but the supervised paper validation now uses a 20 Hz host command cadence
+to match the known-smooth teleoperation timing on this hardware.
 
-For the supervised paper replay, Cartesian IK waypoint spacing is tightened to 1 mm from
-the generic 5 mm default. At the 20 mm/s comparison speed this produces roughly 20 IK
-knots/s before the normal 50 Hz command resampling, reducing piecewise joint-slope changes
-while preserving the same deterministic safety stack. If teleoperation remains smooth
-but linear motion remains shaky, inspect the planned IK joint sequence itself:
-per-waypoint joint deltas/velocity/acceleration and branch continuity.
+The paper workflow retains a 1 mm Cartesian planning-density bound. Every emitted command
+sample is a direct sequential-IK solution of the minimum-jerk Cartesian path. If a
+single-start intermediate solve misses the unchanged 0.5 mm tolerance, that sample is
+retried with multi-start before the path fails. If teleoperation remains smooth but linear
+motion remains shaky at the same 20 Hz cadence, inspect encoder-quantized command deltas,
+measured following error, and the planned joint derivatives before changing motor PID or
+power settings.
 
 ## Current hardware finding
 

@@ -141,3 +141,42 @@ def test_linear_plan_solves_ik_at_each_command_rate_cartesian_sample(monkeypatch
             start_joints["wrist_roll"] + 0.01 * progress_like**3,
             abs=1e-10,
         )
+
+
+def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch) -> None:
+    import numpy as np
+
+    from soarm101_motion.exceptions import IKError
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        original = arm.motion.ik.solve_or_raise
+        calls: list[bool] = []
+        failed_once = False
+
+        def flaky(target, *, seed, tcp, options):
+            nonlocal failed_once
+            calls.append(bool(options.multi_start))
+            if not options.multi_start and not failed_once:
+                failed_once = True
+                raise IKError(
+                    "IK did not meet tolerance: position=0.000556 m, orientation=0.000000 rad"
+                )
+            return original(target, seed=seed, tcp=tcp, options=options)
+
+        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", flaky)
+        current = arm.get_position()
+        target = Pose(
+            current.position + np.array([-0.010, 0.0, 0.004]),
+            current.rotation,
+        )
+        plan = arm.motion.plan_linear(
+            target,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+        )
+
+    assert plan.command_samples
+    assert failed_once is True
+    assert any(calls[index : index + 2] == [False, True] for index in range(len(calls) - 1))
