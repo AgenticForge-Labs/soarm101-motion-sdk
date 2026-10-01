@@ -86,6 +86,7 @@ def test_move_linear_uses_responsive_servo_profile() -> None:
         current = arm.get_position()
         target = Pose(current.position + [-0.005, 0.0, 0.005], current.rotation)
         arm.move_linear(target, orientation_mode="position_only", speed=0.01)
+        arm.backend.write_joint_positions = original  # type: ignore[method-assign]
 
     assert calls
     assert all(
