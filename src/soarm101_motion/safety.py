@@ -162,14 +162,91 @@ def validate_workspace_path(
     minimum_self_clearance_m: float = 0.025,
     base_keepout_radius_m: float = 0.055,
     base_keepout_height_m: float = 0.11,
+    allow_floor_recovery: bool = False,
+    floor_recovery_tolerance_m: float = 0.001,
 ) -> None:
+    if not samples:
+        return
+
+    if not allow_floor_recovery:
+        for index, joints in enumerate(samples):
+            try:
+                validate_workspace_configuration(
+                    model,
+                    joints,
+                    tcp=tcp,
+                    minimum_z_m=minimum_z_m,
+                    maximum_tcp_reach_m=maximum_tcp_reach_m,
+                    minimum_self_clearance_m=minimum_self_clearance_m,
+                    base_keepout_radius_m=base_keepout_radius_m,
+                    base_keepout_height_m=base_keepout_height_m,
+                )
+            except SafetyViolationError as exc:
+                raise SafetyViolationError(f"workspace path sample {index}: {exc}") from exc
+        return
+
+    if not math.isfinite(floor_recovery_tolerance_m) or floor_recovery_tolerance_m < 0.0:
+        raise ValueError("floor_recovery_tolerance_m must be a non-negative finite value")
+
+    guarded_names = ("elbow_flex", "wrist_flex", "wrist_roll", "tcp")
+    start_points = model.link_points(samples[0], tcp=tcp)
+    start_z = {name: float(start_points[name][2]) for name in guarded_names}
+    recovering = {name for name, z in start_z.items() if z < minimum_z_m}
+
+    if not recovering:
+        return validate_workspace_path(
+            model,
+            samples,
+            tcp=tcp,
+            minimum_z_m=minimum_z_m,
+            maximum_tcp_reach_m=maximum_tcp_reach_m,
+            minimum_self_clearance_m=minimum_self_clearance_m,
+            base_keepout_radius_m=base_keepout_radius_m,
+            base_keepout_height_m=base_keepout_height_m,
+        )
+
+    # Keep the ordinary reach/base/self-clearance checks active while allowing only
+    # the points that started below the configured floor to escape upward. The
+    # temporary floor is no lower than the measured starting violation plus the
+    # small numeric/path tolerance.
+    recovery_floor_m = min(start_z[name] for name in recovering) - floor_recovery_tolerance_m
+    previous_z = dict(start_z)
+    recovered: set[str] = set()
+
     for index, joints in enumerate(samples):
+        points = model.link_points(joints, tcp=tcp)
+        for name in guarded_names:
+            z = float(points[name][2])
+            if name not in recovering:
+                if z < minimum_z_m:
+                    raise SafetyViolationError(
+                        f"workspace path sample {index}: workspace check: {name} "
+                        f"z={z:.3f} m is below {minimum_z_m:.3f} m"
+                    )
+                continue
+
+            if name in recovered:
+                if z < minimum_z_m:
+                    raise SafetyViolationError(
+                        f"workspace path sample {index}: floor recovery for {name} "
+                        "re-entered the forbidden floor region"
+                    )
+            else:
+                if z + floor_recovery_tolerance_m < previous_z[name]:
+                    raise SafetyViolationError(
+                        f"workspace path sample {index}: floor recovery for {name} "
+                        f"moved downward from {previous_z[name]:.3f} m to {z:.3f} m"
+                    )
+                if z >= minimum_z_m:
+                    recovered.add(name)
+            previous_z[name] = z
+
         try:
             validate_workspace_configuration(
                 model,
                 joints,
                 tcp=tcp,
-                minimum_z_m=minimum_z_m,
+                minimum_z_m=recovery_floor_m,
                 maximum_tcp_reach_m=maximum_tcp_reach_m,
                 minimum_self_clearance_m=minimum_self_clearance_m,
                 base_keepout_radius_m=base_keepout_radius_m,
@@ -177,3 +254,21 @@ def validate_workspace_path(
             )
         except SafetyViolationError as exc:
             raise SafetyViolationError(f"workspace path sample {index}: {exc}") from exc
+
+    # A recovery path is permitted only if it ends completely back inside the
+    # ordinary workspace envelope.
+    try:
+        validate_workspace_configuration(
+            model,
+            samples[-1],
+            tcp=tcp,
+            minimum_z_m=minimum_z_m,
+            maximum_tcp_reach_m=maximum_tcp_reach_m,
+            minimum_self_clearance_m=minimum_self_clearance_m,
+            base_keepout_radius_m=base_keepout_radius_m,
+            base_keepout_height_m=base_keepout_height_m,
+        )
+    except SafetyViolationError as exc:
+        raise SafetyViolationError(
+            f"workspace path final sample did not recover into the normal envelope: {exc}"
+        ) from exc
