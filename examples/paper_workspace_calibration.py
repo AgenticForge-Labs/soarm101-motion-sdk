@@ -183,70 +183,34 @@ def evaluate_measurement_acceptance(
     return measurement_ok, checks
 
 
-def _joint_delta(first: dict[str, float], second: dict[str, float]) -> dict[str, float]:
-    return {name: float(second[name] - first[name]) for name in first}
-
-
-def _offset_joints(
-    base: dict[str, float],
-    delta: dict[str, float],
-) -> dict[str, float]:
-    return {name: float(base[name] + delta[name]) for name in base}
-
-
-def reachable_demo_targets(
-    arm: SOARM101,
-    *,
-    corners: dict[str, Sample],
-    up_sample: Sample,
+def measured_demo_targets(
+    elevated: dict[str, Sample],
 ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float]]]:
-    """Build Cartesian endpoints from known-reachable inferred joint configurations.
+    """Use physically taught elevated points directly as replay endpoints."""
 
-    The taught D->UP joint delta is applied to each taught paper corner. FK of those
-    joint configurations defines the Cartesian endpoints. The demonstration still uses
-    move_linear() between endpoints; this construction only makes each endpoint itself
-    reachable by definition.
-
-    With only one physically measured UP sample, this does not prove that every elevated
-    endpoint is exactly the same physical height above the paper. The saved affine workspace
-    transform is therefore used only to report an estimated physical Z for diagnostics.
-    """
-
-    required = {"A", "B", "C", "D"}
-    if set(corners) != required:
-        raise ValueError(f"expected corners {sorted(required)}, got {sorted(corners)}")
-
-    lift_delta = _joint_delta(corners["D"].joints_rad, up_sample.joints_rad)
-    elevated_joints = {
-        "D_UP": dict(up_sample.joints_rad),
-        "A_UP": _offset_joints(corners["A"].joints_rad, lift_delta),
-        "B_UP": _offset_joints(corners["B"].joints_rad, lift_delta),
-        "C_UP": _offset_joints(corners["C"].joints_rad, lift_delta),
-        "D_UP_RETURN": dict(up_sample.joints_rad),
-    }
-    center_base = {
-        name: float(
-            np.mean([corners[label].joints_rad[name] for label in ("A", "B", "C", "D")])
+    required = {"A_UP", "B_UP", "C_UP", "D_UP", "CENTER_UP"}
+    if set(elevated) != required:
+        raise ValueError(
+            f"expected elevated samples {sorted(required)}, got {sorted(elevated)}"
         )
-        for name in up_sample.joints_rad
-    }
-    elevated_joints["CENTER_UP"] = _offset_joints(center_base, lift_delta)
-
-    limits = arm.get_joint_limits()
-    for target_name, joints in elevated_joints.items():
-        for joint_name, value in joints.items():
-            lower, upper = limits[joint_name]
-            if not lower <= value <= upper:
-                raise RuntimeError(
-                    f"{target_name} inferred {joint_name}={value:.4f} rad is outside "
-                    f"{lower:.4f}..{upper:.4f}"
-                )
 
     positions = {
-        name: arm.model.forward(joints, tcp=arm.active_tcp).position.copy()
-        for name, joints in elevated_joints.items()
+        "D_UP": elevated["D_UP"].position_m.copy(),
+        "A_UP": elevated["A_UP"].position_m.copy(),
+        "B_UP": elevated["B_UP"].position_m.copy(),
+        "C_UP": elevated["C_UP"].position_m.copy(),
+        "D_UP_RETURN": elevated["D_UP"].position_m.copy(),
+        "CENTER_UP": elevated["CENTER_UP"].position_m.copy(),
     }
-    return positions, elevated_joints
+    preferred_seeds = {
+        "D_UP": dict(elevated["D_UP"].joints_rad),
+        "A_UP": dict(elevated["A_UP"].joints_rad),
+        "B_UP": dict(elevated["B_UP"].joints_rad),
+        "C_UP": dict(elevated["C_UP"].joints_rad),
+        "D_UP_RETURN": dict(elevated["D_UP"].joints_rad),
+        "CENTER_UP": dict(elevated["CENTER_UP"].joints_rad),
+    }
+    return positions, preferred_seeds
 
 
 def preflight_demo_targets(
