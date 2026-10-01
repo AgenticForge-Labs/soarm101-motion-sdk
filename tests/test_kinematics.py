@@ -57,8 +57,6 @@ def test_jacobian_shape() -> None:
 
 
 def test_ik_task_refinement_can_recover_from_regularization_tradeoff() -> None:
-    from types import SimpleNamespace
-
     from soarm101_motion.types import Pose
 
     class FakeModel:
