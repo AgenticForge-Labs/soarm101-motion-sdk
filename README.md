@@ -135,14 +135,14 @@ naturally as needed to place the fixed fingertip; it is recorded for diagnosis b
 not gate workspace-measurement acceptance. The paper workflow physically teaches A/B/C/D plus one measured D_UP reference. Replay
 uses the saved physical-workspace transform to level every paper endpoint to that same
 workspace Z while preserving each endpoint's calibrated workspace X/Y; no extra elevated
-teaching is required. Before the first long move from an ordinary resting pose, replay
-preflights a straight calibrated-workspace-Z move to at least the paper reference/
-transport height before any lateral travel. The climb is executed in separately
-preflighted and settled 10 mm Z stages, with workspace Z remeasured after every stage.
-Measured workspace Z must reach the transport target within 5 mm or replay refuses to
-continue. That clearance path is validated in the calibrated
-physical workspace rather than against the generic model-frame Z floor, which is known to
-misrepresent this measured table. For this hardware validation the paper workflow uses a
+teaching is required. Before entering the paper path from an ordinary resting pose,
+replay preflights one straight calibrated-workspace-Z clearance move of 20 mm by default.
+Measured workspace Z must land within 5 mm of that requested clearance target or replay
+refuses to continue. The traversal then begins at A_UP and follows A_UP -> B_UP -> C_UP ->
+D_UP -> CENTER_UP; D_UP remains the physical-height calibration reference but is no longer
+visited first merely because it was taught there. The clearance path is validated in the
+calibrated physical workspace rather than against the generic model-frame Z floor, which
+is known to misrepresent this measured table. For this hardware validation the paper workflow uses a
 20 Hz host command cadence, matching the proven teleoperation cadence, while the SDK-wide
 planned-motion default remains 50 Hz. Cartesian `move_linear()` uses smooth cosine
 acceleration/deceleration ramps with a constant-speed cruise when distance permits, so the
