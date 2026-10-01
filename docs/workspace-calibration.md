@@ -132,10 +132,12 @@ position-only IK. This separates endpoint reachability from the thing being test
 whether the physical arm follows the requested Cartesian straight-line segments.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
-resting pose. The initial current-pose→D_UP linear move uses target-only coarse workspace
-validation so a slightly odd model interpretation of the resting pose does not block
-recovery; the destination must still be valid, and joint limits, IK continuity, faults,
-following-error, effort, timing, and subsequent full workspace-path checks remain active.
+resting pose. For this supervised paper-linear validation, every segment uses
+**target-only coarse workspace validation**: the destination must pass the coarse model,
+but intermediate coarse floor/base/self-clearance checks are not allowed to veto a
+physically supervised clear path. Joint limits, IK continuity, command-step/rate/
+acceleration, faults, following-error, effort/contact, communication, and timing guards
+remain active.
 
 ## Relationship to the coarse floor guard
 
