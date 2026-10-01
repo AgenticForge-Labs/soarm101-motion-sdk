@@ -311,14 +311,14 @@ def run_demo_targets(
     acceleration_mm_s2: float,
     report_moves: list[dict[str, object]],
 ) -> None:
-    for index, (name, position) in enumerate(positions.items()):
+    for name, position in positions.items():
         print(f"\nMoving to {name}...")
         result = arm.move_linear(
             Pose(position, rotation),
             orientation_mode="position_only",
             speed=speed_mm_s / 1000.0,
             acceleration=acceleration_mm_s2 / 1000.0,
-            workspace_check="target_only" if index == 0 else "full",
+            workspace_check="target_only",
         )
         if not result.accepted or not result.completed:
             raise RuntimeError(f"{name} motion did not complete: {result}")
@@ -496,9 +496,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 f"{args.output}."
             )
             print(
-                "The arm may start from any ordinary resting pose. The first move to D_UP "
-                "uses target-only coarse workspace checking; subsequent paper segments use "
-                "the normal full workspace check."
+                "The arm may start from any ordinary resting pose. This supervised paper "
+                "validation uses target-only coarse workspace checking for each segment; "
+                "dynamic, joint, effort, fault, following-error, and timeout guards remain active."
             )
             _countdown_hold(arm)
             arm.tool.open()
