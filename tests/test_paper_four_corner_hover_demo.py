@@ -35,7 +35,8 @@ def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
     assert "--reference-height-mm" in result.stdout
     assert "--hover-height-mm" in result.stdout
     assert "--workspace-output" in result.stdout
-    assert "no autonomous cartesian arm motion" in result.stdout.lower()
+    assert "--measure-only" in result.stdout
+    assert "--speed-mm-s" in result.stdout
 
 
 def test_old_paper_hover_filename_is_safe_compatibility_entry_point() -> None:
@@ -50,7 +51,7 @@ def test_old_paper_hover_filename_is_safe_compatibility_entry_point() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "--reference-height-mm" in result.stdout
-    assert "no autonomous cartesian arm motion" in result.stdout.lower()
+    assert "--measure-only" in result.stdout
 
 
 def test_clockwise_letter_perimeter_distances() -> None:
@@ -97,4 +98,27 @@ def test_workspace_orientation_drift_is_diagnostic_only() -> None:
     assert accepted is True
     assert checks["measurement_accepted"] is True
     assert checks["diagnostic_up_orientation_drift_deg"] == pytest.approx(16.52)
+
+def test_elevated_demo_positions_use_physical_workspace_coordinates() -> None:
+    module = _load_example_module()
+
+    class Calibration:
+        def model_position_from_physical(self, x_m, y_m, z_m):
+            return np.array([x_m + 1.0, y_m + 2.0, z_m + 3.0])
+
+    positions = module.elevated_demo_positions(
+        Calibration(),
+        width_m=0.2159,
+        height_m=0.2794,
+        elevation_m=0.1070,
+    )
+
+    assert positions["D_UP"] == pytest.approx(np.array([1.0, 2.2794, 3.107]))
+    assert positions["A_UP"] == pytest.approx(np.array([1.0, 2.0, 3.107]))
+    assert positions["B_UP"] == pytest.approx(np.array([1.2159, 2.0, 3.107]))
+    assert positions["C_UP"] == pytest.approx(np.array([1.2159, 2.2794, 3.107]))
+    assert positions["D_UP_RETURN"] == pytest.approx(np.array([1.0, 2.2794, 3.107]))
+    assert positions["CENTER_UP"] == pytest.approx(
+        np.array([1.10795, 2.1397, 3.107])
+    )
 
