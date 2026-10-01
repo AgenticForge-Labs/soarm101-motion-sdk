@@ -8,6 +8,10 @@ from typing import Any
 
 import numpy as np
 
+from soarm101_motion.constants import (
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
+)
 from soarm101_motion.exceptions import InvalidCommandError
 from soarm101_motion.kinematics import OrientationMode
 from soarm101_motion.motion.controller import (
@@ -158,6 +162,8 @@ class MotionController(_BaseMotionController):
                     plan,
                     event,
                     cancellation_message="linear motion cancelled",
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
                 )
             )
         return handle.wait() if wait else handle
