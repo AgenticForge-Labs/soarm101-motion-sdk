@@ -92,9 +92,10 @@ its own persistent connection for live controls; it must not launch CLI subproce
   `move_linear()` replay A_UP→B_UP→C_UP→D_UP→CENTER_UP at 20 Hz. Verify all targets
   share the trained workspace Z and compare physical smoothness directly with teleoperation.
 - [ ] Validate the teleop-style Cartesian servo tracking profile on hardware
-  (speed_raw=0, acceleration_raw=254) together with the responsive bounded-acceleration
-  launch. Confirm the first ~200 ms no longer show the pronounced shake; inspect planned
-  joint derivatives/encoder quantization/following error if residual shake remains.
+  (speed_raw=0, acceleration_raw=254) together with Cartesian-constrained smooth-seed IK
+  reprojection. Confirm A_UP->B_UP preplans at the unchanged 0.5 mm tolerance and compare
+  visible shake with the #72/#73 runs; inspect planned joint derivatives, encoder
+  quantization, following error, and cycle timing if residual shake remains.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
