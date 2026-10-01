@@ -32,7 +32,8 @@ python examples/paper_workspace_calibration.py --reference-height-mm 50
 ```
 
 The historical `--hover-height-mm` spelling is accepted as an alias, but it no longer
-commands motion.
+commands motion. The old `examples/paper_four_corner_hover_demo.py` filename is also
+retained only as a compatibility wrapper around this calibration workflow.
 
 The operator teaches, with the arm relaxed:
 
