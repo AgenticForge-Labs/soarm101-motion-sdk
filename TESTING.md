@@ -28,6 +28,27 @@ after any failed gate rather than continuing into later capabilities.
    leader→follower teleoperation during the first foundational run unless every preceding
    gate has passed.
 
+### Follower position-hold authority
+
+Before repeating gravity-loaded Cartesian tests after upgrading from a configuration that
+used P=16, apply the current recommended motor settings once:
+
+```bash
+soarm101 configure --port /dev/ttyACM1 --robot-id so101
+```
+
+This does not redo mechanical-stop calibration. It disables torque while writing the
+recommended servo configuration and preserves the existing saved calibration. Confirm
+the arm is supported/clear while configuration runs.
+
+The current recommended STS3215 position P coefficient is 32 (factory default). A motion
+that reaches most of a target but remains several degrees short, especially while lifting
+against gravity, must not be "fixed" only by increasing the settle timeout. First verify
+position-hold authority, supply voltage, faults, and effort/current behavior.
+
+On a paper-motion error, verify the script holds the current position and waits for an
+explicit operator release instead of immediately relaxing.
+
 ### Paper/workspace calibration — after the basic motion gates
 
 Run:
