@@ -38,6 +38,7 @@ def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
     assert "--measure-only" in result.stdout
     assert "--replay" in result.stdout
     assert "--startup-lift-mm" in result.stdout
+    assert "--startup-height-tolerance-mm" in result.stdout
     assert "--speed-mm-s" in result.stdout
     assert "--settle-tolerance-deg" in result.stdout
     assert "--settle-timeout-s" in result.stdout
