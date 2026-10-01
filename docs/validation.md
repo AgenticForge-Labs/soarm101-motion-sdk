@@ -119,12 +119,15 @@ quality gates, and provenance.
 Live teleoperation is an important control comparison because it uses the same motors and
 position loop without Cartesian IK. Teleoperation sends host-shaped joint samples with
 Feetech speed_raw=0 (unrestricted) and acceleration_raw=254. Cartesian
-`move_linear()` uses that same servo-side profile. The SDK-wide planned-motion default
-remains 50 Hz, but the supervised paper validation now uses a 20 Hz host command cadence
-to match the known-smooth teleoperation timing on this hardware.
+`move_linear()` retains the responsive acceleration setting but now gives calibrated
+Feetech joints proportional per-sample speed limits so synchronized writes target a common
+arrival horizon. The SDK-wide planned-motion default remains 50 Hz, while the supervised
+paper validation uses a 20 Hz host command cadence to match the known-smooth teleoperation
+timing on this hardware.
 
 The paper workflow retains a 1 mm Cartesian planning-density bound. Every emitted command
-sample is a direct sequential-IK solution of the minimum-jerk Cartesian path. If a
+sample is a direct sequential-IK solution of a cosine-ramped trajectory with constant-speed
+cruise when distance permits. Position-only paths ignore target orientation for timing. If a
 single-start intermediate solve misses the unchanged 0.5 mm tolerance, that sample is
 retried with multi-start before the path fails. If teleoperation remains smooth but linear
 motion remains shaky at the same 20 Hz cadence, inspect encoder-quantized command deltas,
