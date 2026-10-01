@@ -100,12 +100,14 @@ Teach A->B->C->D clockwise, then teach the fixed lower finger at the measured UP
 above D. Immediately after the UP capture, confirm the countdown ends with torque enabled
 and the arm holding that exact pose instead of sagging.
 
-The workflow requires **physically taught elevated endpoints** at A_UP, B_UP, C_UP, D_UP,
-and CENTER_UP. Each point is manually placed at the requested physical reference height
-with a ruler/spacer/gauge and its measured model pose plus joint state is stored. Replay
-uses those measured endpoint positions directly; it does not infer height from a single
-D_UP sample, an affine transform, or a copied joint delta. The segments are still executed
-with `move_linear()` and position-only IK.
+The workflow uses A/B/C/D plus one manually measured D_UP reference. A known-reachable
+FK construction supplies an initial endpoint branch and observed workspace X/Y. Replay
+then inverse-maps each endpoint into physical workspace coordinates, preserves X/Y, sets
+workspace Z to the measured reference height, and maps that corrected coordinate back
+into model space. Read-only IK preflight must accept every corrected endpoint before
+motion. This directly tests whether the saved workspace mapping can level physical height
+without reteaching additional elevated points. The segments are still executed with
+`move_linear()` and position-only IK.
 
 For this supervised paper test, coarse workspace geometry is deliberately target-only on
 each segment. The destination must pass the coarse workspace check, while joint limits,
@@ -118,7 +120,7 @@ After a teaching run, test replay without touching the paper again:
 python examples/paper_workspace_calibration.py --replay
 ```
 
-Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D plus physically taught A_UP/B_UP/C_UP/D_UP/CENTER_UP samples,
+Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D plus the single physically measured D_UP reference,
 counts down and enables torque to hold the current pose, opens the moving jaw, preflights
 the endpoints, then waits for one Enter before running
 D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. It must not require reteaching merely

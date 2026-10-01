@@ -87,11 +87,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Validate FK against measured TCP positions.
 - [ ] Complete the paper/workspace calibration: four table corners plus a physically
   measured UP reference tied to the active motor calibration.
-- [ ] Complete physically measured elevated teaching at A_UP, B_UP, C_UP, D_UP, and
-  CENTER_UP, then run the supervised Cartesian traversal
-  (D_UP→A_UP→B_UP→C_UP→D_UP→CENTER_UP) from an ordinary resting pose and review both
-  physical height and smoothness. Legacy one-UP reports may use --upgrade-elevated without
-  reteaching A/B/C/D.
+- [ ] Run the supervised Cartesian traversal
+  (D_UP→A_UP→B_UP→C_UP→D_UP→CENTER_UP) using software-leveled workspace Z from the
+  existing A/B/C/D + D_UP calibration. Verify that the corrected endpoints preflight,
+  the initial 10 mm workspace-Z clearance lift behaves physically upward, and the paper
+  traversal remains at the requested height.
 - [ ] Review the first real-arm run using command-rate Cartesian IK before declaring the
   linear planner physically smooth.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
