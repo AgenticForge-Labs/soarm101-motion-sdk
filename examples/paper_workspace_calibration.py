@@ -491,7 +491,7 @@ def preflight_demo_targets(
             seeds.append(previous_solution)
 
         attempts: list[dict[str, object]] = []
-        successes: list[tuple[float, object, int]] = []
+        successes: list[tuple[float, float, object, int]] = []
         fingerprints: set[tuple[tuple[str, float], ...]] = set()
         for seed_index, seed in enumerate(seeds):
             fingerprint = tuple(
@@ -514,7 +514,26 @@ def preflight_demo_targets(
                 }
             )
             if solution.success:
-                successes.append((float(solution.position_error_m), solution, seed_index))
+                continuity_reference = (
+                    previous_solution
+                    if previous_solution is not None
+                    else preferred_seeds[name]
+                )
+                max_joint_delta = max(
+                    abs(
+                        float(solution.joints[joint])
+                        - float(continuity_reference[joint])
+                    )
+                    for joint in solution.joints
+                )
+                successes.append(
+                    (
+                        float(max_joint_delta),
+                        float(solution.position_error_m),
+                        solution,
+                        seed_index,
+                    )
+                )
 
         if not successes:
             best = min(attempts, key=lambda item: float(item["position_error_mm"]))
@@ -523,7 +542,10 @@ def preflight_demo_targets(
                 f"{float(best['position_error_mm']):.2f} mm; {best['message']}"
             )
 
-        _, solution, chosen_seed_index = min(successes, key=lambda item: item[0])
+        max_joint_delta, _, solution, chosen_seed_index = min(
+            successes,
+            key=lambda item: (item[0], item[1]),
+        )
         previous_solution = dict(solution.joints)
         results.append(
             {
@@ -534,6 +556,7 @@ def preflight_demo_targets(
                 "position_error_mm": float(solution.position_error_m * 1000.0),
                 "joints_rad": dict(solution.joints),
                 "chosen_seed_index": chosen_seed_index,
+                "max_joint_delta_from_reference_rad": float(max_joint_delta),
                 "attempts": attempts,
             }
         )
@@ -547,7 +570,7 @@ def preflight_joint_space_workspace_path(
     start_joints: dict[str, float],
     target_joints: dict[str, float],
     minimum_z_margin_m: float = 0.005,
-) -> dict[str, float]:
+) -> dict[str, object]:
     """Validate the geometric locus of a smooth joint interpolation before motion."""
 
     max_delta = max(
@@ -594,7 +617,7 @@ def preflight_joint_space_workspace_path(
         "target_workspace_z_mm": float(target_physical[2] * 1000.0),
         "minimum_workspace_z_mm": float(minimum_z * 1000.0),
         "maximum_xy_chord_deviation_mm": float(maximum_chord_deviation * 1000.0),
-        "sample_count": float(sample_count),
+        "sample_count": sample_count,
     }
 
 
@@ -872,7 +895,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     "saved workspace calibration does not match the active motor calibration"
                 )
 
-            print("Paper Cartesian linear replay")
+            print("Paper workspace replay")
             print(
                 f"Loaded saved teaching at {reference_height:.1f} mm reference height from "
                 f"{args.output}."
@@ -1061,7 +1084,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             _hold_until_operator_release(
                 arm,
-                "Cartesian linear replay completed at CENTER_UP.",
+                "Paper workspace replay completed at CENTER_UP.",
             )
             arm.relax()
             print("Motors relaxed.")
