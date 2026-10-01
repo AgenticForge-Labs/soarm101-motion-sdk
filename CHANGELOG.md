@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Extended paper workspace calibration with a supervised powered demonstration after a
+  successful measurement: all targets are generated from calibrated physical paper
+  coordinates at the measured reference height, preflighted torque-off, then traversed
+  D_UP→A_UP→B_UP→C_UP→D_UP→CENTER_UP with position-only IK after one explicit
+  confirmation. `--measure-only` preserves the non-moving workflow.
+
 - Corrected paper workspace measurement acceptance: D→UP wrist/tool-orientation change
   is now diagnostic only. With a 5-DOF arm and the fixed fingertip as the probe, wrist
   rotation may be required to reach the measured UP point. Table fit, affine residual,
