@@ -648,6 +648,18 @@ soarm101 camera capture --all --json
 13. Only after these checks should an external agent client be given named camera + motion CLI
     access.
 
+## Torque-enable endpoint tolerance — hardware
+
+1. With torque OFF, place a calibrated joint at or very near one mechanical endpoint.
+2. If the reported Present_Position settles 1–8 encoder ticks just beyond the active
+   EEPROM Min/Max limit, torque enable should succeed by latching the nearest in-range
+   endpoint rather than requiring manual repositioning.
+3. Confirm the arm does not make a meaningful jump; the correction is at most about 0.7°.
+4. A position 9 or more ticks beyond the EEPROM limit must still fail before any goal or
+   torque-enable write.
+5. This tolerance applies only to the measured startup latch. Normal commanded positions
+   remain constrained to the calibrated limits.
+
 ## Torque-enable transient status-packet validation — hardware
 
 1. Connect follower with torque off and verify diagnostics are otherwise clean.
