@@ -73,20 +73,29 @@ profile as smooth teleoperation: `speed_raw=0`, `acceleration_raw=254`. The host
 trajectory owns speed/acceleration shaping; do not add a second per-sample servo speed
 trajectory.
 
-Hardware replay after #73 remained visibly shaky and again hit an intermediate A_UP->B_UP
-IK miss, so the launch-only experiment is superseded. Keep the symmetric half-cosine host
-profile and the teleoperation servo profile. Position-only Cartesian planning now filters
-the solved joint path only to create smoother IK seeds, re-solves every interior Cartesian
-sample at the unchanged hard tolerance, and accepts the refined path only when discrete
-joint jerk decreases.
+Hardware replay after #74 remained very shaky and A_UP->B_UP still failed during
+pre-motion planning at 0.794 mm against the unchanged 0.5 mm tolerance. Inspection then
+found that calibrated `move_linear()` was still enabling the older per-sample synchronized
+servo-speed caps despite the intended teleoperation profile. The corrected execution path
+must send `speed_raw=0`, `acceleration_raw=254` for every Cartesian sample; synchronized
+per-joint arrival remains a joint-move option only.
+
+Position-only Cartesian planning still filters the solved joint path only to create smoother
+IK seeds and re-solves every interior sample at the unchanged hard tolerance. In addition,
+if forward sequential IK hits the observed numerical pocket, the planner may solve the same
+samples backward from an exact reachable endpoint solution. The paper workflow must pass
+the endpoint solution already produced by read-only preflight as that boundary seed. The
+reverse path is valid only if it reconnects continuously to the measured start and every
+sample passes the same tolerance and safety checks.
 
 The IK solver also performs a task-space-only refinement when soft continuity/joint-center
 regularization would otherwise leave a target just outside the hard Cartesian tolerance.
 Do not loosen the tolerance to make such a case pass.
 
-If motion remains visibly shakier than teleop after this change, capture the planned joint
-derivatives, encoder-quantized command deltas, measured following error, and actual cycle
-timing before changing motor PID or power settings.
+For the next supervised replay, first compare visible shake with #74 and confirm A_UP->B_UP
+gets past planning. If motion is still visibly shakier than teleop after the servo-profile
+correction, capture planned joint derivatives, encoder-quantized command deltas, measured
+following error, and actual cycle timing before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
@@ -751,12 +760,15 @@ the GUI and CLI must not own the follower serial port simultaneously.
 ### Command-rate Cartesian IK smoothness
 
 After hardware comparison showed that the paper traversal remained visibly shaky even
-with 1 mm Cartesian IK knot spacing and the teleoperation-responsive servo profile,
-`move_linear()` was changed to solve IK at the final host command rate after applying the
-minimum-jerk Cartesian progress law. Regression coverage uses a deliberately nonlinear IK
-mapping and requires every emitted command sample to be the direct solution of its
-corresponding Cartesian sample; piecewise interpolation between sparse IK solutions would
-fail this test. Physical smoothness still requires real-arm validation.
+with 1 mm Cartesian IK knot spacing, `move_linear()` was changed to solve IK at the final
+host command rate. The latest hardware run also exposed that the real calibrated execution
+path had not actually matched the documented teleoperation servo profile: it was still
+applying synchronized per-sample speed caps. Regression coverage therefore checks both
+properties: every emitted command sample is a direct IK solution of its corresponding
+Cartesian sample, and calibrated Cartesian execution uses fixed `speed_raw=0`,
+`acceleration_raw=254`. Position-only planning also has an endpoint-seeded reverse
+fallback for a forward numerical IK pocket without relaxing the hard tolerance. Physical
+smoothness still requires real-arm validation.
 
 
 ### Paper replay from a low/resting start
