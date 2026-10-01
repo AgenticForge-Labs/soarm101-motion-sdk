@@ -743,3 +743,13 @@ soarm101 gripper --simulation 0.5 --json --yes
 Confirm each command emits valid JSON and that `ik` performs no motion. Physical one-off
 CLI testing remains subject to the earlier joint-direction, FK/TCP, and Cartesian gates;
 the GUI and CLI must not own the follower serial port simultaneously.
+
+### Command-rate Cartesian IK smoothness
+
+After hardware comparison showed that the paper traversal remained visibly shaky even
+with 1 mm Cartesian IK knot spacing and the teleoperation-responsive servo profile,
+`move_linear()` was changed to solve IK at the final host command rate after applying the
+minimum-jerk Cartesian progress law. Regression coverage uses a deliberately nonlinear IK
+mapping and requires every emitted command sample to be the direct solution of its
+corresponding Cartesian sample; piecewise interpolation between sparse IK solutions would
+fail this test. Physical smoothness still requires real-arm validation.

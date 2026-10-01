@@ -56,3 +56,14 @@ worker and save a freshly acquired observation.
 The camera layer deliberately stops at raw observation: it does not identify objects, infer
 task state, plan motion, or bypass motion safety. Agent reasoning remains above the same
 constrained SDK primitives used manually.
+
+### Cartesian linear trajectory parameterization
+
+`move_linear()` owns a Cartesian trajectory, not a sparse joint polyline. The host applies
+its minimum-jerk timing law to Cartesian interpolation first and solves sequential IK at
+the actual command-rate samples. It must not introduce a second piecewise-linear
+joint-space interpolation layer between sparse IK knots, because those knot boundaries can
+create derivative discontinuities that appear as physical corrections. The resulting
+joint samples remain subject to deterministic joint, step, velocity, acceleration,
+workspace, following-error, effort, fault, and timing validation before and during
+execution.
