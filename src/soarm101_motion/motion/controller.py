@@ -341,21 +341,68 @@ class MotionController:
         )
         return PlannedPath((dict(start), dict(target)), (), samples, duration)
 
-    @staticmethod
-    def _sample_waypoint_path(
-        waypoints: Sequence[Mapping[str, float]],
-        progress: float,
-    ) -> dict[str, float]:
-        if progress >= 1.0:
-            return dict(waypoints[-1])
-        coordinate = progress * (len(waypoints) - 1)
-        index = min(int(math.floor(coordinate)), len(waypoints) - 2)
-        local = coordinate - index
-        first, second = waypoints[index], waypoints[index + 1]
-        return {
-            name: first[name] + (second[name] - first[name]) * local
-            for name in ARM_JOINTS
-        }
+    def _solve_cartesian_command_samples(
+        self,
+        *,
+        start_joints: Mapping[str, float],
+        start_pose: Pose,
+        target: Pose,
+        tcp: Pose | None,
+        orientation_mode: OrientationMode,
+        look_at: np.ndarray | None,
+        duration: float,
+        limits: Mapping[str, tuple[float, float]],
+    ) -> tuple[tuple[dict[str, float], ...], tuple[Pose, ...]]:
+        """Solve the smooth Cartesian trajectory directly at command-rate samples.
+
+        Older linear planning solved a sparse Cartesian polyline and then linearly
+        interpolated between the resulting joint-space IK knots. Even when endpoint
+        geometry was valid, each knot could change the joint-space slope and create a
+        visible correction on real hardware. Here the minimum-jerk scalar trajectory is
+        applied in Cartesian space first, and every command sample gets its own sequential
+        IK solution. The host command stream therefore follows one smooth Cartesian
+        parameterization rather than a piecewise-linear joint polyline.
+        """
+
+        steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
+        fractions = np.linspace(0.0, 1.0, steps)
+        slerp = Slerp(
+            [0.0, 1.0],
+            Rotation.from_matrix(np.stack([start_pose.rotation, target.rotation])),
+        )
+        joint_samples: list[dict[str, float]] = [dict(start_joints)]
+        cartesian_samples: list[Pose] = [start_pose]
+        seed = dict(start_joints)
+
+        for index, time_fraction in enumerate(fractions[1:], start=1):
+            progress = self._minimum_jerk(float(time_fraction))
+            pose = Pose(
+                start_pose.position + (target.position - start_pose.position) * progress,
+                slerp([progress]).as_matrix()[0],
+            )
+            solution = self.ik.solve_or_raise(
+                pose,
+                seed=seed,
+                tcp=tcp,
+                options=IKOptions(
+                    orientation_mode=orientation_mode,
+                    look_at=look_at,
+                    position_tolerance_m=self.config.cartesian_position_tolerance_m,
+                    multi_start=index == 1,
+                ),
+            )
+            candidate = validate_joint_targets(solution.joints, limits=limits)
+            jump = max(abs(candidate[name] - seed[name]) for name in ARM_JOINTS)
+            if jump > self.config.max_ik_waypoint_jump_radians:
+                raise InvalidCommandError(
+                    f"IK path discontinuity of {jump:.3f} rad exceeds "
+                    f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
+                )
+            seed = candidate
+            joint_samples.append(candidate)
+            cartesian_samples.append(pose)
+
+        return tuple(joint_samples), tuple(cartesian_samples)
 
     def plan_linear(
         self,
@@ -386,7 +433,16 @@ class MotionController:
         angular_distance = float(
             np.linalg.norm(Rotation.from_matrix(target.rotation @ start_pose.rotation.T).as_rotvec())
         )
-        segments = max(
+        linear_duration = self._minimum_duration(distance, linear_speed, linear_acceleration)
+        angular_duration = self._minimum_duration(
+            angular_distance,
+            self.config.default_angular_speed,
+            self.config.default_angular_acceleration,
+        )
+
+        # Preserve the configured Cartesian planning density as a lower bound on
+        # duration/sample count, while command-rate IK remains the actual trajectory.
+        minimum_segments = max(
             1,
             int(
                 math.ceil(
@@ -397,78 +453,58 @@ class MotionController:
                 )
             ),
         )
-        fractions = np.linspace(0.0, 1.0, segments + 1)
-        slerp = Slerp(
-            [0.0, 1.0],
-            Rotation.from_matrix(np.stack([start_pose.rotation, target.rotation])),
+        density_duration = minimum_segments / self.config.command_frequency_hz
+        duration = max(
+            linear_duration,
+            angular_duration,
+            density_duration,
+            1.0 / self.config.command_frequency_hz,
         )
-        cartesian: list[Pose] = []
-        joints: list[dict[str, float]] = [dict(start_joints)]
-        seed = dict(start_joints)
         limits = self._limits_for_present(start_joints)
-        for index, fraction in enumerate(fractions):
-            pose = Pose(
-                start_pose.position + (target.position - start_pose.position) * fraction,
-                slerp([fraction]).as_matrix()[0],
-            )
-            cartesian.append(pose)
-            if index == 0:
-                continue
-            solution = self.ik.solve_or_raise(
-                pose,
-                seed=seed,
+
+        samples: tuple[dict[str, float], ...] = ()
+        cartesian: tuple[Pose, ...] = ()
+        for _ in range(12):
+            samples, cartesian = self._solve_cartesian_command_samples(
+                start_joints=start_joints,
+                start_pose=start_pose,
+                target=target,
                 tcp=tcp,
-                options=IKOptions(
-                    orientation_mode=orientation_mode,
-                    look_at=look_at,
-                    position_tolerance_m=self.config.cartesian_position_tolerance_m,
-                    multi_start=index == 1,
-                ),
+                orientation_mode=orientation_mode,
+                look_at=look_at,
+                duration=duration,
+                limits=limits,
             )
-            candidate = validate_joint_targets(solution.joints, limits=limits)
-            jump = max(abs(candidate[name] - seed[name]) for name in ARM_JOINTS)
-            if jump > self.config.max_ik_waypoint_jump_radians:
-                raise InvalidCommandError(
-                    f"IK path discontinuity of {jump:.3f} rad exceeds "
-                    f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
-                )
-            seed = candidate
-            joints.append(candidate)
-
-        linear_duration = self._minimum_duration(distance, linear_speed, linear_acceleration)
-        angular_duration = self._minimum_duration(
-            angular_distance,
-            self.config.default_angular_speed,
-            self.config.default_angular_acceleration,
-        )
-        joint_path_delta = max(
-            sum(abs(second[name] - first[name]) for first, second in zip(joints, joints[1:]))
-            for name in ARM_JOINTS
-        )
-        joint_duration = self._minimum_duration(
-            joint_path_delta,
-            self.config.default_joint_speed,
-            self.config.default_joint_acceleration,
-        )
-        initial_duration = max(linear_duration, angular_duration, joint_duration)
-
-        def builder(duration: float) -> tuple[dict[str, float], ...]:
-            steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
-            return tuple(
-                self._sample_waypoint_path(
-                    joints,
-                    self._minimum_jerk(index / (steps - 1)),
-                )
-                for index in range(steps)
+            max_speed, max_acceleration, max_step = self._trajectory_metrics(samples)
+            scale = max(
+                1.0,
+                max_speed / self.config.default_joint_speed
+                if self.config.default_joint_speed
+                else 1.0,
+                math.sqrt(max_acceleration / self.config.default_joint_acceleration)
+                if max_acceleration and self.config.default_joint_acceleration
+                else 1.0,
+                max_step / self.config.max_command_step_radians if max_step else 1.0,
             )
+            if scale <= 1.001:
+                self._validate_samples(
+                    samples,
+                    speed_limit=self.config.default_joint_speed,
+                    acceleration_limit=self.config.default_joint_acceleration,
+                    limits=limits,
+                )
+                actual_duration = (len(samples) - 1) / self.config.command_frequency_hz
+                return PlannedPath(
+                    tuple(dict(sample) for sample in samples),
+                    cartesian,
+                    samples,
+                    actual_duration,
+                )
+            duration *= scale * 1.05
 
-        samples, duration = self._retime(
-            builder,
-            initial_duration,
-            speed_limit=self.config.default_joint_speed,
-            acceleration_limit=self.config.default_joint_acceleration,
+        raise SafetyViolationError(
+            "could not time-parameterize Cartesian trajectory within configured limits"
         )
-        return PlannedPath(tuple(joints), tuple(cartesian), samples, duration)
 
     def _workspace_kwargs(self) -> dict[str, float]:
         return {
