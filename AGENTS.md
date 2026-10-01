@@ -68,15 +68,14 @@ changes require development discipline; robot use requires conservative hardware
     workspace Z while preserving that endpoint's inverse-mapped workspace X/Y. The
     previous reachable FK endpoints may be used only as X/Y/IK-branch anchors; their
     inferred heights are not execution targets. Read-only IK preflight must accept every
-    corrected target before powered replay. Replay also performs a small preflighted
-    calibrated-workspace-Z transport lift before any lateral travel from a low/resting
-    pose. The target is at least the paper reference height, not merely a nominal small
-    offset, and measured workspace Z must satisfy the completion gate before lateral
-    motion. Startup is executed in bounded, separately settled calibrated-Z stages rather
-    than one long open-loop climb. Each stage is validated in calibrated workspace
-    coordinates (fixed X/Y, nondecreasing physical Z, bounded IK continuity and joint
-    limits); the
-    generic model-frame Z floor is not authoritative for those verified clearance moves
+    corrected target before powered replay. Replay performs one preflighted calibrated-
+    workspace-Z clearance move of 20 mm by default before entering the paper path. The
+    measured endpoint must land within the configured completion tolerance before paper
+    travel. The fixed traversal then starts at A_UP and proceeds A_UP -> B_UP -> C_UP ->
+    D_UP -> CENTER_UP; D_UP remains calibration evidence, not the first motion target.
+    The startup clearance is validated in calibrated workspace coordinates (fixed X/Y,
+    nondecreasing physical Z, bounded IK continuity and joint limits); the generic
+    model-frame Z floor is not authoritative for that verified clearance move
     because it is known to disagree with the measured table frame. The supervised paper
     validation uses the known-smooth 20 Hz host cadence while SDK-wide planned motion stays
     at 50 Hz. All runtime joint/dynamic/following-error/effort/fault/timing guards remain

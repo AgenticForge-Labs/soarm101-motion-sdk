@@ -12,9 +12,10 @@ height and maps that corrected physical coordinate back into model space. Every 
 target must pass read-only IK preflight before motion.
 
 A saved teaching can also be replayed later from any ordinary resting pose with --replay.
-Before any lateral move, replay preflights and performs a straight lift in calibrated
-workspace Z to at least the paper reference/transport height. Measured workspace Z must
-reach that transport target before lateral travel is allowed.
+Before any lateral move, replay preflights and performs one straight 20 mm clearance
+lift in calibrated workspace Z by default. Measured workspace Z must land within the
+configured tolerance of that requested rise before lateral travel is allowed. Replay
+then enters the leveled paper path at A_UP.
 For this fixed supervised paper sequence, every Cartesian segment uses target-only coarse
 workspace checking because the generic model envelope is not yet calibrated to the
 measured table; the normal joint, dynamic, following-error, fault, effort, and timing
@@ -53,6 +54,7 @@ from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibration
 LETTER_WIDTH_MM = 215.9
 LETTER_HEIGHT_MM = 279.4
 PAPER_CARTESIAN_WAYPOINT_SPACING_M = 0.001
+PAPER_REPLAY_ORDER = ("A_UP", "B_UP", "C_UP", "D_UP", "CENTER_UP")
 
 
 @dataclass(frozen=True)
@@ -303,18 +305,29 @@ def workspace_z_offset_target(
     return model_target, physical_start, physical_target
 
 
-def startup_transport_height_m(
+def startup_clearance_height_m(
     *,
     current_workspace_z_m: float,
-    reference_height_m: float,
-    minimum_lift_m: float,
+    lift_m: float,
 ) -> float:
-    """Return a transport height that clears before any lateral travel."""
+    """Return the one-shot calibrated-Z clearance target before paper travel."""
 
-    return max(
-        float(reference_height_m),
-        float(current_workspace_z_m) + float(minimum_lift_m),
-    )
+    return float(current_workspace_z_m) + float(lift_m)
+
+
+def ordered_paper_replay_targets(
+    positions: dict[str, np.ndarray],
+    preferred_seeds: dict[str, dict[str, float]],
+) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float]]]:
+    """Select the fixed A→B→C→D→center replay order.
+
+    D_UP remains the authoritative physical-height teaching reference, but replay no
+    longer visits it first merely because it was the calibration sample.
+    """
+
+    ordered_positions = {name: positions[name] for name in PAPER_REPLAY_ORDER}
+    ordered_seeds = {name: preferred_seeds[name] for name in PAPER_REPLAY_ORDER}
+    return ordered_positions, ordered_seeds
 
 
 def preflight_calibrated_workspace_z_lift(
@@ -451,91 +464,6 @@ def execute_preflighted_workspace_z_lift(
         # The calibrated-workspace preflight is authoritative for this one clearance move.
         # The generic model-Z floor is intentionally not authoritative here.
         workspace_check="off",
-    )
-
-
-def execute_staged_calibrated_workspace_z_lift(
-    arm: SOARM101,
-    calibration: WorkspaceCalibration,
-    *,
-    target_workspace_z_m: float,
-    max_stage_m: float,
-    tolerance_m: float,
-    speed_mm_s: float,
-    acceleration_mm_s2: float,
-) -> list[dict[str, object]]:
-    """Climb to transport height in measured, separately settled Z stages."""
-
-    records: list[dict[str, object]] = []
-    max_stages = max(
-        4,
-        int(np.ceil(0.5 / max(float(max_stage_m), 1e-6))) + 4,
-    )
-    for stage_index in range(1, max_stages + 1):
-        live_pose = arm.get_position()
-        live_joints = dict(arm.get_joint_positions().positions)
-        live_physical = calibration.physical_position_from_model(live_pose.position)
-        current_z = float(live_physical[2])
-        if current_z >= float(target_workspace_z_m) - float(tolerance_m):
-            return records
-
-        stage_target_z = min(
-            float(target_workspace_z_m),
-            current_z + float(max_stage_m),
-        )
-        preflight = preflight_calibrated_workspace_z_lift(
-            arm,
-            calibration,
-            start_pose=live_pose,
-            start_joints=live_joints,
-            target_workspace_z_m=stage_target_z,
-        )
-        target_position = (
-            np.asarray(preflight["target_model_xyz_mm"], dtype=float) / 1000.0
-        )
-        result = execute_preflighted_workspace_z_lift(
-            arm,
-            target_model_position_m=target_position,
-            rotation=live_pose.rotation,
-            speed_mm_s=speed_mm_s,
-            acceleration_mm_s2=acceleration_mm_s2,
-        )
-        if not result.accepted or not result.completed:
-            raise RuntimeError(
-                f"startup lift stage {stage_index} did not complete: {result}"
-            )
-
-        actual_pose = arm.get_position()
-        actual_physical = calibration.physical_position_from_model(actual_pose.position)
-        actual_z = float(actual_physical[2])
-        if actual_z <= current_z + 0.0005:
-            raise RuntimeError(
-                "startup lift made insufficient measured Z progress; "
-                f"stage {stage_index}: {current_z * 1000.0:.1f} -> "
-                f"{actual_z * 1000.0:.1f} mm"
-            )
-        record = {
-            "stage": stage_index,
-            "start_workspace_z_mm": float(current_z * 1000.0),
-            "target_workspace_z_mm": float(stage_target_z * 1000.0),
-            "actual_workspace_z_mm": float(actual_z * 1000.0),
-            "actual_model_xyz_mm": [
-                float(value * 1000.0) for value in actual_pose.position
-            ],
-        }
-        records.append(record)
-        print(
-            f"  startup stage {stage_index}: workspace Z "
-            f"{current_z * 1000.0:.1f} -> {actual_z * 1000.0:.1f} mm "
-            f"(target {stage_target_z * 1000.0:.1f} mm)"
-        )
-
-    final_pose = arm.get_position()
-    final_physical = calibration.physical_position_from_model(final_pose.position)
-    raise RuntimeError(
-        "startup lift exceeded bounded stage count before reaching transport height; "
-        f"actual={final_physical[2] * 1000.0:.1f} mm, "
-        f"target={target_workspace_z_m * 1000.0:.1f} mm"
     )
 
 
@@ -807,11 +735,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--startup-lift-mm",
         type=float,
-        default=10.0,
+        default=20.0,
         help=(
-            "minimum calibrated-workspace Z rise before lateral travel. Replay normally "
-            "lifts all the way to the paper reference/transport height first; this value "
-            "only matters when the arm already starts at or above that height."
+            "one-shot calibrated-workspace Z clearance rise before entering the paper "
+            "path; default 20 mm"
         ),
     )
     parser.add_argument(
@@ -821,15 +748,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "maximum allowed measured calibrated-workspace Z shortfall after the startup "
             "lift before lateral travel is refused; default 5 mm"
-        ),
-    )
-    parser.add_argument(
-        "--startup-stage-mm",
-        type=float,
-        default=10.0,
-        help=(
-            "maximum calibrated-workspace Z increment per startup lift stage. Each stage "
-            "settles and is re-measured before the next one; default 10 mm"
         ),
     )
     parser.add_argument(
@@ -879,14 +797,13 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 "endpoint's calibrated workspace X/Y."
             )
             print(
-                "Cartesian move_linear() solves the minimum-jerk Cartesian trajectory "
-                f"at {config.command_frequency_hz:.0f} Hz, matching the proven teleoperation "
-                "host cadence for this hardware validation."
+                "Cartesian move_linear() uses the cosine-ramped cruise trajectory "
+                f"at {config.command_frequency_hz:.0f} Hz with synchronized Feetech "
+                "per-joint arrival speeds for this hardware validation."
             )
             print(
-                f"Before any lateral travel, replay will lift straight in calibrated "
-                f"workspace Z to at least the {saved.reference_height_m * 1000.0:.1f} mm "
-                "paper transport height."
+                f"Before paper travel, replay will make one straight calibrated-workspace "
+                f"Z clearance move of {args.startup_lift_mm:.1f} mm, then enter at A_UP."
             )
             print(
                 "The arm may start from an ordinary resting pose. Read-only IK preflight "
@@ -902,17 +819,19 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 corners=corner_samples,
                 up_sample=up,
             )
+            demo_positions, preferred_seeds = ordered_paper_replay_targets(
+                demo_positions,
+                preferred_seeds,
+            )
 
             current_pose = arm.get_position()
             current_joints = dict(arm.get_joint_positions().positions)
             current_physical = saved.physical_position_from_model(current_pose.position)
-            target_height_m = float(saved.reference_height_m)
-            startup_target_z = startup_transport_height_m(
+            startup_target_z = startup_clearance_height_m(
                 current_workspace_z_m=float(current_physical[2]),
-                reference_height_m=target_height_m,
-                minimum_lift_m=args.startup_lift_mm / 1000.0,
+                lift_m=args.startup_lift_mm / 1000.0,
             )
-            startup_needed = startup_target_z > float(current_physical[2]) + 1e-6
+            startup_needed = True
             startup_preflight: dict[str, object] | None = None
             if startup_needed:
                 startup_preflight = preflight_calibrated_workspace_z_lift(
@@ -924,21 +843,14 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 )
 
             print("\nRead-only endpoint preflight while holding the current pose...")
-            if startup_needed:
-                assert startup_preflight is not None
-                print(
-                    f"  START_LIFT: workspace Z "
-                    f"{startup_preflight['start_workspace_z_mm']:.1f} -> "
-                    f"{startup_preflight['target_workspace_z_mm']:.1f} mm; "
-                    f"max IK error {startup_preflight['max_position_error_mm']:.2f} mm; "
-                    f"max XY drift {startup_preflight['max_workspace_xy_drift_mm']:.2f} mm"
-                )
-            else:
-                print(
-                    f"  START_LIFT: skipped; current workspace Z="
-                    f"{current_physical[2] * 1000.0:.1f} mm is already at/above "
-                    f"{target_height_m * 1000.0:.1f} mm."
-                )
+            assert startup_preflight is not None
+            print(
+                f"  START_LIFT: workspace Z "
+                f"{startup_preflight['start_workspace_z_mm']:.1f} -> "
+                f"{startup_preflight['target_workspace_z_mm']:.1f} mm; "
+                f"max IK error {startup_preflight['max_position_error_mm']:.2f} mm; "
+                f"max XY drift {startup_preflight['max_workspace_xy_drift_mm']:.2f} mm"
+            )
 
             preflight = preflight_demo_targets(
                 arm,
@@ -973,8 +885,8 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
             input(
-                "\nPress Enter to run the startup workspace-Z lift, then "
-                "D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP, "
+                "\nPress Enter to run the one-shot startup clearance lift, then "
+                "A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP, "
                 "or Ctrl+C to stop... "
             )
             report["autonomous_motion_attempted"] = True
@@ -983,45 +895,54 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             moves = report["demo_moves"]
             assert isinstance(moves, list)
             try:
-                if startup_needed:
-                    print(
-                        f"\nLifting first in workspace Z to "
-                        f"{startup_target_z * 1000.0:.1f} mm in settled "
-                        f"{args.startup_stage_mm:.1f} mm stages..."
+                print(
+                    f"\nLifting once in workspace Z by {args.startup_lift_mm:.1f} mm "
+                    f"to {startup_target_z * 1000.0:.1f} mm..."
+                )
+                assert startup_preflight is not None
+                startup_position = (
+                    np.asarray(startup_preflight["target_model_xyz_mm"], dtype=float)
+                    / 1000.0
+                )
+                result = execute_preflighted_workspace_z_lift(
+                    arm,
+                    target_model_position_m=startup_position,
+                    rotation=current_pose.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                )
+                if not result.accepted or not result.completed:
+                    raise RuntimeError(f"startup lift did not complete: {result}")
+
+                final_pose = arm.get_position()
+                final_physical = saved.physical_position_from_model(final_pose.position)
+                minimum_clear_z = (
+                    startup_target_z - args.startup_height_tolerance_mm / 1000.0
+                )
+                print(
+                    f"  workspace Z after clearance lift = "
+                    f"{final_physical[2] * 1000.0:.1f} mm "
+                    f"(target {startup_target_z * 1000.0:.1f} mm)"
+                )
+                if float(final_physical[2]) < minimum_clear_z:
+                    raise RuntimeError(
+                        "startup clearance lift did not achieve enough measured rise; "
+                        f"target={startup_target_z * 1000.0:.1f} mm, "
+                        f"actual={final_physical[2] * 1000.0:.1f} mm, "
+                        f"required>={minimum_clear_z * 1000.0:.1f} mm. "
+                        "Refusing paper travel."
                     )
-                    lift_stages = execute_staged_calibrated_workspace_z_lift(
-                        arm,
-                        saved,
-                        target_workspace_z_m=startup_target_z,
-                        max_stage_m=args.startup_stage_mm / 1000.0,
-                        tolerance_m=args.startup_height_tolerance_mm / 1000.0,
-                        speed_mm_s=args.speed_mm_s,
-                        acceleration_mm_s2=args.acceleration_mm_s2,
-                    )
-                    final_pose = arm.get_position()
-                    final_physical = saved.physical_position_from_model(final_pose.position)
-                    minimum_clear_z = (
-                        startup_target_z - args.startup_height_tolerance_mm / 1000.0
-                    )
-                    if float(final_physical[2]) < minimum_clear_z:
-                        raise RuntimeError(
-                            "startup lift did not achieve measured clearance; "
-                            f"target={startup_target_z * 1000.0:.1f} mm, "
-                            f"actual={final_physical[2] * 1000.0:.1f} mm, "
-                            f"required>={minimum_clear_z * 1000.0:.1f} mm. "
-                            "Refusing lateral travel."
-                        )
-                    moves.append(
-                        {
-                            "name": "START_LIFT",
-                            "target_workspace_z_mm": float(startup_target_z * 1000.0),
-                            "actual_workspace_z_mm": float(final_physical[2] * 1000.0),
-                            "stages": lift_stages,
-                            "actual_model_xyz_mm": [
-                                float(value * 1000.0) for value in final_pose.position
-                            ],
-                        }
-                    )
+                moves.append(
+                    {
+                        "name": "START_LIFT",
+                        "start_workspace_z_mm": float(current_physical[2] * 1000.0),
+                        "target_workspace_z_mm": float(startup_target_z * 1000.0),
+                        "actual_workspace_z_mm": float(final_physical[2] * 1000.0),
+                        "actual_model_xyz_mm": [
+                            float(value * 1000.0) for value in final_pose.position
+                        ],
+                    }
+                )
 
                 run_demo_targets(
                     arm,
@@ -1090,8 +1011,6 @@ def main() -> int:
         raise SystemExit("--startup-lift-mm must be positive")
     if args.startup_height_tolerance_mm <= 0.0:
         raise SystemExit("--startup-height-tolerance-mm must be positive")
-    if args.startup_stage_mm <= 0.0:
-        raise SystemExit("--startup-stage-mm must be positive")
 
     config = _resolve_config(args)
     if args.replay:
@@ -1339,6 +1258,10 @@ def main() -> int:
                 corners=corner_samples,
                 up_sample=d_up,
             )
+            demo_positions, preferred_seeds = ordered_paper_replay_targets(
+                demo_positions,
+                preferred_seeds,
+            )
             report["demo_target_strategy"] = (
                 "workspace_z_leveling_from_reachable_endpoint_xy"
             )
@@ -1385,7 +1308,7 @@ def main() -> int:
                 "The software has corrected every paper endpoint to the same calibrated "
                 f"workspace Z={args.reference_height_mm:.1f} mm:"
             )
-            print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
+            print("  A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
                 "The motion between endpoints is still Cartesian move_linear(); no extra "
                 "elevated teaching is required."

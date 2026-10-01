@@ -39,7 +39,6 @@ def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
     assert "--replay" in result.stdout
     assert "--startup-lift-mm" in result.stdout
     assert "--startup-height-tolerance-mm" in result.stdout
-    assert "--startup-stage-mm" in result.stdout
     assert "--speed-mm-s" in result.stdout
     assert "--settle-tolerance-deg" in result.stdout
     assert "--settle-timeout-s" in result.stdout
@@ -371,111 +370,41 @@ def test_preflighted_startup_lift_executes_with_generic_workspace_check_off() ->
     assert kwargs["acceleration"] == pytest.approx(0.100)
 
 
-def test_startup_transport_height_reaches_reference_before_lateral_travel() -> None:
+def test_startup_clearance_height_is_one_requested_rise() -> None:
     module = _load_example_module()
 
-    assert module.startup_transport_height_m(
-        current_workspace_z_m=0.0004,
-        reference_height_m=0.107,
-        minimum_lift_m=0.010,
-    ) == pytest.approx(0.107)
+    assert module.startup_clearance_height_m(
+        current_workspace_z_m=-0.0017,
+        lift_m=0.020,
+    ) == pytest.approx(0.0183)
 
-    assert module.startup_transport_height_m(
+    assert module.startup_clearance_height_m(
         current_workspace_z_m=0.120,
-        reference_height_m=0.107,
-        minimum_lift_m=0.010,
-    ) == pytest.approx(0.130)
+        lift_m=0.020,
+    ) == pytest.approx(0.140)
 
 
-def test_staged_startup_lift_remeasures_between_vertical_steps() -> None:
-    from types import SimpleNamespace
-
+def test_ordered_paper_replay_enters_at_a_and_visits_each_corner_once() -> None:
     module = _load_example_module()
-    joint_names = (
-        "shoulder_pan",
-        "shoulder_lift",
-        "elbow_flex",
-        "wrist_flex",
-        "wrist_roll",
-    )
-
-    class Calibration:
-        @staticmethod
-        def physical_position_from_model(position):
-            return np.asarray(position, dtype=float)
-
-        @staticmethod
-        def model_position_from_physical(x, y, z):
-            return np.array([x, y, z], dtype=float)
-
-    class Model:
-        @staticmethod
-        def forward(joints, tcp=None):
-            del tcp
-            return module.Pose(
-                np.array([0.0, 0.0, float(joints["wrist_flex"])]),
-                np.eye(3),
-            )
-
-    class IK:
-        @staticmethod
-        def solve(target, *, seed, tcp, options):
-            del seed, tcp, options
-            joints = {name: 0.0 for name in joint_names}
-            joints["wrist_flex"] = float(target.position[2])
-            return SimpleNamespace(
-                success=True,
-                joints=joints,
-                position_error_m=0.0,
-                message="ok",
-            )
-
-    class JointRead:
-        def __init__(self, positions):
-            self.positions = positions
-
-    class Arm:
-        config = SimpleNamespace(
-            cartesian_position_tolerance_m=0.0005,
-            max_ik_waypoint_jump_radians=0.50,
+    positions = {
+        name: np.array([float(index), 0.0, 0.0])
+        for index, name in enumerate(
+            ("D_UP", "A_UP", "B_UP", "C_UP", "D_UP_RETURN", "CENTER_UP")
         )
-        active_tcp = None
-        model = Model()
-        ik = IK()
+    }
+    seeds = {name: {"shoulder_pan": float(index)} for index, name in enumerate(positions)}
 
-        def __init__(self):
-            self.pose = module.Pose(np.array([0.0, 0.0, 0.0]), np.eye(3))
-
-        @staticmethod
-        def get_joint_limits():
-            return {name: (-3.0, 3.0) for name in joint_names}
-
-        def get_position(self):
-            return self.pose
-
-        def get_joint_positions(self):
-            positions = {name: 0.0 for name in joint_names}
-            positions["wrist_flex"] = float(self.pose.position[2])
-            return JointRead(positions)
-
-        def move_linear(self, target, **kwargs):
-            del kwargs
-            self.pose = target
-            return SimpleNamespace(accepted=True, completed=True)
-
-    arm = Arm()
-    records = module.execute_staged_calibrated_workspace_z_lift(
-        arm,
-        Calibration(),
-        target_workspace_z_m=0.030,
-        max_stage_m=0.010,
-        tolerance_m=0.001,
-        speed_mm_s=20.0,
-        acceleration_mm_s2=100.0,
+    ordered_positions, ordered_seeds = module.ordered_paper_replay_targets(
+        positions,
+        seeds,
     )
 
-    assert len(records) == 3
-    assert [item["target_workspace_z_mm"] for item in records] == pytest.approx(
-        [10.0, 20.0, 30.0]
+    assert tuple(ordered_positions) == (
+        "A_UP",
+        "B_UP",
+        "C_UP",
+        "D_UP",
+        "CENTER_UP",
     )
-    assert arm.get_position().position[2] == pytest.approx(0.030)
+    assert tuple(ordered_seeds) == tuple(ordered_positions)
+    assert "D_UP_RETURN" not in ordered_positions
