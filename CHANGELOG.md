@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed the managed Feetech torque-enable precheck to actually implement the documented
+  calibrated-endpoint tolerance: a measured relaxed position up to 8 encoder ticks beyond
+  an EEPROM limit is now clamped inward for the startup latch, while larger violations
+  still fail before any goal or torque write. Commanded motion remains bounded by the
+  calibrated limits.
+
 - Superseded the paper hover / base-Z floor-recovery experiment after physical hardware
   showed that a numerically valid model +Z move could travel laterally into the table.
   Both paper workflows are now measurement/calibration only: the three-corner script
