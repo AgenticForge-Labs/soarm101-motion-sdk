@@ -527,6 +527,7 @@ class MotionController:
         normalized_speed: float,
         normalized_acceleration: float,
         limits: Mapping[str, tuple[float, float]],
+        target_seed: Mapping[str, float] | None = None,
     ) -> tuple[tuple[dict[str, float], ...], tuple[Pose, ...]]:
         """Solve the smooth Cartesian trajectory directly at command-rate samples.
 
@@ -534,6 +535,12 @@ class MotionController:
         an optional constant-speed cruise. Every command sample gets its own sequential
         IK solution; there is no secondary piecewise-linear interpolation between sparse
         joint-space knots.
+
+        Position-only paths normally solve from the measured start toward the target. If
+        that forward continuation hits a numerical IK pocket, retry from the reachable
+        target endpoint and solve the same Cartesian samples backward. A caller-provided
+        target_seed is only a boundary-condition hint; every sample still has to pass
+        the unchanged hard Cartesian tolerance, joint limits, and continuity checks.
         """
 
         steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
@@ -542,11 +549,8 @@ class MotionController:
             [0.0, 1.0],
             Rotation.from_matrix(np.stack([start_pose.rotation, target.rotation])),
         )
-        joint_samples: list[dict[str, float]] = [dict(start_joints)]
         cartesian_samples: list[Pose] = [start_pose]
-        seed = dict(start_joints)
-
-        for index, time_fraction in enumerate(fractions[1:], start=1):
+        for time_fraction in fractions[1:]:
             progress = self._cosine_cruise_progress(
                 1.0,
                 normalized_speed,
@@ -558,15 +562,25 @@ class MotionController:
                 if orientation_mode == "position_only"
                 else slerp([progress]).as_matrix()[0]
             )
-            pose = Pose(
-                start_pose.position + (target.position - start_pose.position) * progress,
-                pose_rotation,
+            cartesian_samples.append(
+                Pose(
+                    start_pose.position + (target.position - start_pose.position) * progress,
+                    pose_rotation,
+                )
             )
+        solved_cartesian = tuple(cartesian_samples)
+
+        def solve_sample(
+            pose: Pose,
+            *,
+            seed: Mapping[str, float],
+            multi_start: bool,
+        ) -> dict[str, float]:
             options = IKOptions(
                 orientation_mode=orientation_mode,
                 look_at=look_at,
                 position_tolerance_m=self.config.cartesian_position_tolerance_m,
-                multi_start=index == 1,
+                multi_start=multi_start,
             )
             try:
                 solution = self.ik.solve_or_raise(
@@ -576,7 +590,7 @@ class MotionController:
                     options=options,
                 )
             except IKError:
-                if options.multi_start:
+                if multi_start:
                     raise
                 solution = self.ik.solve_or_raise(
                     pose,
@@ -596,12 +610,66 @@ class MotionController:
                     f"IK path discontinuity of {jump:.3f} rad exceeds "
                     f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
                 )
-            seed = candidate
-            joint_samples.append(candidate)
-            cartesian_samples.append(pose)
+            return candidate
 
-        solved_samples = tuple(joint_samples)
-        solved_cartesian = tuple(cartesian_samples)
+        def solve_forward() -> tuple[dict[str, float], ...]:
+            joint_samples: list[dict[str, float]] = [dict(start_joints)]
+            seed = dict(start_joints)
+            for index, pose in enumerate(solved_cartesian[1:], start=1):
+                candidate = solve_sample(
+                    pose,
+                    seed=seed,
+                    multi_start=index == 1,
+                )
+                seed = candidate
+                joint_samples.append(candidate)
+            return tuple(joint_samples)
+
+        try:
+            solved_samples = solve_forward()
+        except IKError as forward_error:
+            if orientation_mode != "position_only":
+                raise
+
+            boundary_seed: Mapping[str, float] = start_joints
+            if target_seed is not None:
+                boundary_seed = validate_joint_targets(target_seed, limits=limits)
+
+            try:
+                endpoint = solve_sample(
+                    solved_cartesian[-1],
+                    seed=boundary_seed,
+                    multi_start=True,
+                )
+                reverse_samples: list[dict[str, float]] = [endpoint]
+                seed = endpoint
+                for pose in reversed(solved_cartesian[1:-1]):
+                    candidate = solve_sample(
+                        pose,
+                        seed=seed,
+                        multi_start=False,
+                    )
+                    seed = candidate
+                    reverse_samples.append(candidate)
+
+                ordered_tail = list(reversed(reverse_samples))
+                first_jump = max(
+                    abs(ordered_tail[0][name] - start_joints[name])
+                    for name in ARM_JOINTS
+                )
+                if first_jump > self.config.max_ik_waypoint_jump_radians:
+                    raise InvalidCommandError(
+                        f"reverse IK path cannot connect to measured start: "
+                        f"{first_jump:.3f} rad exceeds "
+                        f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
+                    )
+                solved_samples = (dict(start_joints), *ordered_tail)
+            except (IKError, InvalidCommandError) as reverse_error:
+                raise IKError(
+                    "forward Cartesian IK failed and endpoint-seeded reverse fallback "
+                    f"also failed; forward={forward_error}; reverse={reverse_error}"
+                ) from reverse_error
+
         if orientation_mode == "position_only":
             solved_samples = self._smooth_position_only_cartesian_samples(
                 solved_samples,
@@ -610,7 +678,6 @@ class MotionController:
                 limits=limits,
             )
         return solved_samples, solved_cartesian
-
     def plan_linear(
         self,
         target: Pose,
@@ -620,6 +687,7 @@ class MotionController:
         look_at: np.ndarray | None = None,
         speed: float | None = None,
         acceleration: float | None = None,
+        target_seed: Mapping[str, float] | None = None,
     ) -> PlannedPath:
         self._require_ready()
         linear_speed = self._bounded(
@@ -710,6 +778,7 @@ class MotionController:
                 normalized_speed=normalized_speed,
                 normalized_acceleration=normalized_acceleration,
                 limits=limits,
+                target_seed=target_seed,
             )
             max_speed, max_acceleration, max_step = self._trajectory_metrics(samples)
             scale = max(
@@ -1181,6 +1250,7 @@ class MotionController:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        target_seed: Mapping[str, float] | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         with self._state_lock:
             self._ensure_idle_locked()
@@ -1191,18 +1261,18 @@ class MotionController:
                 look_at=look_at,
                 speed=speed,
                 acceleration=acceleration,
+                target_seed=target_seed,
             )
             handle = self._start_locked(
                 lambda event: self._execute_plan(
                     plan,
                     event,
                     cancellation_message="linear motion cancelled",
-                    # The host trajectory owns Cartesian/joint speed and
-                    # acceleration. Give each calibrated servo a proportional position-
-                    # mode speed for the next command interval so lightly loaded joints
-                    # do not race ahead of gravity-loaded joints.
+                    # Host-side trajectory generation owns Cartesian/joint
+                    # speed and acceleration. Match smooth teleoperation on calibrated
+                    # hardware instead of adding per-sample servo-side speed throttling.
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
                     servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
-                    synchronize_servo_arrival=True,
                 )
             )
         return handle.wait() if wait else handle
