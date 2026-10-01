@@ -12,6 +12,7 @@ from soarm101_motion.exceptions import (
     CommunicationError,
     InvalidCommandError,
     MotionCancelledError,
+    MotionTimeoutError,
     RobotConnectionError,
     SafetyViolationError,
 )
@@ -204,3 +205,31 @@ def test_feetech_sync_writes_are_serialized(monkeypatch: pytest.MonkeyPatch) -> 
     assert not errors
     assert maximum == 1
     backend.disconnect()
+
+def test_settle_timeout_reports_worst_joint_and_joint_errors() -> None:
+    backend = SimulationBackend(realtime=True)
+    arm = SOARM101(
+        SOARM101Config(
+            motion_completion_timeout_s=0.01,
+            feedback_poll_interval_s=0.002,
+            joint_position_tolerance_rad=0.001,
+        ),
+        backend=backend,
+    )
+    with arm:
+        arm.enable()
+        target = {
+            "shoulder_pan": 0.1,
+            "shoulder_lift": 0.0,
+            "elbow_flex": 0.0,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+        }
+        with pytest.raises(MotionTimeoutError) as excinfo:
+            arm.motion._wait_for_settle(target, threading.Event())
+
+    message = str(excinfo.value)
+    assert "worst=shoulder_pan" in message
+    assert "joint errors(target-measured)" in message
+    assert "shoulder_pan=+0.1000" in message
+
