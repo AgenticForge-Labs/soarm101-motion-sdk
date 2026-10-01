@@ -5,25 +5,24 @@ known physical height above corner D. Those five physical correspondences are us
 fit a local affine map from paper/workspace coordinates into the SDK kinematic model.
 
 After the final UP teaching sample, the script counts down and enables torque so the arm
-holds that exact pose instead of sagging. For replay, a known-reachable FK construction is
-used only to identify each endpoint's calibrated workspace X/Y and preferred IK branch.
-The software then replaces each endpoint's workspace Z with the single measured reference
-height and maps that corrected physical coordinate back into model space. Every corrected
-target must pass read-only IK preflight before motion.
+holds that exact pose instead of sagging. The saved workspace calibration then software-
+levels A/B/C/D/center to the single measured physical workspace Z. Reachable FK
+constructions are retained only as X/Y and IK-branch anchors; their inferred heights are
+not execution targets.
 
-A saved teaching can also be replayed later from any ordinary resting pose with --replay.
-Before any lateral move, replay preflights and performs one straight 20 mm clearance
-lift in calibrated workspace Z by default. Measured workspace Z must land within the
-configured tolerance of that requested rise before lateral travel is allowed. Replay
-then enters the leveled paper path at A_UP.
-For this fixed supervised paper sequence, the one-shot startup clearance remains a
-Cartesian calibrated-Z move. The elevated A/B/C/D/center traversal then uses the already
-preflighted endpoint joint solutions with smooth joint-space interpolation. Each 20 Hz
-joint sample uses calibrated per-joint servo speed pacing so all joints target the next
-sample on the same arrival horizon rather than racing at unrestricted speed. Before each
-powered joint move, the complete joint-space locus is FK-sampled and rejected if calibrated workspace Z would dip more than
-5 mm below the lower endpoint. The normal joint, dynamic, following-error, fault, effort,
-and timing guards remain active.
+A saved teaching can be replayed later from an ordinary resting pose with --replay.
+Replay first performs the separately preflighted calibrated-workspace-Z startup clearance.
+The elevated paper path then runs A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP using the
+SDK's Cartesian move_linear() primitive at the paper workflow's known-smooth 20 Hz host
+cadence. The model-space endpoints come from the calibrated workspace transform, so a
+linear interpolation between equal-workspace-Z endpoints remains a constant-height line in
+that calibrated workspace.
+
+Cartesian execution uses the same responsive STS3215 servo-side tracking profile as live
+teleoperation: the host trajectory owns velocity/acceleration shaping while servo
+speed_raw=0 and acceleration_raw=254 provide enough authority to follow streamed setpoints.
+The normal joint, IK, dynamic, following-error, fault, effort, endpoint-workspace,
+communication, settle, and timing guards remain active.
 
 The resulting calibration records:
 - where the taught table plane lies in model coordinates;
