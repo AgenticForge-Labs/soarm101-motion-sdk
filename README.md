@@ -149,10 +149,15 @@ the servo receives `speed_raw=0` (maximum tracking authority) and
 deceleration with optional constant-speed cruise. Position-only Cartesian paths then get
 one deterministic smooth-seed IK reprojection pass: joint-space seeds are filtered, every
 interior Cartesian sample is re-solved at the unchanged hard position tolerance, and the
-refined path is used only when it lowers discrete joint jerk. This keeps the Cartesian
-line authoritative while reducing redundant-joint numerical wander. The previous
+refined path is used only when it lowers discrete joint jerk. If forward sequential IK
+hits a numerical pocket, a reachable endpoint solution can seed a reverse solve of those
+same Cartesian samples; the paper replay reuses its exact read-only endpoint-preflight
+solution for that boundary condition. The reverse path must reconnect continuously to the
+measured start and still satisfy the unchanged tolerance everywhere. This keeps the
+Cartesian line authoritative while reducing redundant-joint numerical wander. The previous
 per-sample servo speed throttling remains superseded because it could produce visible
-stick-slip on gravity-loaded joints. The normal joint, IK,
+stick-slip on gravity-loaded joints; calibrated Cartesian execution now explicitly sends
+the fixed teleoperation profile rather than enabling synchronized per-sample servo speeds. The normal joint, IK,
 rate/acceleration, following-error, fault, effort/contact, communication, settle,
 provenance, and timing guards remain active. The measured workspace owns paper height;
 the generic model workspace is used only where explicitly documented as a secondary
