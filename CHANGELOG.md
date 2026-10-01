@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Superseded the paper hover / base-Z floor-recovery experiment after physical hardware
+  showed that a numerically valid model +Z move could travel laterally into the table.
+  Both paper workflows are now measurement/calibration only: the three-corner script
+  reports geometry without motion, while the four-corner script adds a manually measured
+  physical-UP point and persists a motor-calibration-bound local workspace transform.
+  Newly measured workspace calibrations remain unvalidated for autonomous Cartesian
+  motion until a separate supervised direction test passes.
+
 - Added an explicit monotonic floor-recovery path check for a Cartesian move that starts
   outside the coarse model floor but ends back inside the normal workspace. The four-corner
   paper hover demo uses it only for the initial upward D lift, fixing a fail-closed case
