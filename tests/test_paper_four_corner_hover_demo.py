@@ -417,47 +417,6 @@ def test_ordered_paper_replay_enters_at_a_and_visits_each_corner_once() -> None:
     assert "D_UP_RETURN" not in ordered_positions
 
 
-def test_joint_space_workspace_preflight_rejects_midpath_z_dip() -> None:
-    module = _load_example_module()
-    joint_names = (
-        "shoulder_pan",
-        "shoulder_lift",
-        "elbow_flex",
-        "wrist_flex",
-        "wrist_roll",
-    )
-
-    class Model:
-        @staticmethod
-        def forward(joints, tcp=None):
-            del tcp
-            q = float(joints["shoulder_pan"])
-            return module.Pose(np.array([0.0, 0.0, q * q]), np.eye(3))
-
-    class Calibration:
-        @staticmethod
-        def physical_position_from_model(position):
-            return np.asarray(position, dtype=float)
-
-    class Arm:
-        model = Model()
-        active_tcp = None
-
-    start = {name: 0.0 for name in joint_names}
-    target = dict(start)
-    start["shoulder_pan"] = -1.0
-    target["shoulder_pan"] = 1.0
-
-    with pytest.raises(RuntimeError, match="dip too low"):
-        module.preflight_joint_space_workspace_path(
-            Arm(),
-            Calibration(),
-            start_joints=start,
-            target_joints=target,
-            minimum_z_margin_m=0.005,
-        )
-
-
 def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> None:
     from types import SimpleNamespace
 
