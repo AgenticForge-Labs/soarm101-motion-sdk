@@ -1,12 +1,16 @@
 # Physical kinematics validation
 
-The native FK/IK model comes from the official SO-101 calibrated URDF, but printed assembly tolerances, horn indexing, backlash, and TCP mounting can create measurable error. Validate the exact arm before relying on larger Cartesian moves.
+The native FK/IK model comes from the official SO-101 calibrated URDF, but printed
+assembly tolerances, horn indexing, backlash, TCP mounting, calibration conventions,
+and frame interpretation can create measurable error. Validate the exact arm before
+relying on Cartesian motion.
 
-## Recommended procedure
+## Measured FK sanity checks
 
-1. Secure the base and define a repeatable base coordinate origin.
+1. Secure the base and define a repeatable physical reference.
 2. Leave torque disabled and position the arm manually at a stable checkpoint.
-3. Measure the active TCP in millimeters using a ruler, square, jig, or camera calibration target.
+3. Measure the active TCP in millimeters using a ruler, square, jig, or camera
+   calibration target.
 4. Record the comparison:
 
 ```bash
@@ -17,21 +21,19 @@ soarm101 kinematics-check \
   --output kinematics-validation.jsonl
 ```
 
-5. Capture at least five poses spanning the useful workspace, not only the home pose.
-6. Review the error vectors and norm. Large systematic offsets usually indicate TCP definition or base-frame error; pose-dependent errors suggest link dimensions, horn indexing, calibration, or compliance.
-7. Keep early Cartesian moves to 2–5 mm until results are understood.
+5. Capture several poses spanning the useful workspace.
+6. Review the error vectors and norm. Large systematic offsets usually indicate TCP or
+   base-frame error; pose-dependent errors suggest link dimensions, horn indexing,
+   calibration, compliance, or another kinematic mismatch.
 
-The command is read-only and never enables torque. It records predicted position, measured position, joint angles, component error, and total position error as JSON Lines for later analysis.
+The command is read-only and never enables torque.
 
+## Three-corner paper geometry check
 
-## Three-corner paper-frame validation
+`examples/paper_corner_cartesian_test.py` is now a read-only geometry diagnostic after
+the brief powered gripper-open step. It does **not** command Cartesian arm motion.
 
-After the mechanical calibration, one-joint direction checks, and initial gripper checks
-have passed, `examples/paper_corner_cartesian_test.py` provides a simple physical
-Cartesian-space validation using a known rectangular sheet. US Letter defaults are
-215.9 x 279.4 mm.
-
-The required three-corner layout is:
+Required layout:
 
 ```text
 C ---------------- D  (predicted; do not touch)
@@ -40,47 +42,29 @@ C ---------------- D  (predicted; do not touch)
 A ---------------- B
 ```
 
-A->B is the 215.9 mm short/width edge. A->C is the 279.4 mm long/height edge and
-**C must be on the same side of the sheet as A**. If the operator goes A->B and then
-up the right side, that point is D, the far corner, and the rectangle-angle check is
-invalid.
+A->B is the 215.9 mm short/width edge of US Letter. A->C is the 279.4 mm
+long/height edge and C must be on the same side of the sheet as A.
 
-The script:
+The script records the model TCP at A/B/C, reports the measured edge lengths and corner
+angle, and predicts D in model coordinates. Its model-space paper normal is diagnostic
+only. It is not accepted as demonstrated physical up.
 
-1. briefly enables torque to open the gripper fully, then relaxes the arm;
-2. asks the operator to place the same lower gripper finger on corner A, the adjacent
-   width corner B, and the adjacent height corner C, pressing Enter at each corner;
-3. records the FK TCP XYZ/RPY and joint state at each touch;
-4. reports measured width, height, corner angle, paper-plane axes, and probe-orientation
-   drift;
-5. derives an orthonormal paper frame and predicts the unseen fourth corner from the
-   known paper dimensions;
-6. with torque still off, preflights exact-orientation IK for the complete test;
-7. after an explicit confirmation, lifts off the paper, traverses above the predicted
-   fourth corner, points just above it, and then visits several +Z heights at that same
-   paper-frame X/Y location.
+This change follows a physical test in which a paper/model normal looked plausible
+numerically but a commanded "up" hover moved laterally and contacted the table.
 
-Run it from the repository root:
+## Four-corner workspace calibration
+
+Use:
 
 ```bash
-python examples/paper_corner_cartesian_test.py
+python examples/paper_four_corner_hover_demo.py --reference-height-mm 50
 ```
 
-The saved workstation follower is used when `--port` is omitted. The default fourth-
-corner point stops 2 mm above the paper and the default Z test visits 25, 50, and
-100 mm above the far corner.
+Despite the historical filename, this workflow is now **manual workspace calibration**,
+not a hover demo. The old `--hover-height-mm` spelling remains as an alias for
+`--reference-height-mm`; it does not command motion.
 
-The stock SDK TCP is the modeled gripper TCP, not the physical lower-finger tip. Using
-the lower finger as a probe is therefore valid only when its pose relative to the modeled
-TCP remains effectively constant. The script reports A/B/C orientation drift and refuses
-autonomous motion above the configured drift threshold unless the override is deliberate.
-A future calibrated lower-finger TCP would remove this approximation.
-
-## Four-corner hover diagnostic
-
-`examples/paper_four_corner_hover_demo.py` is a supervised motion diagnostic for cases
-where the operator wants to observe slow Cartesian motion without predicting an unseen
-corner. It teaches every physical corner manually in clockwise order:
+Teach:
 
 ```text
 D ---------------- C
@@ -89,31 +73,45 @@ D ---------------- C
 A ---------------- B
 ```
 
-The operator may therefore move A->B left-to-right and then B->C up the right side.
-After all four torque-off captures, the script reports the model-space paper distances
-for diagnosis but does not use them to alter any target. Each hover target is simply
-50 mm by default along SDK base +Z from that corner's captured model TCP, retaining that
-corner's captured orientation as the compatible-IK reference.
+Then manually place the same fixed lower finger at a physically measured height above D.
+Use a ruler, rigid spacer, gauge block, or another physical reference and keep the tool
+orientation as close to D as practical.
 
-All four hover targets are solved with torque off first. Powered execution has two
-separate confirmations: first only the lift from the current D touch to the D hover;
-after the operator verifies that motion went upward and is clear of the table, the
-script traverses D->A->B->C->D at the hover height.
+Those five physical/model correspondences fit a local affine workspace mapping and a
+table plane. The calibration is tied to the current motor-calibration ID and is stored,
+when quality gates pass, under:
 
-The manually taught paper touch may place the modeled TCP below the SDK's generic
-base-Z=0 coarse floor even though the physical finger is safely resting on the paper.
-For the **first lift only**, the script opts into guarded floor recovery: any point that
-starts below the configured floor must progress upward without a meaningful downward
-dip, points that start above the floor must remain above it, the normal reach/base/
-self-clearance checks stay active, and the lift must finish entirely inside the ordinary
-workspace envelope. Subsequent perimeter moves use the normal floor rule with no recovery
-exception.
+```text
+~/.config/soarm101/workspace/<robot-id>.json
+```
 
-Each `move_linear()` segment still uses the normal guarded planner and is fully planned
-before that segment sends motor commands. The demo never disables workspace checks or
-bypasses joint, calibration, following-error, fault, effort, or motion-planning guards.
+The workflow performs no autonomous Cartesian arm motion.
 
-This demo is deliberately **not** evidence that Cartesian kinematics are calibrated,
-and it does not replace the three-corner validation gate. Keep physical power immediately
-reachable and stop if the first lift is not physically upward and clear.
+See [Workspace calibration](workspace-calibration.md) for the persisted contract,
+quality gates, and provenance.
 
+## Current hardware finding
+
+On the tested follower, a four-corner paper capture produced a model-space paper plane
+that was nearly horizontal, yet a requested model +Z hover physically traveled roughly
+along the table and contacted it. The motion then failed to settle and the SDK relaxed
+the arm.
+
+That means the present issue is **not just a table-height offset**. The physical/model
+Cartesian direction mapping itself still requires validation.
+
+Therefore:
+
+- do not lower the generic model floor merely to make a paper touch pass;
+- do not use base +Z or a paper-derived model normal as physical up;
+- do not resume autonomous paper hover/traverse motion yet; and
+- use the manually measured UP reference to characterize the local mapping first.
+
+## Next powered Cartesian gate
+
+Powered Cartesian testing remains blocked until the workspace measurement has been
+reviewed and a separate supervised physical-direction validation is designed.
+
+That later validation should start with very small motion, explicit before/after
+measurement, immediate physical-power access, and no assumption that a model axis maps
+directly to a physical world axis.
