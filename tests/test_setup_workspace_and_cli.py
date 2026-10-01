@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from soarm101_motion import SOARM101, SOARM101Config
@@ -10,7 +11,7 @@ from soarm101_motion.exceptions import CommunicationError, SafetyViolationError
 from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.hardware.setup import FeetechMotorSetup
 from soarm101_motion.kinematics.model import SO101KinematicModel
-from soarm101_motion.safety import validate_workspace_configuration
+from soarm101_motion.safety import validate_workspace_configuration, validate_workspace_path
 from soarm101_motion.setup_wizard import _resolve_port, build_parser
 
 
@@ -41,6 +42,59 @@ def test_workspace_home_passes_and_foldback_is_rejected() -> None:
 def test_workspace_checks_can_be_disabled_for_model_development() -> None:
     config = replace(SOARM101Config(), enable_workspace_checks=False)
     assert config.enable_workspace_checks is False
+
+
+class _FloorRecoveryModel:
+    def link_points(self, joints, *, tcp=None):
+        del tcp
+        tcp_z = float(joints["tcp_z"])
+        return {
+            "base": np.array([0.00, 0.0, 0.20]),
+            "shoulder_pan": np.array([0.05, 0.0, 0.20]),
+            "shoulder_lift": np.array([0.10, 0.0, 0.20]),
+            "elbow_flex": np.array([0.15, 0.0, 0.10]),
+            "wrist_flex": np.array([0.20, 0.0, 0.10]),
+            "wrist_roll": np.array([0.25, 0.0, 0.10]),
+            "tcp": np.array([0.30, 0.0, tcp_z]),
+        }
+
+
+def test_workspace_floor_recovery_allows_only_upward_escape_to_valid_space() -> None:
+    model = _FloorRecoveryModel()
+    samples = [
+        {"tcp_z": -0.044},
+        {"tcp_z": -0.020},
+        {"tcp_z": 0.010},
+    ]
+
+    with pytest.raises(SafetyViolationError, match="tcp z=-0.044"):
+        validate_workspace_path(model, samples)
+
+    validate_workspace_path(model, samples, allow_floor_recovery=True)
+
+
+def test_workspace_floor_recovery_rejects_downward_dip() -> None:
+    model = _FloorRecoveryModel()
+    samples = [
+        {"tcp_z": -0.044},
+        {"tcp_z": -0.050},
+        {"tcp_z": 0.010},
+    ]
+
+    with pytest.raises(SafetyViolationError, match="moved downward"):
+        validate_workspace_path(model, samples, allow_floor_recovery=True)
+
+
+def test_workspace_floor_recovery_must_finish_inside_normal_envelope() -> None:
+    model = _FloorRecoveryModel()
+    samples = [
+        {"tcp_z": -0.044},
+        {"tcp_z": -0.020},
+        {"tcp_z": -0.005},
+    ]
+
+    with pytest.raises(SafetyViolationError, match="did not recover"):
+        validate_workspace_path(model, samples, allow_floor_recovery=True)
 
 
 class FakePort:
