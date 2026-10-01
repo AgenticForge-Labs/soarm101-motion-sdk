@@ -124,7 +124,7 @@ three manually pointed US Letter corners with torque off, reports FK geometry, a
 predicts the fourth corner in model coordinates, but it does not command Cartesian
 motion.
 
-`examples/paper_four_corner_hover_demo.py` now performs the machine-local workspace
+`examples/paper_workspace_calibration.py` now performs the machine-local workspace
 calibration. It teaches all four corners clockwise (A lower-left -> B lower-right ->
 C upper-right -> D upper-left), then asks the operator to manually place the same fixed
 finger at a measured physical height above D. Those five correspondences fit and persist
