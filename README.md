@@ -132,13 +132,13 @@ a local paper/workspace mapping under `~/.config/soarm101/workspace/`. The manua
 measured UP point is required because SDK/model +Z is **not assumed to be physical up**.
 Wrist/tool rotation while manually reaching the UP point is expected to change
 naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
-not gate workspace-measurement acceptance. The paper workflow now physically teaches A_UP, B_UP, C_UP, D_UP, and CENTER_UP at the
-requested reference height and replays those measured endpoints directly. A legacy report
-that contains only one elevated D/UP point must first be completed with
-`--upgrade-elevated`; replay fails closed rather than inferring the other heights. The
-segments themselves still run through `move_linear()` with position-only IK. The paper
-configuration retains a 1 mm Cartesian planning-density bound while the linear planner
-solves the minimum-jerk Cartesian path directly at command-rate IK samples. `--replay` reuses the saved teaching from any ordinary resting pose. During this
+not gate workspace-measurement acceptance. The paper workflow physically teaches A/B/C/D plus one measured D_UP reference. Replay
+uses the saved physical-workspace transform to level every paper endpoint to that same
+workspace Z while preserving each endpoint's calibrated workspace X/Y; no extra elevated
+teaching is required. Before the first long move from an ordinary resting pose, replay
+preflights and performs a small workspace-Z clearance lift (10 mm by default). The
+segments still run through `move_linear()` with position-only IK, using command-rate
+sequential IK on the minimum-jerk Cartesian path. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper-linear validation, each segment uses destination-only coarse workspace
 validation while the normal joint, IK-continuity, rate/acceleration, following-error,
 fault, effort/contact, communication, and timeout guards remain active. Because this is
