@@ -458,7 +458,118 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="save the workspace measurement but skip the powered paper demonstration",
     )
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help=(
+            "reuse the saved A/B/C/D/UP teaching in --output and run the Cartesian "
+            "linear sequence from the arm's current resting pose"
+        ),
+    )
     return parser
+
+
+def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
+    report, samples, up = load_saved_teaching(args.output)
+    corner_samples = {sample.name: sample for sample in samples}
+    reference_height = float(report.get("reference_height_mm", 0.0))
+    if reference_height <= 0.0:
+        raise RuntimeError("saved report has no valid reference_height_mm")
+
+    with SOARM101(config) as arm:
+        try:
+            store = WorkspaceCalibrationStore(config.robot_id, path=args.workspace_output)
+            saved = store.load()
+            if arm.calibration_id and saved.arm_calibration_id != arm.calibration_id:
+                raise RuntimeError(
+                    "saved workspace calibration does not match the active motor calibration"
+                )
+
+            print("Paper Cartesian linear replay")
+            print(
+                f"Loaded saved teaching at {reference_height:.1f} mm reference height from "
+                f"{args.output}."
+            )
+            print(
+                "The arm may start from any ordinary resting pose. The first move to D_UP "
+                "uses target-only coarse workspace checking; subsequent paper segments use "
+                "the normal full workspace check."
+            )
+            _countdown_hold(arm)
+            arm.tool.open()
+
+            demo_positions, preferred_seeds = reachable_demo_targets(
+                arm,
+                corners=corner_samples,
+                up_sample=up,
+            )
+            print("\nRead-only endpoint preflight while holding the current pose...")
+            preflight = preflight_demo_targets(
+                arm,
+                demo_positions,
+                preferred_seeds=preferred_seeds,
+                rotation=up.rotation,
+            )
+            for item in preflight:
+                xyz = item["target_model_xyz_mm"]
+                assert isinstance(xyz, list)
+                print(
+                    f"  {item['name']}: "
+                    f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
+                    f"IK error {item['position_error_mm']:.2f} mm"
+                )
+
+            report["replayed_at"] = datetime.now(timezone.utc).isoformat()
+            report["demo_target_strategy"] = (
+                "reachable_FK_endpoints_from_taught_corner_joints_plus_taught_lift_delta"
+            )
+            report["demo_preflight"] = preflight
+            report["demo_targets_model_xyz_mm"] = {
+                name: [float(value * 1000.0) for value in position]
+                for name, position in demo_positions.items()
+            }
+            report["demo_moves"] = []
+            report["autonomous_motion_attempted"] = False
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+            input(
+                "\nPress Enter to run D_UP -> A_UP -> B_UP -> C_UP -> "
+                "D_UP -> CENTER_UP with Cartesian move_linear(), or Ctrl+C to stop... "
+            )
+            report["autonomous_motion_attempted"] = True
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+            moves = report["demo_moves"]
+            assert isinstance(moves, list)
+            try:
+                run_demo_targets(
+                    arm,
+                    demo_positions,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    report_moves=moves,
+                )
+            except BaseException as exc:
+                report["demo_completed"] = False
+                report["demo_error"] = f"{type(exc).__name__}: {exc}"
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                raise
+
+            report["demo_completed"] = True
+            report.pop("demo_error", None)
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            print("\nCartesian linear replay completed at CENTER_UP.")
+            return 0
+        finally:
+            try:
+                arm.relax()
+                print("Motors relaxed.")
+            except Exception as exc:
+                print(f"WARNING: could not confirm relax during cleanup: {exc}")
 
 
 def main() -> int:
@@ -478,8 +589,12 @@ def main() -> int:
         raise SystemExit("--speed-mm-s must be positive")
     if args.acceleration_mm_s2 <= 0.0:
         raise SystemExit("--acceleration-mm-s2 must be positive")
+    if args.replay and args.measure_only:
+        raise SystemExit("--replay and --measure-only cannot be used together")
 
     config = _resolve_config(args)
+    if args.replay:
+        return run_saved_replay(args, config)
 
     print("Paper workspace calibration — MANUAL / TORQUE-OFF GEOMETRY")
     print(f"Reference sheet: {args.width_mm:.1f} x {args.height_mm:.1f} mm")
