@@ -68,8 +68,11 @@ communication failures must still abort before Cartesian motion and leave torque
 For supervised diagnosis only, `examples/paper_four_corner_hover_demo.py` teaches all four
 corners clockwise (A lower-left, B lower-right, C upper-right, D upper-left), then preflights
 50 mm base-+Z hover targets. It first performs only the D lift and requires the operator to
-verify that the physical motion is upward and clear before traversing D->A->B->C->D. This
-does not mark the paper-frame Cartesian validation gate complete.
+verify that the physical motion is upward and clear before traversing D->A->B->C->D. If the
+D touch begins below the generic model Z=0 floor, only that first lift may use guarded floor
+recovery: the violating modeled points must escape upward without dipping lower and the
+target must finish inside the normal workspace envelope. Later traversals use the ordinary
+floor check. This does not mark the paper-frame Cartesian validation gate complete.
 
 
 ## Batch 1 — Setup, follower control, and leader readout
