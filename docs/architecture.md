@@ -59,11 +59,17 @@ constrained SDK primitives used manually.
 
 ### Cartesian linear trajectory parameterization
 
-`move_linear()` owns a Cartesian trajectory, not a sparse joint polyline. The host applies
-its minimum-jerk timing law to Cartesian interpolation first and solves sequential IK at
-the actual command-rate samples. It must not introduce a second piecewise-linear
-joint-space interpolation layer between sparse IK knots, because those knot boundaries can
-create derivative discontinuities that appear as physical corrections. The resulting
+`move_linear()` owns a Cartesian trajectory, not a sparse joint polyline. The host uses
+smooth half-cosine acceleration/deceleration ramps with an optional constant-speed cruise
+region, then solves sequential IK directly at the actual command-rate samples. Requested
+linear speed and acceleration are ceilings of this profile; position-only paths do not
+spend time rotating an unconstrained tool orientation. It must not introduce a second
+piecewise-linear joint-space interpolation layer between sparse IK knots.
+
+On calibrated Feetech hardware, each planned Cartesian sync write derives a per-joint
+position-mode speed from that joint's encoder-tick increment and the command interval.
+All motors are still written in one synchronous packet, but lightly loaded joints are no
+longer told to race at unrestricted speed while gravity-loaded joints lag. The resulting
 joint samples remain subject to deterministic joint, step, velocity, acceleration,
 workspace, following-error, effort, fault, and timing validation before and during
 execution.
