@@ -586,6 +586,24 @@ def preflight_demo_targets(
     return results
 
 
+def preflight_joint_seeds(
+    preflight: list[dict[str, object]],
+) -> dict[str, dict[str, float]]:
+    """Extract exact endpoint IK solutions for Cartesian boundary-condition hints."""
+
+    seeds: dict[str, dict[str, float]] = {}
+    for item in preflight:
+        name = str(item["name"])
+        joints = item.get("joints_rad")
+        if not isinstance(joints, dict):
+            raise ValueError(f"preflight result for {name} has no joint solution")
+        seeds[name] = {
+            str(joint): float(value)
+            for joint, value in joints.items()
+        }
+    return seeds
+
+
 def run_demo_targets(
     arm: SOARM101,
     calibration: WorkspaceCalibration,
@@ -595,10 +613,12 @@ def run_demo_targets(
     speed_mm_s: float,
     acceleration_mm_s2: float,
     report_moves: list[dict[str, object]],
+    target_seeds: dict[str, dict[str, float]] | None = None,
 ) -> None:
     """Execute the leveled paper path with the SDK's Cartesian linear primitive."""
 
     for name, position in positions.items():
+        target_seed = None if target_seeds is None else target_seeds.get(name)
         start_pose = arm.get_position()
         start_physical = calibration.physical_position_from_model(start_pose.position)
         target_physical = calibration.physical_position_from_model(position)
@@ -615,6 +635,10 @@ def run_demo_targets(
             # The measured calibrated workspace is authoritative for this experiment.
             # Keep the generic coarse model as a destination sanity check only.
             workspace_check="target_only",
+            # Endpoint preflight already found an exact reachable solution. Preserve it
+            # as a reverse-planning boundary hint if forward sequential IK hits a
+            # numerical pocket; the hard Cartesian tolerance remains unchanged.
+            target_seed=target_seed,
         )
         if not result.accepted or not result.completed:
             raise RuntimeError(f"{name} Cartesian linear motion did not complete: {result}")
@@ -634,6 +658,9 @@ def run_demo_targets(
                 "mode": "cartesian_move_linear",
                 "servo_tracking_profile": "teleop_authority",
                 "generic_workspace_check": "target_only",
+                "endpoint_seed_source": (
+                    "endpoint_preflight" if target_seed is not None else "planner_multistart"
+                ),
                 "requested_start_workspace_xyz_mm": [
                     float(value * 1000.0) for value in start_physical
                 ],
@@ -1053,6 +1080,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
+                    target_seeds=preflight_joint_seeds(preflight),
                 )
             except Exception as exc:
                 report["demo_completed"] = False
@@ -1445,6 +1473,7 @@ def main() -> int:
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
+                    target_seeds=preflight_joint_seeds(preflight),
                 )
             except Exception as exc:
                 report["demo_completed"] = False
