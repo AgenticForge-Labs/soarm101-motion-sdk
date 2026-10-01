@@ -38,6 +38,8 @@ def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
     assert "--measure-only" in result.stdout
     assert "--replay" in result.stdout
     assert "--speed-mm-s" in result.stdout
+    assert "--settle-tolerance-deg" in result.stdout
+    assert "--settle-timeout-s" in result.stdout
 
 
 def test_old_paper_hover_filename_is_safe_compatibility_entry_point() -> None:
@@ -193,4 +195,20 @@ def test_hold_until_operator_release_stops_before_waiting(monkeypatch) -> None:
     module._hold_until_operator_release(Arm(), "test hold")
 
     assert events == ["stop", "input"]
+
+def test_paper_config_uses_relaxed_supervised_settle_criterion() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    args = SimpleNamespace(
+        port="/dev/null",
+        robot_id="so101",
+        calibration=None,
+        settle_tolerance_deg=3.0,
+        settle_timeout_s=8.0,
+    )
+    config = module._resolve_config(args)
+
+    assert config.joint_position_tolerance_rad == pytest.approx(np.deg2rad(3.0))
+    assert config.motion_completion_timeout_s == pytest.approx(8.0)
 
