@@ -396,11 +396,10 @@ def preflight_calibrated_workspace_z_lift(
         seed = candidate
         final_model_position = model_position
 
-    final_physical = calibration.physical_position_from_model(final_model_position)
-    if abs(float(final_physical[2]) - target_z) > z_tolerance_m:
+    if abs(previous_z - target_z) > z_tolerance_m:
         raise RuntimeError(
             "startup workspace-Z lift final calibrated height does not match target: "
-            f"{final_physical[2] * 1000.0:.1f} vs {target_z * 1000.0:.1f} mm"
+            f"{previous_z * 1000.0:.1f} vs {target_z * 1000.0:.1f} mm"
         )
 
     return {
