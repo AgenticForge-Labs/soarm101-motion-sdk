@@ -181,3 +181,16 @@ def test_reachable_demo_targets_use_taught_lift_delta_and_fk() -> None:
         )
     )
 
+def test_hold_until_operator_release_stops_before_waiting(monkeypatch) -> None:
+    module = _load_example_module()
+    events = []
+
+    class Arm:
+        def stop(self):
+            events.append("stop")
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: events.append("input") or "")
+    module._hold_until_operator_release(Arm(), "test hold")
+
+    assert events == ["stop", "input"]
+
