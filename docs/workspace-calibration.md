@@ -119,10 +119,11 @@ A newly measured calibration is initially saved with:
 motion_validation_status = "unvalidated"
 ```
 
-The same workflow may then run the supervised demonstration
-`D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`. After the final UP teaching
-sample, a short countdown is followed by torque enable so the current pose is held before
-the operator starts motion.
+The same workflow may then run the supervised demonstration: one calibrated-Z startup
+clearance move followed by `A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`. D_UP remains
+the physical-height teaching reference. After the final UP teaching sample, a short
+countdown is followed by torque enable so the current pose is held before the operator
+starts motion.
 
 For the powered demonstration, the single D_UP measurement remains the physical-height
 reference. The earlier copied D→UP joint-delta path was useful because it stayed on a
