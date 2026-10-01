@@ -10,18 +10,6 @@
   Newly measured workspace calibrations remain unvalidated for autonomous Cartesian
   motion until a separate supervised direction test passes.
 
-- Added an explicit monotonic floor-recovery path check for a Cartesian move that starts
-  outside the coarse model floor but ends back inside the normal workspace. The four-corner
-  paper hover demo uses it only for the initial upward D lift, fixing a fail-closed case
-  where the taught paper touch had model TCP Z below zero; normal perimeter moves retain
-  the standard floor check.
-
-- Added a supervised four-corner paper hover diagnostic that manually teaches every
-  corner clockwise, preflights 50 mm base-+Z hover targets with torque off, requires a
-  separately confirmed first lift, and then traverses the taught perimeter through the
-  guarded Cartesian planner. The original three-corner validation prompt now explicitly
-  shows that C shares the long edge with A; the far/right-side corner is D.
-
 - Fixed the managed Feetech torque path to use the same bounded readback/retry recovery
   as the protocol backend for idempotent `Lock` and `Torque_Enable` writes. A single
   lost status packet during guarded enable/disable no longer aborts paper/CLI/GUI startup
@@ -45,12 +33,6 @@
   hardware-fault, effort, and STOP/HOLD guards remain active.
 - New camera profiles default to 640×480 MJPG at 15 FPS to reduce USB bandwidth and host
   processing load; existing saved camera profiles are preserved unchanged.
-
-- Added a guided US Letter paper-frame Cartesian validation script. It opens the gripper,
-  relaxes for three manual lower-finger corner captures, checks measured dimensions,
-  orthogonality and probe-orientation drift, predicts the fourth corner, preflights
-  exact-orientation IK with torque off, then performs a supervised lift/traverse/point
-  sequence plus configurable paper-frame +Z height checks.
 
 - Made Feetech torque/lock control writes tolerant of a single corrupted or missing status
   reply: the backend first reads the control register back, accepts the write only if the
