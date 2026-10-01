@@ -454,6 +454,91 @@ def execute_preflighted_workspace_z_lift(
     )
 
 
+def execute_staged_calibrated_workspace_z_lift(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    target_workspace_z_m: float,
+    max_stage_m: float,
+    tolerance_m: float,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+) -> list[dict[str, object]]:
+    """Climb to transport height in measured, separately settled Z stages."""
+
+    records: list[dict[str, object]] = []
+    max_stages = max(
+        4,
+        int(np.ceil(0.5 / max(float(max_stage_m), 1e-6))) + 4,
+    )
+    for stage_index in range(1, max_stages + 1):
+        live_pose = arm.get_position()
+        live_joints = dict(arm.get_joint_positions().positions)
+        live_physical = calibration.physical_position_from_model(live_pose.position)
+        current_z = float(live_physical[2])
+        if current_z >= float(target_workspace_z_m) - float(tolerance_m):
+            return records
+
+        stage_target_z = min(
+            float(target_workspace_z_m),
+            current_z + float(max_stage_m),
+        )
+        preflight = preflight_calibrated_workspace_z_lift(
+            arm,
+            calibration,
+            start_pose=live_pose,
+            start_joints=live_joints,
+            target_workspace_z_m=stage_target_z,
+        )
+        target_position = (
+            np.asarray(preflight["target_model_xyz_mm"], dtype=float) / 1000.0
+        )
+        result = execute_preflighted_workspace_z_lift(
+            arm,
+            target_model_position_m=target_position,
+            rotation=live_pose.rotation,
+            speed_mm_s=speed_mm_s,
+            acceleration_mm_s2=acceleration_mm_s2,
+        )
+        if not result.accepted or not result.completed:
+            raise RuntimeError(
+                f"startup lift stage {stage_index} did not complete: {result}"
+            )
+
+        actual_pose = arm.get_position()
+        actual_physical = calibration.physical_position_from_model(actual_pose.position)
+        actual_z = float(actual_physical[2])
+        if actual_z <= current_z + 0.0005:
+            raise RuntimeError(
+                "startup lift made insufficient measured Z progress; "
+                f"stage {stage_index}: {current_z * 1000.0:.1f} -> "
+                f"{actual_z * 1000.0:.1f} mm"
+            )
+        record = {
+            "stage": stage_index,
+            "start_workspace_z_mm": float(current_z * 1000.0),
+            "target_workspace_z_mm": float(stage_target_z * 1000.0),
+            "actual_workspace_z_mm": float(actual_z * 1000.0),
+            "actual_model_xyz_mm": [
+                float(value * 1000.0) for value in actual_pose.position
+            ],
+        }
+        records.append(record)
+        print(
+            f"  startup stage {stage_index}: workspace Z "
+            f"{current_z * 1000.0:.1f} -> {actual_z * 1000.0:.1f} mm "
+            f"(target {stage_target_z * 1000.0:.1f} mm)"
+        )
+
+    final_pose = arm.get_position()
+    final_physical = calibration.physical_position_from_model(final_pose.position)
+    raise RuntimeError(
+        "startup lift exceeded bounded stage count before reaching transport height; "
+        f"actual={final_physical[2] * 1000.0:.1f} mm, "
+        f"target={target_workspace_z_m * 1000.0:.1f} mm"
+    )
+
+
 def preflight_demo_targets(
     arm: SOARM101,
     positions: dict[str, np.ndarray],
@@ -739,6 +824,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--startup-stage-mm",
+        type=float,
+        default=10.0,
+        help=(
+            "maximum calibrated-workspace Z increment per startup lift stage. Each stage "
+            "settles and is re-measured before the next one; default 10 mm"
+        ),
+    )
+    parser.add_argument(
         "--measure-only",
         action="store_true",
         help="save the workspace measurement but skip the powered paper demonstration",
@@ -892,57 +986,18 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 if startup_needed:
                     print(
                         f"\nLifting first in workspace Z to "
-                        f"{startup_target_z * 1000.0:.1f} mm..."
+                        f"{startup_target_z * 1000.0:.1f} mm in settled "
+                        f"{args.startup_stage_mm:.1f} mm stages..."
                     )
-                    lift_attempts: list[dict[str, object]] = []
-                    for attempt in range(1, 4):
-                        live_pose = arm.get_position()
-                        live_joints = dict(arm.get_joint_positions().positions)
-                        live_physical = saved.physical_position_from_model(live_pose.position)
-                        if (
-                            float(live_physical[2])
-                            >= startup_target_z
-                            - args.startup_height_tolerance_mm / 1000.0
-                        ):
-                            break
-
-                        correction = preflight_calibrated_workspace_z_lift(
-                            arm,
-                            saved,
-                            start_pose=live_pose,
-                            start_joints=live_joints,
-                            target_workspace_z_m=startup_target_z,
-                        )
-                        correction_position = (
-                            np.asarray(correction["target_model_xyz_mm"], dtype=float) / 1000.0
-                        )
-                        result = execute_preflighted_workspace_z_lift(
-                            arm,
-                            target_model_position_m=correction_position,
-                            rotation=live_pose.rotation,
-                            speed_mm_s=args.speed_mm_s,
-                            acceleration_mm_s2=args.acceleration_mm_s2,
-                        )
-                        if not result.accepted or not result.completed:
-                            raise RuntimeError(f"startup lift did not complete: {result}")
-
-                        actual = arm.get_position()
-                        actual_physical = saved.physical_position_from_model(actual.position)
-                        lift_attempts.append(
-                            {
-                                "attempt": attempt,
-                                "target_workspace_z_mm": float(startup_target_z * 1000.0),
-                                "actual_workspace_z_mm": float(actual_physical[2] * 1000.0),
-                                "actual_model_xyz_mm": [
-                                    float(value * 1000.0) for value in actual.position
-                                ],
-                            }
-                        )
-                        print(
-                            f"  workspace Z after startup lift attempt {attempt} = "
-                            f"{actual_physical[2] * 1000.0:.1f} mm"
-                        )
-
+                    lift_stages = execute_staged_calibrated_workspace_z_lift(
+                        arm,
+                        saved,
+                        target_workspace_z_m=startup_target_z,
+                        max_stage_m=args.startup_stage_mm / 1000.0,
+                        tolerance_m=args.startup_height_tolerance_mm / 1000.0,
+                        speed_mm_s=args.speed_mm_s,
+                        acceleration_mm_s2=args.acceleration_mm_s2,
+                    )
                     final_pose = arm.get_position()
                     final_physical = saved.physical_position_from_model(final_pose.position)
                     minimum_clear_z = (
@@ -961,7 +1016,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                             "name": "START_LIFT",
                             "target_workspace_z_mm": float(startup_target_z * 1000.0),
                             "actual_workspace_z_mm": float(final_physical[2] * 1000.0),
-                            "attempts": lift_attempts,
+                            "stages": lift_stages,
                             "actual_model_xyz_mm": [
                                 float(value * 1000.0) for value in final_pose.position
                             ],
@@ -1035,6 +1090,8 @@ def main() -> int:
         raise SystemExit("--startup-lift-mm must be positive")
     if args.startup_height_tolerance_mm <= 0.0:
         raise SystemExit("--startup-height-tolerance-mm must be positive")
+    if args.startup_stage_mm <= 0.0:
+        raise SystemExit("--startup-stage-mm must be positive")
 
     config = _resolve_config(args)
     if args.replay:
