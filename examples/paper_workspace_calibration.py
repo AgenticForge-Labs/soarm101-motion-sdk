@@ -265,10 +265,12 @@ def workspace_height_demo_targets(
     """Level all replay endpoints to one physical/workspace Z.
 
     The previously reachable FK construction gives a useful branch and observed paper X/Y
-    location for each endpoint, but hardware showed that its physical heights varied from
-    about 30 mm to 107 mm. Preserve each endpoint's inverse-mapped workspace X/Y and replace
-    only workspace Z with the single manually measured reference height. This directly uses
-    the calibrated physical-workspace coordinates the operator observed to track real height.
+    location for each corner endpoint, but hardware showed that its physical heights varied
+    from about 30 mm to 107 mm. Preserve each corner endpoint's inverse-mapped workspace X/Y
+    and replace only workspace Z with the single manually measured reference height.
+    CENTER_UP is different: its target geometry is the true calibrated paper center,
+    (width/2, height/2, reference_height), while the averaged-joint construction is retained
+    only as an IK seed.
 
     Read-only IK preflight remains authoritative: if a corrected endpoint is not reachable,
     the run stops before powered motion.
@@ -285,11 +287,18 @@ def workspace_height_demo_targets(
     for name, position in baseline.items():
         physical = calibration.physical_position_from_model(position)
         baseline_z_mm[name] = float(physical[2] * 1000.0)
-        positions[name] = calibration.model_position_from_physical(
-            float(physical[0]),
-            float(physical[1]),
-            target_z,
-        )
+        if name == "CENTER_UP":
+            positions[name] = calibration.model_position_from_physical(
+                float(calibration.physical_width_m) / 2.0,
+                float(calibration.physical_height_m) / 2.0,
+                target_z,
+            )
+        else:
+            positions[name] = calibration.model_position_from_physical(
+                float(physical[0]),
+                float(physical[1]),
+                target_z,
+            )
     return positions, preferred_seeds, baseline_z_mm
 
 
