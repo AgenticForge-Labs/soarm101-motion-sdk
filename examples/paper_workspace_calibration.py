@@ -1258,6 +1258,10 @@ def main() -> int:
                 corners=corner_samples,
                 up_sample=d_up,
             )
+            demo_positions, preferred_seeds = ordered_paper_replay_targets(
+                demo_positions,
+                preferred_seeds,
+            )
             report["demo_target_strategy"] = (
                 "workspace_z_leveling_from_reachable_endpoint_xy"
             )
@@ -1304,7 +1308,7 @@ def main() -> int:
                 "The software has corrected every paper endpoint to the same calibrated "
                 f"workspace Z={args.reference_height_mm:.1f} mm:"
             )
-            print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
+            print("  A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
                 "The motion between endpoints is still Cartesian move_linear(); no extra "
                 "elevated teaching is required."
