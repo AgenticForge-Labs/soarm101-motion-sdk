@@ -1,10 +1,14 @@
 """Manual paper/workspace calibration for a physical SO-ARM101.
 
-This workflow intentionally performs no autonomous Cartesian arm motion.
-
 The operator teaches all four paper corners on the table, then manually teaches one
 known physical height above corner D. Those five physical correspondences are used to
 fit a local affine map from paper/workspace coordinates into the SDK kinematic model.
+
+After an accepted measurement, all elevated paper targets are preflighted with torque
+off. With one explicit operator confirmation, the script then uses the measured
+physical->model mapping to traverse D-up -> A-up -> B-up -> C-up -> D-up and finish at
+the elevated paper center. Cartesian targets use position-only IK so wrist/tool
+orientation may change naturally.
 
 The resulting calibration records:
 - where the taught table plane lies in model coordinates;
@@ -12,8 +16,9 @@ The resulting calibration records:
 - most importantly, how a manually demonstrated physical-UP direction maps into the
   model on this exact arm/setup.
 
-A measured calibration is evidence only and remains unvalidated for autonomous Cartesian
-motion until a separate supervised motion-validation stage passes.
+The powered traversal is a supervised workspace demonstration and its result is recorded
+as evidence. A saved workspace remains unvalidated for broader autonomous Cartesian use
+until that demonstration succeeds and the resulting evidence is reviewed.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from soarm101_motion import SOARM101, SOARM101Config
+from soarm101_motion import Pose, SOARM101, SOARM101Config
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
 
@@ -163,6 +168,100 @@ def evaluate_measurement_acceptance(
     return measurement_ok, checks
 
 
+def elevated_demo_positions(
+    calibration: WorkspaceCalibration,
+    *,
+    width_m: float,
+    height_m: float,
+    elevation_m: float,
+) -> dict[str, np.ndarray]:
+    """Return elevated perimeter + center targets in model coordinates."""
+
+    physical = {
+        "D_UP": (0.0, height_m, elevation_m),
+        "A_UP": (0.0, 0.0, elevation_m),
+        "B_UP": (width_m, 0.0, elevation_m),
+        "C_UP": (width_m, height_m, elevation_m),
+        "D_UP_RETURN": (0.0, height_m, elevation_m),
+        "CENTER_UP": (width_m / 2.0, height_m / 2.0, elevation_m),
+    }
+    return {
+        name: calibration.model_position_from_physical(*point)
+        for name, point in physical.items()
+    }
+
+
+def preflight_demo_targets(
+    arm: SOARM101,
+    positions: dict[str, np.ndarray],
+    *,
+    seed: dict[str, float],
+    rotation: np.ndarray,
+) -> list[dict[str, object]]:
+    """Solve all demo waypoints read-only, chaining each IK solution as the next seed."""
+
+    results: list[dict[str, object]] = []
+    current_seed = dict(seed)
+    for name, position in positions.items():
+        target = Pose(position, rotation)
+        solution = arm.solve_ik(
+            target,
+            seed=current_seed,
+            orientation_mode="position_only",
+        )
+        if not solution.success:
+            raise RuntimeError(f"{name} preflight IK failed: {solution.message}")
+        results.append(
+            {
+                "name": name,
+                "target_model_xyz_mm": [
+                    float(value * 1000.0) for value in position
+                ],
+                "position_error_mm": float(solution.position_error_m * 1000.0),
+                "joints_rad": dict(solution.joints),
+            }
+        )
+        current_seed = dict(solution.joints)
+    return results
+
+
+def run_demo_targets(
+    arm: SOARM101,
+    positions: dict[str, np.ndarray],
+    *,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    report_moves: list[dict[str, object]],
+) -> None:
+    for name, position in positions.items():
+        print(f"\nMoving to {name}...")
+        result = arm.move_linear(
+            Pose(position, rotation),
+            orientation_mode="position_only",
+            speed=speed_mm_s / 1000.0,
+            acceleration=acceleration_mm_s2 / 1000.0,
+        )
+        if not result.accepted or not result.completed:
+            raise RuntimeError(f"{name} motion did not complete: {result}")
+        actual = arm.get_position()
+        actual_xyz_mm = [float(value * 1000.0) for value in actual.position]
+        print(
+            "  model TCP after move = "
+            f"({actual_xyz_mm[0]:.1f}, {actual_xyz_mm[1]:.1f}, "
+            f"{actual_xyz_mm[2]:.1f}) mm"
+        )
+        report_moves.append(
+            {
+                "name": name,
+                "target_model_xyz_mm": [
+                    float(value * 1000.0) for value in position
+                ],
+                "actual_model_xyz_mm": actual_xyz_mm,
+            }
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -227,6 +326,23 @@ def build_parser() -> argparse.ArgumentParser:
             "~/.config/soarm101/workspace/<robot-id>.json"
         ),
     )
+    parser.add_argument(
+        "--speed-mm-s",
+        type=float,
+        default=5.0,
+        help="supervised elevated-paper demonstration speed",
+    )
+    parser.add_argument(
+        "--acceleration-mm-s2",
+        type=float,
+        default=20.0,
+        help="supervised elevated-paper demonstration acceleration",
+    )
+    parser.add_argument(
+        "--measure-only",
+        action="store_true",
+        help="save the workspace measurement but skip the powered paper demonstration",
+    )
     return parser
 
 
@@ -243,12 +359,19 @@ def main() -> int:
         raise SystemExit("--max-linear-condition-number must be greater than 1")
     if not 0.0 < args.min_up_scale < args.max_up_scale:
         raise SystemExit("--min-up-scale must be positive and below --max-up-scale")
+    if args.speed_mm_s <= 0.0:
+        raise SystemExit("--speed-mm-s must be positive")
+    if args.acceleration_mm_s2 <= 0.0:
+        raise SystemExit("--acceleration-mm-s2 must be positive")
 
     config = _resolve_config(args)
 
     print("Paper workspace calibration — MANUAL / TORQUE-OFF GEOMETRY")
     print(f"Reference sheet: {args.width_mm:.1f} x {args.height_mm:.1f} mm")
-    print("No autonomous Cartesian arm motion is performed by this workflow.")
+    print(
+        "After an accepted measurement, the default workflow performs one supervised "
+        "elevated-paper demonstration unless --measure-only is supplied."
+    )
     print()
     print("Teach the table corners clockwise:")
     print()
@@ -282,7 +405,11 @@ def main() -> int:
         "paper": {"width_mm": args.width_mm, "height_mm": args.height_mm},
         "reference_height_mm": args.reference_height_mm,
         "autonomous_motion_attempted": False,
+        "demo_requested": not args.measure_only,
+        "demo_speed_mm_s": args.speed_mm_s,
+        "demo_acceleration_mm_s2": args.acceleration_mm_s2,
         "probe": "fixed lower gripper finger; stock modeled gripper TCP used for FK",
+        "demo_moves": [],
     }
 
     with SOARM101(config) as arm:
@@ -459,11 +586,96 @@ def main() -> int:
                 f"\nMeasured workspace calibration saved to {store.path}\n"
                 f"workspace_id={saved.workspace_id}"
             )
-            print(
-                "Status remains UNVALIDATED for autonomous Cartesian motion. "
-                "This workflow has only measured the workspace mapping."
+
+            if args.measure_only:
+                print(
+                    "Measurement saved. Powered workspace demonstration skipped by "
+                    "--measure-only."
+                )
+                print(
+                    "Status remains UNVALIDATED for broader autonomous Cartesian motion."
+                )
+                return 0
+
+            width_m = args.width_mm / 1000.0
+            height_m = args.height_mm / 1000.0
+            elevation_m = args.reference_height_mm / 1000.0
+            demo_positions = elevated_demo_positions(
+                calibration,
+                width_m=width_m,
+                height_m=height_m,
+                elevation_m=elevation_m,
             )
-            print("No powered Cartesian motion was attempted.")
+            report["demo_targets_model_xyz_mm"] = {
+                name: [float(value * 1000.0) for value in position]
+                for name, position in demo_positions.items()
+            }
+
+            print(
+                f"\nPreflighting elevated paper demonstration at "
+                f"{args.reference_height_mm:.1f} mm physical height with torque OFF..."
+            )
+            preflight = preflight_demo_targets(
+                arm,
+                demo_positions,
+                seed=up.joints_rad,
+                rotation=up.rotation,
+            )
+            report["demo_preflight"] = preflight
+            for item in preflight:
+                xyz = item["target_model_xyz_mm"]
+                assert isinstance(xyz, list)
+                print(
+                    f"  {item['name']}: model target "
+                    f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
+                    f"IK error {item['position_error_mm']:.2f} mm"
+                )
+            args.output.write_text(
+                json.dumps(report, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            print(
+                "\nThe arm is currently relaxed at the manually taught UP point above D."
+            )
+            print(
+                "The powered path will use the calibrated physical workspace, NOT model +Z:"
+            )
+            print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
+            print(
+                f"All points are at physical z={args.reference_height_mm:.1f} mm "
+                "above the taught paper plane."
+            )
+            input(
+                "\nPress Enter to enable torque and run the full supervised path, "
+                "or Ctrl+C to leave the arm relaxed... "
+            )
+
+            report["autonomous_motion_attempted"] = True
+            args.output.write_text(
+                json.dumps(report, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            arm.enable()
+            moves = report["demo_moves"]
+            assert isinstance(moves, list)
+            run_demo_targets(
+                arm,
+                demo_positions,
+                rotation=up.rotation,
+                speed_mm_s=args.speed_mm_s,
+                acceleration_mm_s2=args.acceleration_mm_s2,
+                report_moves=moves,
+            )
+            report["demo_completed"] = True
+            args.output.write_text(
+                json.dumps(report, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print(
+                "\nElevated paper demonstration completed at CENTER_UP. "
+                "The arm will now relax."
+            )
             return 0
         finally:
             try:
