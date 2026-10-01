@@ -30,7 +30,7 @@ from scipy.spatial.transform import Rotation
 
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.workstation import WorkstationProfileStore
-from soarm101_motion.workspace import WorkspaceCalibrationStore, fit_paper_workspace
+from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
 
 LETTER_WIDTH_MM = 215.9
 LETTER_HEIGHT_MM = 279.4
@@ -124,6 +124,56 @@ def _capture(arm: SOARM101, name: str, instruction: str) -> Sample:
         f"RPY = ({rpy_deg[0]:.1f}, {rpy_deg[1]:.1f}, {rpy_deg[2]:.1f}) deg"
     )
     return sample
+
+
+def evaluate_measurement_acceptance(
+    calibration: WorkspaceCalibration,
+    *,
+    up_orientation_drift_deg: float,
+    max_table_fit_rms_mm: float,
+    max_affine_fit_rms_mm: float,
+    max_linear_condition_number: float,
+    up_orientation_drift_warning_deg: float,
+    min_up_scale: float,
+    max_up_scale: float,
+) -> tuple[bool, dict[str, object], list[str]]:
+    table_ok = calibration.table_plane_rms_m * 1000.0 <= max_table_fit_rms_mm
+    affine_ok = calibration.affine_fit_rms_m * 1000.0 <= max_affine_fit_rms_mm
+    condition_ok = calibration.linear_condition_number <= max_linear_condition_number
+    orientation_ok = up_orientation_drift_deg <= up_orientation_drift_warning_deg
+    up_scale_ok = min_up_scale <= calibration.model_up_scale <= max_up_scale
+    measurement_ok = table_ok and affine_ok and condition_ok and up_scale_ok
+
+    quality_warnings: list[str] = []
+    if not orientation_ok:
+        quality_warnings.append(
+            "D->UP tool orientation changed by "
+            f"{up_orientation_drift_deg:.2f} deg, above the "
+            f"{up_orientation_drift_warning_deg:.2f} deg warning threshold; "
+            "fixed-finger/TCP offset may add a few millimeters of correspondence error"
+        )
+
+    checks: dict[str, object] = {
+        "table_fit_ok": table_ok,
+        "affine_fit_ok": affine_ok,
+        "linear_mapping_well_conditioned": condition_ok,
+        "up_probe_orientation_within_warning_threshold": orientation_ok,
+        "up_scale_plausible": up_scale_ok,
+        "measurement_accepted": measurement_ok,
+        "quality_warnings": quality_warnings,
+        "diagnostic_up_vs_table_normal_angle_deg": (
+            calibration.up_vs_table_normal_angle_deg
+        ),
+        "limits": {
+            "max_table_fit_rms_mm": max_table_fit_rms_mm,
+            "max_affine_fit_rms_mm": max_affine_fit_rms_mm,
+            "max_linear_condition_number": max_linear_condition_number,
+            "up_orientation_drift_warning_deg": up_orientation_drift_warning_deg,
+            "min_up_scale": min_up_scale,
+            "max_up_scale": max_up_scale,
+        },
+    }
+    return measurement_ok, checks, quality_warnings
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -380,68 +430,39 @@ def main() -> int:
                 f"UP={calibration.model_up_scale:.3f}"
             )
 
-            table_ok = (
-                calibration.table_plane_rms_m * 1000.0 <= args.max_table_fit_rms_mm
-            )
-            affine_ok = (
-                calibration.affine_fit_rms_m * 1000.0 <= args.max_affine_fit_rms_mm
-            )
-            condition_ok = (
-                calibration.linear_condition_number <= args.max_linear_condition_number
-            )
-            orientation_ok = up_orientation_drift <= args.max_up_orientation_drift_deg
-            up_scale_ok = args.min_up_scale <= calibration.model_up_scale <= args.max_up_scale
-            measurement_ok = table_ok and affine_ok and condition_ok and up_scale_ok
-
-            quality_warnings: list[str] = []
-            if not orientation_ok:
-                quality_warnings.append(
-                    "D->UP tool orientation changed by "
-                    f"{up_orientation_drift:.2f} deg, above the "
-                    f"{args.max_up_orientation_drift_deg:.2f} deg warning threshold; "
-                    "fixed-finger/TCP offset may add a few millimeters of correspondence error"
+            measurement_ok, acceptance_checks, quality_warnings = (
+                evaluate_measurement_acceptance(
+                    calibration,
+                    up_orientation_drift_deg=up_orientation_drift,
+                    max_table_fit_rms_mm=args.max_table_fit_rms_mm,
+                    max_affine_fit_rms_mm=args.max_affine_fit_rms_mm,
+                    max_linear_condition_number=args.max_linear_condition_number,
+                    up_orientation_drift_warning_deg=args.max_up_orientation_drift_deg,
+                    min_up_scale=args.min_up_scale,
+                    max_up_scale=args.max_up_scale,
                 )
-
-            report["acceptance_checks"] = {
-                "table_fit_ok": table_ok,
-                "affine_fit_ok": affine_ok,
-                "linear_mapping_well_conditioned": condition_ok,
-                "up_probe_orientation_within_warning_threshold": orientation_ok,
-                "up_scale_plausible": up_scale_ok,
-                "measurement_accepted": measurement_ok,
-                "quality_warnings": quality_warnings,
-                "diagnostic_up_vs_table_normal_angle_deg": (
-                    calibration.up_vs_table_normal_angle_deg
-                ),
-                "limits": {
-                    "max_table_fit_rms_mm": args.max_table_fit_rms_mm,
-                    "max_affine_fit_rms_mm": args.max_affine_fit_rms_mm,
-                    "max_linear_condition_number": args.max_linear_condition_number,
-                    "up_orientation_drift_warning_deg": args.max_up_orientation_drift_deg,
-                    "min_up_scale": args.min_up_scale,
-                    "max_up_scale": args.max_up_scale,
-                },
-            }
+            )
+            report["acceptance_checks"] = acceptance_checks
 
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             print(f"\nDiagnostic report written to {args.output}")
 
             if not measurement_ok:
                 print("\nWORKSPACE MEASUREMENT NOT ACCEPTED.")
-                if not table_ok:
+                if not bool(acceptance_checks["table_fit_ok"]):
                     print(
                         f"  table fit RMS exceeds {args.max_table_fit_rms_mm:.1f} mm"
                     )
-                if not affine_ok:
+                if not bool(acceptance_checks["affine_fit_ok"]):
                     print(
                         f"  affine fit RMS exceeds {args.max_affine_fit_rms_mm:.1f} mm"
                     )
-                if not condition_ok:
+                if not bool(acceptance_checks["linear_mapping_well_conditioned"]):
                     print(
                         "  the local physical-to-model mapping is too ill-conditioned "
                         "for reliable inversion"
                     )
-                if not up_scale_ok:
+                if not bool(acceptance_checks["up_scale_plausible"]):
                     print(
                         "  the model displacement for the measured UP height is implausibly "
                         "small or large"
