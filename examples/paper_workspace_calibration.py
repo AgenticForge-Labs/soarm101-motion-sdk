@@ -586,64 +586,6 @@ def preflight_demo_targets(
     return results
 
 
-def preflight_joint_space_workspace_path(
-    arm: SOARM101,
-    calibration: WorkspaceCalibration,
-    *,
-    start_joints: dict[str, float],
-    target_joints: dict[str, float],
-    minimum_z_margin_m: float = 0.005,
-) -> dict[str, object]:
-    """Validate the geometric locus of a smooth joint interpolation before motion."""
-
-    max_delta = max(
-        abs(float(target_joints[name]) - float(start_joints[name]))
-        for name in target_joints
-    )
-    sample_count = max(21, int(np.ceil(max_delta / np.deg2rad(1.0))) + 1)
-    start_pose = arm.model.forward(start_joints, tcp=arm.active_tcp)
-    target_pose = arm.model.forward(target_joints, tcp=arm.active_tcp)
-    start_physical = calibration.physical_position_from_model(start_pose.position)
-    target_physical = calibration.physical_position_from_model(target_pose.position)
-    minimum_allowed_z = (
-        min(float(start_physical[2]), float(target_physical[2]))
-        - float(minimum_z_margin_m)
-    )
-
-    minimum_z = float("inf")
-    maximum_chord_deviation = 0.0
-    chord_xy = target_physical[:2] - start_physical[:2]
-    for alpha in np.linspace(0.0, 1.0, sample_count):
-        progress = 10.0 * alpha**3 - 15.0 * alpha**4 + 6.0 * alpha**5
-        joints = {
-            name: float(start_joints[name])
-            + (float(target_joints[name]) - float(start_joints[name])) * progress
-            for name in target_joints
-        }
-        pose = arm.model.forward(joints, tcp=arm.active_tcp)
-        physical = calibration.physical_position_from_model(pose.position)
-        minimum_z = min(minimum_z, float(physical[2]))
-        chord_point = start_physical[:2] + chord_xy * progress
-        maximum_chord_deviation = max(
-            maximum_chord_deviation,
-            float(np.linalg.norm(physical[:2] - chord_point)),
-        )
-
-    if minimum_z < minimum_allowed_z:
-        raise RuntimeError(
-            "joint-space paper path would dip too low in calibrated workspace: "
-            f"minimum Z={minimum_z * 1000.0:.1f} mm, "
-            f"allowed>={minimum_allowed_z * 1000.0:.1f} mm"
-        )
-    return {
-        "start_workspace_z_mm": float(start_physical[2] * 1000.0),
-        "target_workspace_z_mm": float(target_physical[2] * 1000.0),
-        "minimum_workspace_z_mm": float(minimum_z * 1000.0),
-        "maximum_xy_chord_deviation_mm": float(maximum_chord_deviation * 1000.0),
-        "sample_count": sample_count,
-    }
-
-
 def run_demo_targets(
     arm: SOARM101,
     calibration: WorkspaceCalibration,
