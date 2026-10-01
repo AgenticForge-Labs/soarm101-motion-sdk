@@ -96,10 +96,12 @@ joint delta is applied to the taught A/B/C/D joint poses and FK supplies the Car
 endpoint. The segment itself is still executed with `move_linear()` and position-only
 IK, so this remains a Cartesian-linear-motion test rather than a joint-replay test.
 
-`--replay` reuses the saved teaching without touching A/B/C/D/UP again. Replay can begin
-from an ordinary resting pose; only the first current→D_UP segment relaxes the coarse
-workspace path check to destination-only validation. Subsequent segments use normal full
-workspace checking. Use `--measure-only` to retain the non-moving behavior.
+`--replay` reuses the saved teaching without touching A/B/C/D/UP again and can begin
+from an ordinary resting pose. For this supervised paper-linear test, every segment uses
+destination-only coarse workspace validation. The dynamic/joint/hardware safety stack
+remains active; only the coarse intermediate workspace geometry is relaxed because that
+model has already produced false positives around the measured table. Use `--measure-only`
+to retain the non-moving behavior.
 
 See [Workspace calibration](workspace-calibration.md) for the persisted contract,
 quality gates, and provenance.
