@@ -260,3 +260,109 @@ def test_paper_config_uses_relaxed_supervised_settle_criterion() -> None:
     assert config.motion_completion_timeout_s == pytest.approx(8.0)
     assert config.cartesian_waypoint_spacing_m == pytest.approx(0.001)
 
+
+
+def test_startup_lift_preflight_uses_calibrated_workspace_when_model_z_is_negative() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    joint_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    )
+    start_joints = {name: 0.0 for name in joint_names}
+    start_joints["wrist_flex"] = -0.020
+
+    class Calibration:
+        @staticmethod
+        def physical_position_from_model(position):
+            position = np.asarray(position, dtype=float)
+            return np.array([position[0], position[1], position[2] + 0.020])
+
+        @staticmethod
+        def model_position_from_physical(x, y, z):
+            return np.array([x, y, z - 0.020])
+
+    class Model:
+        @staticmethod
+        def forward(joints, tcp=None):
+            del tcp
+            return module.Pose(
+                np.array([0.0, 0.0, float(joints["wrist_flex"])]),
+                np.eye(3),
+            )
+
+    class IK:
+        @staticmethod
+        def solve(target, *, seed, tcp, options):
+            del seed, tcp, options
+            joints = {name: 0.0 for name in joint_names}
+            joints["wrist_flex"] = float(target.position[2])
+            return SimpleNamespace(
+                success=True,
+                joints=joints,
+                position_error_m=0.0,
+                message="ok",
+            )
+
+    class Arm:
+        config = SimpleNamespace(
+            cartesian_position_tolerance_m=0.0005,
+            max_ik_waypoint_jump_radians=0.50,
+        )
+        active_tcp = None
+        model = Model()
+        ik = IK()
+
+        @staticmethod
+        def get_joint_limits():
+            return {name: (-3.0, 3.0) for name in joint_names}
+
+    start_pose = module.Pose(np.array([0.0, 0.0, -0.020]), np.eye(3))
+    result = module.preflight_calibrated_workspace_z_lift(
+        Arm(),
+        Calibration(),
+        start_pose=start_pose,
+        start_joints=start_joints,
+        target_workspace_z_m=0.010,
+    )
+
+    # The final model-frame Z remains below the generic zero floor, but calibrated
+    # workspace Z rises cleanly from 0 to 10 mm and must be accepted.
+    assert result["target_model_xyz_mm"][2] == pytest.approx(-10.0)
+    assert result["start_workspace_z_mm"] == pytest.approx(0.0)
+    assert result["target_workspace_z_mm"] == pytest.approx(10.0)
+    assert result["max_workspace_xy_drift_mm"] == pytest.approx(0.0)
+    assert result["generic_model_workspace_floor_bypassed"] is True
+
+
+def test_preflighted_startup_lift_executes_with_generic_workspace_check_off() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    calls = []
+
+    class Arm:
+        def move_linear(self, target, **kwargs):
+            calls.append((target, kwargs))
+            return SimpleNamespace(accepted=True, completed=True)
+
+    result = module.execute_preflighted_workspace_z_lift(
+        Arm(),
+        target_model_position_m=np.array([0.1, 0.2, -0.01]),
+        rotation=np.eye(3),
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
+    )
+
+    assert result.completed is True
+    assert len(calls) == 1
+    target, kwargs = calls[0]
+    assert target.position == pytest.approx(np.array([0.1, 0.2, -0.01]))
+    assert kwargs["workspace_check"] == "off"
+    assert kwargs["orientation_mode"] == "position_only"
+    assert kwargs["speed"] == pytest.approx(0.010)
+    assert kwargs["acceleration"] == pytest.approx(0.100)
