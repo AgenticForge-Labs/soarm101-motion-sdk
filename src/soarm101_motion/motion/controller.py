@@ -18,6 +18,7 @@ from soarm101_motion.constants import (
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     JOINT_LIMITS,
     STOCK_GRIPPER,
+    STS3215_MAX_POSITION_SPEED_RAW,
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
@@ -651,6 +652,45 @@ class MotionController:
             "could not time-parameterize Cartesian trajectory within configured limits"
         )
 
+    def _synchronized_servo_speed_raw(
+        self,
+        previous: Mapping[str, float],
+        target: Mapping[str, float],
+        *,
+        interval_s: float,
+    ) -> int | dict[str, int]:
+        """Choose per-joint STS3215 speed limits for synchronized sample arrival.
+
+        On calibrated hardware, convert each planned joint increment to encoder ticks
+        and choose a speed that reaches the next sample in about 80% of the command
+        interval. This leaves headroom for the servo acceleration ramp while preventing
+        lightly loaded joints from racing ahead of gravity-loaded joints. Simulation
+        and backends without motor calibration retain the ordinary unrestricted profile.
+        """
+
+        calibration = getattr(self.backend, "calibration", None)
+        if calibration is None:
+            return TELEOP_SERVO_SPEED_RAW
+
+        arrival_time = max(float(interval_s) * 0.80, 1e-4)
+        speeds: dict[str, int] = {}
+        for name in ARM_JOINTS:
+            motor = calibration.motors.get(name)
+            if motor is None:
+                return TELEOP_SERVO_SPEED_RAW
+            previous_raw = int(motor.radians_to_raw(float(previous[name])))
+            target_raw = int(motor.radians_to_raw(float(target[name])))
+            raw_delta = abs(target_raw - previous_raw)
+            if raw_delta == 0:
+                speeds[name] = 1
+                continue
+            required = int(math.ceil(raw_delta / arrival_time))
+            speeds[name] = min(
+                STS3215_MAX_POSITION_SPEED_RAW,
+                max(1, required),
+            )
+        return speeds
+
     def _workspace_kwargs(self) -> dict[str, float]:
         return {
             "minimum_z_m": self.config.minimum_workspace_z_m,
@@ -827,14 +867,16 @@ class MotionController:
         cancel_event: threading.Event,
         *,
         cancellation_message: str,
-        servo_speed_raw: int | None = None,
+        servo_speed_raw: int | Mapping[str, int] | None = None,
         servo_acceleration_raw: int | None = None,
+        synchronize_servo_arrival: bool = False,
     ) -> MotionResult:
         samples = plan.command_samples
         try:
             if len(samples) <= 1:
                 return self._wait_for_settle(samples[-1], cancel_event)
             frequency = self.config.command_frequency_hz
+            interval_s = 1.0 / frequency
             started = time.perf_counter()
             monitor_every = max(
                 1,
@@ -842,6 +884,7 @@ class MotionController:
             )
             previous_command = samples[0]
             previous_actual = self.backend.read_joint_positions()
+            last_command_sent = samples[0]
             for index, command in enumerate(samples[1:], start=1):
                 self._check_cancelled(cancel_event, cancellation_message)
                 lateness = self._sleep_until(started + index / frequency)
@@ -850,14 +893,22 @@ class MotionController:
                         f"motion command deadline missed by {lateness:.3f}s"
                     )
                 self._check_cancelled(cancel_event, cancellation_message)
-                if servo_speed_raw is None and servo_acceleration_raw is None:
+                command_speed_raw = servo_speed_raw
+                if synchronize_servo_arrival:
+                    command_speed_raw = self._synchronized_servo_speed_raw(
+                        last_command_sent,
+                        command,
+                        interval_s=interval_s,
+                    )
+                if command_speed_raw is None and servo_acceleration_raw is None:
                     self.backend.write_joint_positions(command)
                 else:
                     self.backend.write_joint_positions(
                         command,
-                        speed_raw=servo_speed_raw,
+                        speed_raw=command_speed_raw,
                         acceleration_raw=servo_acceleration_raw,
                     )
+                last_command_sent = command
                 if index % monitor_every == 0 or index == len(samples) - 1:
                     previous_actual = self._monitor_motion(
                         command,
@@ -1050,12 +1101,12 @@ class MotionController:
                     plan,
                     event,
                     cancellation_message="linear motion cancelled",
-                    # The host trajectory already enforces Cartesian/joint speed and
-                    # acceleration. Match teleoperation's responsive Feetech profile
-                    # instead of layering the generic slow servo profile on every
-                    # 50 Hz waypoint.
-                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    # The host trajectory owns Cartesian/joint speed and
+                    # acceleration. Give each calibrated servo a proportional position-
+                    # mode speed for the next command interval so lightly loaded joints
+                    # do not race ahead of gravity-loaded joints.
                     servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                    synchronize_servo_arrival=True,
                 )
             )
         return handle.wait() if wait else handle
