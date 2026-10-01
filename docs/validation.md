@@ -106,8 +106,9 @@ from an ordinary resting pose. Before entering the paper path, replay requests o
 calibrated-workspace-Z clearance rise by default. That path is preflighted at <=1 mm
 spacing; X/Y must remain fixed in the calibrated model, physical Z must not descend,
 sequential IK must remain continuous, and all solved joints must remain inside effective
-limits. Measured workspace Z must land within 5 mm of the requested clearance target
-before motion continues to A_UP. Because the generic model-frame floor is known to
+limits. With the default 20 mm command, measured workspace Z must rise by at least 10 mm
+before motion continues to A_UP. This separates the safety purpose of the clearance from
+servo endpoint accuracy. Because the generic model-frame floor is known to
 disagree with the measured table, only that preflighted startup lift executes with the
 coarse workspace check disabled. The paper
 traversal endpoints continue to use destination-only coarse workspace validation. The

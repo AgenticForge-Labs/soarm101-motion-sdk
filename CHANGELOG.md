@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Startup clearance acceptance is now based on measured rise rather than Cartesian
+  endpoint shortfall. Replay still commands 20 mm by default, but requires at least
+  10 mm measured workspace-Z increase before paper travel. Hardware evidence motivating
+  the threshold is explicit: the earlier dragging case rose only about 5.4 mm, while the
+  later visually acceptable startup rose about 14.0 mm. The legacy
+  `--startup-height-tolerance-mm` option remains available as an explicit compatibility
+  override.
+
 - Hardware replay reached A_UP but the straight A_UP->B_UP Cartesian path still failed
   at an intermediate pose with 0.782 mm residual against the unchanged 0.5 mm IK
   tolerance, while both endpoints preflighted at 0.00 mm. Elevated paper traversal now

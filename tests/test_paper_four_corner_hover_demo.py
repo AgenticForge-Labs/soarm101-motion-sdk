@@ -38,6 +38,7 @@ def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
     assert "--measure-only" in result.stdout
     assert "--replay" in result.stdout
     assert "--startup-lift-mm" in result.stdout
+    assert "--startup-min-rise-mm" in result.stdout
     assert "--startup-height-tolerance-mm" in result.stdout
     assert "--speed-mm-s" in result.stdout
     assert "--settle-tolerance-deg" in result.stdout
@@ -601,3 +602,19 @@ def test_endpoint_preflight_prefers_joint_continuity_over_tiny_residual_differen
     assert results[1]["joints_rad"]["shoulder_pan"] == pytest.approx(0.12)
     assert results[1]["chosen_seed_index"] == 1
     assert results[1]["position_error_mm"] == pytest.approx(0.1)
+
+
+def test_startup_clearance_gate_uses_measured_rise_not_target_shortfall() -> None:
+    module = _load_example_module()
+
+    assert module.startup_required_measured_rise_m(
+        commanded_lift_m=0.020,
+        minimum_rise_m=0.010,
+    ) == pytest.approx(0.010)
+
+    # Legacy behavior remains available only when explicitly requested.
+    assert module.startup_required_measured_rise_m(
+        commanded_lift_m=0.020,
+        minimum_rise_m=0.010,
+        legacy_height_tolerance_m=0.005,
+    ) == pytest.approx(0.015)
