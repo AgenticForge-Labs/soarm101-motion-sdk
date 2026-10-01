@@ -133,34 +133,22 @@ def evaluate_measurement_acceptance(
     max_table_fit_rms_mm: float,
     max_affine_fit_rms_mm: float,
     max_linear_condition_number: float,
-    up_orientation_drift_warning_deg: float,
     min_up_scale: float,
     max_up_scale: float,
 ) -> tuple[bool, dict[str, object], list[str]]:
     table_ok = calibration.table_plane_rms_m * 1000.0 <= max_table_fit_rms_mm
     affine_ok = calibration.affine_fit_rms_m * 1000.0 <= max_affine_fit_rms_mm
     condition_ok = calibration.linear_condition_number <= max_linear_condition_number
-    orientation_ok = up_orientation_drift_deg <= up_orientation_drift_warning_deg
     up_scale_ok = min_up_scale <= calibration.model_up_scale <= max_up_scale
     measurement_ok = table_ok and affine_ok and condition_ok and up_scale_ok
-
-    quality_warnings: list[str] = []
-    if not orientation_ok:
-        quality_warnings.append(
-            "D->UP tool orientation changed by "
-            f"{up_orientation_drift_deg:.2f} deg, above the "
-            f"{up_orientation_drift_warning_deg:.2f} deg warning threshold; "
-            "fixed-finger/TCP offset may add a few millimeters of correspondence error"
-        )
 
     checks: dict[str, object] = {
         "table_fit_ok": table_ok,
         "affine_fit_ok": affine_ok,
         "linear_mapping_well_conditioned": condition_ok,
-        "up_probe_orientation_within_warning_threshold": orientation_ok,
         "up_scale_plausible": up_scale_ok,
         "measurement_accepted": measurement_ok,
-        "quality_warnings": quality_warnings,
+        "diagnostic_up_orientation_drift_deg": up_orientation_drift_deg,
         "diagnostic_up_vs_table_normal_angle_deg": (
             calibration.up_vs_table_normal_angle_deg
         ),
@@ -168,12 +156,11 @@ def evaluate_measurement_acceptance(
             "max_table_fit_rms_mm": max_table_fit_rms_mm,
             "max_affine_fit_rms_mm": max_affine_fit_rms_mm,
             "max_linear_condition_number": max_linear_condition_number,
-            "up_orientation_drift_warning_deg": up_orientation_drift_warning_deg,
             "min_up_scale": min_up_scale,
             "max_up_scale": max_up_scale,
         },
     }
-    return measurement_ok, checks, quality_warnings
+    return measurement_ok, checks
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -215,15 +202,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="maximum condition number for the local 3-D physical-to-model mapping",
     )
     parser.add_argument(
-        "--max-up-orientation-drift-deg",
-        type=float,
-        default=10.0,
-        help=(
-            "warning threshold for D->UP tool-orientation change; exceeding it records a "
-            "quality warning but does not discard an otherwise valid workspace measurement"
-        ),
-    )
-    parser.add_argument(
         "--min-up-scale",
         type=float,
         default=0.25,
@@ -263,8 +241,6 @@ def main() -> int:
         raise SystemExit("--max-affine-fit-rms-mm must be positive")
     if args.max_linear_condition_number <= 1.0:
         raise SystemExit("--max-linear-condition-number must be greater than 1")
-    if args.max_up_orientation_drift_deg <= 0.0:
-        raise SystemExit("--max-up-orientation-drift-deg must be positive")
     if not 0.0 < args.min_up_scale < args.max_up_scale:
         raise SystemExit("--min-up-scale must be positive and below --max-up-scale")
 
@@ -289,8 +265,9 @@ def main() -> int:
         f"{args.reference_height_mm:.1f} mm physically above D."
     )
     print(
-        "Use a ruler, rigid spacer, gauge block, or another physical reference. "
-        "Keep the wrist/tool orientation as close to D as practical."
+        "Use a ruler, rigid spacer, paper edge, gauge block, or another physical reference. "
+        "Allow the wrist/tool orientation to change naturally as needed to place the fixed "
+        "finger at the measured physical point."
     )
     print(
         "That manual UP point is required because model +Z is not assumed to mean physical up."
@@ -430,17 +407,14 @@ def main() -> int:
                 f"UP={calibration.model_up_scale:.3f}"
             )
 
-            measurement_ok, acceptance_checks, quality_warnings = (
-                evaluate_measurement_acceptance(
-                    calibration,
-                    up_orientation_drift_deg=up_orientation_drift,
-                    max_table_fit_rms_mm=args.max_table_fit_rms_mm,
-                    max_affine_fit_rms_mm=args.max_affine_fit_rms_mm,
-                    max_linear_condition_number=args.max_linear_condition_number,
-                    up_orientation_drift_warning_deg=args.max_up_orientation_drift_deg,
-                    min_up_scale=args.min_up_scale,
-                    max_up_scale=args.max_up_scale,
-                )
+            measurement_ok, acceptance_checks = evaluate_measurement_acceptance(
+                calibration,
+                up_orientation_drift_deg=up_orientation_drift,
+                max_table_fit_rms_mm=args.max_table_fit_rms_mm,
+                max_affine_fit_rms_mm=args.max_affine_fit_rms_mm,
+                max_linear_condition_number=args.max_linear_condition_number,
+                min_up_scale=args.min_up_scale,
+                max_up_scale=args.max_up_scale,
             )
             report["acceptance_checks"] = acceptance_checks
 
@@ -472,11 +446,6 @@ def main() -> int:
                     "was attempted."
                 )
                 return 2
-
-            if quality_warnings:
-                print("\nWorkspace measurement accepted with warning:")
-                for warning in quality_warnings:
-                    print(f"  WARNING: {warning}")
 
             store = WorkspaceCalibrationStore(
                 config.robot_id,
