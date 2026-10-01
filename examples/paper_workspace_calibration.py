@@ -5,13 +5,15 @@ known physical height above corner D. Those five physical correspondences are us
 fit a local affine map from paper/workspace coordinates into the SDK kinematic model.
 
 After the final UP teaching sample, the script counts down and enables torque so the arm
-holds that exact pose instead of sagging. Elevated Cartesian endpoints are built from known-reachable inferred joint configurations:
-the taught D->UP joint delta is applied to each taught A/B/C/D corner, then FK defines the
-Cartesian endpoint. Only D_UP was physically measured at the reference height, so the other
-endpoint heights are diagnostic estimates rather than guaranteed equal physical heights. The actual motion between those
-endpoints is still executed with Cartesian move_linear() and position-only IK.
+holds that exact pose instead of sagging. For replay, a known-reachable FK construction is
+used only to identify each endpoint's calibrated workspace X/Y and preferred IK branch.
+The software then replaces each endpoint's workspace Z with the single measured reference
+height and maps that corrected physical coordinate back into model space. Every corrected
+target must pass read-only IK preflight before motion.
 
 A saved teaching can also be replayed later from any ordinary resting pose with --replay.
+Before the first long move, replay preflights and performs a small lift in calibrated
+workspace Z (10 mm by default) when the current pose is below the reference height.
 For this fixed supervised paper sequence, every Cartesian segment uses target-only coarse
 workspace checking because the generic model envelope is not yet calibrated to the
 measured table; the normal joint, dynamic, following-error, fault, effort, and timing
