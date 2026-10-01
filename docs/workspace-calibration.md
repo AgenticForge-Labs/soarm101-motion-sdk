@@ -120,15 +120,22 @@ motion_validation_status = "unvalidated"
 ```
 
 The same workflow may then run the supervised demonstration
-`D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`, all at the measured physical
-reference height. For the powered demonstration, the global affine fit is **not extrapolated upward**.
-Instead, the directly measured model-space D→UP displacement is added to each directly
-measured A/B/C/D corner. CENTER_UP is the mean of those four elevated measured corners.
-This keeps the powered target construction anchored to actual taught observations rather
-than asking the affine approximation to predict unmeasured elevated corners. Position-only
-IK is used; these are not model +Z offsets. The report records
-preflight results and achieved TCP evidence. This demonstration is still narrower than
-general autonomous Cartesian validation.
+`D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`. After the final UP teaching
+sample, a short countdown is followed by torque enable so the current pose is held before
+the operator starts motion.
+
+For the powered demonstration, the global affine fit is calibration evidence rather than
+the endpoint generator. The taught D→UP **joint** change is applied to each taught paper
+corner joint pose, and FK of those known-reachable configurations defines the Cartesian
+endpoints. The motion between endpoints is still commanded with `move_linear()` and
+position-only IK. This separates endpoint reachability from the thing being tested:
+whether the physical arm follows the requested Cartesian straight-line segments.
+
+The saved teaching can be reused with `--replay`. Replay may start from an ordinary
+resting pose. The initial current-pose→D_UP linear move uses target-only coarse workspace
+validation so a slightly odd model interpretation of the resting pose does not block
+recovery; the destination must still be valid, and joint limits, IK continuity, faults,
+following-error, effort, timing, and subsequent full workspace-path checks remain active.
 
 ## Relationship to the coarse floor guard
 
