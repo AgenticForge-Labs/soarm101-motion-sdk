@@ -26,6 +26,8 @@ Rules:
 - Kinematic GUI previews consume the same `SO101KinematicModel` used by planning; ghost
   overlays are visualization only and never authorize or execute motion.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
+- Motor calibration and workspace calibration are separate authorities. Motor calibration maps encoder state to joint coordinates; machine-local workspace calibration records measured physical-workspace correspondences tied to one motor-calibration ID.
+- A workspace calibration is measurement evidence until a separate physical motion-validation stage marks the relevant Cartesian mapping safe. It must not silently redefine joint calibration or authorize motion merely because a paper/table fit is numerically good.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
 
@@ -33,8 +35,13 @@ Rules:
 
 Machine-local addressing is stored once in the workstation profile: follower/leader ports,
 robot IDs/calibration-file references, and named camera profiles. Calibration contents remain
-authoritative in the calibration files; the workstation profile is only the local addressing
-map consumed by GUI, CLI, and agents.
+authoritative in calibration files; the workstation profile is only the local addressing map
+consumed by GUI, CLI, and agents.
+
+Machine-local workspace geometry is persisted separately under
+`~/.config/soarm101/workspace/`. That artifact is tied to the active motor-calibration ID
+and owns measured table/paper frame evidence; it is not duplicated into the workstation
+profile or motor-calibration file.
 
 The GUI may own multiple live camera sessions concurrently, but exactly one worker owns each
 named physical device. Camera and Teleoperation views subscribe to those sessions rather than
