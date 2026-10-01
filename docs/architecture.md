@@ -64,7 +64,10 @@ symmetric half-cosine acceleration/deceleration with an optional constant-speed 
 then solves sequential IK directly at the actual command-rate samples. For position-only
 paths, deterministic code may smooth the joint solution sequence only as a source of new
 IK seeds, then re-solve each Cartesian sample at the unchanged hard tolerance and accept
-the refined sequence only if joint jerk is lower. The Cartesian path remains authoritative
+the refined sequence only if joint jerk is lower. If forward continuation hits a numerical
+IK pocket, an already validated endpoint solution may be used as a boundary-condition seed
+to solve the same Cartesian samples backward; the fallback is accepted only when it
+reconnects continuously to the measured start. The Cartesian path remains authoritative
 throughout. Requested linear speed and acceleration remain ceilings of the profile;
 position-only paths do not spend time rotating an unconstrained tool orientation. It must not introduce a second
 piecewise-linear joint-space interpolation layer between sparse IK knots.
@@ -73,7 +76,9 @@ On calibrated Feetech hardware, planned Cartesian motion uses the same servo-sid
 tracking contract as live teleoperation: `speed_raw=0` gives the position loop full
 tracking authority and `acceleration_raw=254` uses the validated responsive acceleration
 profile. The host trajectory remains the single source of speed/acceleration shaping.
-This avoids layering a second, quantized servo-speed trajectory on top of 20/50 Hz host
-setpoints. The resulting joint samples remain subject to deterministic joint, step,
+This is an execution requirement, not just a planning/documentation convention: Cartesian
+`move_linear()` must not enable the per-sample synchronized servo-speed caps used by
+optional joint-space moves. This avoids layering a second, quantized servo-speed trajectory
+on top of 20/50 Hz host setpoints. The resulting joint samples remain subject to deterministic joint, step,
 velocity, acceleration, workspace, following-error, effort, fault, and timing validation
 before and during execution.
