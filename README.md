@@ -130,9 +130,9 @@ C upper-right -> D upper-left), then asks the operator to manually place the sam
 finger at a measured physical height above D. Those five correspondences fit and persist
 a local paper/workspace mapping under `~/.config/soarm101/workspace/`. The manually
 measured UP point is required because SDK/model +Z is **not assumed to be physical up**.
-Natural wrist/tool rotation while manually reaching the UP point is recorded as a
-measurement-quality warning rather than causing an otherwise valid workspace calibration
-to be discarded. The historical `paper_four_corner_hover_demo.py` filename remains only
+Wrist/tool rotation while manually reaching the UP point is expected to change
+naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
+not gate workspace-measurement acceptance. The historical `paper_four_corner_hover_demo.py` filename remains only
 as a compatibility wrapper and no longer performs a hover.
 
 Hardware testing found a case where a numerically valid +Z hover moved laterally and
