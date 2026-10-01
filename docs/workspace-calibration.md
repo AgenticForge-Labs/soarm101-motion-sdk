@@ -133,7 +133,11 @@ endpoints only as anchors: each endpoint is inverse-mapped into calibrated works
 coordinates, its workspace X/Y is retained, workspace Z is replaced by the measured
 reference height, and the corrected point is mapped back into model space. Every corrected
 target must pass read-only IK preflight before motion. No additional elevated teaching is
-required.
+required. Hardware showed that a straight Cartesian segment between valid A_UP and B_UP
+endpoints still contains an intermediate pose outside the unchanged IK tolerance. Powered
+paper traversal therefore reuses the endpoint joint solutions with smooth joint-space
+interpolation. Each joint-space locus is FK-sampled in calibrated coordinates before
+execution and must not dip more than 5 mm below the lower endpoint.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
 resting pose. Before entering the paper path, software requests one 20 mm calibrated-
