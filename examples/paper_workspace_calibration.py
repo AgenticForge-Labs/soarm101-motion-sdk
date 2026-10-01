@@ -12,8 +12,9 @@ height and maps that corrected physical coordinate back into model space. Every 
 target must pass read-only IK preflight before motion.
 
 A saved teaching can also be replayed later from any ordinary resting pose with --replay.
-Before the first long move, replay preflights and performs a small lift in calibrated
-workspace Z (10 mm by default) when the current pose is below the reference height.
+Before any lateral move, replay preflights and performs a straight lift in calibrated
+workspace Z to at least the paper reference/transport height. Measured workspace Z must
+reach that transport target before lateral travel is allowed.
 For this fixed supervised paper sequence, every Cartesian segment uses target-only coarse
 workspace checking because the generic model envelope is not yet calibrated to the
 measured table; the normal joint, dynamic, following-error, fault, effort, and timing
