@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Paper height validation now requires direct physical teaching of A_UP, B_UP, C_UP,
+  D_UP, and CENTER_UP at the requested reference height. The observed one-UP replay
+  produced ~30 mm estimated physical height at A/B despite a 107 mm D_UP teaching, so
+  replay no longer infers elevated endpoints from affine geometry, Cartesian translation,
+  or copied joint deltas. Legacy reports can be completed with `--upgrade-elevated`
+  without reteaching the paper corners; old incomplete reports fail closed on `--replay`.
+
 - Cartesian `move_linear()` no longer solves sparse IK waypoints and then linearly
   interpolates between those joint-space knots. Hardware testing showed that reducing the
   knot spacing to 1 mm did not remove visible shaking. Linear planning now applies the
