@@ -146,9 +146,10 @@ communication, and timing guards remain active.
 
 ## Relationship to the coarse floor guard
 
-The existing coarse workspace guard still uses the SDK's current generic model envelope.
-The new workspace artifact is the source of truth for future table-aware validation, but
-it is **not yet used to authorize Cartesian motion automatically**.
+The existing coarse workspace guard still uses the SDK's generic model envelope. The
+workspace artifact is now execution authority only for the fixed supervised paper
+workflow's software-level height correction and preflighted startup clearance move; it is
+not yet general authorization for arbitrary Cartesian motion.
 
 The next validation stage should use the measured mapping to design very small,
 supervised physical-direction tests. Only after those pass should the runtime floor guard
