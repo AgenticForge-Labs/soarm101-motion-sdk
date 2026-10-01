@@ -525,7 +525,7 @@ class FeetechBackend(SO101HardwareBackend):
         actuator: str,
         position: float,
         *,
-        speed_raw: int | Mapping[str, int] | None = None,
+        speed_raw: int | None = None,
         acceleration_raw: int | None = None,
     ) -> None:
         with self._io_lock:
