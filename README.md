@@ -118,24 +118,25 @@ soarm101 smoke-test --port /dev/ttyACM0 --robot-id so101 --joint shoulder_pan
 
 Read [Safety](docs/safety.md) before moving hardware. Do not open the same serial port in the GUI and CLI at the same time.
 
-After the basic joint-direction and gripper checks pass, a guided US Letter paper test can
-validate the Cartesian model without relying on the GUI. `examples/paper_corner_cartesian_test.py`
-captures three manually pointed paper corners with torque off, derives the paper frame,
-predicts the fourth corner, preflights the resulting exact-orientation targets, and then
-performs the supervised fourth-corner and vertical-height checks. The required
-three-corner layout is A->B across the short edge and A->C up the same side as A; going
-A->B and then up the right side reaches the far corner instead. See
-[Physical kinematics validation](docs/validation.md) before running it.
+After the basic joint-direction and gripper checks pass, the paper workflows are
+**measurement/calibration only**. `examples/paper_corner_cartesian_test.py` captures
+three manually pointed US Letter corners with torque off, reports FK geometry, and
+predicts the fourth corner in model coordinates, but it does not command Cartesian
+motion.
 
-For a deliberately simpler supervised motion diagnostic,
-`examples/paper_four_corner_hover_demo.py` teaches all four corners clockwise
-(A lower-left -> B lower-right -> C upper-right -> D upper-left), preflights 50 mm
-base-+Z hover targets, performs one separately confirmed lift above D, then traverses
-the taught perimeter. If the manually taught D pose starts below the generic model
-Z=0 floor, that first lift alone may use the guarded monotonic floor-recovery path and
-must finish back inside the normal workspace before any perimeter move. It does not
-predict or rescale corners and is not a substitute for passing the Cartesian validation
-gate.
+`examples/paper_workspace_calibration.py` now performs the machine-local workspace
+calibration. It teaches all four corners clockwise (A lower-left -> B lower-right ->
+C upper-right -> D upper-left), then asks the operator to manually place the same fixed
+finger at a measured physical height above D. Those five correspondences fit and persist
+a local paper/workspace mapping under `~/.config/soarm101/workspace/`. The manually
+measured UP point is required because SDK/model +Z is **not assumed to be physical up**.
+The historical `paper_four_corner_hover_demo.py` filename remains only as a compatibility
+wrapper and no longer performs a hover.
+
+Hardware testing found a case where a numerically valid +Z hover moved laterally and
+contacted the table, so paper-derived normals no longer authorize powered Cartesian
+motion by themselves. See [Physical kinematics validation](docs/validation.md) and
+[Workspace calibration](docs/workspace-calibration.md).
 
 Successful GUI arm connections and saved camera profiles are remembered in the shared
 [machine-local workstation profile](docs/workstation.md), so the GUI, CLI, and external agents

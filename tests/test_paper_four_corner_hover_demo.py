@@ -11,8 +11,8 @@ import pytest
 
 def _load_example_module():
     root = Path(__file__).resolve().parents[1]
-    path = root / "examples" / "paper_four_corner_hover_demo.py"
-    spec = importlib.util.spec_from_file_location("paper_four_corner_hover_demo", path)
+    path = root / "examples" / "paper_workspace_calibration.py"
+    spec = importlib.util.spec_from_file_location("paper_workspace_calibration", path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -21,7 +21,24 @@ def _load_example_module():
     return module
 
 
-def test_paper_four_corner_hover_help_runs_without_hardware() -> None:
+def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "examples/paper_workspace_calibration.py", "--help"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--reference-height-mm" in result.stdout
+    assert "--hover-height-mm" in result.stdout
+    assert "--workspace-output" in result.stdout
+    assert "no autonomous cartesian arm motion" in result.stdout.lower()
+
+
+def test_old_paper_hover_filename_is_safe_compatibility_entry_point() -> None:
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run(
         [sys.executable, "examples/paper_four_corner_hover_demo.py", "--help"],
@@ -32,8 +49,8 @@ def test_paper_four_corner_hover_help_runs_without_hardware() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "--hover-height-mm" in result.stdout
-    assert "--speed-mm-s" in result.stdout
+    assert "--reference-height-mm" in result.stdout
+    assert "no autonomous cartesian arm motion" in result.stdout.lower()
 
 
 def test_clockwise_letter_perimeter_distances() -> None:

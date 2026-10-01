@@ -181,7 +181,9 @@ Later stages then proceed in this order:
 
 ```text
 measured FK/TCP
-→ default 2 mm Cartesian jogs
+→ manual paper/workspace calibration
+→ resolve/validate physical Cartesian direction mapping
+→ very-small supervised Cartesian jogs
 → leader calibration/readout
 → taught point replay
 → trajectory replay
@@ -191,6 +193,9 @@ measured FK/TCP
 → validate the 20 Hz software default with timing evidence
 → experimental 50 Hz only after timing evidence
 ```
+
+Do not skip the workspace-direction gate. A hardware paper test showed that model +Z
+could look numerically valid while the physical finger moved laterally into the table.
 
 Calibration changes after any of those recordings invalidate their target binding.
 Physical replay will fail closed until the affected artifact is deliberately reviewed

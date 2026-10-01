@@ -28,17 +28,18 @@ after any failed gate rather than continuing into later capabilities.
    leader→follower teleoperation during the first foundational run unless every preceding
    gate has passed.
 
-### Paper-frame Cartesian validation — after the basic motion gates
+### Paper/workspace calibration — after the basic motion gates
 
-Once the mechanical calibration, five one-joint direction checks, small gripper motion,
-STOP/Relax behavior, and basic FK sanity checks have passed, run:
+The paper workflows are currently measurement/calibration only. Do not use them to
+authorize powered Cartesian motion.
+
+First, the three-corner geometry check:
 
 ```bash
 python examples/paper_corner_cartesian_test.py
 ```
 
-Use a US Letter sheet by default. The three captured corners are **not** a clockwise
-walk around the sheet:
+Required layout:
 
 ```text
 C ---------------- D  (predicted; do not touch)
@@ -47,32 +48,38 @@ C ---------------- D  (predicted; do not touch)
 A ---------------- B
 ```
 
-With the arm relaxed, point the same lower gripper finger at A, then B along the
-215.9 mm width, then C along the 279.4 mm height on the **same side as A**, pressing
-Enter at each point. Going A->B and then up the right side reaches D and invalidates
-the 90° A-corner check. The script must report plausible edge lengths and an approximately
-90° corner before it is allowed to enable torque again.
+This records FK geometry and predicts D, but does not command motion.
 
-The autonomous phase must preflight with torque OFF, lift away from C, move above the
-predicted fourth corner, descend only to the configured point height (2 mm above the
-paper by default), then visit the configured +Z heights above that far corner. Keep
-physical power immediately reachable throughout the first run. Because the lower finger
-is not yet a separately calibrated TCP, repeat the three captures if reported tool
-orientation drift is excessive rather than overriding the check casually.
+Then run the four-corner workspace calibration:
 
-If guarded torque enable reports a one-off missing/corrupt Feetech status packet for
-`Lock` or `Torque_Enable`, the managed backend must recover only when bounded register
-readback confirms the requested control value (or one retry succeeds). Persistent
-communication failures must still abort before Cartesian motion and leave torque disabled.
+```bash
+python examples/paper_workspace_calibration.py --reference-height-mm 50
+```
 
-For supervised diagnosis only, `examples/paper_four_corner_hover_demo.py` teaches all four
-corners clockwise (A lower-left, B lower-right, C upper-right, D upper-left), then preflights
-50 mm base-+Z hover targets. It first performs only the D lift and requires the operator to
-verify that the physical motion is upward and clear before traversing D->A->B->C->D. If the
-D touch begins below the generic model Z=0 floor, only that first lift may use guarded floor
-recovery: the violating modeled points must escape upward without dipping lower and the
-target must finish inside the normal workspace envelope. Later traversals use the ordinary
-floor check. This does not mark the paper-frame Cartesian validation gate complete.
+Teach A->B->C->D clockwise, then manually place the same fixed lower finger at a
+physically measured height above D. This fifth point demonstrates physical UP directly.
+The workflow fits a local physical-paper -> model affine transform, records the table
+plane and UP mapping, ties it to the active motor-calibration ID, and performs no
+autonomous Cartesian arm motion.
+
+Hardware evidence that triggered this gate:
+
+- A four-corner paper capture was nearly coplanar in model coordinates.
+- A requested model +Z hover nevertheless moved physically along the table direction.
+- The finger contacted the table.
+- The motion failed to settle within 5 s with a maximum joint error of about 0.0767 rad,
+  after which the arm relaxed.
+
+Therefore the earlier base-Z floor-recovery/paper-hover behavior is superseded. A
+negative model Z at a physical paper touch is not sufficient reason to lower the
+workspace floor, and model +Z is not accepted as physical up.
+
+A saved workspace calibration remains `motion_validation_status="unvalidated"`. Review
+its fitted UP direction, affine conditioning, residuals, UP/table-normal skew, and
+probe-orientation drift before designing the next very-small supervised Cartesian
+direction test.
+
+See `docs/workspace-calibration.md` and `docs/validation.md`.
 
 
 ## Batch 1 — Setup, follower control, and leader readout

@@ -22,6 +22,11 @@ from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceR
 from soarm101_motion.tools import CameraTool, SO101Gripper, ToolAssembly
 from soarm101_motion.trajectories import Trajectory, TrajectoryEntry, TrajectoryLibrary
 from soarm101_motion.types import HardwareState, IKResult, JointState, MotionResult, Pose
+from soarm101_motion.workspace import (
+    WorkspaceCalibration,
+    WorkspaceCalibrationStore,
+    fit_paper_workspace,
+)
 
 __version__ = "0.1.0.dev8"
 
@@ -66,7 +71,10 @@ __all__ = [
     "Trajectory",
     "TrajectoryEntry",
     "TrajectoryLibrary",
+    "WorkspaceCalibration",
+    "WorkspaceCalibrationStore",
     "__version__",
     "discover_camera_devices",
+    "fit_paper_workspace",
     "integration_metadata",
 ]

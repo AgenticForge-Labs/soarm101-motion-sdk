@@ -40,9 +40,14 @@ not authoritative calibration contents.
 }
 ```
 
-Calibration data remain authoritative in the files under
+Motor-calibration data remain authoritative in the files under
 `~/.config/soarm101/calibration/`. The workstation profile only remembers which
 robot/calibration identity is associated with each local arm role.
+
+Measured table/workspace geometry is a separate machine-local calibration stored under
+`~/.config/soarm101/workspace/<robot-id>.json`. It is tied to the active motor
+calibration ID and is intentionally not embedded in `workstation.json` or the motor
+calibration file. See [Workspace calibration](workspace-calibration.md).
 
 ## GUI behavior
 

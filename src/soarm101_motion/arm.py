@@ -469,7 +469,6 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
-        allow_floor_recovery: bool = False,
     ) -> MotionResult | MotionHandle[MotionResult]:
         look_at_array = np.asarray(look_at, dtype=float) if look_at is not None else None
         if self.config.enable_workspace_checks:
@@ -485,7 +484,6 @@ class SOARM101:
                 self.model,
                 planned.command_samples,
                 tcp=self.active_tcp,
-                allow_floor_recovery=allow_floor_recovery,
                 **self._workspace_kwargs(),
             )
         return self.motion.move_linear(
