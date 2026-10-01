@@ -7,7 +7,7 @@ from typing import Literal, Mapping
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import least_squares
+from scipy.optimize import OptimizeResult, least_squares
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion.exceptions import IKError
@@ -144,8 +144,8 @@ class IKSolver:
                 ]
             )
 
-        def evaluate(result: object) -> tuple[float, float, bool]:
-            vector = result.x  # type: ignore[attr-defined]
+        def evaluate(result: OptimizeResult) -> tuple[float, float, bool]:
+            vector = result.x
             actual = self.model.forward(vector, tcp=tcp)
             position_error = float(np.linalg.norm(actual.position - target.position))
             orientation_residual = self._orientation_residual(actual, target, options)
@@ -155,7 +155,7 @@ class IKSolver:
                 or orientation_error <= options.orientation_tolerance_rad
             )
             success = bool(
-                result.success  # type: ignore[attr-defined]
+                result.success
                 and position_error <= options.position_tolerance_m
                 and orientation_ok
             )
@@ -209,9 +209,9 @@ class IKSolver:
 
         candidates = feasible or [*regularized_results, *refined_results]
 
-        def candidate_key(result: object) -> tuple[float, float, float]:
+        def candidate_key(result: OptimizeResult) -> tuple[float, float, float]:
             position_error, orientation_error, success = evaluate(result)
-            vector = result.x  # type: ignore[attr-defined]
+            vector = result.x
             continuity_distance = float(np.linalg.norm(vector - seed_vector))
             task_score = position_error / max(options.position_tolerance_m, 1e-12)
             if options.orientation_mode != "position_only":
