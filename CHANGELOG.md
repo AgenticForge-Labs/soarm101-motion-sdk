@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Hardware replay after #74 remained very shaky and A_UP->B_UP still failed safely during
+  pre-motion planning, now at 0.794 mm against the unchanged 0.5 mm Cartesian tolerance.
+  Inspection found that calibrated Cartesian execution was still using the older
+  per-sample synchronized servo-speed caps even though the documented/tested contract was
+  teleoperation-style `speed_raw=0`, `acceleration_raw=254`. `move_linear()` now
+  actually uses that fixed servo-side profile; synchronized per-joint arrival remains
+  available for joint moves but is not layered onto Cartesian streaming.
+- Position-only Cartesian planning now has an endpoint-seeded reverse fallback. If forward
+  sequential IK hits a numerical pocket, the planner solves the same Cartesian samples
+  backward from a reachable target solution and accepts the result only if it reconnects
+  continuously to the measured start. The paper workflow reuses its exact read-only
+  endpoint-preflight joint solution as that boundary-condition seed. Every sample still
+  must satisfy the same hard Cartesian tolerance, joint limits, continuity, dynamic, and
+  runtime safety checks.
+
+
 - Superseded the #73 launch-only smoothness experiment after physical replay remained
   shaky and A_UP->B_UP again failed during read-only planning with a 0.812 mm intermediate
   IK miss against the unchanged 0.5 mm tolerance. Cartesian timing returns to the symmetric
