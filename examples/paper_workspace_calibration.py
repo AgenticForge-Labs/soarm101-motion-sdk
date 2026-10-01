@@ -5,10 +5,10 @@ known physical height above corner D. Those five physical correspondences are us
 fit a local affine map from paper/workspace coordinates into the SDK kinematic model.
 
 After the final UP teaching sample, the script counts down and enables torque so the arm
-holds that exact pose instead of sagging. Elevated Cartesian endpoints are built from the
-directly taught A/B/C/D model positions plus the directly measured D->UP displacement.
-That displacement represents the trained physical reference height on this exact setup.
-Taught corner/lift joint poses are also used as IK seeds. The actual motion between those
+holds that exact pose instead of sagging. Elevated Cartesian endpoints are built from known-reachable inferred joint configurations:
+the taught D->UP joint delta is applied to each taught A/B/C/D corner, then FK defines the
+Cartesian endpoint. Only D_UP was physically measured at the reference height, so the other
+endpoint heights are diagnostic estimates rather than guaranteed equal physical heights. The actual motion between those
 endpoints is still executed with Cartesian move_linear() and position-only IK.
 
 A saved teaching can also be replayed later from any ordinary resting pose with --replay.
@@ -194,73 +194,59 @@ def _offset_joints(
     return {name: float(base[name] + delta[name]) for name in base}
 
 
-def constant_height_demo_targets(
-    calibration: WorkspaceCalibration,
+def reachable_demo_targets(
+    arm: SOARM101,
     *,
     corners: dict[str, Sample],
     up_sample: Sample,
 ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float]]]:
-    """Build targets by applying the measured physical-UP displacement to taught corners.
+    """Build Cartesian endpoints from known-reachable inferred joint configurations.
 
-    The four table-plane corner positions are direct measurements from this exact arm/setup.
-    The taught D->UP displacement is the direct model-space observation of the requested
-    physical reference height. Applying that same displacement to A/B/C/D preserves the
-    trained physical lift without asking the approximate global affine fit to extrapolate
-    corner positions that may be outside the arm's reachable model geometry.
+    The taught D->UP joint delta is applied to each taught paper corner. FK of those
+    joint configurations defines the Cartesian endpoints. The demonstration still uses
+    move_linear() between endpoints; this construction only makes each endpoint itself
+    reachable by definition.
 
-    The affine calibration remains authoritative evidence for workspace interpretation and
-    provenance, but the fixed supervised paper traversal is anchored to the measured points.
+    With only one physically measured UP sample, this does not prove that every elevated
+    endpoint is exactly the same physical height above the paper. The saved affine workspace
+    transform is therefore used only to report an estimated physical Z for diagnostics.
     """
 
     required = {"A", "B", "C", "D"}
     if set(corners) != required:
         raise ValueError(f"expected corners {sorted(required)}, got {sorted(corners)}")
 
-    if calibration.reference_height_m <= 0.0:
-        raise ValueError("workspace reference height must be positive")
-
-    up_delta = up_sample.position_m - corners["D"].position_m
-    elevated_corners = {
-        f"{name}_UP": corners[name].position_m + up_delta
-        for name in ("A", "B", "C", "D")
-    }
-    positions = {
-        "D_UP": up_sample.position_m.copy(),
-        "A_UP": elevated_corners["A_UP"],
-        "B_UP": elevated_corners["B_UP"],
-        "C_UP": elevated_corners["C_UP"],
-        "D_UP_RETURN": up_sample.position_m.copy(),
-        "CENTER_UP": np.mean(
-            np.stack(
-                [
-                    elevated_corners["A_UP"],
-                    elevated_corners["B_UP"],
-                    elevated_corners["C_UP"],
-                    elevated_corners["D_UP"],
-                ]
-            ),
-            axis=0,
-        ),
-    }
-
-    # Seeds are hints only. Keeping the taught lift posture as an initial guess
-    # helps the bounded IK solver stay on the demonstrated branch.
     lift_delta = _joint_delta(corners["D"].joints_rad, up_sample.joints_rad)
+    elevated_joints = {
+        "D_UP": dict(up_sample.joints_rad),
+        "A_UP": _offset_joints(corners["A"].joints_rad, lift_delta),
+        "B_UP": _offset_joints(corners["B"].joints_rad, lift_delta),
+        "C_UP": _offset_joints(corners["C"].joints_rad, lift_delta),
+        "D_UP_RETURN": dict(up_sample.joints_rad),
+    }
     center_base = {
         name: float(
             np.mean([corners[label].joints_rad[name] for label in ("A", "B", "C", "D")])
         )
         for name in up_sample.joints_rad
     }
-    preferred_seeds = {
-        "D_UP": dict(up_sample.joints_rad),
-        "A_UP": _offset_joints(corners["A"].joints_rad, lift_delta),
-        "B_UP": _offset_joints(corners["B"].joints_rad, lift_delta),
-        "C_UP": _offset_joints(corners["C"].joints_rad, lift_delta),
-        "D_UP_RETURN": dict(up_sample.joints_rad),
-        "CENTER_UP": _offset_joints(center_base, lift_delta),
+    elevated_joints["CENTER_UP"] = _offset_joints(center_base, lift_delta)
+
+    limits = arm.get_joint_limits()
+    for target_name, joints in elevated_joints.items():
+        for joint_name, value in joints.items():
+            lower, upper = limits[joint_name]
+            if not lower <= value <= upper:
+                raise RuntimeError(
+                    f"{target_name} inferred {joint_name}={value:.4f} rad is outside "
+                    f"{lower:.4f}..{upper:.4f}"
+                )
+
+    positions = {
+        name: arm.model.forward(joints, tcp=arm.active_tcp).position.copy()
+        for name, joints in elevated_joints.items()
     }
-    return positions, preferred_seeds
+    return positions, elevated_joints
 
 
 def preflight_demo_targets(
@@ -550,10 +536,15 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 f"{args.settle_timeout_s:.1f} s."
             )
             print(
-                f"Every paper target uses the same measured trained lift: "
-                f"{saved.reference_height_m * 1000.0:.1f} mm above its taught table point. "
+                f"Replay uses the taught D->UP joint change (trained at "
+                f"{saved.reference_height_m * 1000.0:.1f} mm) applied to each taught corner, "
+                "then FK to obtain known-reachable Cartesian endpoints. "
                 f"Cartesian IK knots are limited to "
                 f"{PAPER_CARTESIAN_WAYPOINT_SPACING_M * 1000.0:.1f} mm spacing."
+            )
+            print(
+                "Only D_UP was physically measured at the reference height; estimated workspace "
+                "Z for the other reachable endpoints is diagnostic, not a guaranteed constant height."
             )
             print(
                 "The arm may start from any ordinary resting pose. This supervised paper "
@@ -563,8 +554,8 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             _countdown_hold(arm)
             arm.tool.open()
 
-            demo_positions, preferred_seeds = constant_height_demo_targets(
-                saved,
+            demo_positions, preferred_seeds = reachable_demo_targets(
+                arm,
                 corners=corner_samples,
                 up_sample=up,
             )
@@ -584,14 +575,13 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 print(
                     f"  {item['name']}: model "
                     f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
-                    f"trained lift={saved.reference_height_m * 1000.0:.1f} mm; "
-                    f"affine diagnostic Z={physical[2] * 1000.0:.1f} mm; "
+                    f"estimated workspace Z={physical[2] * 1000.0:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
 
             report["replayed_at"] = datetime.now(timezone.utc).isoformat()
             report["demo_target_strategy"] = (
-                "measured_corners_plus_measured_trained_up_displacement"
+                "known_reachable_fk_from_taught_corner_plus_joint_lift"
             )
             report["demo_preflight"] = preflight
             report["demo_targets_model_xyz_mm"] = {
@@ -913,13 +903,13 @@ def main() -> int:
                 return 0
 
             corner_samples = {sample.name: sample for sample in samples}
-            demo_positions, preferred_seeds = constant_height_demo_targets(
-                saved,
+            demo_positions, preferred_seeds = reachable_demo_targets(
+                arm,
                 corners=corner_samples,
                 up_sample=up,
             )
             report["demo_target_strategy"] = (
-                "constant_taught_workspace_height_via_saved_affine_transform"
+                "known_reachable_fk_from_taught_corner_plus_joint_lift"
             )
             report["measured_up_delta_model_mm"] = [
                 float(value * 1000.0)

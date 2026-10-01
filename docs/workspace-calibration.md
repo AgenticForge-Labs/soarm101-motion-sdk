@@ -124,16 +124,16 @@ The same workflow may then run the supervised demonstration
 sample, a short countdown is followed by torque enable so the current pose is held before
 the operator starts motion.
 
-For the powered demonstration, the fixed D/A/B/C/center sequence is anchored to the
-direct measurements rather than the fitted affine surface. The model-space displacement
-from taught D to taught UP is the observed representation of the manually measured
-reference height on this setup; that same displacement is added to the taught A/B/C/D
-positions and CENTER_UP is the mean of the elevated corners. The affine fit remains
-workspace interpretation/provenance evidence and may report slightly different inverse-
-mapped Z values because it is an approximate fit. It must not shift a directly measured
-corner solely to force an exact coordinate value. The taught D→UP **joint** change is
-retained only as an IK seed. Motion between endpoints is still commanded with
-`move_linear()` and position-only IK.
+For the powered demonstration, the fixed D/A/B/C/center sequence is constructed from
+known-reachable inferred joint poses. The taught D→UP **joint** change is applied to each
+taught corner joint pose and FK defines the Cartesian endpoint; joint limits are checked
+before motion. This deliberately avoids using either a translated Cartesian D→UP vector or
+the fitted affine surface as endpoint geometry, because physical preflight showed B_UP
+remained 10.09 mm outside IK tolerance with both Cartesian constructions. Only D_UP was
+physically measured at the reference height. The affine fit therefore reports estimated
+workspace Z for the other endpoints as a diagnostic, not as proof of equal physical
+height. Motion between endpoints is still commanded with `move_linear()` and
+position-only IK.
 
 The saved teaching can be reused with `--replay`. Replay may start from an ordinary
 resting pose. For this supervised paper-linear validation, every segment uses
