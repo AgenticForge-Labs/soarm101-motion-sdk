@@ -153,13 +153,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="maximum table-plane residual for activating the saved workspace calibration",
     )
     parser.add_argument(
-        "--max-up-vs-normal-angle-deg",
+        "--max-affine-fit-rms-mm",
+        type=float,
+        default=10.0,
+        help="maximum correspondence RMS for accepting the measured workspace calibration",
+    )
+    parser.add_argument(
+        "--max-linear-condition-number",
         type=float,
         default=20.0,
-        help=(
-            "maximum angle between manually demonstrated physical UP and the table-plane normal "
-            "before the calibration is rejected"
-        ),
+        help="maximum condition number for the local 3-D physical-to-model mapping",
     )
     parser.add_argument(
         "--max-up-orientation-drift-deg",
@@ -206,8 +209,10 @@ def main() -> int:
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
     if args.max_table_fit_rms_mm <= 0.0:
         raise SystemExit("--max-table-fit-rms-mm must be positive")
-    if not 0.0 < args.max_up_vs_normal_angle_deg < 90.0:
-        raise SystemExit("--max-up-vs-normal-angle-deg must be between 0 and 90")
+    if args.max_affine_fit_rms_mm <= 0.0:
+        raise SystemExit("--max-affine-fit-rms-mm must be positive")
+    if args.max_linear_condition_number <= 1.0:
+        raise SystemExit("--max-linear-condition-number must be greater than 1")
     if args.max_up_orientation_drift_deg <= 0.0:
         raise SystemExit("--max-up-orientation-drift-deg must be positive")
     if not 0.0 < args.min_up_scale < args.max_up_scale:
@@ -324,6 +329,7 @@ def main() -> int:
                 "model_x_scale_mm_per_mm": calibration.model_x_scale,
                 "model_y_scale_mm_per_mm": calibration.model_y_scale,
                 "model_up_scale_mm_per_mm": calibration.model_up_scale,
+                "linear_condition_number": calibration.linear_condition_number,
                 "model_xy_angle_deg": calibration.model_xy_angle_deg,
                 "up_vs_table_normal_angle_deg": calibration.up_vs_table_normal_angle_deg,
                 "up_reference_plane_height_mm": (
@@ -348,8 +354,13 @@ def main() -> int:
                 f"  table-plane RMS residual: {calibration.table_plane_rms_m * 1000.0:.2f} mm"
             )
             print(
-                f"  physical-UP vs fitted table normal: "
-                f"{calibration.up_vs_table_normal_angle_deg:.2f} deg"
+                f"  physical-UP vs model-space table normal: "
+                f"{calibration.up_vs_table_normal_angle_deg:.2f} deg "
+                "(diagnostic skew; not required to be near zero)"
+            )
+            print(
+                f"  affine linear condition number: "
+                f"{calibration.linear_condition_number:.2f}"
             )
             print(
                 f"  measured UP model displacement normal to table: "
@@ -372,23 +383,32 @@ def main() -> int:
             table_ok = (
                 calibration.table_plane_rms_m * 1000.0 <= args.max_table_fit_rms_mm
             )
-            up_angle_ok = (
-                calibration.up_vs_table_normal_angle_deg
-                <= args.max_up_vs_normal_angle_deg
+            affine_ok = (
+                calibration.affine_fit_rms_m * 1000.0 <= args.max_affine_fit_rms_mm
+            )
+            condition_ok = (
+                calibration.linear_condition_number <= args.max_linear_condition_number
             )
             orientation_ok = up_orientation_drift <= args.max_up_orientation_drift_deg
             up_scale_ok = args.min_up_scale <= calibration.model_up_scale <= args.max_up_scale
-            activation_ok = table_ok and up_angle_ok and orientation_ok and up_scale_ok
+            measurement_ok = (
+                table_ok and affine_ok and condition_ok and orientation_ok and up_scale_ok
+            )
 
-            report["activation_checks"] = {
+            report["acceptance_checks"] = {
                 "table_fit_ok": table_ok,
-                "up_direction_consistent_with_table_normal": up_angle_ok,
+                "affine_fit_ok": affine_ok,
+                "linear_mapping_well_conditioned": condition_ok,
                 "up_probe_orientation_ok": orientation_ok,
                 "up_scale_plausible": up_scale_ok,
-                "activated": activation_ok,
+                "measurement_accepted": measurement_ok,
+                "diagnostic_up_vs_table_normal_angle_deg": (
+                    calibration.up_vs_table_normal_angle_deg
+                ),
                 "limits": {
                     "max_table_fit_rms_mm": args.max_table_fit_rms_mm,
-                    "max_up_vs_normal_angle_deg": args.max_up_vs_normal_angle_deg,
+                    "max_affine_fit_rms_mm": args.max_affine_fit_rms_mm,
+                    "max_linear_condition_number": args.max_linear_condition_number,
                     "max_up_orientation_drift_deg": args.max_up_orientation_drift_deg,
                     "min_up_scale": args.min_up_scale,
                     "max_up_scale": args.max_up_scale,
@@ -398,16 +418,20 @@ def main() -> int:
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             print(f"\nDiagnostic report written to {args.output}")
 
-            if not activation_ok:
-                print("\nWORKSPACE CALIBRATION NOT ACTIVATED.")
+            if not measurement_ok:
+                print("\nWORKSPACE MEASUREMENT NOT ACCEPTED.")
                 if not table_ok:
                     print(
                         f"  table fit RMS exceeds {args.max_table_fit_rms_mm:.1f} mm"
                     )
-                if not up_angle_ok:
+                if not affine_ok:
                     print(
-                        "  manually demonstrated physical UP does not agree with the "
-                        "model-space table normal closely enough"
+                        f"  affine fit RMS exceeds {args.max_affine_fit_rms_mm:.1f} mm"
+                    )
+                if not condition_ok:
+                    print(
+                        "  the local physical-to-model mapping is too ill-conditioned "
+                        "for reliable inversion"
                     )
                 if not orientation_ok:
                     print(
@@ -420,8 +444,8 @@ def main() -> int:
                         "small or large"
                     )
                 print(
-                    "No workspace calibration was saved for runtime use, and no powered "
-                    "Cartesian motion was attempted."
+                    "No workspace calibration was saved, and no powered Cartesian motion "
+                    "was attempted."
                 )
                 return 2
 
