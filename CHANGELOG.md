@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Refined Cartesian launch smoothness after hardware replay became faster/error-free
+  but remained visibly shakier at the beginning of each line than near the endpoint. The
+  host profile now uses bounded constant acceleration from rest, optional cruise, and the
+  existing half-cosine deceleration. At the paper validation settings (20 Hz, 20 mm/s,
+  100 mm/s²), the first 50 ms Cartesian increment increases from about 0.021 mm to
+  0.125 mm while respecting the same speed/acceleration ceilings. The validated
+  teleoperation servo profile (speed_raw=0, acceleration_raw=254), Cartesian geometry,
+  endpoint IK, startup clearance, cadence, and workspace policy are unchanged.
+
 - Restored the supervised elevated-paper experiment to its intended purpose: validating
   Cartesian `move_linear()` at one calibrated physical height. The newer workspace
   leveling and true paper-center geometry remain, but A_UP→B_UP→C_UP→D_UP→CENTER_UP

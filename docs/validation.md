@@ -129,10 +129,17 @@ old synchronized-arrival speed throttling could make gravity-loaded Cartesian mo
 stick-slip/shake even though teleoperation on the same arm was smooth.
 
 The paper workflow also uses a 20 Hz host cadence and a 1 mm Cartesian planning-density
-bound. Every emitted command sample is a sequential-IK solution of the Cartesian trajectory.
-If teleoperation is smooth but `move_linear()` remains shaky with the same servo profile
-and cadence, the next comparison should be the planned joint derivatives and measured
-following error; that would isolate IK/Jacobian/quantization effects from servo tracking.
+bound. Every emitted command sample is a sequential-IK solution of the Cartesian
+trajectory. Hardware feedback that each line started shakier and became smoother motivated
+a launch-only host-profile change: bounded constant acceleration from rest replaces the
+zero-acceleration cosine launch, while the existing half-cosine endpoint deceleration is
+retained. At 20 mm/s and 100 mm/s², the first 50 ms Cartesian increment increases from
+about 0.021 mm to 0.125 mm without exceeding the requested acceleration ceiling.
+
+If teleoperation is smooth but `move_linear()` remains shaky after this launch change,
+the next comparison should be planned joint derivatives, encoder-quantized command deltas,
+measured following error, and actual cycle timing; that would isolate
+IK/Jacobian/quantization effects from servo tracking.
 
 ## Current hardware finding
 
