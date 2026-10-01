@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Hardware replay showed that a nominal 10 mm startup clearance reached only 5.8 mm
+  measured workspace Z and still allowed the tool to drag the paper. Paper replay now
+  lifts straight to at least the full reference/transport height before lateral travel,
+  verifies measured workspace Z within 5 mm, and retries up to three separately
+  preflighted lift corrections before failing closed. The supervised paper workflow also
+  uses the known-smooth 20 Hz teleoperation host cadence while leaving the SDK-wide 50 Hz
+  planned-motion default unchanged.
+- Intermediate command-rate Cartesian IK now retries with multi-start when a sequential
+  single-start solve misses the existing 0.5 mm tolerance. Hardware exposed this as a
+  0.556 mm B-segment miss; the retry improves branch recovery without loosening tolerance.
+
 - Fixed paper replay startup from low/resting poses where the calibrated physical-Z
   clearance target was valid but the generic model-frame workspace floor rejected it
   (for example model TCP z=-11 mm). The startup lift now receives a dedicated calibrated-
