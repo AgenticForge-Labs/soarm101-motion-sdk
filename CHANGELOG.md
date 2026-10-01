@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fixed paper joint replay after the first synchronized-servo hardware test reached
+  A_UP preflight but was rejected before motion by the generic model-frame workspace floor
+  at sample 0 (model TCP z=-2 mm), despite the calibrated paper path reporting a safe
+  physical workspace Z minimum of 23.3 mm. Guarded `move_joints()` now exposes the same
+  explicit `full / target_only / off` workspace-check modes as `move_linear()`, with
+  `full` remaining the default. The paper workflow uses `target_only` only after its
+  calibrated full-path FK check, preserving a generic destination sanity check without
+  allowing the known-invalid model table floor to override measured workspace authority.
+
 - Paper joint-space replay now enables calibrated synchronized servo arrival on each
   20 Hz planned sample. The joint trajectory and timing are unchanged; only the servo-side
   pacing changes from fixed unrestricted speed to proportional per-joint speed limits so
