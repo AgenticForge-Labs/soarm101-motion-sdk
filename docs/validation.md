@@ -86,7 +86,12 @@ when quality gates pass, under:
 ~/.config/soarm101/workspace/<robot-id>.json
 ```
 
-The workflow performs no autonomous Cartesian arm motion.
+After the measurement passes its geometry checks, the default workflow preflights an
+elevated paper path with torque off and asks once for confirmation before powered motion.
+The path is `D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`, all at the physical
+reference height. Targets are transformed from physical paper coordinates through the
+measured workspace map and use position-only IK. Use `--measure-only` to retain the
+measurement-only behavior.
 
 See [Workspace calibration](workspace-calibration.md) for the persisted contract,
 quality gates, and provenance.
