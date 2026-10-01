@@ -681,8 +681,8 @@ def run_demo_targets(
             target_joints,
             speed=arm.config.default_joint_speed,
             acceleration=arm.config.default_joint_acceleration,
-            servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
             servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+            synchronize_servo_arrival=True,
         )
         if not result.accepted or not result.completed:
             raise RuntimeError(f"{name} joint motion did not complete: {result}")
