@@ -27,7 +27,7 @@ Rules:
   overlays are visualization only and never authorize or execute motion.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
 - Motor calibration and workspace calibration are separate authorities. Motor calibration maps encoder state to joint coordinates; machine-local workspace calibration records measured physical-workspace correspondences tied to one motor-calibration ID.
-- A workspace calibration is measurement evidence until a separate physical motion-validation stage marks the relevant Cartesian mapping safe. It must not silently redefine joint calibration or authorize motion merely because a paper/table fit is numerically good.
+- A workspace calibration is measurement evidence until physical motion validation succeeds. The paper workflow's supervised elevated traversal is a narrow validation stage: targets are generated from measured physical paper coordinates through the workspace transform and executed through the ordinary guarded Cartesian primitives. A numerically good paper/table fit alone must not silently redefine joint calibration or authorize broader autonomous motion.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
 
