@@ -58,7 +58,7 @@ class SimulationBackend(SO101HardwareBackend):
         self,
         positions: Mapping[str, float],
         *,
-        speed_raw: int | None = None,
+        speed_raw: int | Mapping[str, int] | None = None,
         acceleration_raw: int | None = None,
     ) -> None:
         del speed_raw, acceleration_raw

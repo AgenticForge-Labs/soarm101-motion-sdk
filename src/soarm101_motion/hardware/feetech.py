@@ -456,7 +456,7 @@ class FeetechBackend(SO101HardwareBackend):
         self,
         positions: Mapping[str, int],
         *,
-        speed_raw: int,
+        speed_raw: int | Mapping[str, int],
         acceleration_raw: int,
     ) -> None:
         with self._io_lock:
@@ -468,8 +468,17 @@ class FeetechBackend(SO101HardwareBackend):
                 for name, raw in positions.items():
                     if name not in MOTOR_IDS:
                         raise KeyError(name)
+                    motor_speed_raw = (
+                        int(speed_raw[name])
+                        if isinstance(speed_raw, Mapping)
+                        else int(speed_raw)
+                    )
+                    if not 0 <= motor_speed_raw <= 3400:
+                        raise InvalidCommandError(
+                            f"{name} servo speed {motor_speed_raw} is outside [0, 3400]"
+                        )
                     if not self._packet_handler.SyncWritePosEx(
-                        MOTOR_IDS[name], int(raw), int(speed_raw), int(acceleration_raw)
+                        MOTOR_IDS[name], int(raw), motor_speed_raw, int(acceleration_raw)
                     ):
                         raise CommunicationError(f"could not add {name} to synchronous write")
                 comm = self._packet_handler.groupSyncWrite.txPacket()
@@ -482,7 +491,7 @@ class FeetechBackend(SO101HardwareBackend):
         self,
         positions: Mapping[str, float],
         *,
-        speed_raw: int | None = None,
+        speed_raw: int | Mapping[str, int] | None = None,
         acceleration_raw: int | None = None,
     ) -> None:
         with self._io_lock:

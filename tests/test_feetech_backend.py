@@ -49,6 +49,7 @@ class FakePacket:
     def __init__(self, port: FakePortHandler) -> None:
         self.port = port
         self.positions = {motor_id: 2047 for motor_id in MOTOR_IDS.values()}
+        self.sync_speeds: dict[int, int] = {}
         self.registers = defaultdict(int)
         for motor_id in MOTOR_IDS.values():
             self.registers[(motor_id, 3)] = 777
@@ -94,7 +95,8 @@ class FakePacket:
         return 0, 0
 
     def SyncWritePosEx(self, motor_id: int, raw: int, speed: int, acceleration: int):
-        del speed, acceleration
+        del acceleration
+        self.sync_speeds[motor_id] = speed
         self.groupSyncWrite.pending[motor_id] = raw
         return True
 
@@ -371,4 +373,32 @@ def test_gripper_begin_opening_writes_one_goal_on_fake_transport(
     gripper.begin_opening(0.8, speed_raw=100)
 
     assert packet.positions[motor_id] == backend.calibration.motors["so101_gripper"].normalized_to_raw(0.8)
+    backend.disconnect()
+
+
+def test_joint_sync_write_accepts_per_motor_speed_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False)
+    )
+    backend.connect()
+    backend.enable_torque()
+    packet = backend._packet_handler
+
+    backend.write_joint_positions(
+        {
+            "shoulder_pan": 0.10,
+            "shoulder_lift": 0.05,
+        },
+        speed_raw={
+            "shoulder_pan": 300,
+            "shoulder_lift": 150,
+        },
+        acceleration_raw=254,
+    )
+
+    assert packet.sync_speeds[MOTOR_IDS["shoulder_pan"]] == 300
+    assert packet.sync_speeds[MOTOR_IDS["shoulder_lift"]] == 150
     backend.disconnect()

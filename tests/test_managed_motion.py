@@ -180,3 +180,98 @@ def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch
     assert plan.command_samples
     assert failed_once is True
     assert any(calls[index : index + 2] == [False, True] for index in range(len(calls) - 1))
+
+
+def test_cosine_cruise_profile_uses_requested_speed_as_cruise_ceiling() -> None:
+    from soarm101_motion.motion.controller import MotionController
+
+    duration = MotionController._cosine_cruise_duration(0.220, 0.020, 0.100)
+
+    assert duration == pytest.approx(11.3141592654, rel=1e-6)
+    assert MotionController._cosine_cruise_progress(
+        0.220,
+        0.020,
+        0.100,
+        duration / 2.0,
+    ) == pytest.approx(0.5, abs=1e-8)
+
+
+def test_position_only_linear_timing_ignores_target_rotation() -> None:
+    import numpy as np
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        current = arm.get_position()
+        position = current.position + np.array([-0.010, 0.0, 0.0])
+        rotated = np.diag([-1.0, -1.0, 1.0])
+
+        unchanged = arm.motion.plan_linear(
+            Pose(position, current.rotation),
+            orientation_mode="position_only",
+            speed=0.020,
+            acceleration=0.100,
+        )
+        arbitrary_rotation = arm.motion.plan_linear(
+            Pose(position, rotated),
+            orientation_mode="position_only",
+            speed=0.020,
+            acceleration=0.100,
+        )
+
+    assert arbitrary_rotation.duration_s == pytest.approx(unchanged.duration_s)
+    assert len(arbitrary_rotation.command_samples) == len(unchanged.command_samples)
+
+
+def test_cartesian_execution_uses_per_joint_synchronized_servo_speeds() -> None:
+    from types import SimpleNamespace
+
+    class FakeMotor:
+        radians_limits = (-3.0, 3.0)
+
+        @staticmethod
+        def radians_to_raw(value):
+            return int(round(2048 + float(value) * 1000.0))
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: FakeMotor() for name in (
+                "shoulder_pan",
+                "shoulder_lift",
+                "elbow_flex",
+                "wrist_flex",
+                "wrist_roll",
+            )}
+        )
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        current = arm.get_position()
+        target = Pose(current.position + [-0.010, 0.0, 0.005], current.rotation)
+        arm.move_linear(
+            target,
+            orientation_mode="position_only",
+            speed=0.020,
+            acceleration=0.100,
+        )
+
+    assert calls
+    mapped = [speed for speed, _ in calls if isinstance(speed, dict)]
+    assert mapped
+    assert all(set(speed) == {
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    } for speed in mapped)
+    assert all(all(1 <= value <= 3400 for value in speed.values()) for speed in mapped)

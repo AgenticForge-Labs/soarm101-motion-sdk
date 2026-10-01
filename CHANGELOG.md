@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Hardware replay after #64 still moved laterally toward the base before rising and
+  remained much slower/jerkier than teleoperation. Cartesian planning now uses smooth
+  half-cosine acceleration/deceleration ramps with constant-speed cruise when distance
+  permits; requested linear speed is a real cruise ceiling instead of a minimum-jerk peak.
+  Position-only motion no longer incurs an irrelevant orientation-time penalty.
+- Calibrated Feetech Cartesian execution now derives a per-joint position-mode speed for
+  every synchronous write from the planned encoder-tick increment and command interval.
+  This keeps lightly loaded joints from racing at unrestricted speed while gravity-loaded
+  joints lag behind the same Cartesian sample.
+- Paper startup now climbs to transport height in separately preflighted, settled, and
+  remeasured 10 mm calibrated-Z stages by default, bounding low-height tracking error
+  before any lateral traversal.
+
 - Hardware replay showed that a nominal 10 mm startup clearance reached only 5.8 mm
   measured workspace Z and still allowed the tool to drag the paper. Paper replay now
   lifts straight to at least the full reference/transport height before lateral travel,

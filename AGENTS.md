@@ -72,8 +72,10 @@ changes require development discipline; robot use requires conservative hardware
     calibrated-workspace-Z transport lift before any lateral travel from a low/resting
     pose. The target is at least the paper reference height, not merely a nominal small
     offset, and measured workspace Z must satisfy the completion gate before lateral
-    motion. Each startup/corrective lift is validated in calibrated workspace coordinates
-    (fixed X/Y, nondecreasing physical Z, bounded IK continuity and joint limits); the
+    motion. Startup is executed in bounded, separately settled calibrated-Z stages rather
+    than one long open-loop climb. Each stage is validated in calibrated workspace
+    coordinates (fixed X/Y, nondecreasing physical Z, bounded IK continuity and joint
+    limits); the
     generic model-frame Z floor is not authoritative for those verified clearance moves
     because it is known to disagree with the measured table frame. The supervised paper
     validation uses the known-smooth 20 Hz host cadence while SDK-wide planned motion stays

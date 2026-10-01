@@ -64,6 +64,7 @@ DEFAULT_TELEOP_STREAM_FREQUENCY_HZ = 20.0
 DEFAULT_MAX_COMMAND_STEP_RAD = 5.0 * pi / 180.0
 TELEOP_SERVO_SPEED_RAW = 0  # Feetech: zero selects maximum speed.
 TELEOP_SERVO_ACCELERATION_RAW = 254
+STS3215_MAX_POSITION_SPEED_RAW = 3400
 
 # Feetech STS3215 control table. Address and byte width.
 STS3215_REGISTERS: dict[str, tuple[int, int]] = {

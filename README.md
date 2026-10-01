@@ -137,14 +137,20 @@ uses the saved physical-workspace transform to level every paper endpoint to tha
 workspace Z while preserving each endpoint's calibrated workspace X/Y; no extra elevated
 teaching is required. Before the first long move from an ordinary resting pose, replay
 preflights a straight calibrated-workspace-Z move to at least the paper reference/
-transport height before any lateral travel. After execution, measured workspace Z must
-reach that transport target within 5 mm or replay refuses to continue; corrective lift
-attempts are separately preflighted. That clearance path is validated in the calibrated
+transport height before any lateral travel. The climb is executed in separately
+preflighted and settled 10 mm Z stages, with workspace Z remeasured after every stage.
+Measured workspace Z must reach the transport target within 5 mm or replay refuses to
+continue. That clearance path is validated in the calibrated
 physical workspace rather than against the generic model-frame Z floor, which is known to
 misrepresent this measured table. For this hardware validation the paper workflow uses a
 20 Hz host command cadence, matching the proven teleoperation cadence, while the SDK-wide
-planned-motion default remains 50 Hz. The segments still run through `move_linear()`
-with position-only IK and command-rate sequential IK on the minimum-jerk Cartesian path. `--replay` reuses the saved teaching from any ordinary resting pose. During this
+planned-motion default remains 50 Hz. Cartesian `move_linear()` uses smooth cosine
+acceleration/deceleration ramps with a constant-speed cruise when distance permits, so the
+requested linear speed is an actual cruise ceiling rather than a brief minimum-jerk peak.
+On calibrated Feetech hardware, each synchronized trajectory write also assigns
+proportional per-joint servo speeds so lightly loaded joints do not race ahead of
+gravity-loaded joints. Position-only paths ignore target orientation for timing because
+orientation is unconstrained. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper-linear validation, each segment uses destination-only coarse workspace
 validation while the normal joint, IK-continuity, rate/acceleration, following-error,
 fault, effort/contact, communication, and timeout guards remain active. Because this is
