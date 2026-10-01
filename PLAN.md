@@ -90,10 +90,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Run the supervised Cartesian traversal
   (D_UP→A_UP→B_UP→C_UP→D_UP→CENTER_UP) using software-leveled workspace Z from the
   existing A/B/C/D + D_UP calibration. Verify that the corrected endpoints preflight,
-  the initial 10 mm workspace-Z clearance lift behaves physically upward, and the paper
-  traversal remains at the requested height.
-- [ ] Review the first real-arm run using command-rate Cartesian IK before declaring the
-  linear planner physically smooth.
+  the startup move reaches the full reference/transport height before any lateral travel,
+  measured workspace Z passes the 5 mm completion gate, and the paper traversal remains at
+  the requested height.
+- [ ] Compare the 20 Hz paper command cadence against the known-smooth 20 Hz teleoperation
+  behavior before declaring the linear planner physically smooth.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
