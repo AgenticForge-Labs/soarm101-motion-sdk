@@ -102,7 +102,7 @@ def test_workspace_orientation_drift_is_diagnostic_only() -> None:
     assert checks["measurement_accepted"] is True
     assert checks["diagnostic_up_orientation_drift_deg"] == pytest.approx(16.52)
 
-def test_constant_height_demo_targets_use_workspace_geometry_and_seed_only_lift() -> None:
+def test_constant_height_demo_targets_anchor_to_taught_corners_plus_up_displacement() -> None:
     module = _load_example_module()
     rotation = tuple(tuple(float(value) for value in row) for row in np.eye(3))
     width = 0.2159
@@ -136,14 +136,15 @@ def test_constant_height_demo_targets_use_workspace_geometry_and_seed_only_lift(
         "wrist_flex": 0.0,
         "wrist_roll": 0.0,
     }
-    physical_corners = {
-        "A": (0.0, 0.0, 0.0),
-        "B": (width, 0.0, 0.0),
-        "C": (width, height, 0.0),
-        "D": (0.0, height, 0.0),
-    }
+
+    # Deliberately perturb the measured corners away from the fitted affine surface.
+    # This models the real hardware case where a globally fitted B_UP can become
+    # unreachable even though B itself and the trained D->UP displacement were measured.
     corner_positions = {
-        name: model(point) for name, point in physical_corners.items()
+        "A": model((0.0, 0.0, 0.0)) + np.array([0.001, -0.002, 0.001]),
+        "B": model((width, 0.0, 0.0)) + np.array([-0.008, 0.003, -0.002]),
+        "C": model((width, height, 0.0)) + np.array([0.002, 0.001, 0.002]),
+        "D": model((0.0, height, 0.0)) + np.array([0.0, 0.0, -0.001]),
     }
     corners = {
         "A": sample(
@@ -167,7 +168,8 @@ def test_constant_height_demo_targets_use_workspace_geometry_and_seed_only_lift(
             {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.5},
         ),
     }
-    up_position = model((0.0, height, reference_height))
+    measured_up_delta = np.array([0.021, -0.011, 0.096])
+    up_position = corner_positions["D"] + measured_up_delta
     up = sample(
         "UP",
         up_position,
@@ -189,18 +191,31 @@ def test_constant_height_demo_targets_use_workspace_geometry_and_seed_only_lift(
         up_sample=up,
     )
 
-    expected_xy = {
-        "D_UP": (0.0, height),
-        "A_UP": (0.0, 0.0),
-        "B_UP": (width, 0.0),
-        "C_UP": (width, height),
-        "D_UP_RETURN": (0.0, height),
-        "CENTER_UP": (width / 2.0, height / 2.0),
-    }
-    for name, position in positions.items():
-        physical = calibration.physical_position_from_model(position)
-        assert physical[:2] == pytest.approx(expected_xy[name], abs=1e-9)
-        assert physical[2] == pytest.approx(reference_height, abs=1e-9)
+    assert positions["D_UP"] == pytest.approx(up_position)
+    assert positions["D_UP_RETURN"] == pytest.approx(up_position)
+    assert positions["A_UP"] == pytest.approx(corner_positions["A"] + measured_up_delta)
+    assert positions["B_UP"] == pytest.approx(corner_positions["B"] + measured_up_delta)
+    assert positions["C_UP"] == pytest.approx(corner_positions["C"] + measured_up_delta)
+    expected_center = np.mean(
+        np.stack(
+            [
+                corner_positions["A"] + measured_up_delta,
+                corner_positions["B"] + measured_up_delta,
+                corner_positions["C"] + measured_up_delta,
+                corner_positions["D"] + measured_up_delta,
+            ]
+        ),
+        axis=0,
+    )
+    assert positions["CENTER_UP"] == pytest.approx(expected_center)
+
+    # The approximate affine inverse is diagnostic only; it does not redefine the
+    # measured-corner targets just to make all inverse-mapped Z values exactly equal.
+    diagnostic_z = [
+        calibration.physical_position_from_model(position)[2]
+        for position in positions.values()
+    ]
+    assert max(diagnostic_z) - min(diagnostic_z) > 1e-4
 
     lift = {
         name: up.joints_rad[name] - corners["D"].joints_rad[name]
@@ -212,10 +227,6 @@ def test_constant_height_demo_targets_use_workspace_geometry_and_seed_only_lift(
     }
     assert seeds["D_UP"] == pytest.approx(up.joints_rad)
     assert seeds["B_UP"] == pytest.approx(expected_b_seed)
-
-    # Constant physical height does not imply constant model/base-frame Z.
-    model_z = [float(position[2]) for position in positions.values()]
-    assert max(model_z) - min(model_z) > 0.01
 
 
 def test_hold_until_operator_release_stops_before_waiting(monkeypatch) -> None:
