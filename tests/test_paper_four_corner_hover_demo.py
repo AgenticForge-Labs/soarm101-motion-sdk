@@ -102,28 +102,14 @@ def test_workspace_orientation_drift_is_diagnostic_only() -> None:
     assert checks["measurement_accepted"] is True
     assert checks["diagnostic_up_orientation_drift_deg"] == pytest.approx(16.52)
 
-def test_constant_height_demo_targets_anchor_to_taught_corners_plus_up_displacement() -> None:
+def test_reachable_demo_targets_use_taught_lift_delta_and_fk() -> None:
     module = _load_example_module()
     rotation = tuple(tuple(float(value) for value in row) for row in np.eye(3))
-    width = 0.2159
-    height = 0.2794
-    reference_height = 0.107
-    origin = np.array([0.12, -0.03, -0.04])
-    linear = np.array(
-        [
-            [0.80, 0.05, 0.20],
-            [0.10, 0.95, -0.10],
-            [0.15, -0.12, 0.90],
-        ]
-    )
 
-    def model(point):
-        return origin + linear @ np.asarray(point, dtype=float)
-
-    def sample(name, position, joints):
+    def sample(name, joints):
         return module.Sample(
             name=name,
-            tcp_xyz_mm=tuple(float(value * 1000.0) for value in position),
+            tcp_xyz_mm=(0.0, 0.0, 0.0),
             tcp_rpy_deg=(0.0, 0.0, 0.0),
             rotation_matrix=rotation,
             joints_rad=dict(joints),
@@ -136,98 +122,66 @@ def test_constant_height_demo_targets_anchor_to_taught_corners_plus_up_displacem
         "wrist_flex": 0.0,
         "wrist_roll": 0.0,
     }
-
-    # Deliberately perturb the measured corners away from the fitted affine surface.
-    # This models the real hardware case where a globally fitted B_UP can become
-    # unreachable even though B itself and the trained D->UP displacement were measured.
-    corner_positions = {
-        "A": model((0.0, 0.0, 0.0)) + np.array([0.001, -0.002, 0.001]),
-        "B": model((width, 0.0, 0.0)) + np.array([-0.008, 0.003, -0.002]),
-        "C": model((width, height, 0.0)) + np.array([0.002, 0.001, 0.002]),
-        "D": model((0.0, height, 0.0)) + np.array([0.0, 0.0, -0.001]),
-    }
     corners = {
-        "A": sample(
-            "A",
-            corner_positions["A"],
-            {**base, "shoulder_pan": -0.4, "shoulder_lift": -0.3},
-        ),
-        "B": sample(
-            "B",
-            corner_positions["B"],
-            {**base, "shoulder_pan": 0.4, "shoulder_lift": -0.2},
-        ),
-        "C": sample(
-            "C",
-            corner_positions["C"],
-            {**base, "shoulder_pan": 0.3, "shoulder_lift": 0.4},
-        ),
-        "D": sample(
-            "D",
-            corner_positions["D"],
-            {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.5},
-        ),
+        "A": sample("A", {**base, "shoulder_pan": -0.4, "shoulder_lift": -0.3}),
+        "B": sample("B", {**base, "shoulder_pan": 0.4, "shoulder_lift": -0.2}),
+        "C": sample("C", {**base, "shoulder_pan": 0.3, "shoulder_lift": 0.4}),
+        "D": sample("D", {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.5}),
     }
-    measured_up_delta = np.array([0.021, -0.011, 0.096])
-    up_position = corner_positions["D"] + measured_up_delta
     up = sample(
         "UP",
-        up_position,
         {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.35, "wrist_flex": 0.1},
     )
-    calibration = module.fit_paper_workspace(
-        corner_positions,
-        up_position,
-        robot_id="so101",
-        arm_calibration_id="sha256:motor",
-        width_m=width,
-        height_m=height,
-        reference_height_m=reference_height,
-    )
 
-    positions, seeds = module.constant_height_demo_targets(
-        calibration,
+    class Model:
+        @staticmethod
+        def forward(joints, tcp=None):
+            del tcp
+            return module.Pose(
+                np.array(
+                    [
+                        joints["shoulder_pan"],
+                        joints["shoulder_lift"],
+                        joints["wrist_flex"],
+                    ],
+                    dtype=float,
+                ),
+                np.eye(3),
+            )
+
+    class Arm:
+        model = Model()
+        active_tcp = None
+
+        @staticmethod
+        def get_joint_limits():
+            return {name: (-3.0, 3.0) for name in base}
+
+    positions, seeds = module.reachable_demo_targets(
+        Arm(),
         corners=corners,
         up_sample=up,
     )
-
-    assert positions["D_UP"] == pytest.approx(up_position)
-    assert positions["D_UP_RETURN"] == pytest.approx(up_position)
-    assert positions["A_UP"] == pytest.approx(corner_positions["A"] + measured_up_delta)
-    assert positions["B_UP"] == pytest.approx(corner_positions["B"] + measured_up_delta)
-    assert positions["C_UP"] == pytest.approx(corner_positions["C"] + measured_up_delta)
-    expected_center = np.mean(
-        np.stack(
-            [
-                corner_positions["A"] + measured_up_delta,
-                corner_positions["B"] + measured_up_delta,
-                corner_positions["C"] + measured_up_delta,
-                corner_positions["D"] + measured_up_delta,
-            ]
-        ),
-        axis=0,
-    )
-    assert positions["CENTER_UP"] == pytest.approx(expected_center)
-
-    # The approximate affine inverse is diagnostic only; it does not redefine the
-    # measured-corner targets just to make all inverse-mapped Z values exactly equal.
-    diagnostic_z = [
-        calibration.physical_position_from_model(position)[2]
-        for position in positions.values()
-    ]
-    assert max(diagnostic_z) - min(diagnostic_z) > 1e-4
 
     lift = {
         name: up.joints_rad[name] - corners["D"].joints_rad[name]
         for name in base
     }
-    expected_b_seed = {
+    expected_b = {
         name: corners["B"].joints_rad[name] + lift[name]
         for name in base
     }
     assert seeds["D_UP"] == pytest.approx(up.joints_rad)
-    assert seeds["B_UP"] == pytest.approx(expected_b_seed)
-
+    assert seeds["B_UP"] == pytest.approx(expected_b)
+    assert positions["B_UP"] == pytest.approx(
+        np.array(
+            [
+                expected_b["shoulder_pan"],
+                expected_b["shoulder_lift"],
+                expected_b["wrist_flex"],
+            ]
+        )
+    )
 
 def test_hold_until_operator_release_stops_before_waiting(monkeypatch) -> None:
     module = _load_example_module()
