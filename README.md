@@ -133,12 +133,13 @@ measured UP point is required because SDK/model +Z is **not assumed to be physic
 Wrist/tool rotation while manually reaching the UP point is expected to change
 naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
 not gate workspace-measurement acceptance. After the final UP sample, the workflow counts down and enables torque so the arm
-holds the taught pose instead of sagging. Elevated Cartesian endpoints are anchored to
-the directly taught A/B/C/D model positions plus the directly measured D→UP displacement
-for the trained reference height. The accepted affine workspace fit remains diagnostic
-evidence instead of shifting measured corner targets; the taught D→UP posture change is
-used only as an IK seed. The segments themselves still run through `move_linear()` with
-position-only IK, with 1 mm IK waypoint spacing for this supervised replay. `--replay` reuses the saved teaching from any ordinary resting pose. During this
+holds the taught pose instead of sagging. Elevated replay endpoints are constructed as
+known-reachable targets by applying the taught D→UP **joint** delta to each taught
+A/B/C/D joint configuration and evaluating FK. Only D_UP was physically measured at the
+reference height; the other endpoint heights are reported as affine-estimated diagnostics
+rather than claimed to be exactly equal physical heights. The segments themselves still
+run through `move_linear()` with position-only IK, with 1 mm IK waypoint spacing for this
+supervised replay. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper-linear validation, each segment uses destination-only coarse workspace
 validation while the normal joint, IK-continuity, rate/acceleration, following-error,
 fault, effort/contact, communication, and timeout guards remain active. Because this is
