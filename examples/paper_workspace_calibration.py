@@ -169,8 +169,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=10.0,
         help=(
-            "maximum D->UP tool-orientation change; larger changes confound the lower-finger "
-            "probe with the modeled TCP"
+            "warning threshold for D->UP tool-orientation change; exceeding it records a "
+            "quality warning but does not discard an otherwise valid workspace measurement"
         ),
     )
     parser.add_argument(
@@ -391,17 +391,25 @@ def main() -> int:
             )
             orientation_ok = up_orientation_drift <= args.max_up_orientation_drift_deg
             up_scale_ok = args.min_up_scale <= calibration.model_up_scale <= args.max_up_scale
-            measurement_ok = (
-                table_ok and affine_ok and condition_ok and orientation_ok and up_scale_ok
-            )
+            measurement_ok = table_ok and affine_ok and condition_ok and up_scale_ok
+
+            quality_warnings: list[str] = []
+            if not orientation_ok:
+                quality_warnings.append(
+                    "D->UP tool orientation changed by "
+                    f"{up_orientation_drift:.2f} deg, above the "
+                    f"{args.max_up_orientation_drift_deg:.2f} deg warning threshold; "
+                    "fixed-finger/TCP offset may add a few millimeters of correspondence error"
+                )
 
             report["acceptance_checks"] = {
                 "table_fit_ok": table_ok,
                 "affine_fit_ok": affine_ok,
                 "linear_mapping_well_conditioned": condition_ok,
-                "up_probe_orientation_ok": orientation_ok,
+                "up_probe_orientation_within_warning_threshold": orientation_ok,
                 "up_scale_plausible": up_scale_ok,
                 "measurement_accepted": measurement_ok,
+                "quality_warnings": quality_warnings,
                 "diagnostic_up_vs_table_normal_angle_deg": (
                     calibration.up_vs_table_normal_angle_deg
                 ),
@@ -409,7 +417,7 @@ def main() -> int:
                     "max_table_fit_rms_mm": args.max_table_fit_rms_mm,
                     "max_affine_fit_rms_mm": args.max_affine_fit_rms_mm,
                     "max_linear_condition_number": args.max_linear_condition_number,
-                    "max_up_orientation_drift_deg": args.max_up_orientation_drift_deg,
+                    "up_orientation_drift_warning_deg": args.max_up_orientation_drift_deg,
                     "min_up_scale": args.min_up_scale,
                     "max_up_scale": args.max_up_scale,
                 },
@@ -433,11 +441,6 @@ def main() -> int:
                         "  the local physical-to-model mapping is too ill-conditioned "
                         "for reliable inversion"
                     )
-                if not orientation_ok:
-                    print(
-                        "  D->UP tool orientation changed too much for the lower-finger "
-                        "probe approximation"
-                    )
                 if not up_scale_ok:
                     print(
                         "  the model displacement for the measured UP height is implausibly "
@@ -448,6 +451,11 @@ def main() -> int:
                     "was attempted."
                 )
                 return 2
+
+            if quality_warnings:
+                print("\nWorkspace measurement accepted with warning:")
+                for warning in quality_warnings:
+                    print(f"  WARNING: {warning}")
 
             store = WorkspaceCalibrationStore(
                 config.robot_id,
