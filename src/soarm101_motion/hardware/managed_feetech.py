@@ -346,19 +346,25 @@ class FeetechBackend(_ProtocolFeetechBackend):
         }
 
     @staticmethod
-    def _validate_enable_positions_in_eeprom_limits(
+    def _validated_enable_goal_positions(
         raw_positions: Mapping[str, int],
         limits: Mapping[str, tuple[int, int]],
-    ) -> None:
-        """Refuse torque enable if a measured position would be clamped by firmware.
+        *,
+        tolerance_ticks: int = 8,
+    ) -> dict[str, int]:
+        """Return safe latch goals, tolerating tiny endpoint readout excursions.
 
         STS3215 position goals are constrained by the motor's EEPROM Min/Max
-        Position Limit registers. Safe enable latches each measured Present_Position
-        as Goal_Position before energizing torque, but that is only safe when the
-        measured value is already inside the active EEPROM range. Otherwise the
-        firmware may clamp the goal to a limit and move abruptly when torque is enabled.
+        Position Limit registers. A relaxed arm can read a few encoder counts beyond
+        a calibrated endpoint because of quantization, backlash, or mechanical settling.
+        Small excursions are therefore clamped to the nearest EEPROM limit before torque
+        enable. Larger excursions still fail closed before any goal or torque write.
         """
 
+        if tolerance_ticks < 0:
+            raise ValueError("tolerance_ticks must be non-negative")
+
+        goals: dict[str, int] = {}
         violations: list[str] = []
         invalid_ranges: list[str] = []
         for name, position in raw_positions.items():
@@ -368,19 +374,57 @@ class FeetechBackend(_ProtocolFeetechBackend):
                     f"{name}: invalid EEPROM limits {minimum}..{maximum}"
                 )
                 continue
-            if position < minimum or position > maximum:
-                violations.append(
-                    f"{name}: present {position} outside EEPROM limits "
-                    f"{minimum}..{maximum}"
-                )
+
+            if position < minimum:
+                delta = minimum - position
+                if delta <= tolerance_ticks:
+                    goals[name] = minimum
+                    logger.info(
+                        "clamping %s enable latch from raw %d to EEPROM minimum %d "
+                        "(%d ticks outside)",
+                        name,
+                        position,
+                        minimum,
+                        delta,
+                    )
+                else:
+                    violations.append(
+                        f"{name}: present {position} outside EEPROM limits "
+                        f"{minimum}..{maximum}"
+                    )
+                continue
+
+            if position > maximum:
+                delta = position - maximum
+                if delta <= tolerance_ticks:
+                    goals[name] = maximum
+                    logger.info(
+                        "clamping %s enable latch from raw %d to EEPROM maximum %d "
+                        "(%d ticks outside)",
+                        name,
+                        position,
+                        maximum,
+                        delta,
+                    )
+                else:
+                    violations.append(
+                        f"{name}: present {position} outside EEPROM limits "
+                        f"{minimum}..{maximum}"
+                    )
+                continue
+
+            goals[name] = position
 
         if invalid_ranges or violations:
             details = "; ".join((*invalid_ranges, *violations))
             raise SafetyViolationError(
                 "refusing torque enable because safe position latching cannot be "
-                f"guaranteed: {details}. With torque off, move the affected joint "
-                "inside its calibrated range or repair/re-run calibration before enabling."
+                f"guaranteed: {details}. Positions within {tolerance_ticks} encoder "
+                "ticks of a calibrated endpoint are tolerated and clamped inward; "
+                "larger violations require moving the joint inside range or repairing/"
+                "re-running calibration before enabling."
             )
+        return goals
 
     def enable_torque(self, motors: Sequence[str] | None = None) -> None:
         with self._io_lock:
@@ -410,10 +454,11 @@ class FeetechBackend(_ProtocolFeetechBackend):
             # between the pose we intend to hold and the Goal_Position write.
             limits = self._read_enable_position_limits(selected)
             raw_positions = {name: self.read_raw_position(name) for name in selected}
-            self._validate_enable_positions_in_eeprom_limits(raw_positions, limits)
+            latch_positions = self._validated_enable_goal_positions(raw_positions, limits)
 
-            # Only after all motors pass the precheck do we latch measured positions.
-            self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
+            # Only after all motors pass the precheck do we latch safe positions. Tiny
+            # endpoint excursions are clamped inward; commanded goals never exceed EEPROM.
+            self._write_raw_positions(latch_positions, speed_raw=1, acceleration_raw=1)
 
             enabled: list[str] = []
             try:
