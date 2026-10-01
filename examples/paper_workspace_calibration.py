@@ -50,10 +50,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import (
-    DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
-    TELEOP_SERVO_ACCELERATION_RAW,
-)
+from soarm101_motion.constants import DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
 from soarm101_motion.kinematics import IKOptions
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
@@ -653,40 +650,33 @@ def run_demo_targets(
     calibration: WorkspaceCalibration,
     positions: dict[str, np.ndarray],
     *,
-    endpoint_preflight: list[dict[str, object]],
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
     report_moves: list[dict[str, object]],
 ) -> None:
-    solutions = {
-        str(item["name"]): {
-            str(joint): float(value)
-            for joint, value in dict(item["joints_rad"]).items()
-        }
-        for item in endpoint_preflight
-    }
+    """Execute the leveled paper path with the SDK's Cartesian linear primitive."""
 
     for name, position in positions.items():
-        target_joints = solutions[name]
-        start_joints = dict(arm.get_joint_positions().positions)
-        path_check = preflight_joint_space_workspace_path(
-            arm,
-            calibration,
-            start_joints=start_joints,
-            target_joints=target_joints,
-        )
+        start_pose = arm.get_position()
+        start_physical = calibration.physical_position_from_model(start_pose.position)
+        target_physical = calibration.physical_position_from_model(position)
         print(
-            f"\nMoving to {name} with smooth joint-space replay... "
-            f"workspace Z min {path_check['minimum_workspace_z_mm']:.1f} mm"
+            f"\nMoving linearly to {name}... "
+            f"workspace Z {start_physical[2] * 1000.0:.1f} -> "
+            f"{target_physical[2] * 1000.0:.1f} mm"
         )
-        result = arm.move_joints(
-            target_joints,
-            speed=arm.config.default_joint_speed,
-            acceleration=arm.config.default_joint_acceleration,
-            servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
-            synchronize_servo_arrival=True,
+        result = arm.move_linear(
+            Pose(position, rotation),
+            orientation_mode="position_only",
+            speed=speed_mm_s / 1000.0,
+            acceleration=acceleration_mm_s2 / 1000.0,
+            # The measured calibrated workspace is authoritative for this experiment.
+            # Keep the generic coarse model as a destination sanity check only.
             workspace_check="target_only",
         )
         if not result.accepted or not result.completed:
-            raise RuntimeError(f"{name} joint motion did not complete: {result}")
+            raise RuntimeError(f"{name} Cartesian linear motion did not complete: {result}")
 
         actual = arm.get_position()
         actual_physical = calibration.physical_position_from_model(actual.position)
@@ -700,16 +690,22 @@ def run_demo_targets(
         report_moves.append(
             {
                 "name": name,
-                "mode": "joint_space_endpoint_replay",
-                "synchronized_servo_arrival": True,
+                "mode": "cartesian_move_linear",
+                "servo_tracking_profile": "teleop_authority",
                 "generic_workspace_check": "target_only",
+                "requested_start_workspace_xyz_mm": [
+                    float(value * 1000.0) for value in start_physical
+                ],
+                "target_workspace_xyz_mm": [
+                    float(value * 1000.0) for value in target_physical
+                ],
                 "target_model_xyz_mm": [
                     float(value * 1000.0) for value in position
                 ],
-                "target_joints_rad": target_joints,
-                "joint_path_preflight": path_check,
                 "actual_model_xyz_mm": actual_xyz_mm,
-                "actual_workspace_z_mm": float(actual_physical[2] * 1000.0),
+                "actual_workspace_xyz_mm": [
+                    float(value * 1000.0) for value in actual_physical
+                ],
             }
         )
 
@@ -949,10 +945,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 "endpoint's calibrated workspace X/Y."
             )
             print(
-                "Startup clearance uses Cartesian move_linear(); elevated paper traversal "
-                "uses preflighted smooth joint-space endpoint replay at "
-                f"{config.command_frequency_hz:.0f} Hz with synchronized per-joint "
-                "servo arrival pacing."
+                "Startup clearance and elevated paper traversal both use Cartesian "
+                f"move_linear() at {config.command_frequency_hz:.0f} Hz. Servo tracking "
+                "uses the same high-authority speed/acceleration profile as smooth teleoperation."
             )
             print(
                 f"Before paper travel, replay will command one straight calibrated-workspace "
@@ -1113,7 +1108,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     arm,
                     saved,
                     demo_positions,
-                    endpoint_preflight=preflight,
+                    rotation=d_up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
                 )
             except Exception as exc:
@@ -1483,9 +1480,8 @@ def main() -> int:
             )
             print("  A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                "The motion between elevated endpoints now reuses the preflighted joint "
-                "solutions with smooth joint-space interpolation; no extra elevated "
-                "teaching is required."
+                "The elevated endpoints are connected with Cartesian move_linear() at "
+                "constant calibrated workspace height; no extra elevated teaching is required."
             )
             input(
                 "\nPress Enter to run the full Cartesian linear path, "
@@ -1504,7 +1500,9 @@ def main() -> int:
                     arm,
                     saved,
                     demo_positions,
-                    endpoint_preflight=preflight,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
                 )
             except Exception as exc:
