@@ -113,14 +113,18 @@ model-space paper plane is retained as a diagnostic, **not** as an acceptance co
 A skewed local affine mapping can legitimately make those directions non-parallel; that
 skew is part of what this calibration is intended to measure.
 
-Even when saved, a newly measured calibration has:
+A newly measured calibration is initially saved with:
 
 ```text
 motion_validation_status = "unvalidated"
 ```
 
-That is deliberate. Measurement of the workspace frame is not the same thing as proving
-that autonomous Cartesian interpolation is physically safe.
+The same workflow may then run the supervised demonstration
+`D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`, all at the measured physical
+reference height. These targets are generated through the calibrated physical-to-model
+mapping and use position-only IK; they are not model +Z offsets. The report records
+preflight results and achieved TCP evidence. This demonstration is still narrower than
+general autonomous Cartesian validation.
 
 ## Relationship to the coarse floor guard
 
