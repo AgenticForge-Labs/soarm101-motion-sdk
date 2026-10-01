@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Hardware replay after #58 confirmed that translating the measured D→UP Cartesian
+  displacement still left B_UP 10.09 mm outside IK tolerance. The supervised paper
+  traversal now restores the previously preflighted construction: apply the taught D→UP
+  **joint** delta to each taught corner joint pose, verify limits, then use FK to define
+  known-reachable Cartesian endpoints. Only D_UP has direct physical-height evidence;
+  affine-inverse heights for the other endpoints are reported as diagnostics rather than
+  claimed as an exact constant physical height. Exact constant-height validation requires
+  additional elevated physical correspondences.
+
 - Corrected the constant-height paper replay after hardware preflight showed that the
   global affine transform placed B_UP 10.09 mm outside IK tolerance. The fixed supervised
   traversal now anchors A/B/C/D to their directly taught model positions and adds the
