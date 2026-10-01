@@ -23,6 +23,7 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.exceptions import (
     HardwareFaultError,
+    IKError,
     InvalidCommandError,
     MotionCancelledError,
     MotionTimeoutError,
@@ -380,17 +381,33 @@ class MotionController:
                 start_pose.position + (target.position - start_pose.position) * progress,
                 slerp([progress]).as_matrix()[0],
             )
-            solution = self.ik.solve_or_raise(
-                pose,
-                seed=seed,
-                tcp=tcp,
-                options=IKOptions(
-                    orientation_mode=orientation_mode,
-                    look_at=look_at,
-                    position_tolerance_m=self.config.cartesian_position_tolerance_m,
-                    multi_start=index == 1,
-                ),
+            options = IKOptions(
+                orientation_mode=orientation_mode,
+                look_at=look_at,
+                position_tolerance_m=self.config.cartesian_position_tolerance_m,
+                multi_start=index == 1,
             )
+            try:
+                solution = self.ik.solve_or_raise(
+                    pose,
+                    seed=seed,
+                    tcp=tcp,
+                    options=options,
+                )
+            except IKError:
+                if options.multi_start:
+                    raise
+                solution = self.ik.solve_or_raise(
+                    pose,
+                    seed=seed,
+                    tcp=tcp,
+                    options=IKOptions(
+                        orientation_mode=orientation_mode,
+                        look_at=look_at,
+                        position_tolerance_m=self.config.cartesian_position_tolerance_m,
+                        multi_start=True,
+                    ),
+                )
             candidate = validate_joint_targets(solution.joints, limits=limits)
             jump = max(abs(candidate[name] - seed[name]) for name in ARM_JOINTS)
             if jump > self.config.max_ik_waypoint_jump_radians:
