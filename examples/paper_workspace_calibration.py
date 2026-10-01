@@ -659,14 +659,24 @@ def main() -> int:
             arm.enable()
             moves = report["demo_moves"]
             assert isinstance(moves, list)
-            run_demo_targets(
-                arm,
-                demo_positions,
-                rotation=up.rotation,
-                speed_mm_s=args.speed_mm_s,
-                acceleration_mm_s2=args.acceleration_mm_s2,
-                report_moves=moves,
-            )
+            try:
+                run_demo_targets(
+                    arm,
+                    demo_positions,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    report_moves=moves,
+                )
+            except BaseException as exc:
+                report["demo_completed"] = False
+                report["demo_error"] = f"{type(exc).__name__}: {exc}"
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                raise
+
             report["demo_completed"] = True
             args.output.write_text(
                 json.dumps(report, indent=2) + "\n",
