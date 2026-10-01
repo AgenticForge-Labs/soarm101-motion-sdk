@@ -134,7 +134,8 @@ Wrist/tool rotation while manually reaching the UP point is expected to change
 naturally as needed to place the fixed fingertip; it is recorded for diagnosis but does
 not gate workspace-measurement acceptance. After an accepted measurement, the default workflow preflights and then, with one
 explicit confirmation, traverses the elevated paper perimeter and finishes at its center
-using calibrated physical-paper coordinates and position-only IK. `--measure-only`
+using each measured corner translated by the directly measured D→UP model displacement,
+with position-only IK. `--measure-only`
 skips powered motion. The historical `paper_four_corner_hover_demo.py` filename remains
 only as a compatibility wrapper.
 
