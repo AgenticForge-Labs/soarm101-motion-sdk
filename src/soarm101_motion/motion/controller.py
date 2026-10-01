@@ -216,53 +216,59 @@ class MotionController:
         return 10 * alpha**3 - 15 * alpha**4 + 6 * alpha**5
 
     @staticmethod
-    def _cosine_cruise_profile(
+    def _responsive_cruise_profile(
         delta: float,
         speed: float,
         acceleration: float,
-    ) -> tuple[float, float, float]:
-        """Return peak speed, ramp time, and cruise time for a smooth S-curve.
+    ) -> tuple[float, float, float, float]:
+        """Return peak speed, launch time, cruise time, and smooth decel time.
 
-        Velocity uses half-cosine acceleration/deceleration ramps with zero
-        acceleration at the transitions to and from constant-speed cruise. The
-        requested speed and acceleration are true ceilings rather than minimum-jerk
-        peak values.
+        Hardware validation showed that the previous zero-acceleration cosine launch
+        produced sub-encoder-resolution Cartesian commands during the first few 20 Hz
+        samples. This profile uses bounded constant acceleration from rest so the launch
+        becomes resolvable sooner, while retaining the existing half-cosine deceleration
+        that already behaves smoothly near the endpoint.
+
+        Requested speed and acceleration remain hard ceilings.
         """
 
         if delta < 1e-12:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
         requested_speed = max(float(speed), 1e-12)
         requested_acceleration = max(float(acceleration), 1e-12)
-        full_ramp_time = math.pi * requested_speed / (2.0 * requested_acceleration)
-        full_ramp_distance = requested_speed * full_ramp_time
-        if delta >= full_ramp_distance:
-            cruise_time = (delta - full_ramp_distance) / requested_speed
-            return requested_speed, full_ramp_time, cruise_time
+        launch_time = requested_speed / requested_acceleration
+        decel_time = math.pi * requested_speed / (2.0 * requested_acceleration)
+        launch_distance = requested_speed * launch_time / 2.0
+        decel_distance = requested_speed * decel_time / 2.0
+        ramp_distance = launch_distance + decel_distance
+        if delta >= ramp_distance:
+            cruise_time = (delta - ramp_distance) / requested_speed
+            return requested_speed, launch_time, cruise_time, decel_time
 
+        ramp_factor = 0.5 + math.pi / 4.0
         peak_speed = math.sqrt(
-            2.0 * requested_acceleration * delta / math.pi
+            delta * requested_acceleration / ramp_factor
         )
-        ramp_time = math.pi * peak_speed / (2.0 * requested_acceleration)
-        return peak_speed, ramp_time, 0.0
+        launch_time = peak_speed / requested_acceleration
+        decel_time = math.pi * peak_speed / (2.0 * requested_acceleration)
+        return peak_speed, launch_time, 0.0, decel_time
 
     @classmethod
-    def _cosine_cruise_duration(
+    def _responsive_cruise_duration(
         cls,
         delta: float,
         speed: float,
         acceleration: float,
     ) -> float:
-        peak_speed, ramp_time, cruise_time = cls._cosine_cruise_profile(
-            delta,
-            speed,
-            acceleration,
+        peak_speed, launch_time, cruise_time, decel_time = (
+            cls._responsive_cruise_profile(delta, speed, acceleration)
         )
         if peak_speed <= 0.0:
             return 0.0
-        return 2.0 * ramp_time + cruise_time
+        return launch_time + cruise_time + decel_time
 
     @classmethod
-    def _cosine_cruise_progress(
+    def _responsive_cruise_progress(
         cls,
         delta: float,
         speed: float,
@@ -271,35 +277,31 @@ class MotionController:
     ) -> float:
         if delta < 1e-12:
             return 1.0
-        peak_speed, ramp_time, cruise_time = cls._cosine_cruise_profile(
-            delta,
-            speed,
-            acceleration,
+        peak_speed, launch_time, cruise_time, decel_time = (
+            cls._responsive_cruise_profile(delta, speed, acceleration)
         )
-        total = 2.0 * ramp_time + cruise_time
+        total = launch_time + cruise_time + decel_time
         if elapsed <= 0.0:
             return 0.0
         if elapsed >= total:
             return 1.0
 
-        ramp_distance = peak_speed * ramp_time / 2.0
-        if elapsed < ramp_time:
-            position = 0.5 * peak_speed * (
-                elapsed
-                - ramp_time / math.pi * math.sin(math.pi * elapsed / ramp_time)
-            )
-        elif elapsed <= ramp_time + cruise_time:
-            position = ramp_distance + peak_speed * (elapsed - ramp_time)
+        launch_acceleration = peak_speed / launch_time
+        launch_distance = peak_speed * launch_time / 2.0
+        if elapsed < launch_time:
+            position = 0.5 * launch_acceleration * elapsed**2
+        elif elapsed <= launch_time + cruise_time:
+            position = launch_distance + peak_speed * (elapsed - launch_time)
         else:
-            tau = elapsed - ramp_time - cruise_time
+            tau = elapsed - launch_time - cruise_time
             position = (
-                ramp_distance
+                launch_distance
                 + peak_speed * cruise_time
                 + 0.5
                 * peak_speed
                 * (
                     tau
-                    + ramp_time / math.pi * math.sin(math.pi * tau / ramp_time)
+                    + decel_time / math.pi * math.sin(math.pi * tau / decel_time)
                 )
             )
         return min(1.0, max(0.0, position / delta))
@@ -449,10 +451,11 @@ class MotionController:
     ) -> tuple[tuple[dict[str, float], ...], tuple[Pose, ...]]:
         """Solve the smooth Cartesian trajectory directly at command-rate samples.
 
-        The scalar path uses acceleration-limited half-cosine ramps with an optional
-        constant-speed cruise region. Every command sample gets its own sequential IK
-        solution; there is no secondary piecewise-linear interpolation between sparse
-        joint-space knots.
+        The scalar path uses a bounded constant-acceleration launch, optional
+        constant-speed cruise, and a half-cosine deceleration. The more assertive launch
+        avoids sub-resolution early setpoints on real STS3215 hardware while every
+        command sample still gets its own sequential IK solution. There is no secondary
+        piecewise-linear interpolation between sparse joint-space knots.
         """
 
         steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
@@ -466,7 +469,7 @@ class MotionController:
         seed = dict(start_joints)
 
         for index, time_fraction in enumerate(fractions[1:], start=1):
-            progress = self._cosine_cruise_progress(
+            progress = self._responsive_cruise_progress(
                 1.0,
                 normalized_speed,
                 normalized_acceleration,
@@ -574,7 +577,7 @@ class MotionController:
         if normalized_speed_limits:
             normalized_speed = min(normalized_speed_limits)
             normalized_acceleration = min(normalized_acceleration_limits)
-            profile_duration = self._cosine_cruise_duration(
+            profile_duration = self._responsive_cruise_duration(
                 1.0,
                 normalized_speed,
                 normalized_acceleration,
