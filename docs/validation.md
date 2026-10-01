@@ -86,14 +86,22 @@ when quality gates pass, under:
 ~/.config/soarm101/workspace/<robot-id>.json
 ```
 
-After the measurement passes its geometry checks, the default workflow preflights an
-elevated paper path with torque off and asks once for confirmation before powered motion.
-The path is `D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`, all at the physical
-reference height. Powered targets are constructed by adding the directly measured D→UP model displacement
-to each directly measured paper corner; CENTER_UP is the mean elevated corner position.
-The affine workspace fit remains calibration evidence but is not extrapolated to create
-the powered elevated targets. Position-only IK is used. Use `--measure-only` to retain the
-measurement-only behavior.
+After the final UP sample, the workflow counts down and enables torque to hold that
+taught pose. It then preflights the elevated Cartesian endpoints and asks once for
+confirmation before motion. The path is
+`D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
+
+Each endpoint is generated from a known-reachable joint configuration: the taught D→UP
+joint delta is applied to the taught A/B/C/D joint poses and FK supplies the Cartesian
+endpoint. The segment itself is still executed with `move_linear()` and position-only
+IK, so this remains a Cartesian-linear-motion test rather than a joint-replay test.
+
+`--replay` reuses the saved teaching without touching A/B/C/D/UP again and can begin
+from an ordinary resting pose. For this supervised paper-linear test, every segment uses
+destination-only coarse workspace validation. The dynamic/joint/hardware safety stack
+remains active; only the coarse intermediate workspace geometry is relaxed because that
+model has already produced false positives around the measured table. Use `--measure-only`
+to retain the non-moving behavior.
 
 See [Workspace calibration](workspace-calibration.md) for the persisted contract,
 quality gates, and provenance.

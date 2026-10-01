@@ -4,11 +4,16 @@ The operator teaches all four paper corners on the table, then manually teaches 
 known physical height above corner D. Those five physical correspondences are used to
 fit a local affine map from paper/workspace coordinates into the SDK kinematic model.
 
-After an accepted measurement, all elevated paper targets are preflighted with torque
-off. With one explicit operator confirmation, the script then uses the measured
-physical->model mapping to traverse D-up -> A-up -> B-up -> C-up -> D-up and finish at
-the elevated paper center. Cartesian targets use position-only IK so wrist/tool
-orientation may change naturally.
+After the final UP teaching sample, the script counts down and enables torque so the arm
+holds that exact pose instead of sagging. Elevated Cartesian endpoints are then built
+from known-reachable joint configurations inferred from the taught corners plus the
+taught D->UP posture change. The actual motion between those endpoints is still executed
+with Cartesian move_linear() and position-only IK.
+
+A saved teaching can also be replayed later from any ordinary resting pose with --replay.
+The first Cartesian move to D_UP validates the destination but relaxes the coarse
+workspace-path model for the unknown starting pose; subsequent paper segments use the
+normal full workspace path checks.
 
 The resulting calibration records:
 - where the taught table plane lies in model coordinates;
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from math import hypot
@@ -168,107 +174,96 @@ def evaluate_measurement_acceptance(
     return measurement_ok, checks
 
 
-def elevated_demo_positions(
-    *,
-    corners: dict[str, Sample],
-    up_sample: Sample,
-) -> dict[str, np.ndarray]:
-    """Translate each measured paper corner by the measured D->UP model displacement.
-
-    This deliberately avoids extrapolating the global affine fit into the powered
-    demonstration. The table corners and D->UP displacement are all direct measurements.
-    """
-
-    required = {"A", "B", "C", "D"}
-    if set(corners) != required:
-        raise ValueError(f"expected corners {sorted(required)}, got {sorted(corners)}")
-
-    up_delta = up_sample.position_m - corners["D"].position_m
-    elevated = {
-        "D_UP": corners["D"].position_m + up_delta,
-        "A_UP": corners["A"].position_m + up_delta,
-        "B_UP": corners["B"].position_m + up_delta,
-        "C_UP": corners["C"].position_m + up_delta,
-        "D_UP_RETURN": corners["D"].position_m + up_delta,
-    }
-    elevated["CENTER_UP"] = np.mean(
-        np.stack(
-            [
-                elevated["A_UP"],
-                elevated["B_UP"],
-                elevated["C_UP"],
-                elevated["D_UP"],
-            ]
-        ),
-        axis=0,
-    )
-    return elevated
-
-
 def _joint_delta(first: dict[str, float], second: dict[str, float]) -> dict[str, float]:
     return {name: float(second[name] - first[name]) for name in first}
 
 
-def _offset_seed(
+def _offset_joints(
     base: dict[str, float],
     delta: dict[str, float],
 ) -> dict[str, float]:
     return {name: float(base[name] + delta[name]) for name in base}
 
 
-def _unique_seeds(seeds: list[dict[str, float]]) -> list[dict[str, float]]:
-    unique: list[dict[str, float]] = []
-    fingerprints: set[tuple[tuple[str, float], ...]] = set()
-    for seed in seeds:
-        fingerprint = tuple(sorted((name, round(value, 10)) for name, value in seed.items()))
-        if fingerprint in fingerprints:
-            continue
-        fingerprints.add(fingerprint)
-        unique.append(seed)
-    return unique
+def reachable_demo_targets(
+    arm: SOARM101,
+    *,
+    corners: dict[str, Sample],
+    up_sample: Sample,
+) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float]]]:
+    """Build Cartesian endpoints from known-reachable inferred joint configurations.
+
+    The taught D->UP joint delta is applied to each taught paper corner. FK of those
+    joint configurations defines the Cartesian endpoints. The demonstration still uses
+    move_linear() between endpoints; this construction only makes each endpoint itself
+    reachable by definition.
+    """
+
+    required = {"A", "B", "C", "D"}
+    if set(corners) != required:
+        raise ValueError(f"expected corners {sorted(required)}, got {sorted(corners)}")
+
+    lift_delta = _joint_delta(corners["D"].joints_rad, up_sample.joints_rad)
+    elevated_joints = {
+        "D_UP": dict(up_sample.joints_rad),
+        "A_UP": _offset_joints(corners["A"].joints_rad, lift_delta),
+        "B_UP": _offset_joints(corners["B"].joints_rad, lift_delta),
+        "C_UP": _offset_joints(corners["C"].joints_rad, lift_delta),
+        "D_UP_RETURN": dict(up_sample.joints_rad),
+    }
+    center_base = {
+        name: float(
+            np.mean([corners[label].joints_rad[name] for label in ("A", "B", "C", "D")])
+        )
+        for name in up_sample.joints_rad
+    }
+    elevated_joints["CENTER_UP"] = _offset_joints(center_base, lift_delta)
+
+    limits = arm.get_joint_limits()
+    for target_name, joints in elevated_joints.items():
+        for joint_name, value in joints.items():
+            lower, upper = limits[joint_name]
+            if not lower <= value <= upper:
+                raise RuntimeError(
+                    f"{target_name} inferred {joint_name}={value:.4f} rad is outside "
+                    f"{lower:.4f}..{upper:.4f}"
+                )
+
+    positions = {
+        name: arm.model.forward(joints, tcp=arm.active_tcp).position.copy()
+        for name, joints in elevated_joints.items()
+    }
+    return positions, elevated_joints
 
 
 def preflight_demo_targets(
     arm: SOARM101,
     positions: dict[str, np.ndarray],
     *,
-    corners: dict[str, Sample],
-    up_sample: Sample,
+    preferred_seeds: dict[str, dict[str, float]],
     rotation: np.ndarray,
 ) -> list[dict[str, object]]:
-    """Solve all demo waypoints read-only using measured-pose-derived seed candidates."""
-
-    up_joint_delta = _joint_delta(corners["D"].joints_rad, up_sample.joints_rad)
-    corner_for_target = {
-        "D_UP": "D",
-        "A_UP": "A",
-        "B_UP": "B",
-        "C_UP": "C",
-        "D_UP_RETURN": "D",
-    }
+    """Solve each reachable Cartesian endpoint read-only before powered motion."""
 
     results: list[dict[str, object]] = []
-    previous_solution = dict(up_sample.joints_rad)
-
+    previous_solution: dict[str, float] | None = None
     for name, position in positions.items():
-        seed_candidates: list[dict[str, float]] = [previous_solution, dict(up_sample.joints_rad)]
-        corner_name = corner_for_target.get(name)
-        if corner_name is not None:
-            corner = corners[corner_name]
-            seed_candidates.insert(0, _offset_seed(corner.joints_rad, up_joint_delta))
-            seed_candidates.append(dict(corner.joints_rad))
-        else:
-            # CENTER_UP starts from the preceding D_UP_RETURN solution, but the
-            # elevated-corner seeds provide additional branches if needed.
-            for corner in corners.values():
-                seed_candidates.append(_offset_seed(corner.joints_rad, up_joint_delta))
+        seeds = [preferred_seeds[name]]
+        if previous_solution is not None:
+            seeds.append(previous_solution)
 
         attempts: list[dict[str, object]] = []
         successes: list[tuple[float, object, int]] = []
-        for seed_index, seed in enumerate(_unique_seeds(seed_candidates)):
-            target = Pose(position, rotation)
+        fingerprints: set[tuple[tuple[str, float], ...]] = set()
+        for seed_index, seed in enumerate(seeds):
+            fingerprint = tuple(
+                sorted((joint, round(value, 10)) for joint, value in seed.items())
+            )
+            if fingerprint in fingerprints:
+                continue
+            fingerprints.add(fingerprint)
             solution = arm.solve_ik(
-                target,
+                Pose(position, rotation),
                 seed=seed,
                 orientation_mode="position_only",
             )
@@ -286,9 +281,8 @@ def preflight_demo_targets(
         if not successes:
             best = min(attempts, key=lambda item: float(item["position_error_mm"]))
             raise RuntimeError(
-                f"{name} preflight IK failed for all {len(attempts)} seeds; "
-                f"best position error={float(best['position_error_mm']):.2f} mm; "
-                f"{best['message']}"
+                f"{name} preflight IK failed; best position error="
+                f"{float(best['position_error_mm']):.2f} mm; {best['message']}"
             )
 
         _, solution, chosen_seed_index = min(successes, key=lambda item: item[0])
@@ -307,6 +301,7 @@ def preflight_demo_targets(
         )
     return results
 
+
 def run_demo_targets(
     arm: SOARM101,
     positions: dict[str, np.ndarray],
@@ -323,6 +318,7 @@ def run_demo_targets(
             orientation_mode="position_only",
             speed=speed_mm_s / 1000.0,
             acceleration=acceleration_mm_s2 / 1000.0,
+            workspace_check="target_only",
         )
         if not result.accepted or not result.completed:
             raise RuntimeError(f"{name} motion did not complete: {result}")
@@ -342,6 +338,48 @@ def run_demo_targets(
                 "actual_model_xyz_mm": actual_xyz_mm,
             }
         )
+
+
+def _countdown_hold(arm: SOARM101, seconds: int = 3) -> None:
+    print("\nTeaching complete. Keep the arm still; torque will engage and hold this pose.")
+    for remaining in range(seconds, 0, -1):
+        print(f"  holding in {remaining}...")
+        time.sleep(1.0)
+    arm.enable()
+    print("Torque enabled. Arm is holding its current pose.")
+
+
+def _sample_from_payload(payload: dict[str, object], name: str) -> Sample:
+    samples = payload.get("samples")
+    if not isinstance(samples, list):
+        raise ValueError("saved report has no samples")
+    for item in samples:
+        if not isinstance(item, dict) or item.get("name") != name:
+            continue
+        return Sample(
+            name=name,
+            tcp_xyz_mm=tuple(float(value) for value in item["tcp_xyz_mm"]),
+            tcp_rpy_deg=tuple(float(value) for value in item["tcp_rpy_deg"]),
+            rotation_matrix=tuple(
+                tuple(float(value) for value in row)
+                for row in item["rotation_matrix"]
+            ),
+            joints_rad={
+                str(joint): float(value)
+                for joint, value in dict(item["joints_rad"]).items()
+            },
+        )
+    raise ValueError(f"saved report is missing sample {name}")
+
+
+def load_saved_teaching(path: Path) -> tuple[dict[str, object], list[Sample], Sample]:
+    payload_obj = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload_obj, dict):
+        raise ValueError("saved report root must be a JSON object")
+    payload = dict(payload_obj)
+    corners = [_sample_from_payload(payload, name) for name in ("A", "B", "C", "D")]
+    up = _sample_from_payload(payload, "UP")
+    return payload, corners, up
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -425,7 +463,118 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="save the workspace measurement but skip the powered paper demonstration",
     )
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help=(
+            "reuse the saved A/B/C/D/UP teaching in --output and run the Cartesian "
+            "linear sequence from the arm's current resting pose"
+        ),
+    )
     return parser
+
+
+def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
+    report, samples, up = load_saved_teaching(args.output)
+    corner_samples = {sample.name: sample for sample in samples}
+    reference_height = float(report.get("reference_height_mm", 0.0))
+    if reference_height <= 0.0:
+        raise RuntimeError("saved report has no valid reference_height_mm")
+
+    with SOARM101(config) as arm:
+        try:
+            store = WorkspaceCalibrationStore(config.robot_id, path=args.workspace_output)
+            saved = store.load()
+            if arm.calibration_id and saved.arm_calibration_id != arm.calibration_id:
+                raise RuntimeError(
+                    "saved workspace calibration does not match the active motor calibration"
+                )
+
+            print("Paper Cartesian linear replay")
+            print(
+                f"Loaded saved teaching at {reference_height:.1f} mm reference height from "
+                f"{args.output}."
+            )
+            print(
+                "The arm may start from any ordinary resting pose. This supervised paper "
+                "validation uses target-only coarse workspace checking for each segment; "
+                "dynamic, joint, effort, fault, following-error, and timeout guards remain active."
+            )
+            _countdown_hold(arm)
+            arm.tool.open()
+
+            demo_positions, preferred_seeds = reachable_demo_targets(
+                arm,
+                corners=corner_samples,
+                up_sample=up,
+            )
+            print("\nRead-only endpoint preflight while holding the current pose...")
+            preflight = preflight_demo_targets(
+                arm,
+                demo_positions,
+                preferred_seeds=preferred_seeds,
+                rotation=up.rotation,
+            )
+            for item in preflight:
+                xyz = item["target_model_xyz_mm"]
+                assert isinstance(xyz, list)
+                print(
+                    f"  {item['name']}: "
+                    f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
+                    f"IK error {item['position_error_mm']:.2f} mm"
+                )
+
+            report["replayed_at"] = datetime.now(timezone.utc).isoformat()
+            report["demo_target_strategy"] = (
+                "reachable_FK_endpoints_from_taught_corner_joints_plus_taught_lift_delta"
+            )
+            report["demo_preflight"] = preflight
+            report["demo_targets_model_xyz_mm"] = {
+                name: [float(value * 1000.0) for value in position]
+                for name, position in demo_positions.items()
+            }
+            report["demo_moves"] = []
+            report["autonomous_motion_attempted"] = False
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+            input(
+                "\nPress Enter to run D_UP -> A_UP -> B_UP -> C_UP -> "
+                "D_UP -> CENTER_UP with Cartesian move_linear(), or Ctrl+C to stop... "
+            )
+            report["autonomous_motion_attempted"] = True
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+            moves = report["demo_moves"]
+            assert isinstance(moves, list)
+            try:
+                run_demo_targets(
+                    arm,
+                    demo_positions,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    report_moves=moves,
+                )
+            except BaseException as exc:
+                report["demo_completed"] = False
+                report["demo_error"] = f"{type(exc).__name__}: {exc}"
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                raise
+
+            report["demo_completed"] = True
+            report.pop("demo_error", None)
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            print("\nCartesian linear replay completed at CENTER_UP.")
+            return 0
+        finally:
+            try:
+                arm.relax()
+                print("Motors relaxed.")
+            except Exception as exc:
+                print(f"WARNING: could not confirm relax during cleanup: {exc}")
 
 
 def main() -> int:
@@ -445,8 +594,12 @@ def main() -> int:
         raise SystemExit("--speed-mm-s must be positive")
     if args.acceleration_mm_s2 <= 0.0:
         raise SystemExit("--acceleration-mm-s2 must be positive")
+    if args.replay and args.measure_only:
+        raise SystemExit("--replay and --measure-only cannot be used together")
 
     config = _resolve_config(args)
+    if args.replay:
+        return run_saved_replay(args, config)
 
     print("Paper workspace calibration — MANUAL / TORQUE-OFF GEOMETRY")
     print(f"Reference sheet: {args.width_mm:.1f} x {args.height_mm:.1f} mm")
@@ -520,6 +673,7 @@ def main() -> int:
                 "UP",
                 f"touch/hold the measured point {args.reference_height_mm:.1f} mm above D",
             )
+            _countdown_hold(arm)
 
             report["samples"] = [asdict(sample) for sample in [*samples, up]]
             points = {sample.name: sample.position_m for sample in samples}
@@ -680,12 +834,13 @@ def main() -> int:
                 return 0
 
             corner_samples = {sample.name: sample for sample in samples}
-            demo_positions = elevated_demo_positions(
+            demo_positions, preferred_seeds = reachable_demo_targets(
+                arm,
                 corners=corner_samples,
                 up_sample=up,
             )
             report["demo_target_strategy"] = (
-                "measured_corner_plus_measured_D_to_UP_translation"
+                "reachable_FK_endpoints_from_taught_corner_joints_plus_taught_lift_delta"
             )
             report["measured_up_delta_model_mm"] = [
                 float(value * 1000.0)
@@ -697,14 +852,13 @@ def main() -> int:
             }
 
             print(
-                f"\nPreflighting elevated paper demonstration at "
-                f"{args.reference_height_mm:.1f} mm physical height with torque OFF..."
+                f"\nRead-only endpoint preflight at the taught "
+                f"{args.reference_height_mm:.1f} mm reference height while holding UP..."
             )
             preflight = preflight_demo_targets(
                 arm,
                 demo_positions,
-                corners=corner_samples,
-                up_sample=up,
+                preferred_seeds=preferred_seeds,
                 rotation=up.rotation,
             )
             report["demo_preflight"] = preflight
@@ -722,21 +876,21 @@ def main() -> int:
             )
 
             print(
-                "\nThe arm is currently relaxed at the manually taught UP point above D."
+                "\nThe arm is holding the manually taught UP pose."
             )
             print(
-                "The powered path will use the measured paper corners plus the measured "
-                "D->UP displacement, NOT model +Z and not affine extrapolation:"
+                "The Cartesian endpoints come from known-reachable FK poses inferred from "
+                "the taught corners plus the taught D->UP joint change:"
             )
             print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                f"The D->UP displacement was taught at {args.reference_height_mm:.1f} mm "
-                "physical height and is translated to each measured corner; CENTER_UP is "
-                "the mean of the four elevated measured corners."
+                f"The D->UP posture change was taught at {args.reference_height_mm:.1f} mm "
+                "physical height. Each endpoint is reachable by construction; the motion "
+                "between endpoints is still Cartesian move_linear()."
             )
             input(
-                "\nPress Enter to enable torque and run the full supervised path, "
-                "or Ctrl+C to leave the arm relaxed... "
+                "\nPress Enter to run the full Cartesian linear path, "
+                "or Ctrl+C to stop while holding... "
             )
 
             report["autonomous_motion_attempted"] = True
@@ -744,7 +898,6 @@ def main() -> int:
                 json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
             )
-            arm.enable()
             moves = report["demo_moves"]
             assert isinstance(moves, list)
             try:

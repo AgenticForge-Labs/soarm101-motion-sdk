@@ -63,11 +63,14 @@ changes require development discipline; robot use requires conservative hardware
     than writing directly to servo registers unless the task is explicitly low-level
     hardware development and the safety implications are understood.
 11. Do not infer physical up or table height from model/base +Z. Use the measured workspace
-    calibration workflow. Its supervised elevated-paper demonstration must derive targets
-    from the directly taught paper corners plus the directly taught D→UP displacement
-    (not model-axis offsets or unvalidated affine extrapolation) and use the same guarded
-    Cartesian primitives. Broader autonomous Cartesian use remains unvalidated until that
-    hardware demonstration succeeds and its evidence is reviewed.
+    calibration workflow. Its supervised elevated-paper test derives known-reachable
+    Cartesian endpoints from the taught corner joints plus the taught D→UP joint delta,
+    then tests the same `move_linear()` primitive used elsewhere. Because the generic
+    coarse workspace model is known to misrepresent this measured table, this specific
+    supervised validation may use destination-only coarse workspace checks while retaining
+    joint, IK continuity, rate/acceleration, following-error, fault, effort/contact,
+    communication, and timeout guards. Broader autonomous Cartesian use remains unvalidated
+    until the hardware evidence is reviewed.
 12. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
     agents; task-solving strategies, observe/action loops, model/provider instructions, and
     benchmark policy belong outside the SDK-facing CLI reference.

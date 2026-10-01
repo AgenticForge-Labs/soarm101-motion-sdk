@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Reworked the paper experiment around its actual purpose: validating Cartesian
+  `move_linear()`. After UP teaching, the arm now counts down and holds that pose;
+  `--replay` can reuse the saved teaching from an ordinary resting pose without
+  reteaching. Elevated endpoints are generated from known-reachable FK configurations
+  inferred from taught corner joints plus the taught D→UP joint delta, while the segments
+  themselves remain Cartesian linear moves. The supervised paper workflow now uses
+  target-only coarse workspace checks on each segment, retaining the joint/dynamic/
+  following-error/fault/effort/communication/timeout guard stack.
+
 - Refined the supervised paper traversal after hardware preflight showed affine-
   extrapolated B_UP was 14 mm outside the IK tolerance. Powered targets now use the
   directly measured A/B/C/D model positions translated by the directly measured D→UP

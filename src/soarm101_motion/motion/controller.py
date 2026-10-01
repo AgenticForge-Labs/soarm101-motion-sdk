@@ -405,7 +405,7 @@ class MotionController:
         cartesian: list[Pose] = []
         joints: list[dict[str, float]] = [dict(start_joints)]
         seed = dict(start_joints)
-        limits = self._effective_limits()
+        limits = self._limits_for_present(start_joints)
         for index, fraction in enumerate(fractions):
             pose = Pose(
                 start_pose.position + (target.position - start_pose.position) * fraction,

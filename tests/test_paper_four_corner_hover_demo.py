@@ -36,6 +36,7 @@ def test_paper_workspace_calibration_help_runs_without_hardware() -> None:
     assert "--hover-height-mm" in result.stdout
     assert "--workspace-output" in result.stdout
     assert "--measure-only" in result.stdout
+    assert "--replay" in result.stdout
     assert "--speed-mm-s" in result.stdout
 
 
@@ -99,52 +100,84 @@ def test_workspace_orientation_drift_is_diagnostic_only() -> None:
     assert checks["measurement_accepted"] is True
     assert checks["diagnostic_up_orientation_drift_deg"] == pytest.approx(16.52)
 
-def test_elevated_demo_positions_translate_measured_corners_by_measured_up() -> None:
+def test_reachable_demo_targets_use_taught_lift_delta_and_fk() -> None:
     module = _load_example_module()
     rotation = tuple(tuple(float(value) for value in row) for row in np.eye(3))
-    joints = {
+
+    def sample(name, joints):
+        return module.Sample(
+            name=name,
+            tcp_xyz_mm=(0.0, 0.0, 0.0),
+            tcp_rpy_deg=(0.0, 0.0, 0.0),
+            rotation_matrix=rotation,
+            joints_rad=dict(joints),
+        )
+
+    base = {
         "shoulder_pan": 0.0,
         "shoulder_lift": 0.0,
         "elbow_flex": 0.0,
         "wrist_flex": 0.0,
         "wrist_roll": 0.0,
     }
-
-    def sample(name, xyz_mm):
-        return module.Sample(
-            name=name,
-            tcp_xyz_mm=tuple(float(value) for value in xyz_mm),
-            tcp_rpy_deg=(0.0, 0.0, 0.0),
-            rotation_matrix=rotation,
-            joints_rad=dict(joints),
-        )
-
     corners = {
-        "A": sample("A", (10.0, 20.0, -5.0)),
-        "B": sample("B", (170.0, 25.0, -8.0)),
-        "C": sample("C", (180.0, 270.0, -15.0)),
-        "D": sample("D", (20.0, 280.0, -12.0)),
+        "A": sample("A", {**base, "shoulder_pan": -0.4, "shoulder_lift": -0.3}),
+        "B": sample("B", {**base, "shoulder_pan": 0.4, "shoulder_lift": -0.2}),
+        "C": sample("C", {**base, "shoulder_pan": 0.3, "shoulder_lift": 0.4}),
+        "D": sample("D", {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.5}),
     }
-    up = sample("UP", (32.0, 290.0, 88.0))
+    up = sample(
+        "UP",
+        {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.35, "wrist_flex": 0.1},
+    )
 
-    positions = module.elevated_demo_positions(corners=corners, up_sample=up)
+    class Model:
+        @staticmethod
+        def forward(joints, tcp=None):
+            del tcp
+            return module.Pose(
+                np.array(
+                    [
+                        joints["shoulder_pan"],
+                        joints["shoulder_lift"],
+                        joints["wrist_flex"],
+                    ],
+                    dtype=float,
+                ),
+                np.eye(3),
+            )
 
-    up_delta = np.array([12.0, 10.0, 100.0]) / 1000.0
-    assert positions["D_UP"] == pytest.approx(up.position_m)
-    assert positions["A_UP"] == pytest.approx(corners["A"].position_m + up_delta)
-    assert positions["B_UP"] == pytest.approx(corners["B"].position_m + up_delta)
-    assert positions["C_UP"] == pytest.approx(corners["C"].position_m + up_delta)
-    assert positions["D_UP_RETURN"] == pytest.approx(up.position_m)
-    expected_center = np.mean(
-        np.stack(
+    class Arm:
+        model = Model()
+        active_tcp = None
+
+        @staticmethod
+        def get_joint_limits():
+            return {name: (-3.0, 3.0) for name in base}
+
+    positions, seeds = module.reachable_demo_targets(
+        Arm(),
+        corners=corners,
+        up_sample=up,
+    )
+
+    lift = {
+        name: up.joints_rad[name] - corners["D"].joints_rad[name]
+        for name in base
+    }
+    expected_b = {
+        name: corners["B"].joints_rad[name] + lift[name]
+        for name in base
+    }
+    assert seeds["D_UP"] == pytest.approx(up.joints_rad)
+    assert seeds["B_UP"] == pytest.approx(expected_b)
+    assert positions["B_UP"] == pytest.approx(
+        np.array(
             [
-                corners["A"].position_m,
-                corners["B"].position_m,
-                corners["C"].position_m,
-                corners["D"].position_m,
+                expected_b["shoulder_pan"],
+                expected_b["shoulder_lift"],
+                expected_b["wrist_flex"],
             ]
-        ),
-        axis=0,
-    ) + up_delta
-    assert positions["CENTER_UP"] == pytest.approx(expected_center)
+        )
+    )
 

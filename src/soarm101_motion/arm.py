@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from math import pi
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -469,9 +470,14 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        workspace_check: Literal["full", "target_only", "off"] = "full",
     ) -> MotionResult | MotionHandle[MotionResult]:
         look_at_array = np.asarray(look_at, dtype=float) if look_at is not None else None
-        if self.config.enable_workspace_checks:
+        if workspace_check not in {"full", "target_only", "off"}:
+            raise InvalidCommandError(
+                "workspace_check must be 'full', 'target_only', or 'off'"
+            )
+        if self.config.enable_workspace_checks and workspace_check != "off":
             planned = self.motion.plan_linear(
                 target,
                 tcp=self.active_tcp,
@@ -480,12 +486,20 @@ class SOARM101:
                 speed=speed,
                 acceleration=acceleration,
             )
-            validate_workspace_path(
-                self.model,
-                planned.command_samples,
-                tcp=self.active_tcp,
-                **self._workspace_kwargs(),
-            )
+            if workspace_check == "full":
+                validate_workspace_path(
+                    self.model,
+                    planned.command_samples,
+                    tcp=self.active_tcp,
+                    **self._workspace_kwargs(),
+                )
+            else:
+                validate_workspace_configuration(
+                    self.model,
+                    planned.command_samples[-1],
+                    tcp=self.active_tcp,
+                    **self._workspace_kwargs(),
+                )
         return self.motion.move_linear(
             target,
             tcp=self.active_tcp,
