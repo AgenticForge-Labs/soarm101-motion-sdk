@@ -88,8 +88,8 @@ when quality gates pass, under:
 
 After the final UP sample, the workflow counts down and enables torque to hold that
 taught pose. It then preflights the elevated Cartesian endpoints and asks once for
-confirmation before motion. The path is
-`D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
+confirmation before motion. Replay first makes one calibrated-Z clearance lift, then the
+paper path is `A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`.
 
 The operator teaches A/B/C/D and one physical D_UP reference. Replay first reconstructs
 the previously known-reachable endpoint branch, inverse-maps each endpoint into calibrated
