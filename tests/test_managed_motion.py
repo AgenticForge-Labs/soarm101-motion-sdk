@@ -95,3 +95,49 @@ def test_move_linear_uses_responsive_servo_profile() -> None:
         for speed, acceleration in calls
     )
 
+
+
+def test_linear_plan_solves_ik_at_each_command_rate_cartesian_sample(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start_joints = dict(arm.get_joint_positions().positions)
+        start_pose = arm.get_position()
+        target = Pose(start_pose.position + np.array([-0.012, 0.0, 0.0]), start_pose.rotation)
+        start_x = float(start_pose.position[0])
+
+        def nonlinear_solution(pose, *, seed, tcp, options):
+            del seed, tcp, options
+            progress_like = (float(pose.position[0]) - start_x) / -0.012
+            joints = dict(start_joints)
+            joints["shoulder_pan"] += 0.02 * progress_like**2
+            joints["wrist_roll"] += 0.01 * progress_like**3
+            return SimpleNamespace(joints=joints)
+
+        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", nonlinear_solution)
+        plan = arm.motion.plan_linear(
+            target,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+        )
+
+    assert len(plan.command_samples) == len(plan.cartesian_waypoints)
+    assert len(plan.command_samples) > 10
+    for command, pose in zip(
+        plan.command_samples[1:],
+        plan.cartesian_waypoints[1:],
+        strict=True,
+    ):
+        progress_like = (float(pose.position[0]) - start_x) / -0.012
+        assert command["shoulder_pan"] == pytest.approx(
+            start_joints["shoulder_pan"] + 0.02 * progress_like**2,
+            abs=1e-10,
+        )
+        assert command["wrist_roll"] == pytest.approx(
+            start_joints["wrist_roll"] + 0.01 * progress_like**3,
+            abs=1e-10,
+        )
