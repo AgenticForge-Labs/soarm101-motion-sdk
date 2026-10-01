@@ -114,8 +114,11 @@ limits. With the default 20 mm command, measured workspace Z must rise by at lea
 before motion continues to A_UP. This separates the safety purpose of the clearance from
 servo endpoint accuracy. Because the generic model-frame floor is known to
 disagree with the measured table, only that preflighted startup lift executes with the
-coarse workspace check disabled. The paper
-traversal endpoints continue to use destination-only coarse workspace validation. The
+coarse workspace check disabled. Elevated joint-space traversal first validates the full
+locus in calibrated workspace coordinates and then executes with
+`workspace_check="target_only"` in the generic model envelope. This retains destination
+sanity checking while avoiding a false failure on a measured starting pose below model
+Z=0. The
 dynamic/joint/hardware safety stack remains active.
 Use `--measure-only` to retain the non-moving behavior.
 

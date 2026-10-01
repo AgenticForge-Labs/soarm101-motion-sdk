@@ -683,6 +683,7 @@ def run_demo_targets(
             acceleration=arm.config.default_joint_acceleration,
             servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
             synchronize_servo_arrival=True,
+            workspace_check="target_only",
         )
         if not result.accepted or not result.completed:
             raise RuntimeError(f"{name} joint motion did not complete: {result}")
@@ -701,6 +702,7 @@ def run_demo_targets(
                 "name": name,
                 "mode": "joint_space_endpoint_replay",
                 "synchronized_servo_arrival": True,
+                "generic_workspace_check": "target_only",
                 "target_model_xyz_mm": [
                     float(value * 1000.0) for value in position
                 ],

@@ -551,8 +551,10 @@ def test_run_demo_targets_uses_preflighted_joint_endpoint_and_teleop_profile() -
     assert "servo_speed_raw" not in kwargs
     assert kwargs["servo_acceleration_raw"] == module.TELEOP_SERVO_ACCELERATION_RAW
     assert kwargs["synchronize_servo_arrival"] is True
+    assert kwargs["workspace_check"] == "target_only"
     assert moves[0]["mode"] == "joint_space_endpoint_replay"
     assert moves[0]["synchronized_servo_arrival"] is True
+    assert moves[0]["generic_workspace_check"] == "target_only"
 
 
 def test_endpoint_preflight_prefers_joint_continuity_over_tiny_residual_difference() -> None:

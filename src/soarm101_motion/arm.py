@@ -222,10 +222,23 @@ class SOARM101:
         positions: Mapping[str, float] | Sequence[float],
         *,
         relative: bool,
+        workspace_check: Literal["full", "target_only", "off"] = "full",
     ) -> None:
-        if not self.config.enable_workspace_checks:
+        if workspace_check not in {"full", "target_only", "off"}:
+            raise InvalidCommandError(
+                "workspace_check must be 'full', 'target_only', or 'off'"
+            )
+        if not self.config.enable_workspace_checks or workspace_check == "off":
             return
         current, target = self._resolve_joint_target(positions, relative=relative)
+        if workspace_check == "target_only":
+            validate_workspace_configuration(
+                self.model,
+                target,
+                tcp=self.active_tcp,
+                **self._workspace_kwargs(),
+            )
+            return
         max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
         steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
         samples = tuple(
@@ -370,8 +383,13 @@ class SOARM101:
         servo_speed_raw: int | None = None,
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
+        workspace_check: Literal["full", "target_only", "off"] = "full",
     ) -> MotionResult | MotionHandle[MotionResult]:
-        self._validate_joint_workspace_path(positions, relative=relative)
+        self._validate_joint_workspace_path(
+            positions,
+            relative=relative,
+            workspace_check=workspace_check,
+        )
         return self.motion.move_joints(
             positions,
             speed=speed,

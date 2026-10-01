@@ -781,6 +781,9 @@ descend, IK remains continuous, and all solved joints remain inside effective li
 After execution, the measured workspace Z rise itself is the acceptance criterion. With
 the default 20 mm command, replay requires at least 10 mm measured rise before paper travel
 begins at A_UP. Hardware evidence for this threshold is explicit: the dragging case rose
-only about 5.4 mm, while the later visually acceptable startup rose about 14.0 mm. The generic coarse workspace check is disabled
-only for that verified startup-lift execution; the normal motion/runtime safety stack
-remains active.
+only about 5.4 mm, while the later visually acceptable startup rose about 14.0 mm. The
+generic coarse workspace check is disabled only for that verified startup-lift execution.
+For elevated joint-space replay, the calibrated full joint locus is validated first and
+the SDK then uses `workspace_check="target_only"` for the generic model envelope. This
+retains a generic destination check without re-rejecting sample 0 solely because the
+measured table lies below model Z=0. The normal motion/runtime safety stack remains active.

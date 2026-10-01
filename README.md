@@ -154,7 +154,12 @@ motion. On calibrated Feetech hardware, each 20 Hz joint sample derives proporti
 per-joint servo speeds from the planned encoder-tick increments so all joints target the
 next sample on a common arrival horizon instead of racing at unrestricted speed. Before
 each move, the complete joint-space locus is FK-sampled and rejected if calibrated
-workspace Z would dip more than 5 mm below the lower endpoint. The paper workflow uses a 20 Hz host command cadence; the SDK-wide
+workspace Z would dip more than 5 mm below the lower endpoint. Because the generic
+model-frame table floor can disagree with the measured paper frame, powered endpoint
+moves use the SDK's explicit `target_only` generic workspace mode after that calibrated
+full-path validation: the destination still passes the generic workspace sanity check,
+but the already-validated path is not rejected merely because its measured starting pose
+lies below model Z=0. The paper workflow uses a 20 Hz host command cadence; the SDK-wide
 planned-motion default remains 50 Hz. `--replay` reuses the saved teaching from any ordinary resting pose. During this
 supervised paper validation, the startup clearance remains Cartesian while elevated
 endpoint traversal is joint-space.

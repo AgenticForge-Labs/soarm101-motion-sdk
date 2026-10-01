@@ -76,9 +76,12 @@ changes require development discipline; robot use requires conservative hardware
     Elevated endpoint motion reuses the read-only preflight joint solutions rather than
     forcing straight Cartesian IK through an infeasible intermediate pose. Before each
     endpoint move, deterministic FK sampling of the joint-space locus must show calibrated
-    workspace Z stays within 5 mm of the lower endpoint height. Paper joint replay should
-    use the SDK's calibrated synchronized-servo-arrival option rather than a fixed
-    unrestricted servo speed so all joints share the planned sample horizon. The startup clearance is
+    workspace Z stays within 5 mm of the lower endpoint height. After that calibrated
+    full-path validation, paper joint replay may use the SDK's explicit `target_only`
+    generic workspace mode so a known-invalid model-frame table floor at the starting pose
+    does not veto the move; the generic destination workspace check must still pass. Paper
+    joint replay should use the SDK's calibrated synchronized-servo-arrival option rather
+    than a fixed unrestricted servo speed so all joints share the planned sample horizon. The startup clearance is
     validated in calibrated workspace coordinates (fixed X/Y, nondecreasing physical Z,
     bounded IK continuity and joint limits); the generic model-frame Z floor is not
     authoritative for that verified clearance move

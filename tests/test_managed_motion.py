@@ -351,3 +351,44 @@ def test_joint_move_rejects_fixed_and_synchronized_servo_speed_together() -> Non
                 servo_speed_raw=0,
                 synchronize_servo_arrival=True,
             )
+
+
+def test_joint_target_only_workspace_mode_skips_full_path_guard(monkeypatch) -> None:
+    import soarm101_motion.arm as arm_module
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.02
+        calls = {"target": 0}
+
+        def reject_full_path(*args, **kwargs):
+            del args, kwargs
+            raise AssertionError("full joint workspace guard should not run")
+
+        def accept_target(*args, **kwargs):
+            del args, kwargs
+            calls["target"] += 1
+
+        monkeypatch.setattr(arm_module, "validate_workspace_path", reject_full_path)
+        monkeypatch.setattr(
+            arm_module,
+            "validate_workspace_configuration",
+            accept_target,
+        )
+
+        arm.move_joints(target, workspace_check="target_only")
+
+    assert calls["target"] == 1
+
+
+def test_invalid_joint_workspace_mode_is_rejected() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.02
+        with pytest.raises(InvalidCommandError, match="workspace_check"):
+            arm.move_joints(
+                target,
+                workspace_check="anything",  # type: ignore[arg-type]
+            )
