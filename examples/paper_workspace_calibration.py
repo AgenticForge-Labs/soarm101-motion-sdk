@@ -589,12 +589,10 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             print("Motors relaxed.")
             return 0
         finally:
-            if arm.is_enabled:
-                try:
-                    arm.relax()
-                    print("Motors relaxed during cleanup.")
-                except Exception as exc:
-                    print(f"WARNING: could not confirm relax during cleanup: {exc}")
+            try:
+                arm.relax()
+            except Exception as exc:
+                print(f"WARNING: could not confirm relax during cleanup: {exc}")
 
 
 def main() -> int:
