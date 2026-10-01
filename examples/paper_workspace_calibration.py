@@ -322,6 +322,24 @@ def startup_clearance_height_m(
     return float(current_workspace_z_m) + float(lift_m)
 
 
+def startup_required_measured_rise_m(
+    *,
+    commanded_lift_m: float,
+    minimum_rise_m: float,
+    legacy_height_tolerance_m: float | None = None,
+) -> float:
+    """Resolve the measured-rise gate for the one-shot startup clearance.
+
+    New behavior is expressed directly as the minimum physical rise that must be
+    observed. The older target-shortfall option is retained as a compatibility
+    override and converted into the equivalent minimum rise.
+    """
+
+    if legacy_height_tolerance_m is not None:
+        return max(0.0, float(commanded_lift_m) - float(legacy_height_tolerance_m))
+    return float(minimum_rise_m)
+
+
 def ordered_paper_replay_targets(
     positions: dict[str, np.ndarray],
     preferred_seeds: dict[str, dict[str, float]],
@@ -855,12 +873,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--startup-min-rise-mm",
+        type=float,
+        default=10.0,
+        help=(
+            "minimum measured calibrated-workspace Z rise required after the one-shot "
+            "startup clearance before paper travel; default 10 mm"
+        ),
+    )
+    parser.add_argument(
         "--startup-height-tolerance-mm",
         type=float,
-        default=5.0,
+        default=None,
         help=(
-            "maximum allowed measured calibrated-workspace Z shortfall after the startup "
-            "lift before lateral travel is refused; default 5 mm"
+            "legacy compatibility option: maximum allowed shortfall from the commanded "
+            "startup lift. When supplied, it overrides --startup-min-rise-mm."
         ),
     )
     parser.add_argument(
@@ -915,8 +942,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 f"{config.command_frequency_hz:.0f} Hz with the teleoperation servo profile."
             )
             print(
-                f"Before paper travel, replay will make one straight calibrated-workspace "
-                f"Z clearance move of {args.startup_lift_mm:.1f} mm, then enter at A_UP."
+                f"Before paper travel, replay will command one straight calibrated-workspace "
+                f"Z clearance move of {args.startup_lift_mm:.1f} mm and require at least "
+                f"{args.startup_min_rise_mm:.1f} mm measured rise before entering A_UP."
             )
             print(
                 "The arm may start from an ordinary resting pose. Read-only IK preflight "
@@ -1029,20 +1057,29 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
 
                 final_pose = arm.get_position()
                 final_physical = saved.physical_position_from_model(final_pose.position)
-                minimum_clear_z = (
-                    startup_target_z - args.startup_height_tolerance_mm / 1000.0
+                required_rise_m = startup_required_measured_rise_m(
+                    commanded_lift_m=args.startup_lift_mm / 1000.0,
+                    minimum_rise_m=args.startup_min_rise_mm / 1000.0,
+                    legacy_height_tolerance_m=(
+                        None
+                        if args.startup_height_tolerance_mm is None
+                        else args.startup_height_tolerance_mm / 1000.0
+                    ),
                 )
+                measured_rise_m = float(final_physical[2] - current_physical[2])
                 print(
                     f"  workspace Z after clearance lift = "
                     f"{final_physical[2] * 1000.0:.1f} mm "
-                    f"(target {startup_target_z * 1000.0:.1f} mm)"
+                    f"(target {startup_target_z * 1000.0:.1f} mm; "
+                    f"measured rise {measured_rise_m * 1000.0:.1f} mm; "
+                    f"required >= {required_rise_m * 1000.0:.1f} mm)"
                 )
-                if float(final_physical[2]) < minimum_clear_z:
+                if measured_rise_m < required_rise_m:
                     raise RuntimeError(
                         "startup clearance lift did not achieve enough measured rise; "
-                        f"target={startup_target_z * 1000.0:.1f} mm, "
-                        f"actual={final_physical[2] * 1000.0:.1f} mm, "
-                        f"required>={minimum_clear_z * 1000.0:.1f} mm. "
+                        f"commanded={args.startup_lift_mm:.1f} mm, "
+                        f"measured={measured_rise_m * 1000.0:.1f} mm, "
+                        f"required>={required_rise_m * 1000.0:.1f} mm. "
                         "Refusing paper travel."
                     )
                 moves.append(
@@ -1051,6 +1088,8 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                         "start_workspace_z_mm": float(current_physical[2] * 1000.0),
                         "target_workspace_z_mm": float(startup_target_z * 1000.0),
                         "actual_workspace_z_mm": float(final_physical[2] * 1000.0),
+                        "measured_workspace_z_rise_mm": float(measured_rise_m * 1000.0),
+                        "required_workspace_z_rise_mm": float(required_rise_m * 1000.0),
                         "actual_model_xyz_mm": [
                             float(value * 1000.0) for value in final_pose.position
                         ],
@@ -1121,8 +1160,17 @@ def main() -> int:
         raise SystemExit("--replay and --measure-only cannot be used together")
     if args.startup_lift_mm <= 0.0:
         raise SystemExit("--startup-lift-mm must be positive")
-    if args.startup_height_tolerance_mm <= 0.0:
-        raise SystemExit("--startup-height-tolerance-mm must be positive")
+    if args.startup_min_rise_mm <= 0.0:
+        raise SystemExit("--startup-min-rise-mm must be positive")
+    if args.startup_min_rise_mm > args.startup_lift_mm:
+        raise SystemExit("--startup-min-rise-mm cannot exceed --startup-lift-mm")
+    if args.startup_height_tolerance_mm is not None:
+        if args.startup_height_tolerance_mm <= 0.0:
+            raise SystemExit("--startup-height-tolerance-mm must be positive when supplied")
+        if args.startup_height_tolerance_mm >= args.startup_lift_mm:
+            raise SystemExit(
+                "--startup-height-tolerance-mm must be smaller than --startup-lift-mm"
+            )
 
     config = _resolve_config(args)
     if args.replay:
