@@ -369,6 +369,7 @@ class SOARM101:
         wait: bool = True,
         servo_speed_raw: int | None = None,
         servo_acceleration_raw: int | None = None,
+        synchronize_servo_arrival: bool = False,
     ) -> MotionResult | MotionHandle[MotionResult]:
         self._validate_joint_workspace_path(positions, relative=relative)
         return self.motion.move_joints(
@@ -379,6 +380,7 @@ class SOARM101:
             wait=wait,
             servo_speed_raw=servo_speed_raw,
             servo_acceleration_raw=servo_acceleration_raw,
+            synchronize_servo_arrival=synchronize_servo_arrival,
         )
 
     def move_home(
