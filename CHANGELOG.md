@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Cartesian `move_linear()` no longer solves sparse IK waypoints and then linearly
+  interpolates between those joint-space knots. Hardware testing showed that reducing the
+  knot spacing to 1 mm did not remove visible shaking. Linear planning now applies the
+  minimum-jerk progress law in Cartesian space and solves sequential IK directly at each
+  host command-rate sample. Joint limits, per-step limits, velocity/acceleration retiming,
+  workspace validation, cached-plan start validation, and the responsive servo profile
+  remain in force.
 - Hardware replay after #58 confirmed that translating the measured D→UP Cartesian
   displacement still left B_UP 10.09 mm outside IK tolerance. The supervised paper
   traversal now restores the previously preflighted construction: apply the taught D→UP
