@@ -365,7 +365,7 @@ def test_preflighted_startup_lift_executes_with_generic_workspace_check_off() ->
     assert target.position == pytest.approx(np.array([0.1, 0.2, -0.01]))
     assert kwargs["workspace_check"] == "off"
     assert kwargs["orientation_mode"] == "position_only"
-    assert kwargs["speed"] == pytest.approx(0.010)
+    assert kwargs["speed"] == pytest.approx(0.020)
     assert kwargs["acceleration"] == pytest.approx(0.100)
 
 
