@@ -224,6 +224,8 @@ def test_responsive_cruise_profile_uses_requested_speed_and_acceleration_ceiling
 
 
 def test_responsive_cruise_profile_retains_smooth_endpoint_deceleration() -> None:
+    import numpy as np
+
     from soarm101_motion.motion.controller import MotionController
 
     distance = 0.220
