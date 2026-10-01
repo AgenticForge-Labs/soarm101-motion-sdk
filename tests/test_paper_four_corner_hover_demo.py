@@ -458,103 +458,56 @@ def test_joint_space_workspace_preflight_rejects_midpath_z_dip() -> None:
         )
 
 
-def test_run_demo_targets_uses_preflighted_joint_endpoint_and_teleop_profile() -> None:
+def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> None:
     from types import SimpleNamespace
 
     module = _load_example_module()
-    joint_names = (
-        "shoulder_pan",
-        "shoulder_lift",
-        "elbow_flex",
-        "wrist_flex",
-        "wrist_roll",
-    )
-
-    class Model:
-        @staticmethod
-        def forward(joints, tcp=None):
-            del tcp
-            return module.Pose(
-                np.array(
-                    [
-                        float(joints["shoulder_pan"]),
-                        float(joints["shoulder_lift"]),
-                        0.100 + float(joints["wrist_flex"]) * 0.01,
-                    ]
-                ),
-                np.eye(3),
-            )
 
     class Calibration:
         @staticmethod
         def physical_position_from_model(position):
             return np.asarray(position, dtype=float)
 
-    class JointRead:
-        def __init__(self, positions):
-            self.positions = positions
-
     class Arm:
-        model = Model()
-        active_tcp = None
-        config = SimpleNamespace(
-            default_joint_speed=0.45,
-            default_joint_acceleration=1.2,
-        )
-
         def __init__(self):
-            self.joints = {name: 0.0 for name in joint_names}
+            self.position = module.Pose(np.array([0.0, 0.0, 0.107]), np.eye(3))
             self.calls = []
 
-        def get_joint_positions(self):
-            return JointRead(dict(self.joints))
-
         def get_position(self):
-            return self.model.forward(self.joints)
+            return self.position
 
-        def move_joints(self, target, **kwargs):
-            self.calls.append((dict(target), dict(kwargs)))
-            self.joints = dict(target)
+        def move_linear(self, target, **kwargs):
+            self.calls.append((target, dict(kwargs)))
+            self.position = target
             return SimpleNamespace(accepted=True, completed=True)
 
-        def move_linear(self, *args, **kwargs):
-            raise AssertionError("elevated paper traversal must not use move_linear")
+        def move_joints(self, *args, **kwargs):
+            raise AssertionError("paper linear validation must not replay joint targets")
 
     arm = Arm()
-    target_joints = {name: 0.0 for name in joint_names}
-    target_joints["shoulder_pan"] = 0.10
-    target_joints["wrist_flex"] = 0.05
-    target_pose = arm.model.forward(target_joints)
-    positions = {"A_UP": target_pose.position.copy()}
-    endpoint_preflight = [
-        {
-            "name": "A_UP",
-            "joints_rad": target_joints,
-            "position_error_mm": 0.0,
-        }
-    ]
+    positions = {"B_UP": np.array([0.200, 0.0, 0.107])}
     moves = []
 
     module.run_demo_targets(
         arm,
         Calibration(),
         positions,
-        endpoint_preflight=endpoint_preflight,
+        rotation=np.eye(3),
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
         report_moves=moves,
     )
 
     assert len(arm.calls) == 1
-    commanded, kwargs = arm.calls[0]
-    assert commanded == pytest.approx(target_joints)
-    assert kwargs["speed"] == pytest.approx(0.45)
-    assert kwargs["acceleration"] == pytest.approx(1.2)
-    assert "servo_speed_raw" not in kwargs
-    assert kwargs["servo_acceleration_raw"] == module.TELEOP_SERVO_ACCELERATION_RAW
-    assert kwargs["synchronize_servo_arrival"] is True
+    target, kwargs = arm.calls[0]
+    assert target.position == pytest.approx(np.array([0.200, 0.0, 0.107]))
+    assert kwargs["orientation_mode"] == "position_only"
+    assert kwargs["speed"] == pytest.approx(0.020)
+    assert kwargs["acceleration"] == pytest.approx(0.100)
     assert kwargs["workspace_check"] == "target_only"
-    assert moves[0]["mode"] == "joint_space_endpoint_replay"
-    assert moves[0]["synchronized_servo_arrival"] is True
-    assert moves[0]["generic_workspace_check"] == "target_only"
+    assert moves[0]["mode"] == "cartesian_move_linear"
+    assert moves[0]["servo_tracking_profile"] == "teleop_authority"
+    assert moves[0]["target_workspace_xyz_mm"][2] == pytest.approx(107.0)
 
 
 def test_endpoint_preflight_prefers_joint_continuity_over_tiny_residual_difference() -> None:
