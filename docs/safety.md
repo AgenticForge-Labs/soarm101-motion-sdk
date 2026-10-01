@@ -40,10 +40,12 @@ live teleoperation releases a parked leader so it is back-drivable again.
 
 - Normal connection and read-only diagnosis do not rewrite motor configuration.
 - Direct hardware writes are rejected while torque is disabled.
-- Enabling torque latches measured positions as goals. If a position is no more than
-  8 encoder ticks (about 0.7°) outside a calibrated EEPROM limit, its goal is clamped
-  inward to that limit and the GUI logs the correction. Larger violations still block
-  enable before any goal or torque write.
+- Enabling torque latches measured positions as goals. A relaxed mechanism can settle a
+  few encoder counts beyond an EEPROM endpoint because of quantization/backlash. If a
+  measured position is no more than 8 encoder ticks (about 0.7°) outside a calibrated
+  EEPROM limit, only the startup latch goal is clamped inward to that limit. Larger
+  violations still block enable before any goal or torque write, and ordinary commanded
+  positions remain constrained to the calibrated limits.
 - Feetech transport and synchronized writes use one reentrant lock.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.
