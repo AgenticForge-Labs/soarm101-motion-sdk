@@ -129,9 +129,10 @@ python examples/paper_workspace_calibration.py --replay
 
 Replay may begin from an ordinary resting pose. It loads the saved A/B/C/D plus the single physically measured D_UP reference,
 counts down and enables torque to hold the current pose, opens the moving jaw, preflights
-the endpoints, then waits for one Enter before running
-D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. It must not require reteaching merely
-because an earlier motion/preflight attempt failed.
+the endpoints, then waits for one Enter before running one 20 mm calibrated-Z clearance
+move followed by A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP. D_UP remains the physical
+height reference but is not revisited first merely because it was the teaching point. It
+must not require reteaching merely because an earlier motion/preflight attempt failed.
 
 Use `--measure-only` when a non-moving calibration capture is wanted.
 
