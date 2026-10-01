@@ -53,7 +53,7 @@ This records FK geometry and predicts D, but does not command motion.
 Then run the four-corner workspace calibration:
 
 ```bash
-python examples/paper_four_corner_hover_demo.py --reference-height-mm 50
+python examples/paper_workspace_calibration.py --reference-height-mm 50
 ```
 
 Teach A->B->C->D clockwise, then manually place the same fixed lower finger at a
