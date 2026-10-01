@@ -162,6 +162,8 @@ def test_workspace_height_targets_preserve_workspace_xy_and_set_reference_z() ->
 
     class Calibration:
         reference_height_m = 0.107
+        physical_width_m = 0.2159
+        physical_height_m = 0.2794
 
         @staticmethod
         def physical_position_from_model(position):
@@ -200,7 +202,11 @@ def test_workspace_height_targets_preserve_workspace_xy_and_set_reference_z() ->
     for name, target in positions.items():
         before = Calibration.physical_position_from_model(baseline[name])
         after = Calibration.physical_position_from_model(target)
-        assert after[:2] == pytest.approx(before[:2])
+        if name == "CENTER_UP":
+            assert after[0] == pytest.approx(Calibration.physical_width_m / 2.0)
+            assert after[1] == pytest.approx(Calibration.physical_height_m / 2.0)
+        else:
+            assert after[:2] == pytest.approx(before[:2])
         assert after[2] == pytest.approx(0.107)
         assert baseline_z_mm[name] == pytest.approx(before[2] * 1000.0)
         assert name in seeds
@@ -618,3 +624,91 @@ def test_startup_clearance_gate_uses_measured_rise_not_target_shortfall() -> Non
         minimum_rise_m=0.010,
         legacy_height_tolerance_m=0.005,
     ) == pytest.approx(0.015)
+
+
+def test_center_up_is_true_midpoint_of_both_paper_axes() -> None:
+    module = _load_example_module()
+
+    class Calibration:
+        reference_height_m = 0.107
+        physical_width_m = 0.2159
+        physical_height_m = 0.2794
+
+        @staticmethod
+        def physical_position_from_model(position):
+            return np.asarray(position, dtype=float)
+
+        @staticmethod
+        def model_position_from_physical(x, y, z):
+            return np.array([x, y, z], dtype=float)
+
+    rotation = tuple(tuple(float(value) for value in row) for row in np.eye(3))
+    base = {
+        "shoulder_pan": 0.0,
+        "shoulder_lift": 0.0,
+        "elbow_flex": 0.0,
+        "wrist_flex": 0.0,
+        "wrist_roll": 0.0,
+    }
+
+    def sample(name, joints):
+        return module.Sample(
+            name=name,
+            tcp_xyz_mm=(0.0, 0.0, 0.0),
+            tcp_rpy_deg=(0.0, 0.0, 0.0),
+            rotation_matrix=rotation,
+            joints_rad=dict(joints),
+        )
+
+    corners = {
+        "A": sample("A", {**base, "shoulder_pan": -0.6, "shoulder_lift": -0.4}),
+        "B": sample("B", {**base, "shoulder_pan": 0.5, "shoulder_lift": -0.2}),
+        "C": sample("C", {**base, "shoulder_pan": 0.2, "shoulder_lift": 0.8}),
+        "D": sample("D", {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.7}),
+    }
+    up = sample(
+        "D_UP",
+        {**base, "shoulder_pan": -0.3, "shoulder_lift": 0.6, "wrist_flex": 0.1},
+    )
+
+    class Model:
+        @staticmethod
+        def forward(joints, tcp=None):
+            del tcp
+            return module.Pose(
+                np.array(
+                    [
+                        0.15 + 0.08 * joints["shoulder_pan"],
+                        0.04 + 0.05 * joints["shoulder_lift"],
+                        0.02 + 0.03 * joints["wrist_flex"],
+                    ]
+                ),
+                np.eye(3),
+            )
+
+    class Arm:
+        model = Model()
+        active_tcp = None
+
+        @staticmethod
+        def get_joint_limits():
+            return {name: (-3.0, 3.0) for name in base}
+
+    positions, seeds, _ = module.workspace_height_demo_targets(
+        Calibration(),
+        Arm(),
+        corners=corners,
+        up_sample=up,
+    )
+    center = Calibration.physical_position_from_model(positions["CENTER_UP"])
+
+    assert center == pytest.approx(
+        np.array(
+            [
+                Calibration.physical_width_m / 2.0,
+                Calibration.physical_height_m / 2.0,
+                Calibration.reference_height_m,
+            ]
+        )
+    )
+    assert "CENTER_UP" in seeds
