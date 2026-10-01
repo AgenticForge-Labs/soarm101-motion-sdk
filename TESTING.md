@@ -76,9 +76,9 @@ workspace floor, and model +Z is not accepted as physical up.
 
 A saved workspace calibration remains `motion_validation_status="unvalidated"`. Review
 its fitted UP direction, affine conditioning, residuals, UP/table-normal skew, and
-probe-orientation drift before designing the next very-small supervised Cartesian
-direction test. UP probe-orientation drift is advisory: exceeding the warning threshold
-must not discard an otherwise well-conditioned, plausible manual workspace measurement.
+recorded probe-orientation change before designing the next very-small supervised
+Cartesian direction test. Probe-orientation change is diagnostic only; the wrist may
+need to rotate naturally to place the fixed fingertip at the measured UP point.
 
 See `docs/workspace-calibration.md` and `docs/validation.md`.
 
