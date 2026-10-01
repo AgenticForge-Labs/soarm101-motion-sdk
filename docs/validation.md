@@ -98,7 +98,7 @@ preferred IK seeds. A legacy one-UP report must be completed with `--upgrade-ele
 before replay. The segment itself is still executed with `move_linear()` and
 position-only IK.
 
-`--replay` reuses the saved teaching without touching A/B/C/D/UP again and can begin
+`--replay` reuses the saved base and elevated teaching without touching A/B/C/D/A_UP/B_UP/C_UP/D_UP/CENTER_UP again and can begin
 from an ordinary resting pose. For this supervised paper-linear test, every segment uses
 destination-only coarse workspace validation. The dynamic/joint/hardware safety stack
 remains active; only the coarse intermediate workspace geometry is relaxed because that
