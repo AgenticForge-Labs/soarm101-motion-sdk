@@ -859,8 +859,8 @@ def main() -> int:
     print("B->C and D->A are the LONG/HEIGHT edges.")
     print()
     print(
-        f"After the table corners, you will MANUALLY teach A_UP, B_UP, C_UP, D_UP, "
-        f"and CENTER_UP exactly {args.reference_height_mm:.1f} mm above the paper."
+        f"After D, you will MANUALLY place the same fixed finger exactly "
+        f"{args.reference_height_mm:.1f} mm physically above D."
     )
     print(
         "Use a ruler, rigid spacer, paper edge, gauge block, or another physical reference. "
@@ -868,13 +868,13 @@ def main() -> int:
         "finger at the measured physical point."
     )
     print(
-        "These measured elevated points are required because model +Z and a single UP "
-        "measurement are not assumed to define constant physical height across the paper."
+        "That single measured UP point calibrates physical workspace Z. Replay then "
+        "software-levels every paper target to the same workspace height."
     )
     print("Keep the GUI disconnected from this follower port.")
 
     report: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "robot_id": config.robot_id,
         "port": config.port,
@@ -903,47 +903,21 @@ def main() -> int:
             samples = [a, b, c, d]
 
             print(
-                f"\nNow teach the replay endpoints at exactly "
-                f"{args.reference_height_mm:.1f} mm physical height."
+                f"\nUP: manually raise the SAME fixed finger {args.reference_height_mm:.1f} mm "
+                "physically straight away from the table above D."
             )
             print(
-                "Use the same ruler, rigid spacer, gauge block, or other physical reference "
-                "at every point. Do not infer physical up from SDK/model axes."
+                "Do not infer direction from SDK/model axes. Measure the physical height directly."
             )
             d_up = _capture(
                 arm,
                 "D_UP",
-                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above D",
+                f"touch/hold the measured point {args.reference_height_mm:.1f} mm above D",
             )
-            a_up = _capture(
-                arm,
-                "A_UP",
-                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above A",
-            )
-            b_up = _capture(
-                arm,
-                "B_UP",
-                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above B",
-            )
-            c_up = _capture(
-                arm,
-                "C_UP",
-                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above C",
-            )
-            center_up = _capture(
-                arm,
-                "CENTER_UP",
-                f"hold the fixed finger {args.reference_height_mm:.1f} mm physically above paper center",
-            )
-            elevated = {
-                sample.name: sample
-                for sample in (a_up, b_up, c_up, d_up, center_up)
-            }
             _countdown_hold(arm)
 
             report["samples"] = [
-                asdict(sample)
-                for sample in [*samples, a_up, b_up, c_up, d_up, center_up]
+                asdict(sample) for sample in [*samples, d_up]
             ]
             points = {sample.name: sample.position_m for sample in samples}
             distances = perimeter_distances_mm(points)
@@ -1102,10 +1076,17 @@ def main() -> int:
                 )
                 return 0
 
-            demo_positions, preferred_seeds = measured_demo_targets(elevated)
-            report["demo_target_strategy"] = (
-                "direct_physically_taught_elevated_endpoints"
+            corner_samples = {sample.name: sample for sample in samples}
+            demo_positions, preferred_seeds, baseline_z_mm = workspace_height_demo_targets(
+                saved,
+                arm,
+                corners=corner_samples,
+                up_sample=d_up,
             )
+            report["demo_target_strategy"] = (
+                "workspace_z_leveling_from_reachable_endpoint_xy"
+            )
+            report["baseline_estimated_workspace_z_mm"] = baseline_z_mm
             report["measured_up_delta_model_mm"] = [
                 float(value * 1000.0)
                 for value in (d_up.position_m - d.position_m)
@@ -1132,6 +1113,8 @@ def main() -> int:
                 print(
                     f"  {item['name']}: model target "
                     f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
+                    f"workspace Z {baseline_z_mm[item['name']]:.1f} -> "
+                    f"{args.reference_height_mm:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
             args.output.write_text(
@@ -1140,15 +1123,16 @@ def main() -> int:
             )
 
             print(
-                "\nThe arm is holding the manually taught CENTER_UP pose."
+                "\nThe arm is holding the manually taught D_UP pose."
             )
             print(
-                "Every replay endpoint was physically taught at the requested height:"
+                "The software has corrected every paper endpoint to the same calibrated "
+                f"workspace Z={args.reference_height_mm:.1f} mm:"
             )
             print("  D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP")
             print(
-                f"Each endpoint was measured at {args.reference_height_mm:.1f} mm physical "
-                "height. The motion between endpoints is still Cartesian move_linear()."
+                "The motion between endpoints is still Cartesian move_linear(); no extra "
+                "elevated teaching is required."
             )
             input(
                 "\nPress Enter to run the full Cartesian linear path, "
