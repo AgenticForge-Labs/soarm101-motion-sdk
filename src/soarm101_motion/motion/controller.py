@@ -215,6 +215,95 @@ class MotionController:
         return 10 * alpha**3 - 15 * alpha**4 + 6 * alpha**5
 
     @staticmethod
+    def _cosine_cruise_profile(
+        delta: float,
+        speed: float,
+        acceleration: float,
+    ) -> tuple[float, float, float]:
+        """Return peak speed, ramp time, and cruise time for a smooth S-curve.
+
+        Velocity uses half-cosine acceleration/deceleration ramps with zero
+        acceleration at the transitions to and from constant-speed cruise. The
+        requested speed and acceleration are true ceilings rather than minimum-jerk
+        peak values.
+        """
+
+        if delta < 1e-12:
+            return 0.0, 0.0, 0.0
+        requested_speed = max(float(speed), 1e-12)
+        requested_acceleration = max(float(acceleration), 1e-12)
+        full_ramp_time = math.pi * requested_speed / (2.0 * requested_acceleration)
+        full_ramp_distance = requested_speed * full_ramp_time
+        if delta >= full_ramp_distance:
+            cruise_time = (delta - full_ramp_distance) / requested_speed
+            return requested_speed, full_ramp_time, cruise_time
+
+        peak_speed = math.sqrt(
+            2.0 * requested_acceleration * delta / math.pi
+        )
+        ramp_time = math.pi * peak_speed / (2.0 * requested_acceleration)
+        return peak_speed, ramp_time, 0.0
+
+    @classmethod
+    def _cosine_cruise_duration(
+        cls,
+        delta: float,
+        speed: float,
+        acceleration: float,
+    ) -> float:
+        peak_speed, ramp_time, cruise_time = cls._cosine_cruise_profile(
+            delta,
+            speed,
+            acceleration,
+        )
+        if peak_speed <= 0.0:
+            return 0.0
+        return 2.0 * ramp_time + cruise_time
+
+    @classmethod
+    def _cosine_cruise_progress(
+        cls,
+        delta: float,
+        speed: float,
+        acceleration: float,
+        elapsed: float,
+    ) -> float:
+        if delta < 1e-12:
+            return 1.0
+        peak_speed, ramp_time, cruise_time = cls._cosine_cruise_profile(
+            delta,
+            speed,
+            acceleration,
+        )
+        total = 2.0 * ramp_time + cruise_time
+        if elapsed <= 0.0:
+            return 0.0
+        if elapsed >= total:
+            return 1.0
+
+        ramp_distance = peak_speed * ramp_time / 2.0
+        if elapsed < ramp_time:
+            position = 0.5 * peak_speed * (
+                elapsed
+                - ramp_time / math.pi * math.sin(math.pi * elapsed / ramp_time)
+            )
+        elif elapsed <= ramp_time + cruise_time:
+            position = ramp_distance + peak_speed * (elapsed - ramp_time)
+        else:
+            tau = elapsed - ramp_time - cruise_time
+            position = (
+                ramp_distance
+                + peak_speed * cruise_time
+                + 0.5
+                * peak_speed
+                * (
+                    tau
+                    + ramp_time / math.pi * math.sin(math.pi * tau / ramp_time)
+                )
+            )
+        return min(1.0, max(0.0, position / delta))
+
+    @staticmethod
     def _positive(value: float, name: str) -> float:
         value = float(value)
         if not math.isfinite(value) or value <= 0:
@@ -352,17 +441,17 @@ class MotionController:
         orientation_mode: OrientationMode,
         look_at: np.ndarray | None,
         duration: float,
+        profile_duration: float,
+        normalized_speed: float,
+        normalized_acceleration: float,
         limits: Mapping[str, tuple[float, float]],
     ) -> tuple[tuple[dict[str, float], ...], tuple[Pose, ...]]:
         """Solve the smooth Cartesian trajectory directly at command-rate samples.
 
-        Older linear planning solved a sparse Cartesian polyline and then linearly
-        interpolated between the resulting joint-space IK knots. Even when endpoint
-        geometry was valid, each knot could change the joint-space slope and create a
-        visible correction on real hardware. Here the minimum-jerk scalar trajectory is
-        applied in Cartesian space first, and every command sample gets its own sequential
-        IK solution. The host command stream therefore follows one smooth Cartesian
-        parameterization rather than a piecewise-linear joint polyline.
+        The scalar path uses acceleration-limited half-cosine ramps with an optional
+        constant-speed cruise region. Every command sample gets its own sequential IK
+        solution; there is no secondary piecewise-linear interpolation between sparse
+        joint-space knots.
         """
 
         steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
@@ -376,10 +465,20 @@ class MotionController:
         seed = dict(start_joints)
 
         for index, time_fraction in enumerate(fractions[1:], start=1):
-            progress = self._minimum_jerk(float(time_fraction))
+            progress = self._cosine_cruise_progress(
+                1.0,
+                normalized_speed,
+                normalized_acceleration,
+                float(time_fraction) * profile_duration,
+            )
+            pose_rotation = (
+                start_pose.rotation
+                if orientation_mode == "position_only"
+                else slerp([progress]).as_matrix()[0]
+            )
             pose = Pose(
                 start_pose.position + (target.position - start_pose.position) * progress,
-                slerp([progress]).as_matrix()[0],
+                pose_rotation,
             )
             options = IKOptions(
                 orientation_mode=orientation_mode,
@@ -447,15 +546,42 @@ class MotionController:
         start_joints = self.backend.read_joint_positions()
         start_pose = self.model.forward(start_joints, tcp=tcp)
         distance = float(np.linalg.norm(target.position - start_pose.position))
-        angular_distance = float(
-            np.linalg.norm(Rotation.from_matrix(target.rotation @ start_pose.rotation.T).as_rotvec())
+        angular_distance = (
+            0.0
+            if orientation_mode == "position_only"
+            else float(
+                np.linalg.norm(
+                    Rotation.from_matrix(
+                        target.rotation @ start_pose.rotation.T
+                    ).as_rotvec()
+                )
+            )
         )
-        linear_duration = self._minimum_duration(distance, linear_speed, linear_acceleration)
-        angular_duration = self._minimum_duration(
-            angular_distance,
-            self.config.default_angular_speed,
-            self.config.default_angular_acceleration,
-        )
+
+        normalized_speed_limits: list[float] = []
+        normalized_acceleration_limits: list[float] = []
+        if distance > 1e-12:
+            normalized_speed_limits.append(linear_speed / distance)
+            normalized_acceleration_limits.append(linear_acceleration / distance)
+        if angular_distance > 1e-12:
+            normalized_speed_limits.append(
+                self.config.default_angular_speed / angular_distance
+            )
+            normalized_acceleration_limits.append(
+                self.config.default_angular_acceleration / angular_distance
+            )
+        if normalized_speed_limits:
+            normalized_speed = min(normalized_speed_limits)
+            normalized_acceleration = min(normalized_acceleration_limits)
+            profile_duration = self._cosine_cruise_duration(
+                1.0,
+                normalized_speed,
+                normalized_acceleration,
+            )
+        else:
+            normalized_speed = 1.0
+            normalized_acceleration = 1.0
+            profile_duration = 0.0
 
         # Preserve the configured Cartesian planning density as a lower bound on
         # duration/sample count, while command-rate IK remains the actual trajectory.
@@ -472,8 +598,7 @@ class MotionController:
         )
         density_duration = minimum_segments / self.config.command_frequency_hz
         duration = max(
-            linear_duration,
-            angular_duration,
+            profile_duration,
             density_duration,
             1.0 / self.config.command_frequency_hz,
         )
@@ -490,6 +615,9 @@ class MotionController:
                 orientation_mode=orientation_mode,
                 look_at=look_at,
                 duration=duration,
+                profile_duration=profile_duration,
+                normalized_speed=normalized_speed,
+                normalized_acceleration=normalized_acceleration,
                 limits=limits,
             )
             max_speed, max_acceleration, max_step = self._trajectory_metrics(samples)
