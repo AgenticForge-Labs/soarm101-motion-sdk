@@ -258,6 +258,7 @@ def test_paper_config_uses_relaxed_supervised_settle_criterion() -> None:
 
     assert config.joint_position_tolerance_rad == pytest.approx(np.deg2rad(3.0))
     assert config.motion_completion_timeout_s == pytest.approx(8.0)
+    assert config.command_frequency_hz == pytest.approx(20.0)
     assert config.cartesian_waypoint_spacing_m == pytest.approx(0.001)
 
 
@@ -366,3 +367,19 @@ def test_preflighted_startup_lift_executes_with_generic_workspace_check_off() ->
     assert kwargs["orientation_mode"] == "position_only"
     assert kwargs["speed"] == pytest.approx(0.010)
     assert kwargs["acceleration"] == pytest.approx(0.100)
+
+
+def test_startup_transport_height_reaches_reference_before_lateral_travel() -> None:
+    module = _load_example_module()
+
+    assert module.startup_transport_height_m(
+        current_workspace_z_m=0.0004,
+        reference_height_m=0.107,
+        minimum_lift_m=0.010,
+    ) == pytest.approx(0.107)
+
+    assert module.startup_transport_height_m(
+        current_workspace_z_m=0.120,
+        reference_height_m=0.107,
+        minimum_lift_m=0.010,
+    ) == pytest.approx(0.130)
