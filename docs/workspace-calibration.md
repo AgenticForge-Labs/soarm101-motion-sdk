@@ -121,8 +121,12 @@ motion_validation_status = "unvalidated"
 
 The same workflow may then run the supervised demonstration
 `D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP`, all at the measured physical
-reference height. These targets are generated through the calibrated physical-to-model
-mapping and use position-only IK; they are not model +Z offsets. The report records
+reference height. For the powered demonstration, the global affine fit is **not extrapolated upward**.
+Instead, the directly measured model-space D→UP displacement is added to each directly
+measured A/B/C/D corner. CENTER_UP is the mean of those four elevated measured corners.
+This keeps the powered target construction anchored to actual taught observations rather
+than asking the affine approximation to predict unmeasured elevated corners. Position-only
+IK is used; these are not model +Z offsets. The report records
 preflight results and achieved TCP evidence. This demonstration is still narrower than
 general autonomous Cartesian validation.
 

@@ -99,26 +99,52 @@ def test_workspace_orientation_drift_is_diagnostic_only() -> None:
     assert checks["measurement_accepted"] is True
     assert checks["diagnostic_up_orientation_drift_deg"] == pytest.approx(16.52)
 
-def test_elevated_demo_positions_use_physical_workspace_coordinates() -> None:
+def test_elevated_demo_positions_translate_measured_corners_by_measured_up() -> None:
     module = _load_example_module()
+    rotation = tuple(tuple(float(value) for value in row) for row in np.eye(3))
+    joints = {
+        "shoulder_pan": 0.0,
+        "shoulder_lift": 0.0,
+        "elbow_flex": 0.0,
+        "wrist_flex": 0.0,
+        "wrist_roll": 0.0,
+    }
 
-    class Calibration:
-        def model_position_from_physical(self, x_m, y_m, z_m):
-            return np.array([x_m + 1.0, y_m + 2.0, z_m + 3.0])
+    def sample(name, xyz_mm):
+        return module.Sample(
+            name=name,
+            tcp_xyz_mm=tuple(float(value) for value in xyz_mm),
+            tcp_rpy_deg=(0.0, 0.0, 0.0),
+            rotation_matrix=rotation,
+            joints_rad=dict(joints),
+        )
 
-    positions = module.elevated_demo_positions(
-        Calibration(),
-        width_m=0.2159,
-        height_m=0.2794,
-        elevation_m=0.1070,
-    )
+    corners = {
+        "A": sample("A", (10.0, 20.0, -5.0)),
+        "B": sample("B", (170.0, 25.0, -8.0)),
+        "C": sample("C", (180.0, 270.0, -15.0)),
+        "D": sample("D", (20.0, 280.0, -12.0)),
+    }
+    up = sample("UP", (32.0, 290.0, 88.0))
 
-    assert positions["D_UP"] == pytest.approx(np.array([1.0, 2.2794, 3.107]))
-    assert positions["A_UP"] == pytest.approx(np.array([1.0, 2.0, 3.107]))
-    assert positions["B_UP"] == pytest.approx(np.array([1.2159, 2.0, 3.107]))
-    assert positions["C_UP"] == pytest.approx(np.array([1.2159, 2.2794, 3.107]))
-    assert positions["D_UP_RETURN"] == pytest.approx(np.array([1.0, 2.2794, 3.107]))
-    assert positions["CENTER_UP"] == pytest.approx(
-        np.array([1.10795, 2.1397, 3.107])
-    )
+    positions = module.elevated_demo_positions(corners=corners, up_sample=up)
+
+    up_delta = np.array([12.0, 10.0, 100.0]) / 1000.0
+    assert positions["D_UP"] == pytest.approx(up.position_m)
+    assert positions["A_UP"] == pytest.approx(corners["A"].position_m + up_delta)
+    assert positions["B_UP"] == pytest.approx(corners["B"].position_m + up_delta)
+    assert positions["C_UP"] == pytest.approx(corners["C"].position_m + up_delta)
+    assert positions["D_UP_RETURN"] == pytest.approx(up.position_m)
+    expected_center = np.mean(
+        np.stack(
+            [
+                corners["A"].position_m,
+                corners["B"].position_m,
+                corners["C"].position_m,
+                corners["D"].position_m,
+            ]
+        ),
+        axis=0,
+    ) + up_delta
+    assert positions["CENTER_UP"] == pytest.approx(expected_center)
 
