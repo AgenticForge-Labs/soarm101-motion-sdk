@@ -106,6 +106,19 @@ to retain the non-moving behavior.
 See [Workspace calibration](workspace-calibration.md) for the persisted contract,
 quality gates, and provenance.
 
+## Linear-motion smoothness
+
+Live teleoperation is an important control comparison because it uses the same motors and
+position loop without Cartesian IK. Teleoperation sends host-shaped joint samples with
+Feetech speed_raw=0 (unrestricted) and acceleration_raw=254. Cartesian
+`move_linear()` now uses that same servo-side profile while retaining its independently
+planned 50 Hz minimum-jerk Cartesian trajectory.
+
+If teleoperation remains smooth but linear motion remains shaky after this change, inspect
+the planned IK joint sequence itself: per-waypoint joint deltas/velocity/acceleration and
+branch continuity. That would isolate kinematic/path-parameterization effects from
+servo-side trajectory filtering.
+
 ## Current hardware finding
 
 On the tested follower, a four-corner paper capture produced a model-space paper plane

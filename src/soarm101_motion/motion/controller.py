@@ -869,6 +869,12 @@ class MotionController:
                     plan,
                     event,
                     cancellation_message="linear motion cancelled",
+                    # The host trajectory already enforces Cartesian/joint speed and
+                    # acceleration. Match teleoperation's responsive Feetech profile
+                    # instead of layering the generic slow servo profile on every
+                    # 50 Hz waypoint.
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
                 )
             )
         return handle.wait() if wait else handle

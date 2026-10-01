@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Cartesian `move_linear()` now uses the same responsive Feetech servo-side profile as
+  live teleoperation (speed_raw=0 / unrestricted, acceleration_raw=254). The host-side
+  50 Hz trajectory remains authoritative for Cartesian/joint speed and acceleration.
+  This removes the previous second slow servo trajectory (250/20) that could make a
+  stream of smooth waypoints lag and catch up in visible bursts.
+
 - Relaxed only the supervised paper-linear experiment's completion criterion to 3.0°
   per joint with an 8 s settle window (SDK-wide defaults remain unchanged). The previous
   P=32 hardware replay reached within 2.18° but was still rejected by the global 1.43°

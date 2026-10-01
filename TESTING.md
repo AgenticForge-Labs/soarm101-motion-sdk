@@ -49,6 +49,25 @@ position-hold authority, supply voltage, faults, and effort/current behavior.
 On a paper-motion error, verify the script holds the current position and waits for an
 explicit operator release instead of immediately relaxing.
 
+### Cartesian servo-profile comparison with teleoperation
+
+The host already time-parameterizes `move_linear()` at 50 Hz. Its servo writes should
+therefore use the same responsive Feetech profile as teleoperation:
+
+```text
+speed_raw = 0
+acceleration_raw = 254
+```
+
+Do not reintroduce the generic 250/20 servo profile on every Cartesian waypoint; that
+layers a second slow motor trajectory under the host trajectory and can appear as
+lag/catch-up shaking.
+
+On hardware, compare the same broad workspace motion with smooth 20 Hz teleoperation and
+a 20 mm/s, 100 mm/s² paper replay. If linear motion remains visibly shakier after the
+servo-profile match, capture/analyze the planned IK joint sequence before changing motor
+PID or power settings.
+
 ### Paper linear-motion settle criterion
 
 The paper experiment is a supervised qualitative Cartesian-line validation, not a
