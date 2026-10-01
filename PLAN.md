@@ -93,8 +93,10 @@ its own persistent connection for live controls; it must not launch CLI subproce
   the startup move reaches the full reference/transport height before any lateral travel,
   measured workspace Z passes the 5 mm completion gate, and the paper traversal remains at
   the requested height.
-- [ ] Compare the 20 Hz paper command cadence against the known-smooth 20 Hz teleoperation
-  behavior before declaring the linear planner physically smooth.
+- [ ] Validate the cosine-ramped cruise profile plus per-joint synchronized Feetech speed
+  limits against known-smooth 20 Hz teleoperation. Confirm the staged startup rises
+  physically before lateral travel and that a 20 mm/s paper edge now traverses near the
+  expected cruise-speed timing before declaring linear motion physically smooth.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
