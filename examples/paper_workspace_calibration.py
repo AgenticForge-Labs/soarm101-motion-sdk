@@ -357,14 +357,147 @@ def _sample_from_payload(payload: dict[str, object], name: str) -> Sample:
     raise ValueError(f"saved report is missing sample {name}")
 
 
-def load_saved_teaching(path: Path) -> tuple[dict[str, object], list[Sample], Sample]:
+def _load_report(path: Path) -> dict[str, object]:
     payload_obj = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload_obj, dict):
         raise ValueError("saved report root must be a JSON object")
-    payload = dict(payload_obj)
-    corners = [_sample_from_payload(payload, name) for name in ("A", "B", "C", "D")]
-    up = _sample_from_payload(payload, "UP")
-    return payload, corners, up
+    return dict(payload_obj)
+
+
+def _load_corners(payload: dict[str, object]) -> list[Sample]:
+    return [_sample_from_payload(payload, name) for name in ("A", "B", "C", "D")]
+
+
+def _load_d_up_for_upgrade(payload: dict[str, object]) -> Sample:
+    try:
+        return _sample_from_payload(payload, "D_UP")
+    except ValueError:
+        legacy = _sample_from_payload(payload, "UP")
+        return Sample(
+            name="D_UP",
+            tcp_xyz_mm=legacy.tcp_xyz_mm,
+            tcp_rpy_deg=legacy.tcp_rpy_deg,
+            rotation_matrix=legacy.rotation_matrix,
+            joints_rad=dict(legacy.joints_rad),
+        )
+
+
+def load_saved_teaching(
+    path: Path,
+) -> tuple[dict[str, object], list[Sample], dict[str, Sample]]:
+    payload = _load_report(path)
+    corners = _load_corners(payload)
+    elevated: dict[str, Sample] = {}
+    missing: list[str] = []
+    for name in ("A_UP", "B_UP", "C_UP", "D_UP", "CENTER_UP"):
+        try:
+            elevated[name] = _sample_from_payload(payload, name)
+        except ValueError:
+            missing.append(name)
+    if missing:
+        raise ValueError(
+            "saved paper report does not contain physically taught elevated targets "
+            f"({', '.join(missing)} missing). Run this script once with "
+            "--upgrade-elevated before --replay."
+        )
+    return payload, corners, elevated
+
+
+def _merge_samples(
+    payload: dict[str, object],
+    samples: list[Sample],
+) -> None:
+    payload["samples"] = [asdict(sample) for sample in samples]
+
+
+def run_elevated_upgrade(args: argparse.Namespace, config: SOARM101Config) -> int:
+    """Add physically measured elevated A/B/C/center targets to a legacy report."""
+
+    report = _load_report(args.output)
+    corners = _load_corners(report)
+    d_up = _load_d_up_for_upgrade(report)
+    reference_height = float(report.get("reference_height_mm", 0.0))
+    if reference_height <= 0.0:
+        raise RuntimeError("saved report has no valid reference_height_mm")
+
+    print("Paper elevated-target teaching upgrade")
+    print(
+        f"Reusing saved A/B/C/D and the physically measured D_UP at "
+        f"{reference_height:.1f} mm from {args.output}."
+    )
+    print(
+        "You will manually teach A_UP, B_UP, C_UP, and CENTER_UP at that same "
+        "physical height. Use the same rigid spacer/ruler/gauge method used for D_UP."
+    )
+    print("Mark or measure the paper center before teaching CENTER_UP.")
+    print("Keep the GUI disconnected from this follower port.")
+
+    with SOARM101(config) as arm:
+        try:
+            store = WorkspaceCalibrationStore(config.robot_id, path=args.workspace_output)
+            saved = store.load()
+            if arm.calibration_id and saved.arm_calibration_id != arm.calibration_id:
+                raise RuntimeError(
+                    "saved workspace calibration does not match the active motor calibration"
+                )
+
+            input("\nPress Enter to enable torque briefly and open the moving jaw... ")
+            arm.enable()
+            arm.tool.open()
+            print("Moving jaw is open. Relaxing all motors for manual teaching.")
+            arm.relax()
+
+            elevated = {
+                "D_UP": d_up,
+                "A_UP": _capture(
+                    arm,
+                    "A_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above A",
+                ),
+                "B_UP": _capture(
+                    arm,
+                    "B_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above B",
+                ),
+                "C_UP": _capture(
+                    arm,
+                    "C_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above C",
+                ),
+                "CENTER_UP": _capture(
+                    arm,
+                    "CENTER_UP",
+                    f"hold the fixed finger {reference_height:.1f} mm physically above paper center",
+                ),
+            }
+
+            all_samples = [*corners, *[elevated[name] for name in (
+                "A_UP", "B_UP", "C_UP", "D_UP", "CENTER_UP"
+            )]]
+            _merge_samples(report, all_samples)
+            report["schema_version"] = 3
+            report["elevated_targets_completed_at"] = datetime.now(timezone.utc).isoformat()
+            report["elevated_target_strategy"] = "physically_taught_at_each_replay_endpoint"
+            report["demo_target_strategy"] = "direct_physically_taught_elevated_endpoints"
+            report["autonomous_motion_attempted"] = False
+            report["demo_completed"] = False
+            report["demo_moves"] = []
+            report.pop("demo_error", None)
+            report.pop("demo_preflight", None)
+            report.pop("demo_targets_model_xyz_mm", None)
+            args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+            print(
+                f"\nElevated teaching saved to {args.output}. "
+                "No powered Cartesian replay was attempted."
+            )
+            print("Next run with --replay to preflight and execute the measured targets.")
+            return 0
+        finally:
+            try:
+                arm.relax()
+            except Exception as exc:
+                print(f"WARNING: could not confirm relax during cleanup: {exc}")
 
 
 def build_parser() -> argparse.ArgumentParser:
