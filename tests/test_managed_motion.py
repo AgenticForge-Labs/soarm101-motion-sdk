@@ -182,6 +182,60 @@ def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch
     assert any(calls[index : index + 2] == [False, True] for index in range(len(calls) - 1))
 
 
+def test_position_only_linear_plan_uses_endpoint_seed_for_reverse_ik_fallback(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.exceptions import IKError
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.get_position()
+        target = Pose(
+            start_pose.position + np.array([-0.012, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+        start_x = float(start_pose.position[0])
+        target_seed = dict(start)
+        target_seed["wrist_roll"] += 0.04
+        induced_failures = 0
+
+        def branch_sensitive_solution(pose, *, seed, tcp, options):
+            nonlocal induced_failures
+            del tcp, options
+            progress = (float(pose.position[0]) - start_x) / -0.012
+            reverse_branch = float(seed["wrist_roll"]) > float(start["wrist_roll"]) + 1e-8
+            if not reverse_branch and 0.45 <= progress <= 0.55:
+                induced_failures += 1
+                raise IKError("forward continuation trapped in local IK minimum")
+
+            joints = dict(start)
+            joints["shoulder_pan"] += 0.02 * progress
+            if reverse_branch:
+                joints["wrist_roll"] += 0.04 * progress
+            return SimpleNamespace(joints=joints)
+
+        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", branch_sensitive_solution)
+        plan = arm.motion.plan_linear(
+            target,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+            target_seed=target_seed,
+        )
+
+    assert induced_failures >= 1
+    assert plan.command_samples
+    assert plan.command_samples[0] == start
+    assert plan.command_samples[-1]["wrist_roll"] == pytest.approx(
+        start["wrist_roll"] + 0.04
+    )
+
+
 def test_cosine_cruise_profile_uses_requested_speed_as_cruise_ceiling() -> None:
     from soarm101_motion.motion.controller import MotionController
 
