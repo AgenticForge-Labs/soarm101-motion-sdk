@@ -903,13 +903,13 @@ def main() -> int:
                 return 0
 
             corner_samples = {sample.name: sample for sample in samples}
-            demo_positions, preferred_seeds = constant_height_demo_targets(
-                saved,
+            demo_positions, preferred_seeds = reachable_demo_targets(
+                arm,
                 corners=corner_samples,
                 up_sample=up,
             )
             report["demo_target_strategy"] = (
-                "constant_taught_workspace_height_via_saved_affine_transform"
+                "known_reachable_fk_from_taught_corner_plus_joint_lift"
             )
             report["measured_up_delta_model_mm"] = [
                 float(value * 1000.0)
