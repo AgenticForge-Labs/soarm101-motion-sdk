@@ -130,16 +130,21 @@ stick-slip/shake even though teleoperation on the same arm was smooth.
 
 The paper workflow also uses a 20 Hz host cadence and a 1 mm Cartesian planning-density
 bound. Every emitted command sample is a sequential-IK solution of the Cartesian
-trajectory. Hardware feedback that each line started shakier and became smoother motivated
-a launch-only host-profile change: bounded constant acceleration from rest replaces the
-zero-acceleration cosine launch, while the existing half-cosine endpoint deceleration is
-retained. At 20 mm/s and 100 mm/s², the first 50 ms Cartesian increment increases from
-about 0.021 mm to 0.125 mm without exceeding the requested acceleration ceiling.
+trajectory. The #73 launch-only experiment did not remove the visible shake and A_UP->B_UP
+again failed at an intermediate numerical IK miss (0.812 mm against the unchanged 0.5 mm
+tolerance), so that launch change is superseded.
 
-If teleoperation is smooth but `move_linear()` remains shaky after this launch change,
-the next comparison should be planned joint derivatives, encoder-quantized command deltas,
-measured following error, and actual cycle timing; that would isolate
-IK/Jacobian/quantization effects from servo tracking.
+Position-only paths now receive a deterministic smooth-seed reprojection pass. A five-tap
+joint filter produces seeds only; every interior Cartesian sample is re-solved at the same
+hard tolerance, and the refined sequence is used only if discrete joint jerk decreases.
+Separately, when soft IK continuity/joint-centering regularization prevents a geometrically
+reachable sample from meeting the hard tolerance, a task-space-only refinement is attempted
+without relaxing that tolerance.
+
+If teleoperation is smooth but `move_linear()` remains shaky after this change, the next
+comparison should be planned joint derivatives, encoder-quantized command deltas, measured
+following error, and actual cycle timing; that would isolate IK/Jacobian/quantization
+effects from servo tracking.
 
 ## Current hardware finding
 
