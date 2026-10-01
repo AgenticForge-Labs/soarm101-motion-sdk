@@ -62,6 +62,9 @@ def test_paper_workspace_recovers_known_local_affine_mapping(tmp_path) -> None:
         expected
     )
     assert calibration.motion_validation_status == "unvalidated"
+    assert calibration.linear_condition_number == pytest.approx(np.linalg.cond(linear))
+    recovered = calibration.physical_position_from_model(expected)
+    assert recovered == pytest.approx(np.array([0.1, 0.2, 0.03]))
 
     path = tmp_path / "workspace.json"
     store = WorkspaceCalibrationStore("so101", path=path)
@@ -72,7 +75,7 @@ def test_paper_workspace_recovers_known_local_affine_mapping(tmp_path) -> None:
     assert np.asarray(loaded.physical_to_model_linear) == pytest.approx(linear)
 
 
-def test_paper_workspace_detects_up_direction_inconsistent_with_table_normal() -> None:
+def test_paper_workspace_records_skewed_up_direction_without_assuming_orthogonality() -> None:
     width = 0.2159
     height = 0.2794
     up_height = 0.050
@@ -82,9 +85,9 @@ def test_paper_workspace_detects_up_direction_inconsistent_with_table_normal() -
         "C": np.array([width, height, 0.0]),
         "D": np.array([0.0, height, 0.0]),
     }
-    # The operator says this is physically UP, but the model maps it almost
-    # entirely along the table. That is exactly the condition that must block
-    # Cartesian hover activation.
+    # The operator says this is physically UP, but the model maps it mostly
+    # along the Euclidean table plane. Record that skew rather than silently
+    # reinterpret the model-plane normal as physical UP.
     up = np.array([0.050, height, 0.002])
 
     calibration = fit_paper_workspace(
@@ -100,3 +103,6 @@ def test_paper_workspace_detects_up_direction_inconsistent_with_table_normal() -
     assert calibration.up_vs_table_normal_angle_deg > 80.0
     assert calibration.up_reference_tangent_m > 0.045
     assert calibration.up_reference_plane_height_m < 0.005
+    assert np.isfinite(calibration.linear_condition_number)
+    recovered_up = calibration.physical_position_from_model(up)
+    assert recovered_up == pytest.approx(np.array([0.0, height, up_height]))
