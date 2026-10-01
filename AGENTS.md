@@ -70,8 +70,8 @@ changes require development discipline; robot use requires conservative hardware
     inferred heights are not execution targets. Read-only IK preflight must accept every
     corrected target before powered replay. Replay performs one preflighted calibrated-
     workspace-Z clearance move of 20 mm by default before entering the paper path. The
-    measured endpoint must land within the configured completion tolerance before paper
-    travel. The fixed traversal then starts at A_UP and proceeds A_UP -> B_UP -> C_UP ->
+    measured endpoint must show at least the configured minimum clearance rise (10 mm by
+    default after a 20 mm command) before paper travel. The fixed traversal then starts at A_UP and proceeds A_UP -> B_UP -> C_UP ->
     D_UP -> CENTER_UP; D_UP remains calibration evidence, not the first motion target.
     Elevated endpoint motion reuses the read-only preflight joint solutions rather than
     forcing straight Cartesian IK through an infeasible intermediate pose. Before each
