@@ -587,7 +587,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
-    report, samples, elevated = load_saved_teaching(args.output)
+    report, samples, up = load_saved_teaching(args.output)
+    corner_samples = {sample.name: sample for sample in samples}
     reference_height = float(report.get("reference_height_mm", 0.0))
     if reference_height <= 0.0:
         raise RuntimeError("saved report has no valid reference_height_mm")
@@ -611,30 +612,96 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 f"{args.settle_timeout_s:.1f} s."
             )
             print(
-                f"Replay uses physically taught elevated endpoints at "
-                f"{saved.reference_height_m * 1000.0:.1f} mm: "
-                "A_UP, B_UP, C_UP, D_UP, and CENTER_UP. "
-                "No elevated endpoint is inferred from another corner."
+                f"Software will level every paper endpoint to workspace Z="
+                f"{saved.reference_height_m * 1000.0:.1f} mm while preserving each "
+                "endpoint's calibrated workspace X/Y."
             )
             print(
-                "Cartesian move_linear() now solves the minimum-jerk Cartesian trajectory "
+                "Cartesian move_linear() solves the minimum-jerk Cartesian trajectory "
                 "directly at host command-rate IK samples."
             )
             print(
-                "The arm may start from any ordinary resting pose. This supervised paper "
-                "validation uses target-only coarse workspace checking for each segment; "
-                "dynamic, joint, effort, fault, following-error, and timeout guards remain active."
+                f"Before the first long move, replay will lift in calibrated workspace Z by "
+                f"up to {args.startup_lift_mm:.1f} mm for clearance."
+            )
+            print(
+                "The arm may start from an ordinary resting pose. Read-only IK preflight "
+                "must succeed for both the startup lift and every leveled endpoint before "
+                "powered replay is offered."
             )
             _countdown_hold(arm)
             arm.tool.open()
 
-            demo_positions, preferred_seeds = measured_demo_targets(elevated)
+            demo_positions, preferred_seeds, baseline_z_mm = workspace_height_demo_targets(
+                saved,
+                arm,
+                corners=corner_samples,
+                up_sample=up,
+            )
+
+            current_pose = arm.get_position()
+            current_joints = dict(arm.get_joint_positions().positions)
+            current_physical = saved.physical_position_from_model(current_pose.position)
+            target_height_m = float(saved.reference_height_m)
+            startup_target_z = min(
+                target_height_m,
+                max(
+                    float(current_physical[2]) + args.startup_lift_mm / 1000.0,
+                    args.startup_lift_mm / 1000.0,
+                ),
+            )
+            startup_needed = startup_target_z > float(current_physical[2]) + 1e-6
+            startup_position = current_pose.position.copy()
+            startup_preflight: dict[str, object] | None = None
+            if startup_needed:
+                startup_position = saved.model_position_from_physical(
+                    float(current_physical[0]),
+                    float(current_physical[1]),
+                    startup_target_z,
+                )
+                startup_solution = arm.solve_ik(
+                    Pose(startup_position, current_pose.rotation),
+                    seed=current_joints,
+                    orientation_mode="position_only",
+                )
+                startup_preflight = {
+                    "start_workspace_z_mm": float(current_physical[2] * 1000.0),
+                    "target_workspace_z_mm": float(startup_target_z * 1000.0),
+                    "target_model_xyz_mm": [
+                        float(value * 1000.0) for value in startup_position
+                    ],
+                    "success": bool(startup_solution.success),
+                    "position_error_mm": float(startup_solution.position_error_m * 1000.0),
+                    "message": startup_solution.message,
+                }
+                if not startup_solution.success:
+                    raise RuntimeError(
+                        "startup workspace-Z lift preflight failed; "
+                        f"position error={startup_solution.position_error_m * 1000.0:.2f} mm; "
+                        f"{startup_solution.message}"
+                    )
+
             print("\nRead-only endpoint preflight while holding the current pose...")
+            if startup_needed:
+                assert startup_preflight is not None
+                print(
+                    f"  START_LIFT: workspace Z "
+                    f"{startup_preflight['start_workspace_z_mm']:.1f} -> "
+                    f"{startup_preflight['target_workspace_z_mm']:.1f} mm; "
+                    f"IK error {startup_preflight['position_error_mm']:.2f} mm"
+                )
+            else:
+                print(
+                    f"  START_LIFT: skipped; current workspace Z="
+                    f"{current_physical[2] * 1000.0:.1f} mm is already at/above "
+                    f"{target_height_m * 1000.0:.1f} mm."
+                )
+
             preflight = preflight_demo_targets(
                 arm,
                 demo_positions,
                 preferred_seeds=preferred_seeds,
-                rotation=elevated["D_UP"].rotation,
+                rotation=up.rotation,
             )
             for item in preflight:
                 xyz = item["target_model_xyz_mm"]
@@ -642,14 +709,17 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 print(
                     f"  {item['name']}: model "
                     f"({xyz[0]:.1f}, {xyz[1]:.1f}, {xyz[2]:.1f}) mm; "
-                    f"physically taught Z={reference_height:.1f} mm; "
+                    f"workspace Z {baseline_z_mm[item['name']]:.1f} -> "
+                    f"{reference_height:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
 
             report["replayed_at"] = datetime.now(timezone.utc).isoformat()
             report["demo_target_strategy"] = (
-                "direct_physically_taught_elevated_endpoints"
+                "workspace_z_leveling_from_reachable_endpoint_xy"
             )
+            report["baseline_estimated_workspace_z_mm"] = baseline_z_mm
+            report["startup_clearance_preflight"] = startup_preflight
             report["demo_preflight"] = preflight
             report["demo_targets_model_xyz_mm"] = {
                 name: [float(value * 1000.0) for value in position]
@@ -660,8 +730,9 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
             input(
-                "\nPress Enter to run D_UP -> A_UP -> B_UP -> C_UP -> "
-                "D_UP -> CENTER_UP with Cartesian move_linear(), or Ctrl+C to stop... "
+                "\nPress Enter to run the startup workspace-Z lift, then "
+                "D_UP -> A_UP -> B_UP -> C_UP -> D_UP -> CENTER_UP, "
+                "or Ctrl+C to stop... "
             )
             report["autonomous_motion_attempted"] = True
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -669,10 +740,41 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             moves = report["demo_moves"]
             assert isinstance(moves, list)
             try:
+                if startup_needed:
+                    print(
+                        f"\nLifting first in workspace Z to "
+                        f"{startup_target_z * 1000.0:.1f} mm..."
+                    )
+                    result = arm.move_linear(
+                        Pose(startup_position, current_pose.rotation),
+                        orientation_mode="position_only",
+                        speed=min(args.speed_mm_s, 10.0) / 1000.0,
+                        acceleration=args.acceleration_mm_s2 / 1000.0,
+                        workspace_check="target_only",
+                    )
+                    if not result.accepted or not result.completed:
+                        raise RuntimeError(f"startup lift did not complete: {result}")
+                    actual = arm.get_position()
+                    actual_physical = saved.physical_position_from_model(actual.position)
+                    print(
+                        f"  workspace Z after startup lift = "
+                        f"{actual_physical[2] * 1000.0:.1f} mm"
+                    )
+                    moves.append(
+                        {
+                            "name": "START_LIFT",
+                            "target_workspace_z_mm": float(startup_target_z * 1000.0),
+                            "actual_workspace_z_mm": float(actual_physical[2] * 1000.0),
+                            "actual_model_xyz_mm": [
+                                float(value * 1000.0) for value in actual.position
+                            ],
+                        }
+                    )
+
                 run_demo_targets(
                     arm,
                     demo_positions,
-                    rotation=elevated["D_UP"].rotation,
+                    rotation=up.rotation,
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
