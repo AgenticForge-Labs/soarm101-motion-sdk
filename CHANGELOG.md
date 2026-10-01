@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Restored the STS3215 follower position P gain to the factory value 32 instead of 16.
+  Hardware testing showed a slow/shaky gravity-loaded Cartesian climb that stopped about
+  0.071 rad from target, and an upstream SO-arm report independently documents a P=16
+  static-friction/deadband problem that is resolved by P=32.
+- Paper Cartesian validation now stops/holds on motion failure and waits for the operator
+  to support/release the arm instead of immediately relaxing and dropping it.
+
 - Reworked the paper experiment around its actual purpose: validating Cartesian
   `move_linear()`. After UP teaching, the arm now counts down and holds that pose;
   `--replay` can reuse the saved teaching from an ordinary resting pose without

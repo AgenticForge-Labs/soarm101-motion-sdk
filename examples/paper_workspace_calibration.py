@@ -349,6 +349,14 @@ def _countdown_hold(arm: SOARM101, seconds: int = 3) -> None:
     print("Torque enabled. Arm is holding its current pose.")
 
 
+def _hold_until_operator_release(arm: SOARM101, message: str) -> None:
+    """Keep torque on after a run result until the operator deliberately releases it."""
+    arm.stop()
+    print(f"\n{message}")
+    print("Arm is HOLDING its current pose; it will not automatically relax and drop.")
+    input("Support the arm, then press Enter when you are ready to relax and exit... ")
+
+
 def _sample_from_payload(payload: dict[str, object], name: str) -> Sample:
     samples = payload.get("samples")
     if not isinstance(samples, list):
@@ -555,24 +563,34 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
                 )
-            except BaseException as exc:
+            except Exception as exc:
                 report["demo_completed"] = False
                 report["demo_error"] = f"{type(exc).__name__}: {exc}"
                 args.output.write_text(
                     json.dumps(report, indent=2) + "\n",
                     encoding="utf-8",
                 )
-                raise
+                _hold_until_operator_release(
+                    arm,
+                    f"Motion stopped: {type(exc).__name__}: {exc}",
+                )
+                arm.relax()
+                print("Motors relaxed.")
+                return 2
 
             report["demo_completed"] = True
             report.pop("demo_error", None)
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-            print("\nCartesian linear replay completed at CENTER_UP.")
+            _hold_until_operator_release(
+                arm,
+                "Cartesian linear replay completed at CENTER_UP.",
+            )
+            arm.relax()
+            print("Motors relaxed.")
             return 0
         finally:
             try:
                 arm.relax()
-                print("Motors relaxed.")
             except Exception as exc:
                 print(f"WARNING: could not confirm relax during cleanup: {exc}")
 
@@ -909,31 +927,40 @@ def main() -> int:
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
                 )
-            except BaseException as exc:
+            except Exception as exc:
                 report["demo_completed"] = False
                 report["demo_error"] = f"{type(exc).__name__}: {exc}"
                 args.output.write_text(
                     json.dumps(report, indent=2) + "\n",
                     encoding="utf-8",
                 )
-                raise
+                _hold_until_operator_release(
+                    arm,
+                    f"Motion stopped: {type(exc).__name__}: {exc}",
+                )
+                arm.relax()
+                print("Motors relaxed.")
+                return 2
 
             report["demo_completed"] = True
             args.output.write_text(
                 json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
             )
-            print(
-                "\nElevated paper demonstration completed at CENTER_UP. "
-                "The arm will now relax."
+            _hold_until_operator_release(
+                arm,
+                "Elevated paper demonstration completed at CENTER_UP.",
             )
+            arm.relax()
+            print("Motors relaxed.")
             return 0
         finally:
-            try:
-                arm.relax()
-                print("Motors relaxed.")
-            except Exception as exc:
-                print(f"WARNING: could not confirm relax during cleanup: {exc}")
+            if arm.is_enabled:
+                try:
+                    arm.relax()
+                    print("Motors relaxed during cleanup.")
+                except Exception as exc:
+                    print(f"WARNING: could not confirm relax during cleanup: {exc}")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,10 @@ def test_normal_connections_do_not_configure_motors() -> None:
     assert SOARM101Config().configure_motors_on_connect is False
 
 
+def test_recommended_position_p_gain_uses_factory_hold_authority() -> None:
+    assert SOARM101Config().position_p_coefficient == 32
+
+
 def test_software_stop_name_is_honest() -> None:
     arm = SOARM101.simulated()
     assert callable(arm.software_stop)
