@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fixed paper replay startup from low/resting poses where the calibrated physical-Z
+  clearance target was valid but the generic model-frame workspace floor rejected it
+  (for example model TCP z=-11 mm). The startup lift now receives a dedicated calibrated-
+  workspace preflight that requires fixed workspace X/Y, nondecreasing physical Z,
+  sequential IK continuity, and effective joint limits. Only that verified clearance move
+  bypasses the generic model-Z floor; the normal runtime joint, step, speed/acceleration,
+  following-error, effort, fault, communication, and timing guards remain active.
+
 - Superseded the temporary multi-height teaching approach from #61. The original
   A/B/C/D + one physically measured D_UP workflow remains authoritative. Hardware showed
   that the reachable FK replay landed at ~30 mm workspace Z at A/B and ~107 mm at C/D;
