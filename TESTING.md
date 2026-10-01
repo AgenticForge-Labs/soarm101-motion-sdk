@@ -64,9 +64,11 @@ layers a second slow motor trajectory under the host trajectory and can appear a
 lag/catch-up shaking.
 
 On hardware, compare the same broad workspace motion with smooth 20 Hz teleoperation and
-a 20 mm/s, 100 mm/s² paper replay. If linear motion remains visibly shakier after the
-servo-profile match, capture/analyze the planned IK joint sequence before changing motor
-PID or power settings.
+a 20 mm/s, 100 mm/s² paper replay. The supervised paper script uses 1 mm Cartesian IK
+waypoint spacing instead of the generic 5 mm spacing; at 20 mm/s this gives roughly 20 IK
+knots/s before the 50 Hz command resampling and reduces piecewise joint-slope changes.
+If linear motion remains visibly shakier, capture/analyze the planned IK joint sequence
+before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
@@ -98,12 +100,14 @@ Teach A->B->C->D clockwise, then teach the fixed lower finger at the measured UP
 above D. Immediately after the UP capture, confirm the countdown ends with torque enabled
 and the arm holding that exact pose instead of sagging.
 
-The workflow keeps the affine workspace fit as diagnostic/calibration evidence, but the
-powered Cartesian endpoints are generated from **known-reachable joint configurations**:
-the taught D->UP joint delta is applied to each taught corner joint pose, then FK defines
-D_UP/A_UP/B_UP/C_UP/D_UP_RETURN and an inferred center endpoint. The actual segments are
-still executed with `move_linear()` and position-only IK, so this tests Cartesian linear
-motion rather than replaying joint trajectories.
+The workflow uses the accepted affine workspace fit to generate every powered endpoint at
+the **same taught physical/workspace height**. For a 107 mm teaching, D_UP/A_UP/B_UP/C_UP/
+D_UP_RETURN/CENTER_UP all have workspace Z=107 mm even though their model/base-frame Z
+values may differ because the measured physical axes are skewed relative to model axes.
+The old taught D->UP joint delta is retained only as a continuity-friendly IK seed; it no
+longer defines endpoint geometry. The actual segments are still executed with
+`move_linear()` and position-only IK, so this tests Cartesian linear motion rather than
+replaying joint trajectories.
 
 For this supervised paper test, coarse workspace geometry is deliberately target-only on
 each segment. The destination must pass the coarse workspace check, while joint limits,
