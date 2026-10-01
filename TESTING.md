@@ -767,13 +767,12 @@ fail this test. Physical smoothness still requires real-arm validation.
 ### Paper replay from a low/resting start
 
 The startup clearance move must be evaluated in the saved calibrated workspace, not by
-assuming raw model Z is physical height. From a low/resting pose the target is the full
-paper reference/transport height, not merely a small nominal lift. The climb is split into
-at most 10 mm calibrated-Z stages by default; every stage is preflighted, executed,
-settled, and remeasured before the next. Regression coverage also includes a case where a
-clearance target remains at negative model-frame Z while calibrated workspace Z rises.
-Preflight accepts each stage only when workspace X/Y stays fixed, physical Z does not
+assuming raw model Z is physical height. Replay requests one 20 mm calibrated-Z rise by
+default from the measured starting pose. Regression coverage also includes a case where
+the target remains at negative model-frame Z while calibrated workspace Z rises.
+Preflight accepts the clearance only when workspace X/Y stays fixed, physical Z does not
 descend, IK remains continuous, and all solved joints remain inside effective limits.
-After execution, measured workspace Z must be within 5 mm of the transport target before
-lateral travel is permitted. The generic coarse workspace check is disabled only for those
-verified startup-lift executions; the normal motion/runtime safety stack remains active.
+After execution, measured workspace Z must be within 5 mm of the requested clearance
+target before paper travel begins at A_UP. The generic coarse workspace check is disabled
+only for that verified startup-lift execution; the normal motion/runtime safety stack
+remains active.
