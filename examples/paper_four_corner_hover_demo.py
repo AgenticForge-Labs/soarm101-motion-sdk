@@ -167,6 +167,7 @@ def _move_hover(
     *,
     speed_mm_s: float,
     acceleration_mm_s2: float,
+    allow_floor_recovery: bool = False,
 ) -> dict[str, object]:
     print(f"\nMoving to {sample.name} hover...")
     result = arm.move_linear(
@@ -174,6 +175,7 @@ def _move_hover(
         orientation_mode="compatible",
         speed=speed_mm_s / 1000.0,
         acceleration=acceleration_mm_s2 / 1000.0,
+        allow_floor_recovery=allow_floor_recovery,
     )
     if not result.accepted or not result.completed:
         raise RuntimeError(f"motion to {sample.name} hover did not complete: {result}")
@@ -330,6 +332,12 @@ def main() -> int:
             for sample in samples:
                 _preflight_hover(arm, sample, targets[sample.name])
 
+            print(
+                "\nThe first lift may start below the generic base-Z floor in model coordinates. "
+                "For this lift only, the workspace validator permits a monotonic upward escape "
+                "that must finish back inside the normal workspace envelope; reach, base keep-out, "
+                "self-clearance, joint, effort, fault, and following-error guards remain active."
+            )
             input(
                 f"\nPress Enter to enable torque and make ONLY the first "
                 f"{args.hover_height_mm:.0f} mm lift above D... "
@@ -344,6 +352,7 @@ def main() -> int:
                     targets["D"],
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
+                    allow_floor_recovery=True,
                 )
             )
             args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
