@@ -113,8 +113,11 @@ The URDF/model limits are the generic fallback/reference. For a calibrated real 
 normal executable pose-joint authority follows the saved mechanical-stop calibration with
 a 1° inset from each measured stop by default. `calibrated_joint_stop_margin_deg`
 reports that policy. The same output includes `sleep_pose_rad` and `sleep_pose_deg`,
-derived from those executable limits. Calibration remains the physical authority if a
-measured range is narrower than the model range.
+derived from those executable limits, plus `sleep_gripper` and
+`calibrated_gripper_stop_margin_deg`. The gripper Sleep target is the calibrated closed
+mechanical stop inset 1° toward open by default and is reported in both normalized and raw
+encoder coordinates. Calibration remains the physical authority if a measured range is
+narrower than the model range.
 
 It also reports the configured coarse model-space Cartesian envelope, including maximum
 TCP reach, minimum model Z, base keep-out dimensions, and minimum self-clearance. Maximum
@@ -182,8 +185,10 @@ soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 Sleep is computed from the active follower's executable joint limits: shoulder pan
 midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
 wrist roll midpoint. On a calibrated arm the endpoint limits are already inset 1° from the
-measured mechanical stops. The command does not change the gripper and is never triggered
-automatically by connection or torque enable.
+measured mechanical stops. After the arm reaches that fold, the stock gripper closes to a
+target 1° inside its calibrated closed mechanical stop by default. The target is derived
+from the saved gripper encoder range and normalized so calibration handles either motor
+drive direction. Sleep is never triggered automatically by connection or torque enable.
 
 ## Relative Cartesian linear jog
 
