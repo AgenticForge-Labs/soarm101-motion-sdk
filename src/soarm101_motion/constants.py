@@ -49,6 +49,17 @@ JOINT_LIMITS: dict[str, tuple[float, float]] = {
 
 HOME_JOINTS: dict[str, float] = {joint: 0.0 for joint in ARM_JOINTS}
 
+# Built-in compact rest posture for demos and power-down preparation. This remains
+# a guarded joint-space move through the normal SDK safety stack; it is not
+# commanded automatically on connect or torque enable.
+SLEEP_JOINTS: dict[str, float] = {
+    "shoulder_pan": 0.0,
+    "shoulder_lift": -50.0 * pi / 180.0,
+    "elbow_flex": 65.0 * pi / 180.0,
+    "wrist_flex": 30.0 * pi / 180.0,
+    "wrist_roll": 0.0,
+}
+
 # Conservative host-side defaults. These are intentionally below the values
 # commonly used by direct teleoperation loops.
 DEFAULT_JOINT_SPEED_RAD_S = 0.45
