@@ -231,6 +231,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         calibration_extension_stop_margin_rad=(
             config.calibration_extension_stop_margin_rad
         ),
+        calibration_extension_joints=config.calibration_extension_joints,
     )
     joints: dict[str, object] = {}
     for name in ARM_JOINTS:
@@ -262,6 +263,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         "calibration_extension_stop_margin_deg": float(
             config.calibration_extension_stop_margin_rad * 180.0 / pi
         ),
+        "calibration_extension_joints": list(config.calibration_extension_joints),
         "joints": joints,
         "coarse_cartesian_envelope_mm": {
             "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
@@ -271,7 +273,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             "base_keepout_height": float(config.base_keepout_height_m * 1000.0),
         },
         "notes": [
-            "effective joint limits keep nominal model authority and add calibration-proven extension only where the configured stop margin remains",
+            "effective joint limits keep nominal model authority and add calibration-proven extension only for explicitly validated joints where the configured stop margin remains",
             "the calibration stop margin never narrows the pre-existing model/calibration intersection",
             "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
             "normal Cartesian CLI coordinates are in the soarm101/base model frame",
