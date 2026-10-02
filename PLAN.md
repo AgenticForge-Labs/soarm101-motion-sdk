@@ -104,9 +104,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
   +98.48° wrist flex against a measured +103.91° stop. Runtime limit authority now keeps
   nominal model/calibration limits and adds calibration-proven travel only where a 4° stop
   margin remains, giving this arm about +99.91° positive wrist-flex authority and ~1.43° of
-  planning headroom over the observed path requirement. Validate the normal runtime
-  preflight and one supervised powered replay before treating the extended authority as
-  physically validated. Then use the paper-height sweep only as a
+  planning headroom over the observed path requirement. Runtime extension is deliberately
+  enabled only for `wrist_flex`; the wider measured ranges on other joints remain
+  diagnostic evidence until separately characterized. Validate the normal runtime preflight
+  and one supervised powered replay before treating the wrist extension as physically
+  validated. Then use the paper-height sweep only as a
   separate geometry comparison. The
   first 5 mm sweep found 130 mm (+23 mm from
   the measured 107 mm reference) fully feasible, while candidates through 125 mm remained
