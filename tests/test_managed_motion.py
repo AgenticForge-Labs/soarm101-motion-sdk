@@ -34,7 +34,8 @@ def test_calibrated_extensions_keep_four_degree_stop_margin() -> None:
         limits = arm.get_joint_limits()
         controller_limits = arm.motion._effective_limits()
 
-    assert limits == pytest.approx(controller_limits)
+    for name in ARM_JOINTS:
+        assert limits[name] == pytest.approx(controller_limits[name])
     assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(
         measured_deg["wrist_flex"][1] - 4.0
     )
@@ -76,13 +77,15 @@ def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
             )
 
         monkeypatch.setattr(arm.ik, "solve", fake_solve)
+        expected_limits = arm.get_joint_limits()
         arm.solve_ik(
             Pose(np.array([0.1, 0.0, 0.1]), np.eye(3)),
             orientation_mode="position_only",
         )
 
     assert observed["limits"] is not None
-    assert observed["limits"] == pytest.approx(arm.get_joint_limits())
+    for name in ARM_JOINTS:
+        assert observed["limits"][name] == pytest.approx(expected_limits[name])
 
 
 
