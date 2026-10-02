@@ -101,14 +101,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
   the nominal model on every pose joint, including wrist flex ±103.9° versus ±95°. The
   torque-off margin search has now bounded the original 107 mm path's wrist requirement:
   5.430° from the measured stop is feasible and 5.469° is not. The boundary solution reaches
-  +98.48° wrist flex against a measured +103.91° stop. Runtime limit authority now keeps
-  nominal model/calibration limits and adds calibration-proven travel only where a 4° stop
-  margin remains, giving this arm about +99.91° positive wrist-flex authority and ~1.43° of
-  planning headroom over the observed path requirement. Runtime extension is deliberately
-  enabled only for `wrist_flex`; the wider measured ranges on other joints remain
-  diagnostic evidence until separately characterized. Validate the normal runtime preflight
-  and one supervised powered replay before treating the wrist extension as physically
-  validated. Then use the paper-height sweep only as a
+  +98.48° wrist flex against a measured +103.91° stop. Runtime limit authority now uses
+  the URDF/model range as the generic fallback/reference, but a calibrated real arm follows
+  its measured pose-joint travel with a 1° inset from each mechanical stop. This preserves
+  nearly all measured range while keeping normal commands off the stop itself. Validate the
+  normal runtime preflight and one supervised powered replay before treating the extended
+  calibrated range as physically validated. Then use the paper-height sweep only as a
   separate geometry comparison. The
   first 5 mm sweep found 130 mm (+23 mm from
   the measured 107 mm reference) fully feasible, while candidates through 125 mm remained
