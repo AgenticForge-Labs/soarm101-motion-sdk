@@ -119,8 +119,13 @@ Also validate the calibrated Sleep posture first in simulation, then with a clea
 workspace at low speed. Sleep is derived from the active executable limits: shoulder pan
 midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
 wrist roll midpoint. On a calibrated physical follower those endpoints are already 1°
-inside the measured mechanical stops. Sleep uses normal joint/workspace guards, does not
-move the gripper, and is never automatic.
+inside the measured mechanical stops. Sleep retains calibrated joint limits plus trajectory, rate/acceleration, following-error,
+effort, fault, communication, and completion guards, but intentionally skips the generic
+coarse workspace-geometry check. The designed folded posture places link centerlines closer
+than the generic 25 mm self-clearance heuristic on this arm, so that heuristic produces a
+known false positive for Sleep. This exception is specific to the calibration-derived Sleep
+primitive; ordinary joint motion continues to use the coarse workspace check. Sleep does not
+move the gripper and is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
