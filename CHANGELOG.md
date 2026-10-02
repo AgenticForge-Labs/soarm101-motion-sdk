@@ -4,11 +4,10 @@
 
 - Hardware replay after #74 remained very shaky and A_UP->B_UP still failed safely during
   pre-motion planning, now at 0.794 mm against the unchanged 0.5 mm Cartesian tolerance.
-  Inspection found that calibrated Cartesian execution was still using the older
-  per-sample synchronized servo-speed caps even though the documented/tested contract was
-  teleoperation-style `speed_raw=0`, `acceleration_raw=254`. `move_linear()` now
-  actually uses that fixed servo-side profile; synchronized per-joint arrival remains
-  available for joint moves but is not layered onto Cartesian streaming.
+  Review of the public managed controller confirmed that real Cartesian execution was
+  already using the intended teleoperation-style `speed_raw=0`,
+  `acceleration_raw=254` profile, so the visible shake remains unresolved and this change
+  does not introduce another servo-profile experiment.
 - Position-only Cartesian planning now has an endpoint-seeded reverse fallback. If forward
   sequential IK hits a numerical pocket, the planner solves the same Cartesian samples
   backward from a reachable target solution and accepts the result only if it reconnects
