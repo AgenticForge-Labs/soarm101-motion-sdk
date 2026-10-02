@@ -286,6 +286,55 @@ def test_plan_linear_from_is_read_only_and_does_not_require_torque() -> None:
         assert arm.backend.get_hardware_state().torque_enabled is False
 
 
+
+def test_plan_linear_from_accepts_calibration_bounded_diagnostic_limits(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+
+    class FakeMotor:
+        radians_limits = (-2.5, 2.5)
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: FakeMotor() for name in ARM_JOINTS}
+        )
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+        diagnostic_limits = dict(JOINT_LIMITS)
+        diagnostic_limits["wrist_flex"] = (
+            JOINT_LIMITS["wrist_flex"][0],
+            JOINT_LIMITS["wrist_flex"][1] + 0.10,
+        )
+        observed = []
+        original = arm.motion.ik.solve
+
+        def record_limits(target_pose, *, seed, tcp, options):
+            observed.append(options.joint_limits)
+            return original(target_pose, seed=seed, tcp=tcp, options=options)
+
+        monkeypatch.setattr(arm.motion.ik, "solve", record_limits)
+        plan = arm.motion.plan_linear_from(
+            start,
+            target,
+            tcp=arm.active_tcp,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+            limits_override=diagnostic_limits,
+        )
+
+    assert plan.command_samples
+    assert observed
+    assert all(item == diagnostic_limits for item in observed if item is not None)
+
+
 def test_plan_linear_from_uses_explicit_start_without_changing_backend_state() -> None:
     import numpy as np
 
