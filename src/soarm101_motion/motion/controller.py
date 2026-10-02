@@ -34,6 +34,7 @@ from soarm101_motion.exceptions import (
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.safety import (
+    resolve_effective_joint_limits,
     validate_command_step,
     validate_joint_targets,
     validate_workspace_path,
@@ -178,24 +179,20 @@ class MotionController:
             raise InvalidCommandError("torque is disabled; call enable() before motion")
 
     def _effective_limits(self) -> dict[str, tuple[float, float]]:
-        limits = dict(JOINT_LIMITS)
         calibration = getattr(self.backend, "calibration", None)
-        if calibration is None:
-            return limits
-        for name in ARM_JOINTS:
-            motor = calibration.motors.get(name)
-            if motor is None:
-                continue
-            calibrated_lower, calibrated_upper = motor.radians_limits
-            model_lower, model_upper = limits[name]
-            lower = max(model_lower, calibrated_lower)
-            upper = min(model_upper, calibrated_upper)
-            if lower >= upper:
-                raise SafetyViolationError(
-                    f"calibrated range for {name} does not overlap the model limits"
-                )
-            limits[name] = (lower, upper)
-        return limits
+        calibrated_limits = None
+        if calibration is not None:
+            calibrated_limits = {
+                name: motor.radians_limits
+                for name, motor in calibration.motors.items()
+                if name in ARM_JOINTS
+            }
+        return resolve_effective_joint_limits(
+            calibrated_limits,
+            calibration_extension_stop_margin_rad=(
+                self.config.calibration_extension_stop_margin_rad
+            ),
+        )
 
     def _limits_for_present(self, present: Mapping[str, float]) -> dict[str, tuple[float, float]]:
         limits = self._effective_limits()
@@ -864,10 +861,10 @@ class MotionController:
     ) -> PlannedPath:
         """Read-only Cartesian planning from an explicit validated start configuration.
 
-        ``limits_override`` is diagnostic-only. It may widen nominal model bounds
-        for read-only planning, but never beyond the active motor calibration.
-        Executable motion continues to use the normal effective model/calibration
-        intersection.
+        ``limits_override`` is diagnostic-only. It may widen normal executable
+        bounds for read-only planning, but never beyond the active motor calibration.
+        Executable motion uses the centrally resolved nominal-plus-calibrated-extension
+        limits and configured mechanical-stop margin.
         """
 
         state = self.backend.get_hardware_state()
