@@ -16,7 +16,6 @@ from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
-    JOINT_LIMITS,
     STOCK_GRIPPER,
     STS3215_MAX_POSITION_SPEED_RAW,
     TELEOP_SERVO_ACCELERATION_RAW,
