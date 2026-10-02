@@ -98,12 +98,15 @@ preflight every elevated segment from its endpoint IK solutions. A failure must 
 the exact command-rate sample and line progress and report signed XYZ residual, positional
 Jacobian conditioning, and nearest effective joint-limit margin. The replay-only `--limit-compare-only` diagnostic must also keep torque disabled.
 It compares the saved reference-height path under normal effective limits with read-only
-calibration-derived limits inset from the measured mechanical stops. The diagnostic must
-never change executable `move-linear` or joint-space limits, and any explicit read-only
-bound must remain inside the active calibration. The current calibration records wider
-mechanical travel than the nominal model, including wrist flex ±103.9° versus the model's
-±95°, so use this comparison to determine whether the 107 mm A_UP->B_UP miss is primarily
-the nominal URDF/model boundary before changing path height or executable limits.
+calibration-derived extensions inset from the measured mechanical stops. The diagnostic
+must never narrow the normal executable range, change executable `move-linear` or
+joint-space limits, or accept any explicit read-only bound outside the active calibration.
+The current calibration records wider mechanical travel than the nominal model, including
+wrist flex ±103.9° versus the model's ±95°. Hardware-side read-only comparison at 107 mm
+failed under the normal +95° wrist-flex boundary but planned all four straight segments
+with a 0.1° inset from measured stops. The next diagnostic must report the actual joint
+range used by that feasible path and its nearest measured-stop margin before any executable
+limit policy is changed.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
