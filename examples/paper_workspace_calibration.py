@@ -467,6 +467,7 @@ def calibration_margin_joint_limits(
     limits = resolve_effective_joint_limits(
         calibrated_limits,
         calibration_extension_stop_margin_rad=margin_rad,
+        calibration_extension_joints=ARM_JOINTS,
     )
     rows: list[dict[str, object]] = []
     for name in ARM_JOINTS:
