@@ -49,15 +49,15 @@ JOINT_LIMITS: dict[str, tuple[float, float]] = {
 
 HOME_JOINTS: dict[str, float] = {joint: 0.0 for joint in ARM_JOINTS}
 
-# Built-in compact rest posture for demos and power-down preparation. This remains
-# a guarded joint-space move through the normal SDK safety stack; it is not
-# commanded automatically on connect or torque enable.
-SLEEP_JOINTS: dict[str, float] = {
-    "shoulder_pan": 0.0,
-    "shoulder_lift": -50.0 * pi / 180.0,
-    "elbow_flex": 65.0 * pi / 180.0,
-    "wrist_flex": 30.0 * pi / 180.0,
-    "wrist_roll": 0.0,
+# Universal semantic recipe for the calibrated Sleep posture. The actual
+# angles are derived at runtime from the active arm calibration/effective limits,
+# so each follower gets a mechanically natural folded pose after calibration.
+SLEEP_LIMIT_SELECTORS: dict[str, str] = {
+    "shoulder_pan": "midpoint",
+    "shoulder_lift": "lower",
+    "elbow_flex": "upper",
+    "wrist_flex": "lower",
+    "wrist_roll": "midpoint",
 }
 
 # Conservative host-side defaults. These are intentionally below the values
