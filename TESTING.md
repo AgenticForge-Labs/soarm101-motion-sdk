@@ -115,9 +115,12 @@ expected ~1° inset and that read-only full-segment preflight passes under the n
 limits. This change does not authorize commanding a measured mechanical stop and does not
 resolve the separate visible-shake issue.
 
-Also validate the built-in Sleep posture first in simulation, then with a clear physical
-workspace at low speed. Sleep is `[0°, -50°, +65°, +30°, 0°]`, uses normal joint/workspace
-guards, does not move the gripper, and is never automatic.
+Also validate the calibrated Sleep posture first in simulation, then with a clear physical
+workspace at low speed. Sleep is derived from the active executable limits: shoulder pan
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
+wrist roll midpoint. On a calibrated physical follower those endpoints are already 1°
+inside the measured mechanical stops. Sleep uses normal joint/workspace guards, does not
+move the gripper, and is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
