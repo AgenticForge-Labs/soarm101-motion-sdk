@@ -614,7 +614,27 @@ def test_height_sweep_prefers_nearest_higher_feasible_height(monkeypatch) -> Non
         height_mm = float(next(iter(positions.values()))[2] * 1000.0)
         if height_mm < 112.0 - 1e-9:
             raise RuntimeError("wrist_flex limit")
-        return [{"segment": "A_UP->B_UP"}]
+        return [
+            {
+                "segment": "A_UP->B_UP",
+                "sample_count": 10,
+                "duration_s": 0.5,
+                "max_joint_step_rad": 0.001,
+                "max_joint_speed_rad_s": 0.01,
+                "max_joint_acceleration_rad_s2": 0.1,
+                "max_joint_jerk_rad_s3": 1.0,
+                "per_joint_motion": {
+                name: {
+                    "max_step_rad": 0.001,
+                    "max_speed_rad_s": 0.01,
+                    "max_acceleration_rad_s2": 0.1,
+                    "max_jerk_rad_s3": 1.0,
+                    "direction_reversals": 0,
+                }
+                for name in module.ARM_JOINTS
+            },
+            }
+        ]
 
     monkeypatch.setattr(module, "preflight_demo_segments", fake_segments)
 
