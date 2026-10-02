@@ -192,7 +192,9 @@ def test_explicit_session_port_overrides_saved_workstation_follower(
 
 
 def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> None:
-    from soarm101_motion.constants import ALL_MOTORS, MOTOR_IDS
+    from math import degrees
+
+    from soarm101_motion.constants import ALL_MOTORS, JOINT_LIMITS, MOTOR_IDS
 
     calibration_path = tmp_path / "so101.json"
     calibration_path.write_text(
@@ -231,5 +233,7 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     payload = json.loads(capsys.readouterr().out)
     assert payload["calibration_path"] == str(calibration_path)
     assert payload["joints"]["shoulder_pan"]["calibrated_deg"][1] > 110.0
-    assert payload["joints"]["shoulder_pan"]["effective_deg"][1] == pytest.approx(110.0)
+    assert payload["joints"]["shoulder_pan"]["effective_deg"][1] == pytest.approx(
+        degrees(JOINT_LIMITS["shoulder_pan"][1])
+    )
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
