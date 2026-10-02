@@ -1,6 +1,13 @@
 # Kinematics and IK
 
-The native model reproduces the five revolute-joint origins, axes, calibrated limits, and stock gripper TCP from the official SO-101 URDF. It does not require ROS or a URDF parser at runtime.
+The native model reproduces the five revolute-joint origins, axes, nominal planning limits, and stock gripper TCP from the official SO-101 URDF. It does not require ROS or a URDF parser at runtime.
+
+Runtime joint authority is calibration-aware but does not treat every measured mechanical
+stop as executable range. The normal model/calibration intersection remains authoritative
+for all joints unless a joint has separately validated calibrated extension. The current
+default extension allowlist contains only `wrist_flex`, using a 4° inset from its measured
+mechanical stops based on the saved 107 mm paper-path characterization. Read-only
+diagnostics may explore broader calibrated ranges without changing executable authority.
 
 Inverse kinematics uses bounded `scipy.optimize.least_squares`. The current or previous joint configuration is the seed, which preserves continuity during linear motion. Planned Cartesian paths use a configurable 0.5 mm position tolerance by default; this is a solver acceptance threshold, not a claim of 0.5 mm physical accuracy. Continuity and joint-centering are soft regularizers only: if they leave an otherwise reachable target outside the hard task tolerance, the solver performs a bounded task-space-only refinement from the regularized candidates rather than relaxing the tolerance.
 
