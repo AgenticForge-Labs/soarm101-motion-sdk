@@ -9,7 +9,6 @@ from pathlib import Path
 
 from soarm101_motion.constants import (
     ALL_MOTORS,
-    ARM_JOINTS,
     DEFAULT_COMMAND_FREQUENCY_HZ,
     DEFAULT_JOINT_ACCEL_RAD_S2,
     DEFAULT_JOINT_SPEED_RAD_S,
@@ -50,15 +49,10 @@ class SOARM101Config:
 
     max_command_step_radians: float = DEFAULT_MAX_COMMAND_STEP_RAD
     max_ik_waypoint_jump_radians: float = 0.50
-    # Arm-specific calibration may prove conservative travel beyond the nominal
-    # model/URDF range, but executable motion must stay this far inside each
-    # measured mechanical stop. This never narrows the normal model/calibration
-    # intersection; it only governs calibrated extensions beyond nominal limits.
-    calibration_extension_stop_margin_rad: float = math.radians(1.0)
-    # The official URDF remains the generic fallback/reference. Once a real arm has
-    # a mechanical-stop calibration, use that per-arm evidence to extend all pose
-    # joints toward their measured stops while retaining a small endpoint margin.
-    calibration_extension_joints: tuple[str, ...] = ARM_JOINTS
+    # The official URDF is the generic fallback. Once a real arm has a
+    # mechanical-stop calibration, that measured range becomes the pose-joint
+    # authority, inset from each measured stop by this margin.
+    calibrated_joint_stop_margin_rad: float = math.radians(1.0)
     cartesian_waypoint_spacing_m: float = 0.005
     cartesian_waypoint_spacing_rad: float = 0.08
     cartesian_position_tolerance_m: float = 0.0005
@@ -140,9 +134,7 @@ class SOARM101Config:
             "max_angular_acceleration": self.max_angular_acceleration,
             "max_command_step_radians": self.max_command_step_radians,
             "max_ik_waypoint_jump_radians": self.max_ik_waypoint_jump_radians,
-            "calibration_extension_stop_margin_rad": (
-                self.calibration_extension_stop_margin_rad
-            ),
+            "calibrated_joint_stop_margin_rad": self.calibrated_joint_stop_margin_rad,
             "cartesian_waypoint_spacing_m": self.cartesian_waypoint_spacing_m,
             "cartesian_waypoint_spacing_rad": self.cartesian_waypoint_spacing_rad,
             "cartesian_position_tolerance_m": self.cartesian_position_tolerance_m,
@@ -170,17 +162,6 @@ class SOARM101Config:
                 raise ConfigurationError(f"{name} must be a positive finite value")
         if not math.isfinite(self.minimum_workspace_z_m):
             raise ConfigurationError("minimum_workspace_z_m must be finite")
-        unknown_extension_joints = set(self.calibration_extension_joints) - set(ARM_JOINTS)
-        if unknown_extension_joints:
-            raise ConfigurationError(
-                "calibration_extension_joints contains unknown joints: "
-                + ", ".join(sorted(unknown_extension_joints))
-            )
-        if len(set(self.calibration_extension_joints)) != len(
-            self.calibration_extension_joints
-        ):
-            raise ConfigurationError("calibration_extension_joints must not contain duplicates")
-
         ceilings = {
             "default_joint_speed": (self.default_joint_speed, self.max_joint_speed),
             "default_joint_acceleration": (
