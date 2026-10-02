@@ -462,13 +462,20 @@ def calibration_margin_joint_limits(
     rows: list[dict[str, object]] = []
     for name in ARM_JOINTS:
         calibrated_lower, calibrated_upper = calibration.motors[name].radians_limits
-        diagnostic_lower = float(calibrated_lower + margin_rad)
-        diagnostic_upper = float(calibrated_upper - margin_rad)
-        if diagnostic_lower >= diagnostic_upper:
+        inset_lower = float(calibrated_lower + margin_rad)
+        inset_upper = float(calibrated_upper - margin_rad)
+        if inset_lower >= inset_upper:
             raise ValueError(
                 f"stop margin {stop_margin_deg:.1f} deg leaves no usable range for {name}"
             )
         model_lower, model_upper = JOINT_LIMITS[name]
+        normal_lower = max(float(calibrated_lower), float(model_lower))
+        normal_upper = min(float(calibrated_upper), float(model_upper))
+        # Diagnostic extension must never make the existing executable range narrower.
+        # It only adds calibrated travel where the requested mechanical-stop margin
+        # still leaves room beyond the normal model/calibration intersection.
+        diagnostic_lower = min(normal_lower, inset_lower)
+        diagnostic_upper = max(normal_upper, inset_upper)
         limits[name] = (diagnostic_lower, diagnostic_upper)
         rows.append(
             {
@@ -604,6 +611,33 @@ def diagnose_paper_joint_limit_comparison(
             f"  RESULT: FEASIBLE for all {len(calibrated_segments)} segments "
             "under read-only calibration-derived limits"
         )
+        print("  Planned joint ranges across the complete 107 mm path:")
+        for joint in ARM_JOINTS:
+            minima = []
+            maxima = []
+            margins = []
+            for segment in calibrated_segments:
+                per_joint = segment["per_joint_motion"]
+                assert isinstance(per_joint, dict)
+                motion = per_joint[joint]
+                assert isinstance(motion, dict)
+                minima.append(float(motion["min_position_rad"]))
+                maxima.append(float(motion["max_position_rad"]))
+                margin = motion.get("min_margin_to_planning_limit_rad")
+                if margin is not None:
+                    margins.append(float(margin))
+            measured_lower, measured_upper = arm.backend.calibration.motors[joint].radians_limits
+            used_lower = min(minima)
+            used_upper = max(maxima)
+            stop_margin = min(
+                used_lower - float(measured_lower),
+                float(measured_upper) - used_upper,
+            )
+            print(
+                f"    {joint:15s} used "
+                f"{np.degrees(used_lower):+7.2f}..{np.degrees(used_upper):+7.2f} deg; "
+                f"nearest measured stop margin={np.degrees(stop_margin):.2f} deg"
+            )
 
     return comparison
 
@@ -994,6 +1028,16 @@ def preflight_demo_segments(
                     )
                     if step.size
                     else 0
+                ),
+                "min_position_rad": float(np.min(matrix[:, index])),
+                "max_position_rad": float(np.max(matrix[:, index])),
+                "min_margin_to_planning_limit_rad": (
+                    min(
+                        float(np.min(matrix[:, index])) - float(planning_limits[name][0]),
+                        float(planning_limits[name][1]) - float(np.max(matrix[:, index])),
+                    )
+                    if planning_limits is not None
+                    else None
                 ),
             }
             for index, name in enumerate(ARM_JOINTS)
