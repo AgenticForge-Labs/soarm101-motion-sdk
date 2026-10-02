@@ -8,6 +8,7 @@ from soarm101_motion.poses import (
     REST_POSE_NAME,
     PoseLibrary,
     SavedPose,
+    sleep_joint_positions,
 )
 
 
@@ -104,3 +105,25 @@ def test_saved_pose_validation() -> None:
             gripper=2.0,
             tcp_xyz_rpy=(0, 0, 0, 0, 0, 0),
         )
+
+
+def test_sleep_joint_positions_selects_natural_fold_directions() -> None:
+    limits = {
+        "shoulder_pan": (-2.0, 2.0),
+        "shoulder_lift": (-1.8, 1.8),
+        "elbow_flex": (-1.6, 1.6),
+        "wrist_flex": (-1.7, 1.7),
+        "wrist_roll": (-2.8, 3.0),
+    }
+
+    sleep = sleep_joint_positions(limits)
+
+    assert sleep == pytest.approx(
+        {
+            "shoulder_pan": 0.0,
+            "shoulder_lift": -1.8,
+            "elbow_flex": 1.6,
+            "wrist_flex": -1.7,
+            "wrist_roll": 0.1,
+        }
+    )
