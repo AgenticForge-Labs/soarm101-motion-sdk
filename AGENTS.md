@@ -76,11 +76,12 @@ changes require development discipline; robot use requires conservative hardware
     teleoperation (STS3215 speed_raw=0, acceleration_raw=254); host trajectory planning owns
     speed and acceleration shaping. Hardware did not show a benefit from the temporary
     bounded-acceleration launch in #73, so Cartesian timing uses the symmetric half-cosine
-    profile again. Hardware after #74 remained very shaky and exposed that calibrated
-    `move_linear()` was still executing the older per-sample synchronized servo-speed
-    caps despite the documented teleoperation profile; Cartesian execution must actually
-    send speed_raw=0 and acceleration_raw=254. If forward position-only IK hits a numerical
-    pocket while the endpoint is known reachable, deterministic planning may use the exact
+    profile again. Hardware after #74 remained very shaky, but review of the public
+    managed controller confirmed that real `move_linear()` execution was already using
+    the documented teleoperation profile (speed_raw=0, acceleration_raw=254). Treat the
+    shake as unresolved rather than changing servo behavior by assumption. If forward
+    position-only IK hits a numerical pocket while the endpoint is known reachable,
+    deterministic planning may use the exact
     read-only endpoint solution as a reverse boundary condition, but it must re-solve every
     Cartesian sample at the unchanged hard tolerance and reconnect continuously to the
     measured start. Position-only smoothness work belongs in Cartesian-constrained IK
