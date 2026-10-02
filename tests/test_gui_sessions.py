@@ -533,20 +533,13 @@ def test_camera_missing_device_shows_waiting_state(window):
     assert window.camera_toggle_button.text() == "Stop selected"
 
 
-def test_builtin_sleep_control_emits_guarded_joint_command(window):
-    from math import degrees
-
-    from soarm101_motion.constants import ARM_JOINTS, SLEEP_JOINTS
-
+def test_builtin_sleep_control_requests_calibrated_sleep_move(window):
     captured = []
-    window.move_joints_requested.connect(captured.append)
+    window.sleep_requested.connect(captured.append)
     window._go_sleep()
 
     assert len(captured) == 1
     command = dict(captured[0])
     assert command["speed_deg_s"] == pytest.approx(8.0)
     assert command["acceleration_deg_s2"] == pytest.approx(25.0)
-    assert command["joints_deg"] == pytest.approx(
-        {name: degrees(SLEEP_JOINTS[name]) for name in ARM_JOINTS}
-    )
     assert window.go_sleep_button.text() == "Go Sleep"
