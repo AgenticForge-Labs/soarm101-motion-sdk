@@ -12,7 +12,7 @@ def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() ->
 
     import numpy as np
 
-    from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+    from soarm101_motion.constants import ARM_JOINTS
 
     measured_deg = {
         "shoulder_pan": (-121.14285714285717, 121.14285714285717),
