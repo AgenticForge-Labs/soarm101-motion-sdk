@@ -100,10 +100,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
   calibration-limit comparison first: the active mechanical-stop calibration is wider than
   the nominal model on every pose joint, including wrist flex ±103.9° versus ±95°. The
   torque-off `--limit-compare-only` run has now shown the original 107 mm path is feasible
-  with calibration-derived bounds inset 0.1° from measured stops while the unchanged normal
-  bounds fail at +95° wrist flex. Next quantify the actual joint extrema and nearest
-  measured-stop margin on that feasible path before deciding whether executable limits
-  should gain calibration-derived extensions. Then use the paper-height sweep only as a
+  with calibration-derived bounds inset 3.0° from measured stops while the unchanged normal
+  bounds fail at +95° wrist flex. The 3° plan reaches +100.91° wrist flex, exactly the
+  measured-stop inset boundary, so the margin is binding. Use the torque-off
+  `--limit-margin-search-only` binary search to identify the largest feasible stop margin
+  before deciding whether executable limits should gain calibration-derived extensions.
+  Then use the paper-height sweep only as a
   separate geometry comparison. The
   first 5 mm sweep found 130 mm (+23 mm from
   the measured 107 mm reference) fully feasible, while candidates through 125 mm remained
