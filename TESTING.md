@@ -99,10 +99,14 @@ the exact command-rate sample and line progress and report signed XYZ residual, 
 Jacobian conditioning, and nearest effective joint-limit margin. The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
 nearest constant calibrated workspace Z whose endpoints and all four straight segments
-preflight successfully. Only after the straight path itself is shown feasible should visible
-shake be characterized with planned joint derivatives, encoder-quantized command deltas,
-measured following error, and actual cycle timing before changing motor PID or power
-settings.
+preflight successfully. The saved calibration's 5 mm sweep found the first feasible path at
+130 mm (+23 mm above the measured 107 mm reference); candidates through 125 mm remained
+wrist-flex limited. Because 130 mm is extrapolated beyond the measured reference, do not
+treat the sweep result itself as powered validation. First inspect the printed per-segment
+joint step/speed/acceleration/jerk and per-joint encoder quantization/reversal diagnostics.
+Only after the straight path itself is shown feasible should visible shake be characterized
+with planned joint derivatives, encoder-quantized command deltas, measured following error,
+and actual cycle timing before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
