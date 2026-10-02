@@ -1,7 +1,11 @@
+from math import radians
+
 import numpy as np
 import pytest
 
 from soarm101_motion import CameraTool, Pose, SOARM101, ToolAssembly
+from soarm101_motion.calibration import MotorCalibration
+from soarm101_motion.constants import ENCODER_MAX
 from soarm101_motion.tools import SO101Gripper
 from soarm101_motion.exceptions import InvalidCommandError, MotionTimeoutError
 from soarm101_motion.hardware import SimulationBackend
@@ -24,6 +28,31 @@ def test_tool_assembly_binds_primary_gripper() -> None:
         gripper.close()
         assert gripper.is_closed
         arm.set_active_tcp("camera")
+
+
+def test_calibrated_gripper_closed_target_is_one_degree_inside_either_drive_direction() -> None:
+    for drive_mode in (0, 1):
+        motor = MotorCalibration(
+            motor_id=6,
+            drive_mode=drive_mode,
+            homing_offset=0,
+            range_min=1000,
+            range_max=2000,
+        )
+        target = SO101Gripper.closed_position_from_calibration(
+            motor,
+            stop_margin_rad=radians(1.0),
+        )
+        closed_raw = motor.normalized_to_raw(0.0)
+        open_raw = motor.normalized_to_raw(1.0)
+        target_raw = motor.normalized_to_raw(target)
+
+        assert 0.0 < target < 1.0
+        assert abs(target_raw - closed_raw) == pytest.approx(
+            ENCODER_MAX / 360.0,
+            abs=1.0,
+        )
+        assert (target_raw - closed_raw) * (open_raw - closed_raw) > 0
 
 
 def test_gripper_begin_opening_sends_goal_without_starting_polling() -> None:
