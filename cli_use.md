@@ -136,6 +136,27 @@ Those labels depend on how the arm and workspace are physically arranged.
 In particular, model/base XYZ and a calibrated physical workspace are distinct coordinate
 systems. The normal Cartesian CLI commands use model/base coordinates.
 
+## Built-in Sleep posture
+
+Use the built-in compact posture for a natural demo/resting position:
+
+```bash
+soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
+```
+
+The pose is:
+
+```text
+shoulder_pan     0°
+shoulder_lift  -50°
+elbow_flex     +65°
+wrist_flex     +30°
+wrist_roll       0°
+```
+
+Sleep is a normal guarded joint-space move. It is never commanded automatically on connect
+or torque enable; the arm can be moved to Sleep explicitly and then relaxed/powered down.
+
 ## Relative Cartesian jog
 
 Use `jog` for a relative Cartesian displacement.
