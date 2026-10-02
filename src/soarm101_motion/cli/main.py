@@ -408,6 +408,20 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sleep(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move without --yes.", file=sys.stderr)
+        return 2
+    with _arm_from_args(args) as arm:
+        arm.enable()
+        result = arm.move_sleep(
+            speed=args.speed_deg_s * pi / 180.0,
+            acceleration=args.acceleration_deg_s2 * pi / 180.0,
+        )
+        _print_motion_result(result, as_json=args.json)
+    return 0
+
+
 def _cmd_jog(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
@@ -993,6 +1007,17 @@ def build_parser() -> argparse.ArgumentParser:
     move.add_argument("--yes", action="store_true")
     move.add_argument("--json", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
+
+    sleep = sub.add_parser(
+        "sleep",
+        help="move to the built-in compact sleep posture through normal safety guards",
+    )
+    add_session_options(sleep)
+    sleep.add_argument("--speed-deg-s", type=float, default=8.0)
+    sleep.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    sleep.add_argument("--yes", action="store_true")
+    sleep.add_argument("--json", action="store_true")
+    sleep.set_defaults(func=_cmd_sleep)
 
     jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
     add_session_options(jog)
