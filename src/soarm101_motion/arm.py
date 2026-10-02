@@ -363,6 +363,7 @@ class SOARM101:
             calibration_extension_stop_margin_rad=(
                 self.config.calibration_extension_stop_margin_rad
             ),
+            calibration_extension_joints=self.config.calibration_extension_joints,
         )
 
     def get_joint_positions(self) -> JointState:
