@@ -97,8 +97,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
   Require read-only full-segment preflight of every elevated paper segment and inspect the
   failing sample's residual vector, Jacobian conditioning, and joint-limit margin to decide
   whether this is optimizer behavior or a real model-workspace boundary. Use the torque-off
-  paper-height sweep to find the nearest constant workspace Z whose complete path is feasible
-  before considering another powered replay. The first 5 mm sweep found 130 mm (+23 mm from
+  calibration-limit comparison first: the active mechanical-stop calibration is wider than
+  the nominal model on every pose joint, including wrist flex ±103.9° versus ±95°. Use the
+  torque-off `--limit-compare-only` diagnostic to test the original 107 mm path with
+  calibration-derived bounds inset from the measured stops while leaving executable limits
+  unchanged. Then use the paper-height sweep only as a separate geometry comparison. The
+  first 5 mm sweep found 130 mm (+23 mm from
   the measured 107 mm reference) fully feasible, while candidates through 125 mm remained
   wrist-flex limited. Treat 130 mm as extrapolated calibration geometry until separately
   validated. Inspect its planned joint/encoder diagnostics before any powered use. The severe
