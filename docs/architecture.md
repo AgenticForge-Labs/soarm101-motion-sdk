@@ -67,8 +67,10 @@ IK seeds, then re-solve each Cartesian sample at the unchanged hard tolerance an
 the refined sequence only if joint jerk is lower. If forward continuation hits a numerical
 IK pocket, an already validated endpoint solution may be used as a boundary-condition seed
 to solve the same Cartesian samples backward; the fallback is accepted only when it
-reconnects continuously to the measured start. The Cartesian path remains authoritative
-throughout. Requested linear speed and acceleration remain ceilings of the profile;
+reconnects continuously to the measured start. Endpoint reachability does not prove that
+the straight segment between endpoints is reachable, so supervised paper replay must
+preflight every complete elevated segment read-only before powered traversal. The Cartesian
+path remains authoritative throughout. Requested linear speed and acceleration remain ceilings of the profile;
 position-only paths do not spend time rotating an unconstrained tool orientation. It must not introduce a second
 piecewise-linear joint-space interpolation layer between sparse IK knots.
 
