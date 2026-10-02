@@ -47,6 +47,7 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     JOINT_LIMITS,
+    SLEEP_JOINTS,
 )
 from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
@@ -1326,6 +1327,11 @@ class MainWindow(QMainWindow):
             "Capture the follower's fresh measured pose, including during live teleoperation."
         )
         self.go_rest_button = QPushButton("Go Rest")
+        self.sleep_status = QLabel("Sleep: built-in compact pose")
+        self.go_sleep_button = QPushButton("Go Sleep")
+        self.go_sleep_button.setToolTip(
+            "Move to the built-in compact sleep posture through normal joint/workspace guards."
+        )
         self.save_home_button.clicked.connect(
             lambda _checked=False: self._save_named_pose(HOME_POSE_NAME)
         )
@@ -1338,12 +1344,17 @@ class MainWindow(QMainWindow):
         self.go_rest_button.clicked.connect(
             lambda _checked=False: self._go_named_pose(REST_POSE_NAME)
         )
+        self.go_sleep_button.clicked.connect(
+            lambda _checked=False: self._go_sleep()
+        )
         grid.addWidget(self.home_status, 0, 0)
         grid.addWidget(self.save_home_button, 0, 1)
         grid.addWidget(self.go_home_button, 0, 2)
         grid.addWidget(self.rest_status, 1, 0)
         grid.addWidget(self.save_rest_button, 1, 1)
         grid.addWidget(self.go_rest_button, 1, 2)
+        grid.addWidget(self.sleep_status, 2, 0, 1, 2)
+        grid.addWidget(self.go_sleep_button, 2, 2)
         return box
 
     def _build_leader_connection(self) -> QWidget:
@@ -5215,6 +5226,18 @@ class MainWindow(QMainWindow):
         )
         self._refresh_sidebar_context()
 
+    def _go_sleep(self) -> None:
+        self.move_joints_requested.emit(
+            {
+                "joints_deg": {
+                    name: degrees(float(SLEEP_JOINTS[name]))
+                    for name in ARM_JOINTS
+                },
+                "speed_deg_s": 8.0,
+                "acceleration_deg_s2": 25.0,
+            }
+        )
+
     def _move_joints(self) -> None:
         self.move_joints_requested.emit(
             {
@@ -5713,6 +5736,7 @@ class MainWindow(QMainWindow):
             has_home = has_rest = False
         self.go_home_button.setEnabled(can_move and has_home)
         self.go_rest_button.setEnabled(can_move and has_rest)
+        self.go_sleep_button.setEnabled(can_move)
 
         leader_editable = not self._leader_connected and not self._leader_connecting and not self._leader_busy and not self._busy
         self.leader_connect_button.setEnabled(not self._leader_connecting and not self._leader_busy and not self._busy)
