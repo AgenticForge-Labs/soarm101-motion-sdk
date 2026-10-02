@@ -6,6 +6,86 @@ from soarm101_motion import Pose, SOARM101
 from soarm101_motion.exceptions import InvalidCommandError
 
 
+
+def test_calibrated_extensions_keep_four_degree_stop_margin() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+
+    measured_deg = {
+        "shoulder_pan": (-121.14285714285717, 121.14285714285717),
+        "shoulder_lift": (-105.05494505494505, 105.05494505494505),
+        "elbow_flex": (-96.96703296703296, 96.96703296703296),
+        "wrist_flex": (-103.91208791208791, 103.91208791208791),
+        "wrist_roll": (-168.79120879120882, 168.79120879120882),
+    }
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: SimpleNamespace(
+                    radians_limits=tuple(np.deg2rad(measured_deg[name]))
+                )
+                for name in ARM_JOINTS
+            }
+        )
+        limits = arm.get_joint_limits()
+        controller_limits = arm.motion._effective_limits()
+
+    assert limits == pytest.approx(controller_limits)
+    assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(
+        measured_deg["wrist_flex"][1] - 4.0
+    )
+    assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(
+        measured_deg["wrist_flex"][0] + 4.0
+    )
+    # The elbow has too little extra calibrated travel for a 4 degree extension;
+    # retaining the normal model/calibration intersection must not shrink it.
+    assert limits["elbow_flex"] == pytest.approx(JOINT_LIMITS["elbow_flex"])
+
+
+def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS
+    from soarm101_motion.types import IKResult
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: SimpleNamespace(radians_limits=(-2.2, 2.2))
+                for name in ARM_JOINTS
+            }
+        )
+        observed = {}
+
+        def fake_solve(target, *, seed, tcp, options):
+            del target, seed, tcp
+            observed["limits"] = options.joint_limits
+            return IKResult(
+                success=True,
+                joints={name: 0.0 for name in ARM_JOINTS},
+                position_error_m=0.0,
+                orientation_error_rad=0.0,
+                iterations=1,
+                message="ok",
+            )
+
+        monkeypatch.setattr(arm.ik, "solve", fake_solve)
+        arm.solve_ik(
+            Pose(np.array([0.1, 0.0, 0.1]), np.eye(3)),
+            orientation_mode="position_only",
+        )
+
+    assert observed["limits"] is not None
+    assert observed["limits"] == pytest.approx(arm.get_joint_limits())
+
+
+
 def test_guarded_linear_move_plans_only_once() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
