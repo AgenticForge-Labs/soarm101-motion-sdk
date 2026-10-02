@@ -859,3 +859,105 @@ def test_calibration_margin_joint_limits_use_measured_stops_not_model_limits() -
     assert limits["elbow_flex"] == pytest.approx(module.JOINT_LIMITS["elbow_flex"])
     wrist = next(row for row in rows if row["joint"] == "wrist_flex")
     assert wrist["diagnostic_deg"][1] > wrist["model_deg"][1]
+
+
+def test_limit_margin_search_finds_largest_feasible_inset(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    joint_names = tuple(module.ARM_JOINTS)
+    zero = {name: 0.0 for name in joint_names}
+
+    class Calibration:
+        reference_height_m = 0.107
+
+    arm = SimpleNamespace(
+        backend=SimpleNamespace(
+            calibration=SimpleNamespace(
+                motors={
+                    name: SimpleNamespace(radians_limits=(-3.0, 3.0))
+                    for name in joint_names
+                }
+            )
+        )
+    )
+
+    positions = {
+        name: np.array([index * 0.01, 0.0, 0.107])
+        for index, name in enumerate(module.PAPER_REPLAY_ORDER)
+    }
+    preferred = {name: dict(zero) for name in positions}
+
+    monkeypatch.setattr(
+        module,
+        "workspace_height_demo_targets",
+        lambda *args, **kwargs: (positions, preferred, {}),
+    )
+    monkeypatch.setattr(
+        module,
+        "ordered_paper_replay_targets",
+        lambda p, q: (p, q),
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_demo_targets",
+        lambda *args, **kwargs: [
+            {"name": name, "joints_rad": dict(zero)}
+            for name in positions
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_joint_seeds",
+        lambda preflight: {
+            item["name"]: dict(item["joints_rad"])
+            for item in preflight
+        },
+    )
+
+    def fake_limits(candidate_arm, *, stop_margin_deg):
+        del candidate_arm
+        encoded = float(stop_margin_deg)
+        limits = {name: (-3.0, 3.0) for name in joint_names}
+        limits["wrist_flex"] = (-3.0, encoded)
+        return limits, []
+
+    monkeypatch.setattr(module, "calibration_margin_joint_limits", fake_limits)
+
+    def fake_segments(candidate_arm, candidate_positions, **kwargs):
+        del candidate_arm, candidate_positions
+        margin = float(kwargs["planning_limits"]["wrist_flex"][1])
+        if margin > 4.0:
+            raise RuntimeError("synthetic wrist margin failure")
+        per_joint = {
+            name: {
+                "min_position_rad": -0.5,
+                "max_position_rad": 0.5,
+            }
+            for name in joint_names
+        }
+        return [
+            {
+                "segment": "A_UP->B_UP",
+                "per_joint_motion": per_joint,
+            }
+        ]
+
+    monkeypatch.setattr(module, "preflight_demo_segments", fake_segments)
+
+    result = module.diagnose_paper_limit_margin_search(
+        arm,
+        Calibration(),
+        corners={},
+        up_sample=object(),
+        rotation=np.eye(3),
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
+        maximum_margin_deg=10.0,
+        tolerance_deg=0.05,
+    )
+
+    assert result["largest_feasible_margin_deg"] <= 4.0
+    assert result["largest_feasible_margin_deg"] >= 3.95
+    assert result["smallest_infeasible_margin_deg"] > 4.0
+    assert result["smallest_infeasible_margin_deg"] - result["largest_feasible_margin_deg"] <= 0.05
