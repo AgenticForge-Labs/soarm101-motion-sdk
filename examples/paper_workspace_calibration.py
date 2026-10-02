@@ -49,7 +49,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+from soarm101_motion.constants import ARM_JOINTS, DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
 from soarm101_motion.kinematics import IKOptions
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
