@@ -236,6 +236,30 @@ def test_position_only_linear_plan_uses_endpoint_seed_for_reverse_ik_fallback(
     )
 
 
+def test_plan_linear_from_is_read_only_and_does_not_require_torque() -> None:
+    import numpy as np
+
+    with SOARM101.simulated() as arm:
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+
+        plan = arm.motion.plan_linear_from(
+            start,
+            target,
+            tcp=arm.active_tcp,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+        )
+
+        assert plan.command_samples[0] == pytest.approx(start)
+        assert arm.backend.get_hardware_state().torque_enabled is False
+
+
 def test_plan_linear_from_uses_explicit_start_without_changing_backend_state() -> None:
     import numpy as np
 
