@@ -134,11 +134,10 @@ trajectory. The #73 launch-only experiment did not remove the visible shake. Aft
 hardware was still very shaky and A_UP->B_UP again failed before motion, now at 0.794 mm
 against the unchanged 0.5 mm tolerance.
 
-That run exposed a separate implementation regression: calibrated `move_linear()` still
-enabled the older per-sample synchronized servo-speed caps even though the documented
-contract and teleoperation baseline require fixed `speed_raw=0`,
-`acceleration_raw=254`. Cartesian execution now explicitly uses the fixed teleoperation
-profile; synchronized per-joint servo arrival remains available for joint-space moves.
+Review of the public managed controller confirmed that real Cartesian execution was
+already using the documented teleoperation baseline (`speed_raw=0`,
+`acceleration_raw=254`). The visible shake therefore remains unresolved and is not
+evidence for another servo-profile change.
 
 Position-only paths retain deterministic smooth-seed reprojection. In addition, if forward
 sequential IK hits a numerical pocket, the planner can use an exact reachable endpoint
@@ -150,9 +149,9 @@ Separately, when soft IK continuity/joint-centering regularization prevents a ge
 reachable sample from meeting the hard tolerance, a task-space-only refinement is attempted
 without relaxing that tolerance.
 
-If `move_linear()` remains shaky after the actual servo-profile correction, the next
-comparison should be planned joint derivatives, encoder-quantized command deltas, measured
-following error, and actual cycle timing; that would isolate remaining
+Because `move_linear()` remains shaky despite the existing teleoperation-style servo
+profile, the next comparison should be planned joint derivatives, encoder-quantized command
+deltas, measured following error, and actual cycle timing; that would isolate remaining
 IK/Jacobian/quantization effects from servo tracking.
 
 ## Current hardware finding
