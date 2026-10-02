@@ -78,8 +78,13 @@ Use `--calibration PATH` to inspect a specific calibration file.
 ```text
 calibrated = measured mechanical stop-to-stop range from the saved calibration
 model      = nominal SO-101 kinematic-model planning range
-effective  = intersection(calibrated, model), used by normal executable motion
+effective  = executable range for this arm
 ```
+
+The executable range keeps the nominal model authority and may extend beyond it when the
+saved calibration proves additional travel. Calibration-derived extensions stop 4° inside
+the measured mechanical stop by default. This margin governs only the extra calibrated
+travel and never shrinks the existing model/calibration intersection.
 
 The coarse Cartesian `maximum_tcp_reach` is an outer radial envelope. It does not mean
 that every XYZ point inside that radius is reachable.
