@@ -157,11 +157,17 @@ preflights every complete elevated segment read-only before powered traversal an
 the exact failing sample, signed XYZ residual, positional Jacobian conditioning, and
 nearest effective joint-limit margin.
 
+The saved paper calibration's torque-off constant-height sweep then stayed wrist-flex
+limited through 125 mm and found the first fully feasible four-segment path at 130 mm,
+which is +23 mm above the manually measured 107 mm reference. The 130 mm result proves
+model/path feasibility under the unchanged limits, but it is extrapolated workspace
+geometry rather than physical validation because it lies above the measured reference.
+
 Because `move_linear()` also remains very shaky despite the existing teleoperation-style
-servo profile, once a complete paper path is actually feasible the next comparison should
-be planned joint derivatives, encoder-quantized command deltas, measured following error,
-and actual cycle timing; that would isolate remaining IK/Jacobian/quantization effects from
-servo tracking.
+servo profile, the next step is still read-only: inspect the 130 mm plan's per-segment
+joint step/speed/acceleration/jerk and per-joint direction-reversal/encoder-quantization
+diagnostics. Only after those diagnostics are understood should measured following error
+and cycle timing be collected during another supervised powered move.
 
 ## Current hardware finding
 
