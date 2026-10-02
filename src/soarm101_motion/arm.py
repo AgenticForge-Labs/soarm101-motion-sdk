@@ -18,7 +18,6 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     HOME_JOINTS,
-    SLEEP_LIMIT_SELECTORS,
 )
 from soarm101_motion.exceptions import (
     ConfigurationError,
@@ -30,6 +29,7 @@ from soarm101_motion.exceptions import (
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.motion import MotionController, MotionHandle
+from soarm101_motion.poses import sleep_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
     resolve_effective_joint_limits,
@@ -416,27 +416,8 @@ class SOARM101:
     move_gohome = move_home
 
     def get_sleep_joint_positions(self) -> dict[str, float]:
-        """Return the calibrated natural Sleep posture for this arm.
-
-        On a calibrated physical arm the lower/upper values already include the
-        configured measured-stop inset. Simulation or an explicitly uncalibrated
-        backend falls back to the generic model limits through get_joint_limits().
-        """
-
-        limits = self.get_joint_limits()
-        result: dict[str, float] = {}
-        for name in ARM_JOINTS:
-            lower, upper = limits[name]
-            selector = SLEEP_LIMIT_SELECTORS[name]
-            if selector == "lower":
-                result[name] = float(lower)
-            elif selector == "upper":
-                result[name] = float(upper)
-            elif selector == "midpoint":
-                result[name] = float((lower + upper) / 2.0)
-            else:
-                raise RuntimeError(f"unsupported Sleep selector for {name}: {selector}")
-        return result
+        """Return this arm's natural Sleep pose from its executable limits."""
+        return sleep_joint_positions(self.get_joint_limits())
 
     def move_sleep(
         self,
