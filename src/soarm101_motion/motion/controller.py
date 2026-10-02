@@ -396,6 +396,7 @@ class MotionController:
                         orientation_mode="position_only",
                         position_tolerance_m=self.config.cartesian_position_tolerance_m,
                         multi_start=False,
+                        joint_limits=limits,
                     ),
                 )
             except IKError:
@@ -574,6 +575,7 @@ class MotionController:
                 look_at=look_at,
                 position_tolerance_m=self.config.cartesian_position_tolerance_m,
                 multi_start=multi_start,
+                joint_limits=limits,
             )
             solution = self.ik.solve(
                 pose,
@@ -591,6 +593,7 @@ class MotionController:
                         look_at=look_at,
                         position_tolerance_m=self.config.cartesian_position_tolerance_m,
                         multi_start=True,
+                        joint_limits=limits,
                     ),
                 )
             if not solution.success:
@@ -857,15 +860,55 @@ class MotionController:
         speed: float | None = None,
         acceleration: float | None = None,
         target_seed: Mapping[str, float] | None = None,
+        limits_override: Mapping[str, tuple[float, float]] | None = None,
     ) -> PlannedPath:
-        """Read-only Cartesian planning from an explicit validated start configuration."""
+        """Read-only Cartesian planning from an explicit validated start configuration.
+
+        ``limits_override`` is diagnostic-only. It may widen nominal model bounds
+        for read-only planning, but never beyond the active motor calibration.
+        Executable motion continues to use the normal effective model/calibration
+        intersection.
+        """
 
         state = self.backend.get_hardware_state()
         if not state.connected:
             raise RobotConnectionError("robot is not connected")
         if state.faulted:
             raise HardwareFaultError(state.fault_message or "robot is faulted")
-        limits = self._effective_limits()
+        if limits_override is None:
+            limits = self._effective_limits()
+        else:
+            missing = set(ARM_JOINTS) - set(limits_override)
+            if missing:
+                raise InvalidCommandError(
+                    "limits_override is missing joints: " + ", ".join(sorted(missing))
+                )
+            limits = {
+                name: (
+                    float(limits_override[name][0]),
+                    float(limits_override[name][1]),
+                )
+                for name in ARM_JOINTS
+            }
+            calibration = getattr(self.backend, "calibration", None)
+            for name in ARM_JOINTS:
+                lower, upper = limits[name]
+                if not math.isfinite(lower) or not math.isfinite(upper) or lower >= upper:
+                    raise InvalidCommandError(
+                        f"invalid read-only limits_override for {name}: {lower}..{upper}"
+                    )
+                if calibration is not None:
+                    calibrated_lower, calibrated_upper = (
+                        calibration.motors[name].radians_limits
+                    )
+                    if (
+                        lower < calibrated_lower - 1e-12
+                        or upper > calibrated_upper + 1e-12
+                    ):
+                        raise SafetyViolationError(
+                            f"read-only limits_override for {name} exceeds calibrated "
+                            f"range {calibrated_lower:.4f}..{calibrated_upper:.4f} rad"
+                        )
         start = validate_joint_targets(start_joints, limits=limits)
         return self._plan_linear_from_start(
             start,
