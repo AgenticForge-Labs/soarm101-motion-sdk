@@ -25,6 +25,7 @@ from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
 from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitiveLibrary
+from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
 from soarm101_motion.trajectories import TrajectoryLibrary
 from soarm101_motion.types import MotionResult, Pose
@@ -221,12 +222,21 @@ def _cmd_limits(args: argparse.Namespace) -> int:
 
     calibration = SO101Calibration.load(calibration_path)
     config = SOARM101Config(robot_id=robot_id)
+    calibrated_limits = {
+        name: calibration.motors[name].radians_limits
+        for name in ARM_JOINTS
+    }
+    effective_limits = resolve_effective_joint_limits(
+        calibrated_limits,
+        calibration_extension_stop_margin_rad=(
+            config.calibration_extension_stop_margin_rad
+        ),
+    )
     joints: dict[str, object] = {}
     for name in ARM_JOINTS:
-        calibrated_lower, calibrated_upper = calibration.motors[name].radians_limits
+        calibrated_lower, calibrated_upper = calibrated_limits[name]
         model_lower, model_upper = JOINT_LIMITS[name]
-        effective_lower = max(calibrated_lower, model_lower)
-        effective_upper = min(calibrated_upper, model_upper)
+        effective_lower, effective_upper = effective_limits[name]
         joints[name] = {
             "model_rad": [float(model_lower), float(model_upper)],
             "model_deg": [
@@ -249,6 +259,9 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         "robot_id": robot_id,
         "calibration_path": str(calibration_path),
         "calibration_id": calibration.calibration_id,
+        "calibration_extension_stop_margin_deg": float(
+            config.calibration_extension_stop_margin_rad * 180.0 / pi
+        ),
         "joints": joints,
         "coarse_cartesian_envelope_mm": {
             "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
@@ -258,7 +271,8 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             "base_keepout_height": float(config.base_keepout_height_m * 1000.0),
         },
         "notes": [
-            "effective joint limits are the intersection of model and calibrated ranges",
+            "effective joint limits keep nominal model authority and add calibration-proven extension only where the configured stop margin remains",
+            "the calibration stop margin never narrows the pre-existing model/calibration intersection",
             "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
             "normal Cartesian CLI coordinates are in the soarm101/base model frame",
         ],
@@ -268,6 +282,10 @@ def _cmd_limits(args: argparse.Namespace) -> int:
     else:
         print(f"robot_id: {robot_id}")
         print(f"calibration: {calibration_path}")
+        print(
+            "calibration extension stop margin: "
+            f"{payload['calibration_extension_stop_margin_deg']:.1f} deg"
+        )
         print("joint                         calibrated                   model               effective")
         for name in ARM_JOINTS:
             item = joints[name]
