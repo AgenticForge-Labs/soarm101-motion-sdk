@@ -233,6 +233,10 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     payload = json.loads(capsys.readouterr().out)
     assert payload["calibration_path"] == str(calibration_path)
     assert payload["calibrated_joint_stop_margin_deg"] == pytest.approx(1.0)
+    assert payload["calibrated_gripper_stop_margin_deg"] == pytest.approx(1.0)
+    assert 0.0 < payload["sleep_gripper"]["normalized"] < 0.1
+    assert payload["sleep_gripper"]["raw"] > 700
+    assert payload["sleep_gripper"]["calibrated_raw"] == [700, 3394]
 
     shoulder_calibrated_upper = payload["joints"]["shoulder_pan"]["calibrated_deg"][1]
     shoulder_effective_upper = payload["joints"]["shoulder_pan"]["effective_deg"][1]
@@ -284,3 +288,4 @@ def test_sleep_cli_requires_confirmation_and_runs_in_simulation(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["accepted"] is True
     assert payload["completed"] is True
+    assert payload["final_positions"]["so101_gripper"] == pytest.approx(0.0)
