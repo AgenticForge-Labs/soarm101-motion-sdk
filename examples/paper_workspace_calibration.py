@@ -448,7 +448,11 @@ def calibration_margin_joint_limits(
     dict[str, tuple[float, float]],
     list[dict[str, object]],
 ]:
-    """Return measured calibration limits inset from each mechanical stop.
+    """Return diagnostic limits that extend normal limits only where calibration permits.
+
+    The requested stop margin is applied to the measured mechanical range. The existing
+    model/calibration intersection is never narrowed; calibration only contributes extra
+    travel where the inset measured range extends beyond the normal executable limits.
 
     This is diagnostic geometry only. Normal executable motion still uses the
     model/calibration intersection.
