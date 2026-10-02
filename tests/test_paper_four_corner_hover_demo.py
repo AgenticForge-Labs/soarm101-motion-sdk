@@ -557,6 +557,84 @@ def test_preflight_joint_seeds_extracts_exact_endpoint_solutions() -> None:
     assert seeds["A_UP"]["wrist_roll"] == pytest.approx(0.2)
 
 
+def test_height_sweep_prefers_nearest_higher_feasible_height(monkeypatch) -> None:
+    module = _load_example_module()
+
+    class Calibration:
+        reference_height_m = 0.107
+
+    arm = object()
+    corners = {}
+    up = object()
+
+    def fake_targets(calibration, candidate_arm, *, corners, up_sample, target_workspace_z_m=None):
+        del calibration, candidate_arm, corners, up_sample
+        height = float(target_workspace_z_m)
+        positions = {
+            name: np.array([index * 0.01, 0.0, height])
+            for index, name in enumerate(module.PAPER_REPLAY_ORDER)
+        }
+        seeds = {
+            name: {
+                "shoulder_pan": 0.0,
+                "shoulder_lift": 0.0,
+                "elbow_flex": 0.0,
+                "wrist_flex": 0.0,
+                "wrist_roll": 0.0,
+            }
+            for name in module.PAPER_REPLAY_ORDER
+        }
+        return positions, seeds, {}
+
+    monkeypatch.setattr(module, "workspace_height_demo_targets", fake_targets)
+    monkeypatch.setattr(
+        module,
+        "ordered_paper_replay_targets",
+        lambda positions, seeds: (positions, seeds),
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_demo_targets",
+        lambda arm, positions, **kwargs: [
+            {"name": name, "joints_rad": kwargs["preferred_seeds"][name]}
+            for name in positions
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_joint_seeds",
+        lambda preflight: {
+            item["name"]: dict(item["joints_rad"])
+            for item in preflight
+        },
+    )
+
+    def fake_segments(arm, positions, **kwargs):
+        del arm, kwargs
+        height_mm = float(next(iter(positions.values()))[2] * 1000.0)
+        if height_mm < 112.0 - 1e-9:
+            raise RuntimeError("wrist_flex limit")
+        return [{"segment": "A_UP->B_UP"}]
+
+    monkeypatch.setattr(module, "preflight_demo_segments", fake_segments)
+
+    result = module.diagnose_paper_height_sweep(
+        arm,
+        Calibration(),
+        corners=corners,
+        up_sample=up,
+        rotation=np.eye(3),
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
+        minimum_height_mm=102.0,
+        maximum_height_mm=117.0,
+        step_mm=5.0,
+    )
+
+    assert result["nearest_feasible_height_mm"] == pytest.approx(112.0)
+    assert result["nearest_feasible_offset_mm"] == pytest.approx(5.0)
+
+
 def test_full_segment_preflight_plans_adjacent_endpoints_without_motion() -> None:
     from types import SimpleNamespace
 
