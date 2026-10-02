@@ -109,11 +109,12 @@ For each pose joint it reports:
 - `model_rad` / `model_deg`: nominal kinematic-model planning range; and
 - `effective_rad` / `effective_deg`: executable range for the calibrated arm.
 
-Normal executable authority keeps the model/calibration intersection. Where the measured
-calibration proves additional travel beyond the nominal model limit, the SDK may add that
-travel while retaining the configured mechanical-stop margin (4° by default).
-`calibration_extension_stop_margin_deg` reports the active margin. The extension policy
-never narrows the pre-existing model/calibration intersection.
+Normal executable authority keeps the model/calibration intersection. Additional
+calibration-derived travel is enabled only for explicitly validated joints; the current
+default is `wrist_flex`, with a 4° measured-stop margin based on the saved 107 mm
+paper-path characterization. `calibration_extension_stop_margin_deg` and
+`calibration_extension_joints` report the active policy. Other joints remain at the normal
+model/calibration intersection even when their measured stop-to-stop range is wider.
 
 It also reports the configured coarse model-space Cartesian envelope, including maximum
 TCP reach, minimum model Z, base keep-out dimensions, and minimum self-clearance. Maximum
