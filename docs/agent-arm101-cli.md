@@ -172,6 +172,16 @@ Orientation modes are:
 
 A failed solve exits non-zero.
 
+## Built-in Sleep posture
+
+```bash
+soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
+```
+
+This performs a guarded joint-space move to the built-in compact posture
+`[0°, -50°, +65°, +30°, 0°]`. It does not change the gripper and is never triggered
+automatically by connection or torque enable.
+
 ## Relative Cartesian linear jog
 
 ```bash
