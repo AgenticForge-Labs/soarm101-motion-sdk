@@ -27,6 +27,13 @@ Rules:
   overlays are visualization only and never authorize or execute motion.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
 - Motor calibration and workspace calibration are separate authorities. Motor calibration maps encoder state to joint coordinates; machine-local workspace calibration records measured physical-workspace correspondences tied to one motor-calibration ID.
+- Executable pose-joint limits are resolved once in the motion safety layer. The official
+  URDF/model limits are the generic fallback/reference; when an active mechanical-stop
+  calibration is present, deterministic runtime authority follows that arm-specific
+  calibration and stays 1° inside each measured pose-joint stop by default. A narrower
+  measured range remains authoritative. Endpoint IK, joint motion, Cartesian planning,
+  live streaming, and limit reporting share this resolver. Read-only diagnostics may test
+  alternate margins but do not bypass the saved calibration.
 - A workspace calibration is measurement evidence until physical motion validation succeeds. The supervised paper traversal is a narrow validation exception that uses one manually measured D_UP correspondence to define the local physical workspace Z coordinate. For each replay endpoint, deterministic code preserves the endpoint's inverse-mapped workspace X/Y and replaces only workspace Z with the measured reference height, then requires read-only IK preflight before motion. Startup consists of one preflighted calibrated-workspace-Z clearance move of 20 mm by default; the measured physical/workspace rise must be at least 10 mm before paper travel. Replay then enters at A_UP and proceeds A_UP→B_UP→C_UP→D_UP→CENTER_UP. D_UP remains calibration evidence rather than an obligatory first target. The supervised elevated paper workflow is specifically a Cartesian linear-motion validation. Software levels A_UP/B_UP/C_UP/D_UP/CENTER_UP to one calibrated workspace Z, then connects those endpoints with the SDK's `move_linear()` primitive and position-only sequential IK at a 20 Hz paper-validation cadence. Because the workspace mapping is affine, the requested line between equal-workspace-Z endpoints remains constant height in calibrated workspace coordinates. Planned Cartesian execution uses the same responsive Feetech tracking profile as live teleoperation (speed_raw=0, acceleration_raw=254); deterministic host-side trajectory generation owns speed and acceleration rather than adding a second servo-side pacing trajectory. The generic model-frame floor is known to disagree with the measured table, so the separately preflighted startup lift uses calibrated workspace authority and paper segments may use the documented generic destination-only sanity check. Runtime joint/IK/dynamic/following-error/effort/fault/communication/settle/timing guards remain active. This validation is evidence for the `move_linear()` primitive on the measured setup; it does not by itself authorize broader autonomous Cartesian motion.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
@@ -64,8 +71,13 @@ symmetric half-cosine acceleration/deceleration with an optional constant-speed 
 then solves sequential IK directly at the actual command-rate samples. For position-only
 paths, deterministic code may smooth the joint solution sequence only as a source of new
 IK seeds, then re-solve each Cartesian sample at the unchanged hard tolerance and accept
-the refined sequence only if joint jerk is lower. The Cartesian path remains authoritative
-throughout. Requested linear speed and acceleration remain ceilings of the profile;
+the refined sequence only if joint jerk is lower. If forward continuation hits a numerical
+IK pocket, an already validated endpoint solution may be used as a boundary-condition seed
+to solve the same Cartesian samples backward; the fallback is accepted only when it
+reconnects continuously to the measured start. Endpoint reachability does not prove that
+the straight segment between endpoints is reachable, so supervised paper replay must
+preflight every complete elevated segment read-only before powered traversal. The Cartesian
+path remains authoritative throughout. Requested linear speed and acceleration remain ceilings of the profile;
 position-only paths do not spend time rotating an unconstrained tool orientation. It must not introduce a second
 piecewise-linear joint-space interpolation layer between sparse IK knots.
 
@@ -73,7 +85,9 @@ On calibrated Feetech hardware, planned Cartesian motion uses the same servo-sid
 tracking contract as live teleoperation: `speed_raw=0` gives the position loop full
 tracking authority and `acceleration_raw=254` uses the validated responsive acceleration
 profile. The host trajectory remains the single source of speed/acceleration shaping.
-This avoids layering a second, quantized servo-speed trajectory on top of 20/50 Hz host
-setpoints. The resulting joint samples remain subject to deterministic joint, step,
+This is an execution requirement, not just a planning/documentation convention: Cartesian
+`move_linear()` must not enable the per-sample synchronized servo-speed caps used by
+optional joint-space moves. This avoids layering a second, quantized servo-speed trajectory
+on top of 20/50 Hz host setpoints. The resulting joint samples remain subject to deterministic joint, step,
 velocity, acceleration, workspace, following-error, effort, fault, and timing validation
 before and during execution.

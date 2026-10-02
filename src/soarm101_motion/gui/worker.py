@@ -1485,6 +1485,20 @@ class RobotWorker(QObject):
             self._report_error("joint move", exc)
 
     @Slot(object)
+    def move_sleep(self, command: object) -> None:
+        try:
+            values = dict(command)  # type: ignore[arg-type]
+            record_session("sleep_requested", worker=self._robot_id, command=values)
+            result = self._require_motion_available().move_sleep(
+                speed=radians(float(values["speed_deg_s"])),
+                acceleration=radians(float(values["acceleration_deg_s2"])),
+                wait=False,
+            )
+            self._track("sleep move", result)
+        except BaseException as exc:
+            self._report_error("sleep move", exc)
+
+    @Slot(object)
     def jog_cartesian(self, command: object) -> None:
         try:
             values = dict(command)  # type: ignore[arg-type]

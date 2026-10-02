@@ -3,7 +3,151 @@ from __future__ import annotations
 import pytest
 
 from soarm101_motion import Pose, SOARM101
-from soarm101_motion.exceptions import InvalidCommandError
+from soarm101_motion.exceptions import InvalidCommandError, SafetyViolationError
+
+
+
+def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS
+
+    measured_deg = {
+        "shoulder_pan": (-121.14285714285717, 121.14285714285717),
+        "shoulder_lift": (-105.05494505494505, 105.05494505494505),
+        "elbow_flex": (-96.96703296703296, 96.96703296703296),
+        "wrist_flex": (-103.91208791208791, 103.91208791208791),
+        "wrist_roll": (-168.79120879120882, 168.79120879120882),
+    }
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: SimpleNamespace(
+                    radians_limits=tuple(np.deg2rad(measured_deg[name]))
+                )
+                for name in ARM_JOINTS
+            }
+        )
+        limits = arm.get_joint_limits()
+        controller_limits = arm.motion._effective_limits()
+
+    for name in ARM_JOINTS:
+        assert limits[name] == pytest.approx(controller_limits[name])
+
+    assert np.degrees(limits["shoulder_pan"]) == pytest.approx(
+        (measured_deg["shoulder_pan"][0] + 1.0, measured_deg["shoulder_pan"][1] - 1.0)
+    )
+    assert np.degrees(limits["shoulder_lift"]) == pytest.approx(
+        (
+            measured_deg["shoulder_lift"][0] + 1.0,
+            measured_deg["shoulder_lift"][1] - 1.0,
+        )
+    )
+    assert np.degrees(limits["elbow_flex"]) == pytest.approx(
+        (measured_deg["elbow_flex"][0] + 1.0, measured_deg["elbow_flex"][1] - 1.0)
+    )
+    assert np.degrees(limits["wrist_flex"]) == pytest.approx(
+        (measured_deg["wrist_flex"][0] + 1.0, measured_deg["wrist_flex"][1] - 1.0)
+    )
+    assert np.degrees(limits["wrist_roll"]) == pytest.approx(
+        (measured_deg["wrist_roll"][0] + 1.0, measured_deg["wrist_roll"][1] - 1.0)
+    )
+
+
+def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS
+
+    measured_deg = {
+        "shoulder_pan": (-121.14285714285717, 121.14285714285717),
+        "shoulder_lift": (-105.05494505494505, 105.05494505494505),
+        "elbow_flex": (-96.96703296703296, 96.96703296703296),
+        "wrist_flex": (-103.91208791208791, 103.91208791208791),
+        "wrist_roll": (-168.79120879120882, 168.79120879120882),
+    }
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: SimpleNamespace(
+                    radians_limits=tuple(np.deg2rad(measured_deg[name]))
+                )
+                for name in ARM_JOINTS
+            }
+        )
+        sleep = arm.get_sleep_joint_positions()
+        arm.enable()
+        with pytest.raises(SafetyViolationError, match="coarse self-clearance"):
+            arm.move_joints(sleep, speed=0.2, acceleration=0.5)
+        result = arm.move_sleep(speed=0.2, acceleration=0.5)
+        final = dict(arm.get_joint_positions().positions)
+
+    assert np.degrees(sleep["shoulder_pan"]) == pytest.approx(0.0)
+    assert np.degrees(sleep["shoulder_lift"]) == pytest.approx(
+        measured_deg["shoulder_lift"][0] + 1.0
+    )
+    assert np.degrees(sleep["elbow_flex"]) == pytest.approx(
+        measured_deg["elbow_flex"][1] - 1.0
+    )
+    assert np.degrees(sleep["wrist_flex"]) == pytest.approx(
+        measured_deg["wrist_flex"][0] + 1.0
+    )
+    assert np.degrees(sleep["wrist_roll"]) == pytest.approx(0.0)
+    assert result.completed is True
+    for name, target in sleep.items():
+        assert final[name] == pytest.approx(
+            target,
+            abs=arm.config.joint_position_tolerance_rad,
+        )
+
+
+
+def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS
+    from soarm101_motion.types import IKResult
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: SimpleNamespace(radians_limits=(-2.2, 2.2))
+                for name in ARM_JOINTS
+            }
+        )
+        observed = {}
+
+        def fake_solve(target, *, seed, tcp, options):
+            del target, seed, tcp
+            observed["limits"] = options.joint_limits
+            return IKResult(
+                success=True,
+                joints={name: 0.0 for name in ARM_JOINTS},
+                position_error_m=0.0,
+                orientation_error_rad=0.0,
+                iterations=1,
+                message="ok",
+            )
+
+        monkeypatch.setattr(arm.ik, "solve", fake_solve)
+        expected_limits = arm.get_joint_limits()
+        arm.solve_ik(
+            Pose(np.array([0.1, 0.0, 0.1]), np.eye(3)),
+            orientation_mode="position_only",
+        )
+
+    assert observed["limits"] is not None
+    for name in ARM_JOINTS:
+        assert observed["limits"][name] == pytest.approx(expected_limits[name])
+
 
 
 def test_guarded_linear_move_plans_only_once() -> None:
@@ -115,9 +259,19 @@ def test_linear_plan_solves_ik_at_each_command_rate_cartesian_sample(monkeypatch
             joints = dict(start_joints)
             joints["shoulder_pan"] += 0.02 * progress_like**2
             joints["wrist_roll"] += 0.01 * progress_like**3
-            return SimpleNamespace(joints=joints)
+            return SimpleNamespace(
+                success=True,
+                joints=joints,
+                position_error_m=0.0,
+                message="synthetic command-rate IK solution",
+            )
 
-        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", nonlinear_solution)
+        monkeypatch.setattr(arm.motion.ik, "solve", nonlinear_solution)
+        monkeypatch.setattr(
+            arm.motion,
+            "_smooth_position_only_cartesian_samples",
+            lambda samples, cartesian, **kwargs: samples,
+        )
         plan = arm.motion.plan_linear(
             target,
             orientation_mode="position_only",
@@ -144,13 +298,13 @@ def test_linear_plan_solves_ik_at_each_command_rate_cartesian_sample(monkeypatch
 
 
 def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch) -> None:
-    import numpy as np
+    from types import SimpleNamespace
 
-    from soarm101_motion.exceptions import IKError
+    import numpy as np
 
     with SOARM101.simulated() as arm:
         arm.enable()
-        original = arm.motion.ik.solve_or_raise
+        original = arm.motion.ik.solve
         calls: list[bool] = []
         failed_once = False
 
@@ -159,12 +313,15 @@ def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch
             calls.append(bool(options.multi_start))
             if not options.multi_start and not failed_once:
                 failed_once = True
-                raise IKError(
-                    "IK did not meet tolerance: position=0.000556 m, orientation=0.000000 rad"
+                return SimpleNamespace(
+                    success=False,
+                    joints=dict(seed),
+                    position_error_m=0.000556,
+                    message="synthetic single-start miss",
                 )
             return original(target, seed=seed, tcp=tcp, options=options)
 
-        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", flaky)
+        monkeypatch.setattr(arm.motion.ik, "solve", flaky)
         current = arm.get_position()
         target = Pose(
             current.position + np.array([-0.010, 0.0, 0.004]),
@@ -180,6 +337,257 @@ def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch
     assert plan.command_samples
     assert failed_once is True
     assert any(calls[index : index + 2] == [False, True] for index in range(len(calls) - 1))
+
+
+def test_position_only_linear_plan_uses_endpoint_seed_for_reverse_ik_fallback(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.get_position()
+        target = Pose(
+            start_pose.position + np.array([-0.012, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+        start_x = float(start_pose.position[0])
+        target_seed = dict(start)
+        target_seed["wrist_roll"] += 0.04
+        induced_failures = 0
+
+        def branch_sensitive_solution(pose, *, seed, tcp, options):
+            nonlocal induced_failures
+            del tcp, options
+            progress = (float(pose.position[0]) - start_x) / -0.012
+            reverse_branch = float(seed["wrist_roll"]) > float(start["wrist_roll"]) + 1e-8
+            if not reverse_branch and 0.45 <= progress <= 0.55:
+                induced_failures += 1
+                return SimpleNamespace(
+                    success=False,
+                    joints=dict(seed),
+                    position_error_m=0.001,
+                    message="forward continuation trapped in local IK minimum",
+                )
+
+            joints = dict(start)
+            joints["shoulder_pan"] += 0.02 * progress
+            if reverse_branch:
+                joints["wrist_roll"] += 0.04 * progress
+            return SimpleNamespace(
+                success=True,
+                joints=joints,
+                position_error_m=0.0,
+                message="synthetic branch solution",
+            )
+
+        monkeypatch.setattr(arm.motion.ik, "solve", branch_sensitive_solution)
+        monkeypatch.setattr(
+            arm.motion,
+            "_smooth_position_only_cartesian_samples",
+            lambda samples, cartesian, **kwargs: samples,
+        )
+        plan = arm.motion.plan_linear(
+            target,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+            target_seed=target_seed,
+        )
+
+    assert induced_failures >= 1
+    assert plan.command_samples
+    assert plan.command_samples[0] == start
+    assert plan.command_samples[-1]["wrist_roll"] == pytest.approx(
+        start["wrist_roll"] + 0.04
+    )
+
+
+def test_plan_linear_from_is_read_only_and_does_not_require_torque() -> None:
+    import numpy as np
+
+    with SOARM101.simulated() as arm:
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+
+        plan = arm.motion.plan_linear_from(
+            start,
+            target,
+            tcp=arm.active_tcp,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+        )
+
+        assert plan.command_samples[0] == pytest.approx(start)
+        assert arm.backend.get_hardware_state().torque_enabled is False
+
+
+
+def test_plan_linear_from_accepts_calibration_bounded_diagnostic_limits(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+
+    class FakeMotor:
+        # Wider than every nominal model joint and the +0.10 rad wrist-flex
+        # diagnostic extension used below.
+        radians_limits = (-3.2, 3.2)
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: FakeMotor() for name in ARM_JOINTS}
+        )
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+        diagnostic_limits = dict(JOINT_LIMITS)
+        diagnostic_limits["wrist_flex"] = (
+            JOINT_LIMITS["wrist_flex"][0],
+            JOINT_LIMITS["wrist_flex"][1] + 0.10,
+        )
+        observed = []
+        original = arm.motion.ik.solve
+
+        def record_limits(target_pose, *, seed, tcp, options):
+            observed.append(options.joint_limits)
+            return original(target_pose, seed=seed, tcp=tcp, options=options)
+
+        monkeypatch.setattr(arm.motion.ik, "solve", record_limits)
+        plan = arm.motion.plan_linear_from(
+            start,
+            target,
+            tcp=arm.active_tcp,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+            limits_override=diagnostic_limits,
+        )
+
+    assert plan.command_samples
+    assert observed
+    assert all(item == diagnostic_limits for item in observed if item is not None)
+
+
+
+def test_plan_linear_from_rejects_diagnostic_limits_beyond_calibration() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+    from soarm101_motion.exceptions import SafetyViolationError
+
+    class FakeMotor:
+        radians_limits = (-2.5, 2.5)
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: FakeMotor() for name in ARM_JOINTS}
+        )
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+        diagnostic_limits = dict(JOINT_LIMITS)
+
+        with pytest.raises(SafetyViolationError, match="exceeds calibrated range"):
+            arm.motion.plan_linear_from(
+                start,
+                target,
+                tcp=arm.active_tcp,
+                orientation_mode="position_only",
+                speed=0.01,
+                acceleration=0.05,
+                limits_override=diagnostic_limits,
+            )
+
+
+def test_plan_linear_from_uses_explicit_start_without_changing_backend_state() -> None:
+    import numpy as np
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        measured = dict(arm.get_joint_positions().positions)
+        start = dict(measured)
+        start["shoulder_pan"] += 0.02
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+
+        plan = arm.motion.plan_linear_from(
+            start,
+            target,
+            tcp=arm.active_tcp,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+        )
+
+        assert plan.command_samples[0] == pytest.approx(start)
+        assert dict(arm.get_joint_positions().positions) == pytest.approx(measured)
+
+
+def test_cartesian_ik_failure_reports_sample_residual_and_conditioning(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.exceptions import IKError
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.010, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+
+        def fail(target_pose, *, seed, tcp, options):
+            del target_pose, tcp, options
+            return SimpleNamespace(
+                success=False,
+                joints=dict(seed),
+                position_error_m=0.00065,
+                message="forced diagnostic failure",
+            )
+
+        monkeypatch.setattr(arm.motion.ik, "solve", fail)
+        with pytest.raises(IKError) as excinfo:
+            arm.motion.plan_linear_from(
+                start,
+                target,
+                tcp=arm.active_tcp,
+                orientation_mode="position_only",
+                speed=0.01,
+                acceleration=0.05,
+            )
+
+    message = str(excinfo.value)
+    assert "sample" in message
+    assert "line progress=" in message
+    assert "residual=(" in message
+    assert "sigma_min=" in message
+    assert "nearest effective joint limit=" in message
 
 
 def test_cosine_cruise_profile_uses_requested_speed_as_cruise_ceiling() -> None:

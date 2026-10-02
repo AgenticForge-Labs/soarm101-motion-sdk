@@ -10,13 +10,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.constants import ARM_JOINTS, SLEEP_LIMIT_SELECTORS
 
 if TYPE_CHECKING:
     from soarm101_motion.arm import SOARM101
 
 HOME_POSE_NAME = "home"
 REST_POSE_NAME = "rest"
+
+
+def sleep_joint_positions(
+    limits: Mapping[str, tuple[float, float]],
+) -> dict[str, float]:
+    """Derive the natural compact Sleep pose from executable joint limits."""
+
+    missing = set(ARM_JOINTS) - set(limits)
+    if missing:
+        raise ValueError("sleep limits are missing joints: " + ", ".join(sorted(missing)))
+    result: dict[str, float] = {}
+    for name in ARM_JOINTS:
+        lower, upper = (float(limits[name][0]), float(limits[name][1]))
+        if not math.isfinite(lower) or not math.isfinite(upper) or lower >= upper:
+            raise ValueError(f"invalid sleep joint limits for {name}: {lower}..{upper}")
+        selector = SLEEP_LIMIT_SELECTORS[name]
+        if selector == "lower":
+            result[name] = lower
+        elif selector == "upper":
+            result[name] = upper
+        elif selector == "midpoint":
+            result[name] = (lower + upper) / 2.0
+        else:
+            raise ValueError(f"unsupported Sleep selector for {name}: {selector}")
+    return result
 
 
 def _utc_timestamp() -> str:

@@ -130,21 +130,44 @@ stick-slip/shake even though teleoperation on the same arm was smooth.
 
 The paper workflow also uses a 20 Hz host cadence and a 1 mm Cartesian planning-density
 bound. Every emitted command sample is a sequential-IK solution of the Cartesian
-trajectory. The #73 launch-only experiment did not remove the visible shake and A_UP->B_UP
-again failed at an intermediate numerical IK miss (0.812 mm against the unchanged 0.5 mm
-tolerance), so that launch change is superseded.
+trajectory. The #73 launch-only experiment did not remove the visible shake. After #74,
+hardware was still very shaky and A_UP->B_UP again failed before motion, now at 0.794 mm
+against the unchanged 0.5 mm tolerance.
 
-Position-only paths now receive a deterministic smooth-seed reprojection pass. A five-tap
-joint filter produces seeds only; every interior Cartesian sample is re-solved at the same
-hard tolerance, and the refined sequence is used only if discrete joint jerk decreases.
+Review of the public managed controller confirmed that real Cartesian execution was
+already using the documented teleoperation baseline (`speed_raw=0`,
+`acceleration_raw=254`). The visible shake therefore remains unresolved and is not
+evidence for another servo-profile change.
+
+Position-only paths retain deterministic smooth-seed reprojection. In addition, if forward
+sequential IK hits a numerical pocket, the planner can use an exact reachable endpoint
+solution as a second boundary condition and solve the same Cartesian samples backward.
+The paper workflow reuses its read-only endpoint-preflight joint solution for this purpose.
+A reverse path is accepted only if it reconnects continuously to the measured start and
+every sample satisfies the same hard tolerance, joint limits, and dynamic guards.
 Separately, when soft IK continuity/joint-centering regularization prevents a geometrically
 reachable sample from meeting the hard tolerance, a task-space-only refinement is attempted
 without relaxing that tolerance.
 
-If teleoperation is smooth but `move_linear()` remains shaky after this change, the next
-comparison should be planned joint derivatives, encoder-quantized command deltas, measured
-following error, and actual cycle timing; that would isolate IK/Jacobian/quantization
-effects from servo tracking.
+Hardware #75 testing also showed that the endpoint-seeded reverse fallback does not
+resolve A_UP->B_UP: forward and reverse planning converged to essentially the same
+0.648/0.646 mm miss. That pattern can indicate a true local reachability/singularity or
+joint-limit boundary rather than a seed-direction problem. The paper workflow therefore
+preflights every complete elevated segment read-only before powered traversal and reports
+the exact failing sample, signed XYZ residual, positional Jacobian conditioning, and
+nearest effective joint-limit margin.
+
+The saved paper calibration's torque-off constant-height sweep then stayed wrist-flex
+limited through 125 mm and found the first fully feasible four-segment path at 130 mm,
+which is +23 mm above the manually measured 107 mm reference. The 130 mm result proves
+model/path feasibility under the unchanged limits, but it is extrapolated workspace
+geometry rather than physical validation because it lies above the measured reference.
+
+Because `move_linear()` also remains very shaky despite the existing teleoperation-style
+servo profile, the next step is still read-only: inspect the 130 mm plan's per-segment
+joint step/speed/acceleration/jerk and per-joint direction-reversal/encoder-quantization
+diagnostics. Only after those diagnostics are understood should measured following error
+and cycle timing be collected during another supervised powered move.
 
 ## Current hardware finding
 

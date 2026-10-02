@@ -531,3 +531,15 @@ def test_camera_missing_device_shows_waiting_state(window):
     assert "Waiting for device" in window.camera_preview_status_labels[name].text()
     assert "4/30 s" in window.camera_preview_status_labels[name].text()
     assert window.camera_toggle_button.text() == "Stop selected"
+
+
+def test_builtin_sleep_control_requests_calibrated_sleep_move(window):
+    captured = []
+    window.sleep_requested.connect(captured.append)
+    window._go_sleep()
+
+    assert len(captured) == 1
+    command = dict(captured[0])
+    assert command["speed_deg_s"] == pytest.approx(8.0)
+    assert command["acceleration_deg_s2"] == pytest.approx(25.0)
+    assert window.go_sleep_button.text() == "Go Sleep"

@@ -13,18 +13,19 @@ from pathlib import Path
 import numpy as np
 
 from soarm101_motion import SOARM101, SOARM101Config, __version__
-from soarm101_motion.calibration import default_calibration_path
+from soarm101_motion.calibration import SO101Calibration, default_calibration_path
 from soarm101_motion.camera import (
     CameraCapture,
     CameraSettings,
     discover_camera_devices,
 )
-from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, MOTOR_IDS
+from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, JOINT_LIMITS, MOTOR_IDS
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
-from soarm101_motion.poses import PoseLibrary, SavedPose
+from soarm101_motion.poses import PoseLibrary, SavedPose, sleep_joint_positions
 from soarm101_motion.primitives import MotionPrimitiveLibrary
+from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
 from soarm101_motion.trajectories import TrajectoryLibrary
 from soarm101_motion.types import MotionResult, Pose
@@ -205,6 +206,108 @@ def _cmd_read(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def _cmd_limits(args: argparse.Namespace) -> int:
+    """Report model, calibration, and effective joint/workspace limits without hardware."""
+
+    robot_id = str(args.robot_id)
+    if args.calibration:
+        calibration_path = Path(args.calibration).expanduser()
+    else:
+        profile = WorkstationProfileStore().load()
+        if profile.follower.robot_id == robot_id and profile.follower.calibration:
+            calibration_path = Path(profile.follower.calibration).expanduser()
+        else:
+            calibration_path = default_calibration_path(robot_id)
+
+    calibration = SO101Calibration.load(calibration_path)
+    config = SOARM101Config(robot_id=robot_id)
+    calibrated_limits = {
+        name: calibration.motors[name].radians_limits
+        for name in ARM_JOINTS
+    }
+    effective_limits = resolve_effective_joint_limits(
+        calibrated_limits,
+        calibrated_joint_stop_margin_rad=config.calibrated_joint_stop_margin_rad,
+    )
+    joints: dict[str, object] = {}
+    for name in ARM_JOINTS:
+        calibrated_lower, calibrated_upper = calibrated_limits[name]
+        model_lower, model_upper = JOINT_LIMITS[name]
+        effective_lower, effective_upper = effective_limits[name]
+        joints[name] = {
+            "model_rad": [float(model_lower), float(model_upper)],
+            "model_deg": [
+                float(model_lower * 180.0 / pi),
+                float(model_upper * 180.0 / pi),
+            ],
+            "calibrated_rad": [float(calibrated_lower), float(calibrated_upper)],
+            "calibrated_deg": [
+                float(calibrated_lower * 180.0 / pi),
+                float(calibrated_upper * 180.0 / pi),
+            ],
+            "effective_rad": [float(effective_lower), float(effective_upper)],
+            "effective_deg": [
+                float(effective_lower * 180.0 / pi),
+                float(effective_upper * 180.0 / pi),
+            ],
+        }
+
+    payload = {
+        "robot_id": robot_id,
+        "calibration_path": str(calibration_path),
+        "calibration_id": calibration.calibration_id,
+        "calibrated_joint_stop_margin_deg": float(
+            config.calibrated_joint_stop_margin_rad * 180.0 / pi
+        ),
+        "joints": joints,
+        "sleep_pose_rad": sleep_joint_positions(effective_limits),
+        "sleep_pose_deg": {
+            name: float(value * 180.0 / pi)
+            for name, value in sleep_joint_positions(effective_limits).items()
+        },
+        "coarse_cartesian_envelope_mm": {
+            "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
+            "maximum_tcp_reach": float(config.maximum_tcp_reach_m * 1000.0),
+            "minimum_self_clearance": float(config.minimum_self_clearance_m * 1000.0),
+            "base_keepout_radius": float(config.base_keepout_radius_m * 1000.0),
+            "base_keepout_height": float(config.base_keepout_height_m * 1000.0),
+        },
+        "notes": [
+            "URDF/model joint limits are the generic fallback/reference; calibrated real arms use measured pose-joint travel with the configured stop margin",
+            "calibration remains the physical authority if a measured range is narrower than the model range",
+            "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
+            "normal Cartesian CLI coordinates are in the soarm101/base model frame",
+        ],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"robot_id: {robot_id}")
+        print(f"calibration: {calibration_path}")
+        print(
+            "calibrated joint stop margin: "
+            f"{payload['calibrated_joint_stop_margin_deg']:.1f} deg"
+        )
+        print("joint                         calibrated                   model               effective")
+        for name in ARM_JOINTS:
+            item = joints[name]
+            assert isinstance(item, dict)
+            calibrated = item["calibrated_deg"]
+            model = item["model_deg"]
+            effective = item["effective_deg"]
+            print(
+                f"{name:16s} "
+                f"{calibrated[0]:7.1f}..{calibrated[1]:7.1f}  "
+                f"{model[0]:7.1f}..{model[1]:7.1f}  "
+                f"{effective[0]:7.1f}..{effective[1]:7.1f}"
+            )
+        print(
+            "coarse TCP reach: "
+            f"{payload['coarse_cartesian_envelope_mm']['maximum_tcp_reach']:.1f} mm"
+        )
+    return 0
+
 def _cmd_diagnose(args: argparse.Namespace) -> int:
     config = _hardware_config(
         args,
@@ -302,6 +405,20 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
     with _arm_from_args(args) as arm:
         arm.enable()
         result = arm.move_joints(values, speed=args.speed, acceleration=args.acceleration)
+        _print_motion_result(result, as_json=args.json)
+    return 0
+
+
+def _cmd_sleep(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move without --yes.", file=sys.stderr)
+        return 2
+    with _arm_from_args(args) as arm:
+        arm.enable()
+        result = arm.move_sleep(
+            speed=args.speed_deg_s * pi / 180.0,
+            acceleration=args.acceleration_deg_s2 * pi / 180.0,
+        )
         _print_motion_result(result, as_json=args.json)
     return 0
 
@@ -854,6 +971,15 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--json", action="store_true")
     read.set_defaults(func=_cmd_read)
 
+    limits = sub.add_parser(
+        "limits",
+        help="show saved calibrated, model, and effective joint/workspace limits",
+    )
+    limits.add_argument("--robot-id", default="so101")
+    limits.add_argument("--calibration")
+    limits.add_argument("--json", action="store_true")
+    limits.set_defaults(func=_cmd_limits)
+
     diagnose = sub.add_parser(
         "diagnose", help="read motor model, voltage, temperature, and status without configuration writes"
     )
@@ -882,6 +1008,17 @@ def build_parser() -> argparse.ArgumentParser:
     move.add_argument("--yes", action="store_true")
     move.add_argument("--json", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
+
+    sleep = sub.add_parser(
+        "sleep",
+        help="move to the calibration-derived natural Sleep posture through normal safety guards",
+    )
+    add_session_options(sleep)
+    sleep.add_argument("--speed-deg-s", type=float, default=8.0)
+    sleep.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    sleep.add_argument("--yes", action="store_true")
+    sleep.add_argument("--json", action="store_true")
+    sleep.set_defaults(func=_cmd_sleep)
 
     jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
     add_session_options(jog)

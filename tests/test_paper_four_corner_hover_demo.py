@@ -445,6 +445,13 @@ def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> No
 
     arm = Arm()
     positions = {"B_UP": np.array([0.200, 0.0, 0.107])}
+    endpoint_seed = {
+        "shoulder_pan": 0.1,
+        "shoulder_lift": -0.2,
+        "elbow_flex": 0.3,
+        "wrist_flex": -0.1,
+        "wrist_roll": 0.2,
+    }
     moves = []
 
     module.run_demo_targets(
@@ -455,6 +462,7 @@ def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> No
         speed_mm_s=20.0,
         acceleration_mm_s2=100.0,
         report_moves=moves,
+        target_seeds={"B_UP": endpoint_seed},
     )
 
     assert len(arm.calls) == 1
@@ -464,7 +472,9 @@ def test_run_demo_targets_uses_cartesian_linear_motion_at_leveled_height() -> No
     assert kwargs["speed"] == pytest.approx(0.020)
     assert kwargs["acceleration"] == pytest.approx(0.100)
     assert kwargs["workspace_check"] == "target_only"
+    assert kwargs["target_seed"] == endpoint_seed
     assert moves[0]["mode"] == "cartesian_move_linear"
+    assert moves[0]["endpoint_seed_source"] == "endpoint_preflight"
     assert moves[0]["servo_tracking_profile"] == "teleop_authority"
     assert moves[0]["target_workspace_xyz_mm"][2] == pytest.approx(107.0)
 
@@ -524,6 +534,190 @@ def test_endpoint_preflight_prefers_joint_continuity_over_tiny_residual_differen
     assert results[1]["joints_rad"]["shoulder_pan"] == pytest.approx(0.12)
     assert results[1]["chosen_seed_index"] == 1
     assert results[1]["position_error_mm"] == pytest.approx(0.1)
+
+
+def test_preflight_joint_seeds_extracts_exact_endpoint_solutions() -> None:
+    module = _load_example_module()
+    seeds = module.preflight_joint_seeds(
+        [
+            {
+                "name": "A_UP",
+                "joints_rad": {
+                    "shoulder_pan": 0.1,
+                    "shoulder_lift": -0.2,
+                    "elbow_flex": 0.3,
+                    "wrist_flex": -0.1,
+                    "wrist_roll": 0.2,
+                },
+            }
+        ]
+    )
+
+    assert seeds["A_UP"]["shoulder_pan"] == pytest.approx(0.1)
+    assert seeds["A_UP"]["wrist_roll"] == pytest.approx(0.2)
+
+
+def test_height_sweep_prefers_nearest_higher_feasible_height(monkeypatch) -> None:
+    module = _load_example_module()
+
+    class Calibration:
+        reference_height_m = 0.107
+
+    arm = object()
+    corners = {}
+    up = object()
+
+    def fake_targets(calibration, candidate_arm, *, corners, up_sample, target_workspace_z_m=None):
+        del calibration, candidate_arm, corners, up_sample
+        height = float(target_workspace_z_m)
+        positions = {
+            name: np.array([index * 0.01, 0.0, height])
+            for index, name in enumerate(module.PAPER_REPLAY_ORDER)
+        }
+        seeds = {
+            name: {
+                "shoulder_pan": 0.0,
+                "shoulder_lift": 0.0,
+                "elbow_flex": 0.0,
+                "wrist_flex": 0.0,
+                "wrist_roll": 0.0,
+            }
+            for name in module.PAPER_REPLAY_ORDER
+        }
+        return positions, seeds, {}
+
+    monkeypatch.setattr(module, "workspace_height_demo_targets", fake_targets)
+    monkeypatch.setattr(
+        module,
+        "ordered_paper_replay_targets",
+        lambda positions, seeds: (positions, seeds),
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_demo_targets",
+        lambda arm, positions, **kwargs: [
+            {"name": name, "joints_rad": kwargs["preferred_seeds"][name]}
+            for name in positions
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_joint_seeds",
+        lambda preflight: {
+            item["name"]: dict(item["joints_rad"])
+            for item in preflight
+        },
+    )
+
+    def fake_segments(arm, positions, **kwargs):
+        del arm, kwargs
+        height_mm = float(next(iter(positions.values()))[2] * 1000.0)
+        if height_mm < 112.0 - 1e-9:
+            raise RuntimeError("wrist_flex limit")
+        return [
+            {
+                "segment": "A_UP->B_UP",
+                "sample_count": 10,
+                "duration_s": 0.5,
+                "max_joint_step_rad": 0.001,
+                "max_joint_speed_rad_s": 0.01,
+                "max_joint_acceleration_rad_s2": 0.1,
+                "max_joint_jerk_rad_s3": 1.0,
+                "per_joint_motion": {
+                name: {
+                    "max_step_rad": 0.001,
+                    "max_speed_rad_s": 0.01,
+                    "max_acceleration_rad_s2": 0.1,
+                    "max_jerk_rad_s3": 1.0,
+                    "direction_reversals": 0,
+                }
+                for name in module.ARM_JOINTS
+            },
+            }
+        ]
+
+    monkeypatch.setattr(module, "preflight_demo_segments", fake_segments)
+
+    result = module.diagnose_paper_height_sweep(
+        arm,
+        Calibration(),
+        corners=corners,
+        up_sample=up,
+        rotation=np.eye(3),
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
+        minimum_height_mm=102.0,
+        maximum_height_mm=117.0,
+        step_mm=5.0,
+    )
+
+    assert result["nearest_feasible_height_mm"] == pytest.approx(112.0)
+    assert result["nearest_feasible_offset_mm"] == pytest.approx(5.0)
+
+
+def test_full_segment_preflight_plans_adjacent_endpoints_without_motion() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    calls = []
+
+    joint_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    )
+    seeds = {
+        "A_UP": {name: 0.0 for name in joint_names},
+        "B_UP": {name: 0.1 for name in joint_names},
+        "C_UP": {name: 0.2 for name in joint_names},
+    }
+
+    class Motion:
+        def plan_linear_from(self, start_joints, target, **kwargs):
+            calls.append((dict(start_joints), target.position.copy(), dict(kwargs)))
+            samples = (
+                dict(start_joints),
+                dict(kwargs["target_seed"]),
+            )
+            return SimpleNamespace(command_samples=samples, duration_s=1.0)
+
+    class Arm:
+        motion = Motion()
+        active_tcp = None
+        config = SimpleNamespace(command_frequency_hz=20.0)
+        backend = SimpleNamespace(calibration=None)
+
+    positions = {
+        "A_UP": np.array([0.0, 0.0, 0.1]),
+        "B_UP": np.array([0.1, 0.0, 0.1]),
+        "C_UP": np.array([0.2, 0.0, 0.1]),
+    }
+
+    planning_limits = {name: (-1.5, 1.5) for name in joint_names}
+    result = module.preflight_demo_segments(
+        Arm(),
+        positions,
+        rotation=np.eye(3),
+        endpoint_seeds=seeds,
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
+        planning_limits=planning_limits,
+    )
+
+    assert [item["segment"] for item in result] == ["A_UP->B_UP", "B_UP->C_UP"]
+    assert len(calls) == 2
+    assert calls[0][0] == seeds["A_UP"]
+    assert calls[0][2]["target_seed"] == seeds["B_UP"]
+    assert calls[0][2]["limits_override"] == planning_limits
+    assert calls[1][0] == seeds["B_UP"]
+    assert calls[1][2]["target_seed"] == seeds["C_UP"]
+    assert calls[1][2]["limits_override"] == planning_limits
+    first_motion = result[0]["per_joint_motion"]["shoulder_pan"]
+    assert first_motion["min_position_rad"] == pytest.approx(0.0)
+    assert first_motion["max_position_rad"] == pytest.approx(0.1)
+    assert first_motion["min_margin_to_planning_limit_rad"] == pytest.approx(1.4)
 
 
 def test_startup_clearance_gate_uses_measured_rise_not_target_shortfall() -> None:
@@ -628,3 +822,143 @@ def test_center_up_is_true_midpoint_of_both_paper_axes() -> None:
         )
     )
     assert "CENTER_UP" in seeds
+
+
+def test_calibration_margin_joint_limits_use_measured_stops_not_model_limits() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    measured = {
+        "shoulder_pan": (-2.11, 2.11),
+        "shoulder_lift": (-1.83, 1.83),
+        "elbow_flex": (-1.70, 1.70),
+        "wrist_flex": (-1.81, 1.81),
+        "wrist_roll": (-2.94, 2.94),
+    }
+    arm = SimpleNamespace(
+        backend=SimpleNamespace(
+            calibration=SimpleNamespace(
+                motors={
+                    name: SimpleNamespace(radians_limits=limits)
+                    for name, limits in measured.items()
+                }
+            )
+        )
+    )
+
+    limits, rows = module.calibration_margin_joint_limits(
+        arm,
+        stop_margin_deg=3.0,
+    )
+
+    margin = np.deg2rad(3.0)
+    assert limits["wrist_flex"][0] == pytest.approx(measured["wrist_flex"][0] + margin)
+    assert limits["wrist_flex"][1] == pytest.approx(measured["wrist_flex"][1] - margin)
+    # Measured calibration is the runtime authority even when the requested
+    # stop margin makes the executable range narrower than the generic model.
+    assert limits["elbow_flex"][0] == pytest.approx(measured["elbow_flex"][0] + margin)
+    assert limits["elbow_flex"][1] == pytest.approx(measured["elbow_flex"][1] - margin)
+    wrist = next(row for row in rows if row["joint"] == "wrist_flex")
+    assert wrist["diagnostic_deg"][1] > wrist["model_deg"][1]
+
+
+def test_limit_margin_search_finds_largest_feasible_inset(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    joint_names = tuple(module.ARM_JOINTS)
+    zero = {name: 0.0 for name in joint_names}
+
+    class Calibration:
+        reference_height_m = 0.107
+
+    arm = SimpleNamespace(
+        backend=SimpleNamespace(
+            calibration=SimpleNamespace(
+                motors={
+                    name: SimpleNamespace(radians_limits=(-3.0, 3.0))
+                    for name in joint_names
+                }
+            )
+        )
+    )
+
+    positions = {
+        name: np.array([index * 0.01, 0.0, 0.107])
+        for index, name in enumerate(module.PAPER_REPLAY_ORDER)
+    }
+    preferred = {name: dict(zero) for name in positions}
+
+    monkeypatch.setattr(
+        module,
+        "workspace_height_demo_targets",
+        lambda *args, **kwargs: (positions, preferred, {}),
+    )
+    monkeypatch.setattr(
+        module,
+        "ordered_paper_replay_targets",
+        lambda p, q: (p, q),
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_demo_targets",
+        lambda *args, **kwargs: [
+            {"name": name, "joints_rad": dict(zero)}
+            for name in positions
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "preflight_joint_seeds",
+        lambda preflight: {
+            item["name"]: dict(item["joints_rad"])
+            for item in preflight
+        },
+    )
+
+    def fake_limits(candidate_arm, *, stop_margin_deg):
+        del candidate_arm
+        encoded = float(stop_margin_deg)
+        limits = {name: (-3.0, 3.0) for name in joint_names}
+        limits["wrist_flex"] = (-3.0, encoded)
+        return limits, []
+
+    monkeypatch.setattr(module, "calibration_margin_joint_limits", fake_limits)
+
+    def fake_segments(candidate_arm, candidate_positions, **kwargs):
+        del candidate_arm, candidate_positions
+        margin = float(kwargs["planning_limits"]["wrist_flex"][1])
+        if margin > 4.0:
+            raise RuntimeError("synthetic wrist margin failure")
+        per_joint = {
+            name: {
+                "min_position_rad": -0.5,
+                "max_position_rad": 0.5,
+            }
+            for name in joint_names
+        }
+        return [
+            {
+                "segment": "A_UP->B_UP",
+                "per_joint_motion": per_joint,
+            }
+        ]
+
+    monkeypatch.setattr(module, "preflight_demo_segments", fake_segments)
+
+    result = module.diagnose_paper_limit_margin_search(
+        arm,
+        Calibration(),
+        corners={},
+        up_sample=object(),
+        rotation=np.eye(3),
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
+        maximum_margin_deg=10.0,
+        tolerance_deg=0.05,
+    )
+
+    assert result["largest_feasible_margin_deg"] <= 4.0
+    assert result["largest_feasible_margin_deg"] >= 3.95
+    assert result["smallest_infeasible_margin_deg"] > 4.0
+    assert result["smallest_infeasible_margin_deg"] - result["largest_feasible_margin_deg"] <= 0.05

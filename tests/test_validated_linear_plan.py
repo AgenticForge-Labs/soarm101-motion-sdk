@@ -32,6 +32,32 @@ def test_guarded_linear_move_plans_only_once(monkeypatch: pytest.MonkeyPatch) ->
         assert calls == 1
 
 
+def test_guarded_linear_move_forwards_target_seed_through_managed_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = _small_inward_target(arm)
+        endpoint_seed = dict(arm.get_joint_positions().positions)
+        calls: list[dict[str, float] | None] = []
+        original = arm.motion.plan_linear
+
+        def counted(*args, **kwargs):
+            seed = kwargs.get("target_seed")
+            calls.append(None if seed is None else dict(seed))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(arm.motion, "plan_linear", counted)
+        arm.move_linear(
+            target,
+            orientation_mode="position_only",
+            speed=0.01,
+            target_seed=endpoint_seed,
+        )
+
+    assert calls == [endpoint_seed]
+
+
 def test_encoder_scale_noise_keeps_validated_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     with SOARM101.simulated() as arm:
         arm.enable()

@@ -73,20 +73,71 @@ profile as smooth teleoperation: `speed_raw=0`, `acceleration_raw=254`. The host
 trajectory owns speed/acceleration shaping; do not add a second per-sample servo speed
 trajectory.
 
-Hardware replay after #73 remained visibly shaky and again hit an intermediate A_UP->B_UP
-IK miss, so the launch-only experiment is superseded. Keep the symmetric half-cosine host
-profile and the teleoperation servo profile. Position-only Cartesian planning now filters
-the solved joint path only to create smoother IK seeds, re-solves every interior Cartesian
-sample at the unchanged hard tolerance, and accepts the refined path only when discrete
-joint jerk decreases.
+Hardware replay after #74 remained very shaky and A_UP->B_UP still failed during
+pre-motion planning at 0.794 mm against the unchanged 0.5 mm tolerance. Review of the
+public managed controller confirmed that real Cartesian execution was already using the
+intended teleoperation servo profile (`speed_raw=0`, `acceleration_raw=254`), so the
+shake remains unresolved and should not be attributed to a servo-profile regression.
+
+Position-only Cartesian planning still filters the solved joint path only to create smoother
+IK seeds and re-solves every interior sample at the unchanged hard tolerance. In addition,
+if forward sequential IK hits the observed numerical pocket, the planner may solve the same
+samples backward from an exact reachable endpoint solution. The paper workflow must pass
+the endpoint solution already produced by read-only preflight as that boundary seed. The
+reverse path is valid only if it reconnects continuously to the measured start and every
+sample passes the same tolerance and safety checks.
 
 The IK solver also performs a task-space-only refinement when soft continuity/joint-center
 regularization would otherwise leave a target just outside the hard Cartesian tolerance.
 Do not loosen the tolerance to make such a case pass.
 
-If motion remains visibly shakier than teleop after this change, capture the planned joint
-derivatives, encoder-quantized command deltas, measured following error, and actual cycle
-timing before changing motor PID or power settings.
+Hardware validation of the endpoint-seeded reverse fallback still failed safely:
+forward and reverse A_UP->B_UP solves converged to 0.648 mm and 0.646 mm respectively
+against the unchanged 0.5 mm tolerance. Before another powered replay, the script must
+preflight every elevated segment from its endpoint IK solutions. A failure must identify
+the exact command-rate sample and line progress and report signed XYZ residual, positional
+Jacobian conditioning, and nearest effective joint-limit margin. The replay-only `--limit-compare-only` diagnostic must also keep torque disabled.
+It compares the saved reference-height path under normal effective limits with read-only
+calibration-derived extensions inset from the measured mechanical stops. The diagnostic
+must never narrow the normal executable range, change executable `move-linear` or
+joint-space limits, or accept any explicit read-only bound outside the active calibration.
+The current calibration records wider mechanical travel than the nominal model, including
+wrist flex ±103.9° versus the model's ±95°. Hardware-side read-only comparison at 107 mm
+failed under the old +95° wrist-flex boundary. A completed torque-off margin search found
+5.430° feasible and 5.469° infeasible; the largest feasible tested solution used wrist flex
+through +98.48° and remained 5.43° from the measured +103.91° stop.
+
+Executable motion now treats URDF/model joint limits as the generic fallback/reference.
+When a real arm has a valid mechanical-stop calibration, all five pose joints may use the
+measured travel with a 1° inset from each stop; a narrower measured range remains
+authoritative. Before powered paper replay, verify `soarm101 limits --json` reports the
+expected ~1° inset and that read-only full-segment preflight passes under the normal runtime
+limits. This change does not authorize commanding a measured mechanical stop and does not
+resolve the separate visible-shake issue.
+
+Also validate the calibrated Sleep posture first in simulation, then with a clear physical
+workspace at low speed. Sleep is derived from the active executable limits: shoulder pan
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
+wrist roll midpoint. On a calibrated physical follower those endpoints are already 1°
+inside the measured mechanical stops. Sleep retains calibrated joint limits plus trajectory, rate/acceleration, following-error,
+effort, fault, communication, and completion guards, but intentionally skips the generic
+coarse workspace-geometry check. The designed folded posture places link centerlines closer
+than the generic 25 mm self-clearance heuristic on this arm, so that heuristic produces a
+known false positive for Sleep. This exception is specific to the calibration-derived Sleep
+primitive; ordinary joint motion continues to use the coarse workspace check. Sleep does not
+move the gripper and is never automatic.
+
+The replay-only
+`--height-sweep-only` diagnostic must keep torque disabled while it searches for the
+nearest constant calibrated workspace Z whose endpoints and all four straight segments
+preflight successfully. The saved calibration's 5 mm sweep found the first feasible path at
+130 mm (+23 mm above the measured 107 mm reference); candidates through 125 mm remained
+wrist-flex limited. Because 130 mm is extrapolated beyond the measured reference, do not
+treat the sweep result itself as powered validation. First inspect the printed per-segment
+joint step/speed/acceleration/jerk and per-joint encoder quantization/reversal diagnostics.
+Only after the straight path itself is shown feasible should visible shake be characterized
+with planned joint derivatives, encoder-quantized command deltas, measured following error,
+and actual cycle timing before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
@@ -751,12 +802,13 @@ the GUI and CLI must not own the follower serial port simultaneously.
 ### Command-rate Cartesian IK smoothness
 
 After hardware comparison showed that the paper traversal remained visibly shaky even
-with 1 mm Cartesian IK knot spacing and the teleoperation-responsive servo profile,
-`move_linear()` was changed to solve IK at the final host command rate after applying the
-minimum-jerk Cartesian progress law. Regression coverage uses a deliberately nonlinear IK
-mapping and requires every emitted command sample to be the direct solution of its
-corresponding Cartesian sample; piecewise interpolation between sparse IK solutions would
-fail this test. Physical smoothness still requires real-arm validation.
+with 1 mm Cartesian IK knot spacing, `move_linear()` was changed to solve IK at the final
+host command rate. The latest hardware run remained shaky even though the public managed
+controller already used fixed `speed_raw=0`, `acceleration_raw=254`. Regression coverage
+therefore continues to require every emitted command sample to be a direct IK solution of
+its corresponding Cartesian sample, while position-only planning now also has an
+endpoint-seeded reverse fallback for a forward numerical IK pocket without relaxing the
+hard tolerance. Physical smoothness still requires real-arm validation.
 
 
 ### Paper replay from a low/resting start

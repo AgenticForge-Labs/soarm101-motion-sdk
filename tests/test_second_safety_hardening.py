@@ -18,7 +18,56 @@ from soarm101_motion.exceptions import (
 )
 from soarm101_motion.hardware.simulation import SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver
+from soarm101_motion.safety import resolve_effective_joint_limits
 from test_safety_hardening import make_backend
+
+
+def test_calibrated_joint_resolver_uses_measured_range_inside_margin() -> None:
+    from soarm101_motion.constants import JOINT_LIMITS
+
+    margin = np.deg2rad(1.0)
+    calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
+    calibrated["wrist_flex"] = tuple(np.deg2rad((-103.9120879121, 103.9120879121)))
+    calibrated["elbow_flex"] = tuple(np.deg2rad((-96.9670329670, 96.9670329670)))
+
+    limits = resolve_effective_joint_limits(
+        calibrated,
+        calibrated_joint_stop_margin_rad=margin,
+    )
+
+    assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(-102.9120879121)
+    assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(102.9120879121)
+    assert np.degrees(limits["elbow_flex"][0]) == pytest.approx(-95.9670329670)
+    assert np.degrees(limits["elbow_flex"][1]) == pytest.approx(95.9670329670)
+
+
+def test_calibrated_joint_resolver_uses_narrower_calibration_as_authority() -> None:
+    from soarm101_motion.constants import JOINT_LIMITS
+
+    calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
+    calibrated["shoulder_pan"] = (-1.5, 1.5)
+
+    limits = resolve_effective_joint_limits(
+        calibrated,
+        calibrated_joint_stop_margin_rad=np.deg2rad(1.0),
+    )
+
+    margin = np.deg2rad(1.0)
+    assert limits["shoulder_pan"] == pytest.approx((-1.5 + margin, 1.5 - margin))
+
+
+def test_calibrated_joint_resolver_rejects_range_smaller_than_stop_margin() -> None:
+    from soarm101_motion.constants import JOINT_LIMITS
+
+    calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
+    calibrated["wrist_flex"] = (-0.005, 0.005)
+
+    with pytest.raises(SafetyViolationError, match="too small"):
+        resolve_effective_joint_limits(
+            calibrated,
+            calibrated_joint_stop_margin_rad=np.deg2rad(1.0),
+        )
+
 
 
 class FailingWriteBackend(SimulationBackend):

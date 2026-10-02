@@ -53,9 +53,10 @@ An agent can choose a validated capability such as moving to a taught point or e
 ### Agent-facing CLI
 
 The SDK exposes a provider-neutral command surface for coding agents and other automation
-clients. [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents only the CLI
+clients. [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise CLI
 contract—commands, units, structured output, coordinate/orientation semantics, and enforced
-guards—without prescribing an agent strategy. The `agent-as-code/` directory remains a
+guards. [`cli_use.md`](cli_use.md) is the compact technical usage reference for common CLI
+commands, units, model-frame XYZ semantics, motion modes, JSON output, and safety behavior. The `agent-as-code/` directory remains a
 small experiment helper; machine-local ports, calibration references, and named cameras come
 from the shared workstation profile rather than being duplicated in experiment files. Agent
 launchers, model selection, and sandboxing are intentionally outside the Motion SDK.
@@ -149,10 +150,18 @@ the servo receives `speed_raw=0` (maximum tracking authority) and
 deceleration with optional constant-speed cruise. Position-only Cartesian paths then get
 one deterministic smooth-seed IK reprojection pass: joint-space seeds are filtered, every
 interior Cartesian sample is re-solved at the unchanged hard position tolerance, and the
-refined path is used only when it lowers discrete joint jerk. This keeps the Cartesian
-line authoritative while reducing redundant-joint numerical wander. The previous
+refined path is used only when it lowers discrete joint jerk. If forward sequential IK
+hits a numerical pocket, a reachable endpoint solution can seed a reverse solve of those
+same Cartesian samples; the paper replay reuses its exact read-only endpoint-preflight
+solution for that boundary condition. The reverse path must reconnect continuously to the
+measured start and still satisfy the unchanged tolerance everywhere. Because reachable
+endpoints do not guarantee a reachable straight line, the paper workflow also preflights
+every complete elevated segment read-only before it offers powered traversal. This keeps
+the Cartesian line authoritative while reducing redundant-joint numerical wander. The previous
 per-sample servo speed throttling remains superseded because it could produce visible
-stick-slip on gravity-loaded joints. The normal joint, IK,
+stick-slip on gravity-loaded joints. The public managed Cartesian controller continues to
+use the fixed teleoperation profile; the #74 shake therefore remains a separate unresolved
+trajectory/IK/tracking problem rather than evidence for another servo-profile change. The normal joint, IK,
 rate/acceleration, following-error, fault, effort/contact, communication, settle,
 provenance, and timing guards remain active. The measured workspace owns paper height;
 the generic model workspace is used only where explicitly documented as a secondary
@@ -190,7 +199,7 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 
 The follower has five pose joints; the stock gripper is a separate tool actuator. The SDK includes forward kinematics to estimate the tool pose from joint readings, inverse kinematics for finding joint targets, and Cartesian motion planning for linear moves. These calculations use the arm model and calibration, so check the TCP, joint directions, and coordinate frame against your own assembly before relying on Cartesian accuracy. The Manual workspace exposes this explicitly: its joint-center view uses the SDK FK model, renders the gripper from the modeled wrist/gripper-link frame, and keeps the gripper controls visible below both angular and Cartesian modes. Each Cartesian jog reports the requested and achieved TCP so physical/model direction mismatches can be diagnosed rather than hidden.
 
-The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration.
+The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration. A separate **Sleep** pose is derived from each follower's calibrated executable limits, providing a natural folded posture for demos and power-down preparation without replacing user-saved Home/Rest. Because that designed fold is closer than the generic coarse 25 mm link-centerline self-clearance heuristic, the dedicated Sleep primitive skips only that coarse workspace-geometry check; calibrated joint, trajectory, following-error, effort, fault, and completion guards remain active.
 
 The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. A resizable workspace keeps the task tabs on the left and the persistent follower sidebar on the right, including Setup and Log, so robot state never disappears while changing workflows. If vertical space is tight, the model/readout area scrolls while Enable hold, STOP/HOLD, and Relax remain pinned and visible. Programs are stored using the existing `MotionSequence` format, so GUI Programs and SDK/CLI sequence execution share the same guarded runner and provenance rules. See [Programs and saved positions](docs/programs.md) for the simple position-program workflow. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
 
@@ -221,6 +230,9 @@ soarm101 move-joints --port /dev/ttyACM0 --robot-id so101 \
 # Capture and replay a named pose
 soarm101 pose capture home --port /dev/ttyACM0 --robot-id so101
 soarm101 pose go home --port /dev/ttyACM0 --robot-id so101 --yes
+
+# Move to this follower's calibration-derived natural Sleep posture
+soarm101 sleep --port /dev/ttyACM0 --robot-id so101 --yes
 
 # Operate the stock gripper
 soarm101 gripper --port /dev/ttyACM0 --robot-id so101 open --yes

@@ -94,6 +94,33 @@ JSON fields:
 
 The TCP is the SDK's active stock-gripper TCP in the `soarm101/base` frame.
 
+## Saved calibration and workspace limits
+
+```bash
+soarm101 limits --robot-id ROBOT_ID --json
+```
+
+This command reads the saved calibration file only; it does not open the serial port or
+enable torque. `--calibration PATH` selects a specific calibration file.
+
+For each pose joint it reports:
+
+- `calibrated_rad` / `calibrated_deg`: measured mechanical-stop range;
+- `model_rad` / `model_deg`: nominal kinematic-model planning range; and
+- `effective_rad` / `effective_deg`: executable range for the calibrated arm.
+
+The URDF/model limits are the generic fallback/reference. For a calibrated real arm,
+normal executable pose-joint authority follows the saved mechanical-stop calibration with
+a 1° inset from each measured stop by default. `calibrated_joint_stop_margin_deg`
+reports that policy. The same output includes `sleep_pose_rad` and `sleep_pose_deg`,
+derived from those executable limits. Calibration remains the physical authority if a
+measured range is narrower than the model range.
+
+It also reports the configured coarse model-space Cartesian envelope, including maximum
+TCP reach, minimum model Z, base keep-out dimensions, and minimum self-clearance. Maximum
+TCP reach is an outer radial guard, not a guarantee that every XYZ point inside it is
+kinematically reachable.
+
 ## Motor diagnostics
 
 ```bash
@@ -145,6 +172,18 @@ Orientation modes are:
 - `exact`: require the requested XYZ/RPY pose to lie on the reachable five-axis manifold.
 
 A failed solve exits non-zero.
+
+## Calibrated Sleep posture
+
+```bash
+soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
+```
+
+Sleep is computed from the active follower's executable joint limits: shoulder pan
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
+wrist roll midpoint. On a calibrated arm the endpoint limits are already inset 1° from the
+measured mechanical stops. The command does not change the gripper and is never triggered
+automatically by connection or torque enable.
 
 ## Relative Cartesian linear jog
 

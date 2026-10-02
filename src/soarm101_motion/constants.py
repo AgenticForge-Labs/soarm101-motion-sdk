@@ -49,6 +49,17 @@ JOINT_LIMITS: dict[str, tuple[float, float]] = {
 
 HOME_JOINTS: dict[str, float] = {joint: 0.0 for joint in ARM_JOINTS}
 
+# Universal semantic recipe for the calibrated Sleep posture. The actual
+# angles are derived at runtime from the active arm calibration/effective limits,
+# so each follower gets a mechanically natural folded pose after calibration.
+SLEEP_LIMIT_SELECTORS: dict[str, str] = {
+    "shoulder_pan": "midpoint",
+    "shoulder_lift": "lower",
+    "elbow_flex": "upper",
+    "wrist_flex": "lower",
+    "wrist_roll": "midpoint",
+}
+
 # Conservative host-side defaults. These are intentionally below the values
 # commonly used by direct teleoperation loops.
 DEFAULT_JOINT_SPEED_RAD_S = 0.45

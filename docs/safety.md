@@ -8,6 +8,11 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
 - Do not depend on software stop as an emergency stop.
 - Do not force joints during calibration.
 - Confirm motor voltage, calibration, direction, TCP, and limits on the exact assembly.
+- The official URDF/model limits are the generic fallback/reference. For a calibrated
+  real arm, executable pose-joint authority follows the measured mechanical-stop
+  calibration with a 1° inset from each stop by default. Calibration remains authoritative
+  if it is narrower than the model. Never treat a measured mechanical stop itself as a
+  command target.
 - Inspect voltage, temperature, current, and status using `soarm101 diagnose`.
 
 ## Transient torque-control replies

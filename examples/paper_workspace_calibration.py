@@ -49,8 +49,9 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+from soarm101_motion.constants import ARM_JOINTS, DEFAULT_TELEOP_STREAM_FREQUENCY_HZ, JOINT_LIMITS
 from soarm101_motion.kinematics import IKOptions
+from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
 
@@ -253,6 +254,7 @@ def workspace_height_demo_targets(
     *,
     corners: dict[str, Sample],
     up_sample: Sample,
+    target_workspace_z_m: float | None = None,
 ) -> tuple[
     dict[str, np.ndarray],
     dict[str, dict[str, float]],
@@ -277,7 +279,11 @@ def workspace_height_demo_targets(
         corners=corners,
         up_sample=up_sample,
     )
-    target_z = float(calibration.reference_height_m)
+    target_z = float(
+        calibration.reference_height_m
+        if target_workspace_z_m is None
+        else target_workspace_z_m
+    )
     positions: dict[str, np.ndarray] = {}
     baseline_z_mm: dict[str, float] = {}
     for name, position in baseline.items():
@@ -296,6 +302,511 @@ def workspace_height_demo_targets(
                 target_z,
             )
     return positions, preferred_seeds, baseline_z_mm
+
+
+def diagnose_paper_height_sweep(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    corners: dict[str, Sample],
+    up_sample: Sample,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    minimum_height_mm: float,
+    maximum_height_mm: float,
+    step_mm: float,
+) -> dict[str, object]:
+    """Find the nearest constant workspace height with a fully feasible paper path.
+
+    This is read-only: it uses saved teaching, the calibrated workspace transform,
+    endpoint IK, and explicit-start Cartesian planning. It does not enable torque or
+    issue motor commands.
+    """
+
+    reference_mm = float(calibration.reference_height_m * 1000.0)
+    raw = np.arange(minimum_height_mm, maximum_height_mm + 0.5 * step_mm, step_mm)
+    candidates = sorted(
+        (float(value) for value in raw),
+        key=lambda value: (abs(value - reference_mm), value < reference_mm, value),
+    )
+    attempts: list[dict[str, object]] = []
+
+    for height_mm in candidates:
+        positions, preferred_seeds, _ = workspace_height_demo_targets(
+            calibration,
+            arm,
+            corners=corners,
+            up_sample=up_sample,
+            target_workspace_z_m=height_mm / 1000.0,
+        )
+        positions, preferred_seeds = ordered_paper_replay_targets(
+            positions,
+            preferred_seeds,
+        )
+        attempt: dict[str, object] = {
+            "workspace_height_mm": height_mm,
+            "offset_from_reference_mm": height_mm - reference_mm,
+            "extrapolated_above_reference": height_mm > reference_mm + 1e-9,
+        }
+        try:
+            endpoint_preflight = preflight_demo_targets(
+                arm,
+                positions,
+                preferred_seeds=preferred_seeds,
+                rotation=rotation,
+            )
+            endpoint_seeds = preflight_joint_seeds(endpoint_preflight)
+            segments = preflight_demo_segments(
+                arm,
+                positions,
+                rotation=rotation,
+                endpoint_seeds=endpoint_seeds,
+                speed_mm_s=speed_mm_s,
+                acceleration_mm_s2=acceleration_mm_s2,
+            )
+        except Exception as exc:
+            attempt["feasible"] = False
+            attempt["error"] = f"{type(exc).__name__}: {exc}"
+            attempts.append(attempt)
+            print(
+                f"  {height_mm:.1f} mm "
+                f"({height_mm - reference_mm:+.1f}): FAIL — {exc}"
+            )
+            continue
+
+        attempt["feasible"] = True
+        attempt["endpoint_preflight"] = endpoint_preflight
+        attempt["segments"] = segments
+        attempts.append(attempt)
+        print(
+            f"  {height_mm:.1f} mm "
+            f"({height_mm - reference_mm:+.1f}): FEASIBLE "
+            f"for all {len(segments)} segments"
+        )
+        print("  Planned-motion diagnostics at this feasible height:")
+        for segment in segments:
+            print(
+                f"    {segment['segment']}: {segment['sample_count']} samples, "
+                f"{float(segment['duration_s']):.2f} s, "
+                f"max step={np.degrees(float(segment['max_joint_step_rad'])):.3f} deg, "
+                f"max speed={np.degrees(float(segment['max_joint_speed_rad_s'])):.2f} deg/s, "
+                f"max accel={np.degrees(float(segment['max_joint_acceleration_rad_s2'])):.2f} "
+                f"deg/s^2, max jerk={np.degrees(float(segment['max_joint_jerk_rad_s3'])):.1f} "
+                "deg/s^3"
+            )
+            per_joint = segment["per_joint_motion"]
+            assert isinstance(per_joint, dict)
+            zero_fraction = segment.get("encoder_zero_delta_fraction", {})
+            max_ticks = segment.get("max_encoder_step_ticks", {})
+            for joint in ARM_JOINTS:
+                motion = per_joint[joint]
+                assert isinstance(motion, dict)
+                zero = (
+                    float(zero_fraction[joint])
+                    if isinstance(zero_fraction, dict) and joint in zero_fraction
+                    else float("nan")
+                )
+                ticks = (
+                    int(max_ticks[joint])
+                    if isinstance(max_ticks, dict) and joint in max_ticks
+                    else -1
+                )
+                print(
+                    f"      {joint}: step="
+                    f"{np.degrees(float(motion['max_step_rad'])):.3f} deg, "
+                    f"jerk={np.degrees(float(motion['max_jerk_rad_s3'])):.1f} deg/s^3, "
+                    f"reversals={int(motion['direction_reversals'])}, "
+                    f"encoder-zero={zero:.1%}, max-tick-step={ticks}"
+                )
+        return {
+            "reference_height_mm": reference_mm,
+            "minimum_height_mm": minimum_height_mm,
+            "maximum_height_mm": maximum_height_mm,
+            "step_mm": step_mm,
+            "attempts": attempts,
+            "nearest_feasible_height_mm": height_mm,
+            "nearest_feasible_offset_mm": height_mm - reference_mm,
+        }
+
+    return {
+        "reference_height_mm": reference_mm,
+        "minimum_height_mm": minimum_height_mm,
+        "maximum_height_mm": maximum_height_mm,
+        "step_mm": step_mm,
+        "attempts": attempts,
+        "nearest_feasible_height_mm": None,
+        "nearest_feasible_offset_mm": None,
+    }
+
+
+
+def calibration_margin_joint_limits(
+    arm: SOARM101,
+    *,
+    stop_margin_deg: float,
+) -> tuple[
+    dict[str, tuple[float, float]],
+    list[dict[str, object]],
+]:
+    """Return diagnostic calibrated extensions using the runtime limit resolver.
+
+    The requested stop margin may be zero for read-only characterization. The
+    normal model/calibration authority is never narrowed; calibration contributes
+    only extra travel that remains outside the requested stop margin.
+    """
+
+    calibration = getattr(arm.backend, "calibration", None)
+    if calibration is None:
+        raise RuntimeError("active arm has no motor calibration")
+    margin_rad = float(np.deg2rad(stop_margin_deg))
+    calibrated_limits = {
+        name: calibration.motors[name].radians_limits
+        for name in ARM_JOINTS
+    }
+    limits = resolve_effective_joint_limits(
+        calibrated_limits,
+        calibrated_joint_stop_margin_rad=margin_rad,
+    )
+    rows: list[dict[str, object]] = []
+    for name in ARM_JOINTS:
+        calibrated_lower, calibrated_upper = calibrated_limits[name]
+        model_lower, model_upper = JOINT_LIMITS[name]
+        diagnostic_lower, diagnostic_upper = limits[name]
+        rows.append(
+            {
+                "joint": name,
+                "calibrated_deg": [
+                    float(np.degrees(calibrated_lower)),
+                    float(np.degrees(calibrated_upper)),
+                ],
+                "model_deg": [
+                    float(np.degrees(model_lower)),
+                    float(np.degrees(model_upper)),
+                ],
+                "diagnostic_deg": [
+                    float(np.degrees(diagnostic_lower)),
+                    float(np.degrees(diagnostic_upper)),
+                ],
+            }
+        )
+    return limits, rows
+
+def diagnose_paper_joint_limit_comparison(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    corners: dict[str, Sample],
+    up_sample: Sample,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    stop_margin_deg: float,
+) -> dict[str, object]:
+    """Compare the saved path under current runtime and alternate calibrated limits.
+
+    No torque is enabled and no motor command is issued.
+    """
+
+    positions, preferred_seeds, _ = workspace_height_demo_targets(
+        calibration,
+        arm,
+        corners=corners,
+        up_sample=up_sample,
+    )
+    positions, preferred_seeds = ordered_paper_replay_targets(
+        positions,
+        preferred_seeds,
+    )
+    endpoint_preflight = preflight_demo_targets(
+        arm,
+        positions,
+        preferred_seeds=preferred_seeds,
+        rotation=rotation,
+    )
+    endpoint_seeds = preflight_joint_seeds(endpoint_preflight)
+
+    comparison: dict[str, object] = {
+        "reference_height_mm": float(calibration.reference_height_m * 1000.0),
+        "stop_margin_deg": float(stop_margin_deg),
+        "endpoint_preflight": endpoint_preflight,
+    }
+
+    print(
+        f"Reference-height path: {calibration.reference_height_m * 1000.0:.1f} mm"
+    )
+    print("\nCurrent executable planning limits:")
+    try:
+        nominal_segments = preflight_demo_segments(
+            arm,
+            positions,
+            rotation=rotation,
+            endpoint_seeds=endpoint_seeds,
+            speed_mm_s=speed_mm_s,
+            acceleration_mm_s2=acceleration_mm_s2,
+        )
+    except Exception as exc:
+        comparison["nominal"] = {
+            "feasible": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        print(f"  FAIL — {exc}")
+    else:
+        comparison["nominal"] = {
+            "feasible": True,
+            "segments": nominal_segments,
+        }
+        print(f"  FEASIBLE for all {len(nominal_segments)} segments")
+
+    diagnostic_limits, limit_rows = calibration_margin_joint_limits(
+        arm,
+        stop_margin_deg=stop_margin_deg,
+    )
+    comparison["calibration_margin_limits"] = limit_rows
+    print(
+        f"\nCalibration-derived planning limits with {stop_margin_deg:.1f} deg "
+        "inset from measured stops:"
+    )
+    for row in limit_rows:
+        calibrated = row["calibrated_deg"]
+        model = row["model_deg"]
+        diagnostic = row["diagnostic_deg"]
+        assert isinstance(calibrated, list)
+        assert isinstance(model, list)
+        assert isinstance(diagnostic, list)
+        print(
+            f"  {row['joint']:15s} measured "
+            f"{calibrated[0]:+6.1f}..{calibrated[1]:+6.1f} deg; "
+            f"model {model[0]:+6.1f}..{model[1]:+6.1f}; "
+            f"diagnostic {diagnostic[0]:+6.1f}..{diagnostic[1]:+6.1f}"
+        )
+
+    try:
+        calibrated_segments = preflight_demo_segments(
+            arm,
+            positions,
+            rotation=rotation,
+            endpoint_seeds=endpoint_seeds,
+            speed_mm_s=speed_mm_s,
+            acceleration_mm_s2=acceleration_mm_s2,
+            planning_limits=diagnostic_limits,
+        )
+    except Exception as exc:
+        comparison["calibration_margin"] = {
+            "feasible": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        print(f"  RESULT: FAIL — {exc}")
+    else:
+        comparison["calibration_margin"] = {
+            "feasible": True,
+            "segments": calibrated_segments,
+        }
+        print(
+            f"  RESULT: FEASIBLE for all {len(calibrated_segments)} segments "
+            "under read-only calibration-derived limits"
+        )
+        print("  Planned joint ranges across the complete 107 mm path:")
+        for joint in ARM_JOINTS:
+            minima = []
+            maxima = []
+            margins = []
+            for segment in calibrated_segments:
+                per_joint = segment["per_joint_motion"]
+                assert isinstance(per_joint, dict)
+                motion = per_joint[joint]
+                assert isinstance(motion, dict)
+                minima.append(float(motion["min_position_rad"]))
+                maxima.append(float(motion["max_position_rad"]))
+                margin = motion.get("min_margin_to_planning_limit_rad")
+                if margin is not None:
+                    margins.append(float(margin))
+            measured_lower, measured_upper = arm.backend.calibration.motors[joint].radians_limits
+            used_lower = min(minima)
+            used_upper = max(maxima)
+            stop_margin = min(
+                used_lower - float(measured_lower),
+                float(measured_upper) - used_upper,
+            )
+            print(
+                f"    {joint:15s} used "
+                f"{np.degrees(used_lower):+7.2f}..{np.degrees(used_upper):+7.2f} deg; "
+                f"nearest measured stop margin={np.degrees(stop_margin):.2f} deg"
+            )
+
+    return comparison
+
+
+
+def diagnose_paper_limit_margin_search(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    corners: dict[str, Sample],
+    up_sample: Sample,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    maximum_margin_deg: float,
+    tolerance_deg: float,
+) -> dict[str, object]:
+    """Find the largest measured-stop inset that keeps the 107 mm path feasible.
+
+    The search is read-only. Larger margins only remove calibration-derived extension;
+    the normal executable model/calibration intersection is never narrowed.
+    """
+
+    positions, preferred_seeds, _ = workspace_height_demo_targets(
+        calibration,
+        arm,
+        corners=corners,
+        up_sample=up_sample,
+    )
+    positions, preferred_seeds = ordered_paper_replay_targets(
+        positions,
+        preferred_seeds,
+    )
+    endpoint_preflight = preflight_demo_targets(
+        arm,
+        positions,
+        preferred_seeds=preferred_seeds,
+        rotation=rotation,
+    )
+    endpoint_seeds = preflight_joint_seeds(endpoint_preflight)
+
+    attempts: list[dict[str, object]] = []
+
+    def evaluate(margin_deg: float) -> tuple[bool, list[dict[str, object]] | None, str | None]:
+        limits, rows = calibration_margin_joint_limits(
+            arm,
+            stop_margin_deg=margin_deg,
+        )
+        try:
+            segments = preflight_demo_segments(
+                arm,
+                positions,
+                rotation=rotation,
+                endpoint_seeds=endpoint_seeds,
+                speed_mm_s=speed_mm_s,
+                acceleration_mm_s2=acceleration_mm_s2,
+                planning_limits=limits,
+            )
+        except Exception as exc:
+            attempts.append(
+                {
+                    "margin_deg": float(margin_deg),
+                    "feasible": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "limits": rows,
+                }
+            )
+            print(f"  margin {margin_deg:.3f} deg: FAIL")
+            return False, None, f"{type(exc).__name__}: {exc}"
+        attempts.append(
+            {
+                "margin_deg": float(margin_deg),
+                "feasible": True,
+                "segments": segments,
+                "limits": rows,
+            }
+        )
+        print(f"  margin {margin_deg:.3f} deg: FEASIBLE")
+        return True, segments, None
+
+    print(
+        f"Reference-height path: {calibration.reference_height_m * 1000.0:.1f} mm"
+    )
+    print(
+        f"Searching measured-stop margin from 0.0 to {maximum_margin_deg:.2f} deg "
+        f"at {tolerance_deg:.3f} deg resolution..."
+    )
+
+    low = 0.0
+    high = float(maximum_margin_deg)
+    low_ok, low_segments, low_error = evaluate(low)
+    if not low_ok:
+        return {
+            "reference_height_mm": float(calibration.reference_height_m * 1000.0),
+            "maximum_margin_deg": float(maximum_margin_deg),
+            "tolerance_deg": float(tolerance_deg),
+            "attempts": attempts,
+            "largest_feasible_margin_deg": None,
+            "smallest_infeasible_margin_deg": 0.0,
+            "error": low_error,
+        }
+
+    high_ok, high_segments, _ = evaluate(high)
+    if high_ok:
+        best_segments = high_segments
+        assert best_segments is not None
+        largest = high
+        smallest_infeasible: float | None = None
+    else:
+        best_segments = low_segments
+        assert best_segments is not None
+        while high - low > tolerance_deg:
+            mid = (low + high) / 2.0
+            ok, segments, _ = evaluate(mid)
+            if ok:
+                low = mid
+                assert segments is not None
+                best_segments = segments
+            else:
+                high = mid
+        largest = low
+        smallest_infeasible = high
+
+    joint_usage: dict[str, dict[str, float]] = {}
+    for joint in ARM_JOINTS:
+        minima: list[float] = []
+        maxima: list[float] = []
+        for segment in best_segments:
+            per_joint = segment["per_joint_motion"]
+            assert isinstance(per_joint, dict)
+            motion = per_joint[joint]
+            assert isinstance(motion, dict)
+            minima.append(float(motion["min_position_rad"]))
+            maxima.append(float(motion["max_position_rad"]))
+        measured_lower, measured_upper = arm.backend.calibration.motors[joint].radians_limits
+        used_lower = min(minima)
+        used_upper = max(maxima)
+        stop_margin_rad = min(
+            used_lower - float(measured_lower),
+            float(measured_upper) - used_upper,
+        )
+        joint_usage[joint] = {
+            "min_used_deg": float(np.degrees(used_lower)),
+            "max_used_deg": float(np.degrees(used_upper)),
+            "nearest_measured_stop_margin_deg": float(np.degrees(stop_margin_rad)),
+        }
+
+    print(
+        f"\nLargest feasible measured-stop margin: >= {largest:.3f} deg"
+    )
+    if smallest_infeasible is not None:
+        print(
+            f"Smallest known infeasible margin: <= {smallest_infeasible:.3f} deg"
+        )
+    print("Joint usage at the largest feasible tested margin:")
+    for joint, usage in joint_usage.items():
+        print(
+            f"  {joint:15s} used "
+            f"{usage['min_used_deg']:+7.2f}..{usage['max_used_deg']:+7.2f} deg; "
+            f"nearest measured stop margin="
+            f"{usage['nearest_measured_stop_margin_deg']:.2f} deg"
+        )
+
+    return {
+        "reference_height_mm": float(calibration.reference_height_m * 1000.0),
+        "maximum_margin_deg": float(maximum_margin_deg),
+        "tolerance_deg": float(tolerance_deg),
+        "attempts": attempts,
+        "largest_feasible_margin_deg": float(largest),
+        "smallest_infeasible_margin_deg": (
+            None if smallest_infeasible is None else float(smallest_infeasible)
+        ),
+        "joint_usage_at_largest_feasible_margin": joint_usage,
+    }
 
 
 def workspace_z_offset_target(
@@ -586,6 +1097,161 @@ def preflight_demo_targets(
     return results
 
 
+def preflight_joint_seeds(
+    preflight: list[dict[str, object]],
+) -> dict[str, dict[str, float]]:
+    """Extract exact endpoint IK solutions for Cartesian boundary-condition hints."""
+
+    seeds: dict[str, dict[str, float]] = {}
+    for item in preflight:
+        name = str(item["name"])
+        joints = item.get("joints_rad")
+        if not isinstance(joints, dict):
+            raise ValueError(f"preflight result for {name} has no joint solution")
+        seeds[name] = {
+            str(joint): float(value)
+            for joint, value in joints.items()
+        }
+    return seeds
+
+
+def preflight_demo_segments(
+    arm: SOARM101,
+    positions: dict[str, np.ndarray],
+    *,
+    rotation: np.ndarray,
+    endpoint_seeds: dict[str, dict[str, float]],
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    planning_limits: dict[str, tuple[float, float]] | None = None,
+) -> list[dict[str, object]]:
+    """Plan every elevated paper segment read-only before any powered traversal."""
+
+    names = list(positions)
+    results: list[dict[str, object]] = []
+    for start_name, end_name in zip(names, names[1:]):
+        try:
+            plan = arm.motion.plan_linear_from(
+                endpoint_seeds[start_name],
+                Pose(positions[end_name], rotation),
+                tcp=arm.active_tcp,
+                orientation_mode="position_only",
+                speed=speed_mm_s / 1000.0,
+                acceleration=acceleration_mm_s2 / 1000.0,
+                target_seed=endpoint_seeds[end_name],
+                limits_override=planning_limits,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"{start_name}->{end_name} full Cartesian segment preflight failed: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        matrix = np.array(
+            [[sample[name] for name in ARM_JOINTS] for sample in plan.command_samples],
+            dtype=float,
+        )
+        dt = 1.0 / arm.config.command_frequency_hz
+        step = np.diff(matrix, axis=0)
+        velocity = step / dt if step.size else np.zeros((0, len(ARM_JOINTS)))
+        acceleration = (
+            np.diff(velocity, axis=0) / dt
+            if len(velocity) > 1
+            else np.zeros((0, len(ARM_JOINTS)))
+        )
+        jerk = (
+            np.diff(acceleration, axis=0) / dt
+            if len(acceleration) > 1
+            else np.zeros((0, len(ARM_JOINTS)))
+        )
+        per_joint_motion = {
+            name: {
+                "max_step_rad": (
+                    float(np.max(np.abs(step[:, index]))) if step.size else 0.0
+                ),
+                "max_speed_rad_s": (
+                    float(np.max(np.abs(velocity[:, index]))) if velocity.size else 0.0
+                ),
+                "max_acceleration_rad_s2": (
+                    float(np.max(np.abs(acceleration[:, index])))
+                    if acceleration.size
+                    else 0.0
+                ),
+                "max_jerk_rad_s3": (
+                    float(np.max(np.abs(jerk[:, index]))) if jerk.size else 0.0
+                ),
+                "direction_reversals": (
+                    int(
+                        np.count_nonzero(
+                            np.diff(
+                                np.sign(
+                                    step[:, index][
+                                        np.abs(step[:, index]) > 1e-10
+                                    ]
+                                )
+                            )
+                            != 0
+                        )
+                    )
+                    if step.size
+                    else 0
+                ),
+                "min_position_rad": float(np.min(matrix[:, index])),
+                "max_position_rad": float(np.max(matrix[:, index])),
+                "min_margin_to_planning_limit_rad": (
+                    min(
+                        float(np.min(matrix[:, index])) - float(planning_limits[name][0]),
+                        float(planning_limits[name][1]) - float(np.max(matrix[:, index])),
+                    )
+                    if planning_limits is not None
+                    else None
+                ),
+            }
+            for index, name in enumerate(ARM_JOINTS)
+        }
+        result: dict[str, object] = {
+            "segment": f"{start_name}->{end_name}",
+            "sample_count": len(plan.command_samples),
+            "duration_s": float(plan.duration_s),
+            "max_joint_step_rad": float(np.max(np.abs(step))) if step.size else 0.0,
+            "max_joint_speed_rad_s": (
+                float(np.max(np.abs(velocity))) if velocity.size else 0.0
+            ),
+            "max_joint_acceleration_rad_s2": (
+                float(np.max(np.abs(acceleration))) if acceleration.size else 0.0
+            ),
+            "max_joint_jerk_rad_s3": (
+                float(np.max(np.abs(jerk))) if jerk.size else 0.0
+            ),
+            "per_joint_motion": per_joint_motion,
+        }
+
+        calibration = getattr(arm.backend, "calibration", None)
+        if calibration is not None and len(plan.command_samples) > 1:
+            raw = np.array(
+                [
+                    [
+                        calibration.motors[name].radians_to_raw(sample[name])
+                        for name in ARM_JOINTS
+                    ]
+                    for sample in plan.command_samples
+                ],
+                dtype=int,
+            )
+            raw_delta = np.diff(raw, axis=0)
+            result["encoder_zero_delta_fraction"] = {
+                name: float(np.mean(raw_delta[:, index] == 0))
+                for index, name in enumerate(ARM_JOINTS)
+            }
+            result["max_encoder_step_ticks"] = {
+                name: int(np.max(np.abs(raw_delta[:, index])))
+                for index, name in enumerate(ARM_JOINTS)
+            }
+
+        results.append(result)
+    return results
+
+
 def run_demo_targets(
     arm: SOARM101,
     calibration: WorkspaceCalibration,
@@ -595,10 +1261,12 @@ def run_demo_targets(
     speed_mm_s: float,
     acceleration_mm_s2: float,
     report_moves: list[dict[str, object]],
+    target_seeds: dict[str, dict[str, float]] | None = None,
 ) -> None:
     """Execute the leveled paper path with the SDK's Cartesian linear primitive."""
 
     for name, position in positions.items():
+        target_seed = None if target_seeds is None else target_seeds.get(name)
         start_pose = arm.get_position()
         start_physical = calibration.physical_position_from_model(start_pose.position)
         target_physical = calibration.physical_position_from_model(position)
@@ -615,6 +1283,10 @@ def run_demo_targets(
             # The measured calibrated workspace is authoritative for this experiment.
             # Keep the generic coarse model as a destination sanity check only.
             workspace_check="target_only",
+            # Endpoint preflight already found an exact reachable solution. Preserve it
+            # as a reverse-planning boundary hint if forward sequential IK hits a
+            # numerical pocket; the hard Cartesian tolerance remains unchanged.
+            target_seed=target_seed,
         )
         if not result.accepted or not result.completed:
             raise RuntimeError(f"{name} Cartesian linear motion did not complete: {result}")
@@ -634,6 +1306,9 @@ def run_demo_targets(
                 "mode": "cartesian_move_linear",
                 "servo_tracking_profile": "teleop_authority",
                 "generic_workspace_check": "target_only",
+                "endpoint_seed_source": (
+                    "endpoint_preflight" if target_seed is not None else "planner_multistart"
+                ),
                 "requested_start_workspace_xyz_mm": [
                     float(value * 1000.0) for value in start_physical
                 ],
@@ -852,6 +1527,70 @@ def build_parser() -> argparse.ArgumentParser:
             "software levels all paper targets to that workspace Z before replay"
         ),
     )
+    parser.add_argument(
+        "--height-sweep-only",
+        action="store_true",
+        help=(
+            "with --replay, keep torque off and search read-only for the nearest "
+            "constant workspace height whose complete paper path is IK-feasible"
+        ),
+    )
+    parser.add_argument(
+        "--height-sweep-min-mm",
+        type=float,
+        default=60.0,
+        help="minimum calibrated workspace Z tested by --height-sweep-only",
+    )
+    parser.add_argument(
+        "--height-sweep-max-mm",
+        type=float,
+        default=160.0,
+        help="maximum calibrated workspace Z tested by --height-sweep-only",
+    )
+    parser.add_argument(
+        "--height-sweep-step-mm",
+        type=float,
+        default=5.0,
+        help="workspace-Z increment tested by --height-sweep-only",
+    )
+    parser.add_argument(
+        "--limit-compare-only",
+        action="store_true",
+        help=(
+            "with --replay, keep torque off and compare the saved reference-height "
+            "Cartesian path under current model/effective limits versus measured "
+            "calibration limits inset from the mechanical stops"
+        ),
+    )
+    parser.add_argument(
+        "--calibration-stop-margin-deg",
+        type=float,
+        default=3.0,
+        help=(
+            "per-side inset from measured mechanical-stop calibration used only by "
+            "--limit-compare-only; executable motion limits are unchanged"
+        ),
+    )
+    parser.add_argument(
+        "--limit-margin-search-only",
+        action="store_true",
+        help=(
+            "with --replay, keep torque off and binary-search the largest measured-stop "
+            "margin that still makes the saved reference-height Cartesian path feasible"
+        ),
+    )
+    parser.add_argument(
+        "--limit-margin-search-max-deg",
+        type=float,
+        default=10.0,
+        help="maximum measured-stop margin tested by --limit-margin-search-only",
+    )
+    parser.add_argument(
+        "--limit-margin-search-tolerance-deg",
+        type=float,
+        default=0.05,
+        help="binary-search resolution for --limit-margin-search-only",
+    )
     return parser
 
 
@@ -870,6 +1609,103 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 raise RuntimeError(
                     "saved workspace calibration does not match the active motor calibration"
                 )
+
+            if args.limit_margin_search_only:
+                print("Paper workspace joint-limit margin search — READ ONLY")
+                print(
+                    "Torque remains disabled. No startup lift or paper motion will be commanded."
+                )
+                demo = diagnose_paper_limit_margin_search(
+                    arm,
+                    saved,
+                    corners=corner_samples,
+                    up_sample=up,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    maximum_margin_deg=args.limit_margin_search_max_deg,
+                    tolerance_deg=args.limit_margin_search_tolerance_deg,
+                )
+                report["joint_limit_margin_search"] = demo
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                return 0 if demo["largest_feasible_margin_deg"] is not None else 2
+
+            if args.limit_compare_only:
+                print("Paper workspace joint-limit comparison — READ ONLY")
+                print(
+                    "Torque remains disabled. No startup lift or paper motion will be commanded."
+                )
+                demo = diagnose_paper_joint_limit_comparison(
+                    arm,
+                    saved,
+                    corners=corner_samples,
+                    up_sample=up,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    stop_margin_deg=args.calibration_stop_margin_deg,
+                )
+                report["joint_limit_comparison"] = demo
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                nominal = demo["nominal"]
+                calibrated = demo["calibration_margin"]
+                assert isinstance(nominal, dict)
+                assert isinstance(calibrated, dict)
+                if calibrated.get("feasible"):
+                    print(
+                        "\nCalibration-derived limits make the saved reference-height "
+                        "path feasible in read-only planning."
+                    )
+                    return 0
+                print(
+                    "\nThe saved reference-height path is still not fully feasible "
+                    "under calibration-derived diagnostic limits."
+                )
+                return 2
+
+            if args.height_sweep_only:
+                print("Paper workspace constant-height feasibility sweep — READ ONLY")
+                print(
+                    "Torque remains disabled. No startup lift or paper motion will be commanded."
+                )
+                demo = diagnose_paper_height_sweep(
+                    arm,
+                    saved,
+                    corners=corner_samples,
+                    up_sample=up,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    minimum_height_mm=args.height_sweep_min_mm,
+                    maximum_height_mm=args.height_sweep_max_mm,
+                    step_mm=args.height_sweep_step_mm,
+                )
+                report["height_sweep"] = demo
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                nearest = demo["nearest_feasible_height_mm"]
+                if nearest is None:
+                    print("\nNo fully feasible constant-height paper path was found.")
+                    return 2
+                extrapolated = float(nearest) > saved.reference_height_m * 1000.0 + 1e-9
+                suffix = (
+                    " (above the measured reference; extrapolated workspace Z)"
+                    if extrapolated
+                    else ""
+                )
+                print(
+                    f"\nNearest fully feasible constant height: {float(nearest):.1f} mm"
+                    f"{suffix}"
+                )
+                return 0
 
             print("Paper workspace replay")
             print(
@@ -959,6 +1795,39 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
 
+            endpoint_seeds = preflight_joint_seeds(preflight)
+            print("\nRead-only full Cartesian segment preflight...")
+            try:
+                segment_preflight = preflight_demo_segments(
+                    arm,
+                    demo_positions,
+                    rotation=up.rotation,
+                    endpoint_seeds=endpoint_seeds,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                )
+            except Exception as exc:
+                report["demo_completed"] = False
+                report["autonomous_motion_attempted"] = False
+                report["segment_preflight_error"] = f"{type(exc).__name__}: {exc}"
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                _hold_until_operator_release(
+                    arm,
+                    f"Read-only segment preflight stopped: {type(exc).__name__}: {exc}",
+                )
+                arm.relax()
+                print("Motors relaxed.")
+                return 2
+            for item in segment_preflight:
+                print(
+                    f"  {item['segment']}: {item['sample_count']} samples, "
+                    f"{item['duration_s']:.2f} s, max step "
+                    f"{np.degrees(item['max_joint_step_rad']):.3f} deg"
+                )
+
             report["replayed_at"] = datetime.now(timezone.utc).isoformat()
             report["demo_target_strategy"] = (
                 "workspace_z_leveling_from_reachable_endpoint_xy"
@@ -966,6 +1835,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             report["baseline_estimated_workspace_z_mm"] = baseline_z_mm
             report["startup_clearance_preflight"] = startup_preflight
             report["demo_preflight"] = preflight
+            report["segment_preflight"] = segment_preflight
             report["demo_targets_model_xyz_mm"] = {
                 name: [float(value * 1000.0) for value in position]
                 for name, position in demo_positions.items()
@@ -1053,6 +1923,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
+                    target_seeds=endpoint_seeds,
                 )
             except Exception as exc:
                 report["demo_completed"] = False
@@ -1109,6 +1980,38 @@ def main() -> int:
         raise SystemExit("--settle-timeout-s must be positive")
     if args.replay and args.measure_only:
         raise SystemExit("--replay and --measure-only cannot be used together")
+    if args.height_sweep_only and not args.replay:
+        raise SystemExit("--height-sweep-only requires --replay")
+    if args.limit_compare_only and not args.replay:
+        raise SystemExit("--limit-compare-only requires --replay")
+    if args.limit_compare_only and args.height_sweep_only:
+        raise SystemExit("--limit-compare-only and --height-sweep-only cannot be combined")
+    if args.limit_margin_search_only and not args.replay:
+        raise SystemExit("--limit-margin-search-only requires --replay")
+    if args.limit_margin_search_only and (
+        args.limit_compare_only or args.height_sweep_only
+    ):
+        raise SystemExit(
+            "--limit-margin-search-only cannot be combined with "
+            "--limit-compare-only or --height-sweep-only"
+        )
+    if args.calibration_stop_margin_deg < 0.0:
+        raise SystemExit("--calibration-stop-margin-deg cannot be negative")
+    if args.limit_margin_search_max_deg <= 0.0:
+        raise SystemExit("--limit-margin-search-max-deg must be positive")
+    if args.limit_margin_search_tolerance_deg <= 0.0:
+        raise SystemExit("--limit-margin-search-tolerance-deg must be positive")
+    if args.limit_margin_search_tolerance_deg >= args.limit_margin_search_max_deg:
+        raise SystemExit(
+            "--limit-margin-search-tolerance-deg must be smaller than "
+            "--limit-margin-search-max-deg"
+        )
+    if args.height_sweep_min_mm <= 0.0:
+        raise SystemExit("--height-sweep-min-mm must be positive")
+    if args.height_sweep_max_mm <= args.height_sweep_min_mm:
+        raise SystemExit("--height-sweep-max-mm must exceed --height-sweep-min-mm")
+    if args.height_sweep_step_mm <= 0.0:
+        raise SystemExit("--height-sweep-step-mm must be positive")
     if args.startup_lift_mm <= 0.0:
         raise SystemExit("--startup-lift-mm must be positive")
     if args.startup_min_rise_mm <= 0.0:
@@ -1407,6 +2310,39 @@ def main() -> int:
                     f"{args.reference_height_mm:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
+            endpoint_seeds = preflight_joint_seeds(preflight)
+            print("\nRead-only full Cartesian segment preflight...")
+            try:
+                segment_preflight = preflight_demo_segments(
+                    arm,
+                    demo_positions,
+                    rotation=d_up.rotation,
+                    endpoint_seeds=endpoint_seeds,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                )
+            except Exception as exc:
+                report["demo_completed"] = False
+                report["autonomous_motion_attempted"] = False
+                report["segment_preflight_error"] = f"{type(exc).__name__}: {exc}"
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                _hold_until_operator_release(
+                    arm,
+                    f"Read-only segment preflight stopped: {type(exc).__name__}: {exc}",
+                )
+                arm.relax()
+                print("Motors relaxed.")
+                return 2
+            report["segment_preflight"] = segment_preflight
+            for item in segment_preflight:
+                print(
+                    f"  {item['segment']}: {item['sample_count']} samples, "
+                    f"{item['duration_s']:.2f} s, max step "
+                    f"{np.degrees(item['max_joint_step_rad']):.3f} deg"
+                )
             args.output.write_text(
                 json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
@@ -1445,6 +2381,7 @@ def main() -> int:
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
+                    target_seeds=endpoint_seeds,
                 )
             except Exception as exc:
                 report["demo_completed"] = False

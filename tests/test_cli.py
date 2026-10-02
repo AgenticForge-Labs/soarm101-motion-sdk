@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from soarm101_motion.cli.main import _arm_from_args, build_parser, main
 from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
 
@@ -187,3 +189,98 @@ def test_explicit_session_port_overrides_saved_workstation_follower(
 
     assert arm.config.port == "/dev/ttyUSB3"
     assert arm.config.robot_id == "explicit"
+
+
+def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> None:
+    from math import degrees
+
+    from soarm101_motion.constants import ALL_MOTORS, JOINT_LIMITS, MOTOR_IDS
+
+    calibration_path = tmp_path / "so101.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "test",
+                "motors": {
+                    name: {
+                        "motor_id": MOTOR_IDS[name],
+                        "drive_mode": 0,
+                        "homing_offset": 0,
+                        "range_min": 700,
+                        "range_max": 3394,
+                    }
+                    for name in ALL_MOTORS
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "limits",
+                "--robot-id",
+                "so101",
+                "--calibration",
+                str(calibration_path),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["calibration_path"] == str(calibration_path)
+    assert payload["calibrated_joint_stop_margin_deg"] == pytest.approx(1.0)
+
+    shoulder_calibrated_upper = payload["joints"]["shoulder_pan"]["calibrated_deg"][1]
+    shoulder_effective_upper = payload["joints"]["shoulder_pan"]["effective_deg"][1]
+    assert shoulder_calibrated_upper > degrees(JOINT_LIMITS["shoulder_pan"][1]) + 1.0
+    assert shoulder_effective_upper == pytest.approx(shoulder_calibrated_upper - 1.0)
+    assert shoulder_effective_upper > degrees(JOINT_LIMITS["shoulder_pan"][1])
+
+    wrist_calibrated_upper = payload["joints"]["wrist_flex"]["calibrated_deg"][1]
+    wrist_effective_upper = payload["joints"]["wrist_flex"]["effective_deg"][1]
+    assert wrist_calibrated_upper > degrees(JOINT_LIMITS["wrist_flex"][1]) + 1.0
+    assert wrist_effective_upper == pytest.approx(wrist_calibrated_upper - 1.0)
+    assert wrist_effective_upper > degrees(JOINT_LIMITS["wrist_flex"][1])
+
+    sleep = payload["sleep_pose_deg"]
+    assert sleep["shoulder_pan"] == pytest.approx(0.0)
+    assert sleep["shoulder_lift"] == pytest.approx(
+        payload["joints"]["shoulder_lift"]["effective_deg"][0]
+    )
+    assert sleep["elbow_flex"] == pytest.approx(
+        payload["joints"]["elbow_flex"]["effective_deg"][1]
+    )
+    assert sleep["wrist_flex"] == pytest.approx(
+        payload["joints"]["wrist_flex"]["effective_deg"][0]
+    )
+    assert sleep["wrist_roll"] == pytest.approx(0.0)
+
+    assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
+
+
+def test_sleep_cli_requires_confirmation_and_runs_in_simulation(capsys) -> None:
+    assert main(["sleep", "--simulation"]) == 2
+    assert "Refusing to move without --yes" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "sleep",
+                "--simulation",
+                "--speed-deg-s",
+                "8",
+                "--acceleration-deg-s2",
+                "25",
+                "--json",
+                "--yes",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["accepted"] is True
+    assert payload["completed"] is True

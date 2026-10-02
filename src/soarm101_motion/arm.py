@@ -18,7 +18,6 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     HOME_JOINTS,
-    JOINT_LIMITS,
 )
 from soarm101_motion.exceptions import (
     ConfigurationError,
@@ -30,8 +29,10 @@ from soarm101_motion.exceptions import (
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.motion import MotionController, MotionHandle
+from soarm101_motion.poses import sleep_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
+    resolve_effective_joint_limits,
     validate_joint_targets,
     validate_workspace_configuration,
     validate_workspace_path,
@@ -349,22 +350,19 @@ class SOARM101:
         reset()
 
     def get_joint_limits(self) -> dict[str, tuple[float, float]]:
-        """Return effective model/calibration limits for the five pose joints."""
-        limits = dict(JOINT_LIMITS)
+        """Return executable pose-joint limits for this calibrated arm."""
         calibration = getattr(self.backend, "calibration", None)
-        if calibration is None:
-            return limits
-        for name in ARM_JOINTS:
-            motor = calibration.motors.get(name)
-            if motor is None:
-                continue
-            model_lower, model_upper = limits[name]
-            calibrated_lower, calibrated_upper = motor.radians_limits
-            lower = max(model_lower, calibrated_lower)
-            upper = min(model_upper, calibrated_upper)
-            if lower < upper:
-                limits[name] = (lower, upper)
-        return limits
+        calibrated_limits = None
+        if calibration is not None:
+            calibrated_limits = {
+                name: motor.radians_limits
+                for name, motor in calibration.motors.items()
+                if name in ARM_JOINTS
+            }
+        return resolve_effective_joint_limits(
+            calibrated_limits,
+            calibrated_joint_stop_margin_rad=self.config.calibrated_joint_stop_margin_rad,
+        )
 
     def get_joint_positions(self) -> JointState:
         return JointState(self.backend.read_joint_positions(), time.monotonic())
@@ -417,6 +415,34 @@ class SOARM101:
 
     move_gohome = move_home
 
+    def get_sleep_joint_positions(self) -> dict[str, float]:
+        """Return this arm's natural Sleep pose from its executable limits."""
+        return sleep_joint_positions(self.get_joint_limits())
+
+    def move_sleep(
+        self,
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        wait: bool = True,
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        """Move to this arm's calibration-derived natural Sleep posture.
+
+        Sleep intentionally bypasses only the generic coarse workspace geometry
+        check. The calibrated folded posture places non-neighboring link
+        centerlines closer than the generic 25 mm self-clearance heuristic even
+        though the physical arm is designed to fold there. Calibrated joint
+        limits, host trajectory/rate/acceleration checks, following-error,
+        effort, fault, communication, and completion guards remain active.
+        """
+        return self.move_joints(
+            self.get_sleep_joint_positions(),
+            speed=speed,
+            acceleration=acceleration,
+            wait=wait,
+            workspace_check="off",
+        )
+
     def solve_ik(
         self,
         target: Pose,
@@ -434,6 +460,7 @@ class SOARM101:
             options=IKOptions(
                 orientation_mode=orientation_mode,
                 look_at=np.asarray(look_at, dtype=float) if look_at is not None else None,
+                joint_limits=self.get_joint_limits(),
             ),
         )
         if result.success and self.config.enable_workspace_checks:
@@ -491,6 +518,7 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         workspace_check: Literal["full", "target_only", "off"] = "full",
+        target_seed: Mapping[str, float] | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         look_at_array = np.asarray(look_at, dtype=float) if look_at is not None else None
         if workspace_check not in {"full", "target_only", "off"}:
@@ -505,6 +533,7 @@ class SOARM101:
                 look_at=look_at_array,
                 speed=speed,
                 acceleration=acceleration,
+                target_seed=target_seed,
             )
             if workspace_check == "full":
                 validate_workspace_path(
@@ -528,6 +557,7 @@ class SOARM101:
             speed=speed,
             acceleration=acceleration,
             wait=wait,
+            target_seed=target_seed,
         )
 
     def get_servo_angle(self, *, is_radian: bool = True) -> list[float]:

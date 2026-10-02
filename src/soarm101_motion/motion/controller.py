@@ -16,7 +16,6 @@ from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
-    JOINT_LIMITS,
     STOCK_GRIPPER,
     STS3215_MAX_POSITION_SPEED_RAW,
     TELEOP_SERVO_ACCELERATION_RAW,
@@ -34,6 +33,7 @@ from soarm101_motion.exceptions import (
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.safety import (
+    resolve_effective_joint_limits,
     validate_command_step,
     validate_joint_targets,
     validate_workspace_path,
@@ -178,24 +178,18 @@ class MotionController:
             raise InvalidCommandError("torque is disabled; call enable() before motion")
 
     def _effective_limits(self) -> dict[str, tuple[float, float]]:
-        limits = dict(JOINT_LIMITS)
         calibration = getattr(self.backend, "calibration", None)
-        if calibration is None:
-            return limits
-        for name in ARM_JOINTS:
-            motor = calibration.motors.get(name)
-            if motor is None:
-                continue
-            calibrated_lower, calibrated_upper = motor.radians_limits
-            model_lower, model_upper = limits[name]
-            lower = max(model_lower, calibrated_lower)
-            upper = min(model_upper, calibrated_upper)
-            if lower >= upper:
-                raise SafetyViolationError(
-                    f"calibrated range for {name} does not overlap the model limits"
-                )
-            limits[name] = (lower, upper)
-        return limits
+        calibrated_limits = None
+        if calibration is not None:
+            calibrated_limits = {
+                name: motor.radians_limits
+                for name, motor in calibration.motors.items()
+                if name in ARM_JOINTS
+            }
+        return resolve_effective_joint_limits(
+            calibrated_limits,
+            calibrated_joint_stop_margin_rad=self.config.calibrated_joint_stop_margin_rad,
+        )
 
     def _limits_for_present(self, present: Mapping[str, float]) -> dict[str, tuple[float, float]]:
         limits = self._effective_limits()
@@ -396,6 +390,7 @@ class MotionController:
                         orientation_mode="position_only",
                         position_tolerance_m=self.config.cartesian_position_tolerance_m,
                         multi_start=False,
+                        joint_limits=limits,
                     ),
                 )
             except IKError:
@@ -527,14 +522,9 @@ class MotionController:
         normalized_speed: float,
         normalized_acceleration: float,
         limits: Mapping[str, tuple[float, float]],
+        target_seed: Mapping[str, float] | None = None,
     ) -> tuple[tuple[dict[str, float], ...], tuple[Pose, ...]]:
-        """Solve the smooth Cartesian trajectory directly at command-rate samples.
-
-        The scalar path uses symmetric half-cosine acceleration/deceleration ramps with
-        an optional constant-speed cruise. Every command sample gets its own sequential
-        IK solution; there is no secondary piecewise-linear interpolation between sparse
-        joint-space knots.
-        """
+        """Solve the Cartesian trajectory directly at command-rate samples."""
 
         steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
         fractions = np.linspace(0.0, 1.0, steps)
@@ -542,11 +532,8 @@ class MotionController:
             [0.0, 1.0],
             Rotation.from_matrix(np.stack([start_pose.rotation, target.rotation])),
         )
-        joint_samples: list[dict[str, float]] = [dict(start_joints)]
         cartesian_samples: list[Pose] = [start_pose]
-        seed = dict(start_joints)
-
-        for index, time_fraction in enumerate(fractions[1:], start=1):
+        for time_fraction in fractions[1:]:
             progress = self._cosine_cruise_progress(
                 1.0,
                 normalized_speed,
@@ -558,27 +545,40 @@ class MotionController:
                 if orientation_mode == "position_only"
                 else slerp([progress]).as_matrix()[0]
             )
-            pose = Pose(
-                start_pose.position + (target.position - start_pose.position) * progress,
-                pose_rotation,
+            cartesian_samples.append(
+                Pose(
+                    start_pose.position + (target.position - start_pose.position) * progress,
+                    pose_rotation,
+                )
             )
+        solved_cartesian = tuple(cartesian_samples)
+        line_delta = target.position - start_pose.position
+        line_length_sq = float(np.dot(line_delta, line_delta))
+
+        def solve_sample(
+            pose: Pose,
+            *,
+            seed: Mapping[str, float],
+            multi_start: bool,
+            sample_index: int,
+            direction: str,
+            enforce_seed_jump: bool = True,
+        ) -> dict[str, float]:
             options = IKOptions(
                 orientation_mode=orientation_mode,
                 look_at=look_at,
                 position_tolerance_m=self.config.cartesian_position_tolerance_m,
-                multi_start=index == 1,
+                multi_start=multi_start,
+                joint_limits=limits,
             )
-            try:
-                solution = self.ik.solve_or_raise(
-                    pose,
-                    seed=seed,
-                    tcp=tcp,
-                    options=options,
-                )
-            except IKError:
-                if options.multi_start:
-                    raise
-                solution = self.ik.solve_or_raise(
+            solution = self.ik.solve(
+                pose,
+                seed=seed,
+                tcp=tcp,
+                options=options,
+            )
+            if not solution.success and not multi_start:
+                solution = self.ik.solve(
                     pose,
                     seed=seed,
                     tcp=tcp,
@@ -587,21 +587,123 @@ class MotionController:
                         look_at=look_at,
                         position_tolerance_m=self.config.cartesian_position_tolerance_m,
                         multi_start=True,
+                        joint_limits=limits,
                     ),
                 )
-            candidate = validate_joint_targets(solution.joints, limits=limits)
-            jump = max(abs(candidate[name] - seed[name]) for name in ARM_JOINTS)
-            if jump > self.config.max_ik_waypoint_jump_radians:
-                raise InvalidCommandError(
-                    f"IK path discontinuity of {jump:.3f} rad exceeds "
-                    f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
+            if not solution.success:
+                actual = self.model.forward(solution.joints, tcp=tcp)
+                residual_mm = (actual.position - pose.position) * 1000.0
+                jacobian = self.model.jacobian(solution.joints, tcp=tcp)[:3, :]
+                singular = np.linalg.svd(jacobian, compute_uv=False)
+                sigma_min = float(np.min(singular)) if singular.size else 0.0
+                sigma_max = float(np.max(singular)) if singular.size else 0.0
+                condition = float("inf") if sigma_min <= 1e-12 else sigma_max / sigma_min
+                margins = {
+                    name: min(
+                        float(solution.joints[name]) - float(limits[name][0]),
+                        float(limits[name][1]) - float(solution.joints[name]),
+                    )
+                    for name in ARM_JOINTS
+                }
+                margin_joint = min(margins, key=margins.get)
+                progress = (
+                    float(np.dot(pose.position - start_pose.position, line_delta) / line_length_sq)
+                    if line_length_sq > 1e-18
+                    else 1.0
                 )
-            seed = candidate
-            joint_samples.append(candidate)
-            cartesian_samples.append(pose)
+                target_mm = pose.position * 1000.0
+                joints = ", ".join(
+                    f"{name}={float(solution.joints[name]):+.4f}" for name in ARM_JOINTS
+                )
+                raise IKError(
+                    f"{direction} Cartesian IK failed at sample "
+                    f"{sample_index}/{len(solved_cartesian) - 1} "
+                    f"(line progress={progress:.4f}, "
+                    f"target=({target_mm[0]:.2f},{target_mm[1]:.2f},{target_mm[2]:.2f}) mm): "
+                    f"best position error={solution.position_error_m * 1000.0:.3f} mm "
+                    f"with residual=({residual_mm[0]:+.3f},{residual_mm[1]:+.3f},"
+                    f"{residual_mm[2]:+.3f}) mm; "
+                    f"position-Jacobian sigma_min={sigma_min:.6g}, condition={condition:.2f}; "
+                    f"nearest effective joint limit={margin_joint} margin="
+                    f"{margins[margin_joint]:+.4f} rad; best joints: {joints}; "
+                    f"optimizer={solution.message}"
+                )
+            candidate = validate_joint_targets(solution.joints, limits=limits)
+            if enforce_seed_jump:
+                jump = max(abs(candidate[name] - seed[name]) for name in ARM_JOINTS)
+                if jump > self.config.max_ik_waypoint_jump_radians:
+                    raise InvalidCommandError(
+                        f"IK path discontinuity of {jump:.3f} rad exceeds "
+                        f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
+                    )
+            return candidate
 
-        solved_samples = tuple(joint_samples)
-        solved_cartesian = tuple(cartesian_samples)
+        def solve_forward() -> tuple[dict[str, float], ...]:
+            joint_samples: list[dict[str, float]] = [dict(start_joints)]
+            seed = dict(start_joints)
+            for index, pose in enumerate(solved_cartesian[1:], start=1):
+                candidate = solve_sample(
+                    pose,
+                    seed=seed,
+                    multi_start=index == 1,
+                    sample_index=index,
+                    direction="forward",
+                )
+                seed = candidate
+                joint_samples.append(candidate)
+            return tuple(joint_samples)
+
+        try:
+            solved_samples = solve_forward()
+        except IKError as forward_error:
+            if orientation_mode != "position_only":
+                raise
+
+            boundary_seed: Mapping[str, float] = start_joints
+            if target_seed is not None:
+                boundary_seed = validate_joint_targets(target_seed, limits=limits)
+
+            try:
+                endpoint_index = len(solved_cartesian) - 1
+                endpoint = solve_sample(
+                    solved_cartesian[-1],
+                    seed=boundary_seed,
+                    multi_start=True,
+                    sample_index=endpoint_index,
+                    direction="reverse",
+                    enforce_seed_jump=False,
+                )
+                reverse_samples: list[dict[str, float]] = [endpoint]
+                seed = endpoint
+                for sample_index in range(len(solved_cartesian) - 2, 0, -1):
+                    candidate = solve_sample(
+                        solved_cartesian[sample_index],
+                        seed=seed,
+                        multi_start=False,
+                        sample_index=sample_index,
+                        direction="reverse",
+                    )
+                    seed = candidate
+                    reverse_samples.append(candidate)
+
+                ordered_tail = list(reversed(reverse_samples))
+                first_jump = max(
+                    abs(ordered_tail[0][name] - start_joints[name])
+                    for name in ARM_JOINTS
+                )
+                if first_jump > self.config.max_ik_waypoint_jump_radians:
+                    raise InvalidCommandError(
+                        f"reverse IK path cannot connect to measured start: "
+                        f"{first_jump:.3f} rad exceeds "
+                        f"{self.config.max_ik_waypoint_jump_radians:.3f} rad"
+                    )
+                solved_samples = (dict(start_joints), *ordered_tail)
+            except (IKError, InvalidCommandError) as reverse_error:
+                raise IKError(
+                    "forward Cartesian IK failed and endpoint-seeded reverse fallback "
+                    f"also failed; forward={forward_error}; reverse={reverse_error}"
+                ) from reverse_error
+
         if orientation_mode == "position_only":
             solved_samples = self._smooth_position_only_cartesian_samples(
                 solved_samples,
@@ -611,17 +713,19 @@ class MotionController:
             )
         return solved_samples, solved_cartesian
 
-    def plan_linear(
+    def _plan_linear_from_start(
         self,
+        start_joints: Mapping[str, float],
         target: Pose,
         *,
-        tcp: Pose | None = None,
-        orientation_mode: OrientationMode = "compatible",
-        look_at: np.ndarray | None = None,
-        speed: float | None = None,
-        acceleration: float | None = None,
+        tcp: Pose | None,
+        orientation_mode: OrientationMode,
+        look_at: np.ndarray | None,
+        speed: float | None,
+        acceleration: float | None,
+        target_seed: Mapping[str, float] | None,
+        limits: Mapping[str, tuple[float, float]],
     ) -> PlannedPath:
-        self._require_ready()
         linear_speed = self._bounded(
             speed,
             self.config.default_linear_speed,
@@ -634,7 +738,6 @@ class MotionController:
             self.config.max_linear_acceleration,
             "linear acceleration",
         )
-        start_joints = self.backend.read_joint_positions()
         start_pose = self.model.forward(start_joints, tcp=tcp)
         distance = float(np.linalg.norm(target.position - start_pose.position))
         angular_distance = (
@@ -674,8 +777,6 @@ class MotionController:
             normalized_acceleration = 1.0
             profile_duration = 0.0
 
-        # Preserve the configured Cartesian planning density as a lower bound on
-        # duration/sample count, while command-rate IK remains the actual trajectory.
         minimum_segments = max(
             1,
             int(
@@ -693,7 +794,6 @@ class MotionController:
             density_duration,
             1.0 / self.config.command_frequency_hz,
         )
-        limits = self._limits_for_present(start_joints)
 
         samples: tuple[dict[str, float], ...] = ()
         cartesian: tuple[Pose, ...] = ()
@@ -710,6 +810,7 @@ class MotionController:
                 normalized_speed=normalized_speed,
                 normalized_acceleration=normalized_acceleration,
                 limits=limits,
+                target_seed=target_seed,
             )
             max_speed, max_acceleration, max_step = self._trajectory_metrics(samples)
             scale = max(
@@ -740,6 +841,105 @@ class MotionController:
 
         raise SafetyViolationError(
             "could not time-parameterize Cartesian trajectory within configured limits"
+        )
+
+    def plan_linear_from(
+        self,
+        start_joints: Mapping[str, float],
+        target: Pose,
+        *,
+        tcp: Pose | None = None,
+        orientation_mode: OrientationMode = "compatible",
+        look_at: np.ndarray | None = None,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        target_seed: Mapping[str, float] | None = None,
+        limits_override: Mapping[str, tuple[float, float]] | None = None,
+    ) -> PlannedPath:
+        """Read-only Cartesian planning from an explicit validated start configuration.
+
+        ``limits_override`` is diagnostic-only. It may widen normal executable
+        bounds for read-only planning, but never beyond the active motor calibration.
+        Executable motion uses the centrally resolved nominal-plus-calibrated-extension
+        limits and configured mechanical-stop margin.
+        """
+
+        state = self.backend.get_hardware_state()
+        if not state.connected:
+            raise RobotConnectionError("robot is not connected")
+        if state.faulted:
+            raise HardwareFaultError(state.fault_message or "robot is faulted")
+        if limits_override is None:
+            limits = self._effective_limits()
+        else:
+            missing = set(ARM_JOINTS) - set(limits_override)
+            if missing:
+                raise InvalidCommandError(
+                    "limits_override is missing joints: " + ", ".join(sorted(missing))
+                )
+            limits = {
+                name: (
+                    float(limits_override[name][0]),
+                    float(limits_override[name][1]),
+                )
+                for name in ARM_JOINTS
+            }
+            calibration = getattr(self.backend, "calibration", None)
+            for name in ARM_JOINTS:
+                lower, upper = limits[name]
+                if not math.isfinite(lower) or not math.isfinite(upper) or lower >= upper:
+                    raise InvalidCommandError(
+                        f"invalid read-only limits_override for {name}: {lower}..{upper}"
+                    )
+                if calibration is not None:
+                    calibrated_lower, calibrated_upper = (
+                        calibration.motors[name].radians_limits
+                    )
+                    if (
+                        lower < calibrated_lower - 1e-12
+                        or upper > calibrated_upper + 1e-12
+                    ):
+                        raise SafetyViolationError(
+                            f"read-only limits_override for {name} exceeds calibrated "
+                            f"range {calibrated_lower:.4f}..{calibrated_upper:.4f} rad"
+                        )
+        start = validate_joint_targets(start_joints, limits=limits)
+        return self._plan_linear_from_start(
+            start,
+            target,
+            tcp=tcp,
+            orientation_mode=orientation_mode,
+            look_at=look_at,
+            speed=speed,
+            acceleration=acceleration,
+            target_seed=target_seed,
+            limits=limits,
+        )
+
+    def plan_linear(
+        self,
+        target: Pose,
+        *,
+        tcp: Pose | None = None,
+        orientation_mode: OrientationMode = "compatible",
+        look_at: np.ndarray | None = None,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        target_seed: Mapping[str, float] | None = None,
+    ) -> PlannedPath:
+        self._require_ready()
+        start_joints = self.backend.read_joint_positions()
+        limits = self._limits_for_present(start_joints)
+        return self._plan_linear_from_start(
+            start_joints,
+            target,
+            tcp=tcp,
+            orientation_mode=orientation_mode,
+            look_at=look_at,
+            speed=speed,
+            acceleration=acceleration,
+            target_seed=target_seed,
+            limits=limits,
         )
 
     def _synchronized_servo_speed_raw(
@@ -1181,6 +1381,7 @@ class MotionController:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        target_seed: Mapping[str, float] | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         with self._state_lock:
             self._ensure_idle_locked()
@@ -1191,6 +1392,7 @@ class MotionController:
                 look_at=look_at,
                 speed=speed,
                 acceleration=acceleration,
+                target_seed=target_seed,
             )
             handle = self._start_locked(
                 lambda event: self._execute_plan(

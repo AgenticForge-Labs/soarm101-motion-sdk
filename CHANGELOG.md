@@ -2,6 +2,87 @@
 
 ## Unreleased
 
+- Hardware validation of the endpoint-seeded reverse fallback still failed safely on
+  A_UP->B_UP. The forward solve bottomed out at 0.648 mm and the reverse solve at
+  0.646 mm against the unchanged 0.5 mm Cartesian tolerance, while both endpoints still
+  preflighted at 0.00 mm. Because both directions converged to essentially the same miss,
+  the next question is geometric reachability/singularity/joint-limit interaction rather
+  than another directional solver heuristic.
+- Paper replay now performs read-only full-segment preflight for
+  A_UP->B_UP->C_UP->D_UP->CENTER_UP before offering powered traversal. A failing IK sample
+  reports command-rate sample index, line progress, target XYZ, signed XYZ residual, best
+  joint solution, positional Jacobian conditioning, and nearest effective joint-limit
+  margin. This prevents repeated shaky powered entry motion when a later elevated segment
+  is already known to be unplannable.
+- Added `soarm101 limits --json` as a hardware-free view of saved mechanical calibration
+  ranges, nominal model limits, the arm-specific executable range, the active calibrated
+  extension stop margin, and the configured coarse Cartesian envelope.
+- Added a read-only paper `--limit-compare-only` diagnostic. It compares the saved
+  reference-height Cartesian path under the unchanged executable model/calibration
+  intersection versus calibration-derived joint bounds inset from the measured mechanical
+  stops by `--calibration-stop-margin-deg`. Explicit diagnostic IK bounds are accepted
+  only by read-only planning and may never exceed the active calibration; executable
+  `move-linear`/joint motion limits are unchanged.
+- The current arm calibration measured wider stop-to-stop travel than the nominal model
+  on every pose joint: shoulder pan ±121.1° vs ±110°, shoulder lift ±105.1° vs ±100°,
+  elbow flex ±97.0° vs about ±96.8°, wrist flex ±103.9° vs ±95°, and wrist roll
+  ±168.8° vs roughly -157.2°/+162.8°. This means the prior +95° wrist-flex failure was
+  a nominal model boundary, not the measured physical stop. Hardware-side read-only
+  comparison at the saved 107 mm paper height confirmed the distinction: the normal
+  model/effective bounds failed A_UP->B_UP at the +95° wrist-flex cap, while calibration-
+  derived bounds inset 3.0° from the measured stops planned all four straight Cartesian
+  segments successfully. The feasible path used wrist flex up to +100.91°, exactly the
+  +103.91° measured stop minus the 3° inset, so the margin is binding. Added a torque-off
+  binary-search diagnostic to find the largest measured-stop margin that still keeps the
+  107 mm path feasible. The completed search bounded that transition between 5.430° feasible
+  and 5.469° infeasible; the boundary solution used wrist flex through +98.48°, leaving
+  5.43° to the measured +103.91° stop. Runtime limit policy now treats the official URDF
+  limits as the generic fallback/reference while a calibrated real arm uses its measured
+  pose-joint travel with a 1° inset from each mechanical stop. A narrower calibration
+  remains authoritative. This gives the current arm nearly all of its measured travel,
+  including wrist flex to about ±102.91°. Endpoint IK, joint motion, Cartesian planning,
+  live streaming, and the limits CLI share this resolver.
+- Added a calibration-derived Sleep posture for demos and power-down preparation.
+  Sleep is computed from the active executable limits: shoulder pan midpoint, shoulder lift
+  lower limit, elbow flex upper limit, wrist flex lower limit, and wrist roll midpoint.
+  On a calibrated arm those endpoint limits are already 1° inside the measured mechanical
+  stops. It is exposed through `SOARM101.get_sleep_joint_positions()`,
+  `SOARM101.move_sleep()`, `soarm101 sleep --yes`, and a GUI **Go Sleep** control.
+  `soarm101 limits --json` reports the exact derived Sleep pose without moving hardware.
+  Sleep is never commanded automatically on connect or torque enable. The dedicated Sleep
+  primitive skips only the generic coarse workspace-geometry check because the designed
+  folded posture violates the generic 25 mm link-centerline self-clearance heuristic; normal
+  joint motion still uses that check, and calibrated joint, trajectory, following-error,
+  effort, fault, communication, and completion guards remain active.
+- Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
+  the calibrated workspace Z range for the nearest height whose endpoints and complete
+  straight paper path are feasible under the unchanged model/calibration joint limits.
+  Explicit-start Cartesian planning is now genuinely read-only and no longer requires
+  torque to be enabled. On the saved paper calibration, the nearest-first 5 mm sweep
+  continued to hit the wrist-flex upper limit through 125 mm and found all four straight
+  segments feasible at 130 mm (+23 mm from the measured 107 mm reference). Because 130 mm
+  is above the measured reference, it remains extrapolated workspace geometry rather than
+  powered-motion validation.
+- Feasible height-sweep results now print per-segment planned joint step/speed/acceleration/
+  jerk plus per-joint jerk, direction reversals, encoder zero-delta fraction, and maximum
+  encoder step. These are read-only diagnostics for the unresolved visible shake.
+
+
+- Hardware replay after #74 remained very shaky and A_UP->B_UP still failed safely during
+  pre-motion planning, now at 0.794 mm against the unchanged 0.5 mm Cartesian tolerance.
+  Review of the public managed controller confirmed that real Cartesian execution was
+  already using the intended teleoperation-style `speed_raw=0`,
+  `acceleration_raw=254` profile, so the visible shake remains unresolved and this change
+  does not introduce another servo-profile experiment.
+- Position-only Cartesian planning now has an endpoint-seeded reverse fallback. If forward
+  sequential IK hits a numerical pocket, the planner solves the same Cartesian samples
+  backward from a reachable target solution and accepts the result only if it reconnects
+  continuously to the measured start. The paper workflow reuses its exact read-only
+  endpoint-preflight joint solution as that boundary-condition seed. Every sample still
+  must satisfy the same hard Cartesian tolerance, joint limits, continuity, dynamic, and
+  runtime safety checks.
+
+
 - Superseded the #73 launch-only smoothness experiment after physical replay remained
   shaky and A_UP->B_UP again failed during read-only planning with a 0.812 mm intermediate
   IK miss against the unchanged 0.5 mm tolerance. Cartesian timing returns to the symmetric

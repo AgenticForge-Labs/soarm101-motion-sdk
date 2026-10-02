@@ -19,6 +19,57 @@ if TYPE_CHECKING:
 FloatArray = NDArray[np.float64]
 
 
+def resolve_effective_joint_limits(
+    calibrated_limits: Mapping[str, tuple[float, float]] | None,
+    *,
+    calibrated_joint_stop_margin_rad: float,
+    model_limits: Mapping[str, tuple[float, float]] = JOINT_LIMITS,
+) -> dict[str, tuple[float, float]]:
+    """Resolve executable pose-joint limits from model and measured calibration.
+
+    The URDF/model range is the generic fallback. When a mechanical-stop
+    calibration is available, the measured range is authoritative after insetting
+    both ends by the configured stop margin. The measured stop itself is therefore
+    never exposed as a normal target when the margin is nonzero.
+    """
+
+    margin = float(calibrated_joint_stop_margin_rad)
+    if not math.isfinite(margin) or margin < 0.0:
+        raise ValueError(
+            "calibrated_joint_stop_margin_rad must be nonnegative and finite"
+        )
+
+    resolved = {
+        name: (float(model_limits[name][0]), float(model_limits[name][1]))
+        for name in ARM_JOINTS
+    }
+    if calibrated_limits is None:
+        return resolved
+
+    for name in ARM_JOINTS:
+        if name not in calibrated_limits:
+            continue
+        calibrated_lower, calibrated_upper = (
+            float(calibrated_limits[name][0]),
+            float(calibrated_limits[name][1]),
+        )
+        if (
+            not math.isfinite(calibrated_lower)
+            or not math.isfinite(calibrated_upper)
+            or calibrated_lower >= calibrated_upper
+        ):
+            raise SafetyViolationError(f"invalid calibrated joint range for {name}")
+
+        lower = calibrated_lower + margin
+        upper = calibrated_upper - margin
+        if lower >= upper:
+            raise SafetyViolationError(
+                f"calibrated range for {name} is too small for the configured stop margin"
+            )
+        resolved[name] = (lower, upper)
+
+    return resolved
+
 def validate_joint_targets(
     targets: Mapping[str, float],
     limits: Mapping[str, tuple[float, float]] = JOINT_LIMITS,

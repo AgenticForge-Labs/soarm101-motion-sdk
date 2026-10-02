@@ -14,7 +14,8 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] Torque-safe enable, trajectory validation, feedback completion, timeouts, diagnostics, CLI, and simulation.
 - [x] PySide6 Setup/Control/Teach workspaces with shared follower/leader GUI
   mechanical-stop calibration.
-- [x] Persistent Home/Rest pose library and calibrated joint-control ranges.
+- [x] Persistent Home/Rest pose library, calibration-derived natural Sleep posture, and
+  calibrated joint-control ranges.
 - [x] Independent read-only leader/controller connection and selectable teaching source.
 - [x] Named taught points captured from follower or leader and replayed as joint or linear moves.
 - [x] Immutable 50 Hz trajectory recording with gripper and optional effort/current diagnostics.
@@ -91,11 +92,31 @@ its own persistent connection for live controls; it must not launch CLI subproce
   one calibrated-Z startup clearance move, then constant-height Cartesian
   `move_linear()` replay A_UP→B_UP→C_UP→D_UP→CENTER_UP at 20 Hz. Verify all targets
   share the trained workspace Z and compare physical smoothness directly with teleoperation.
-- [ ] Validate the teleop-style Cartesian servo tracking profile on hardware
-  (speed_raw=0, acceleration_raw=254) together with Cartesian-constrained smooth-seed IK
-  reprojection. Confirm A_UP->B_UP preplans at the unchanged 0.5 mm tolerance and compare
-  visible shake with the #72/#73 runs; inspect planned joint derivatives, encoder
-  quantization, following error, and cycle timing if residual shake remains.
+- [ ] Diagnose the A_UP->B_UP straight-line feasibility before any further powered
+  paper replay. Hardware #75 evidence shows forward and endpoint-seeded reverse IK both
+  converge near the same residual (0.648/0.646 mm) against the unchanged 0.5 mm tolerance.
+  Require read-only full-segment preflight of every elevated paper segment and inspect the
+  failing sample's residual vector, Jacobian conditioning, and joint-limit margin to decide
+  whether this is optimizer behavior or a real model-workspace boundary. Use the torque-off
+  calibration-limit comparison first: the active mechanical-stop calibration is wider than
+  the nominal model on every pose joint, including wrist flex ±103.9° versus ±95°. The
+  torque-off margin search has now bounded the original 107 mm path's wrist requirement:
+  5.430° from the measured stop is feasible and 5.469° is not. The boundary solution reaches
+  +98.48° wrist flex against a measured +103.91° stop. Runtime limit authority now uses
+  the URDF/model range as the generic fallback/reference, but a calibrated real arm follows
+  its measured pose-joint travel with a 1° inset from each mechanical stop. This preserves
+  nearly all measured range while keeping normal commands off the stop itself. Validate the
+  normal runtime preflight and one supervised powered replay before treating the extended
+  calibrated range as physically validated. Then use the paper-height sweep only as a
+  separate geometry comparison. The
+  first 5 mm sweep found 130 mm (+23 mm from
+  the measured 107 mm reference) fully feasible, while candidates through 125 mm remained
+  wrist-flex limited. Treat 130 mm as extrapolated calibration geometry until separately
+  validated. Inspect its planned joint/encoder diagnostics before any powered use. The severe
+  visible shake remains a separate
+  unresolved issue; after planning is feasible, inspect planned
+  joint derivatives, encoder quantization, following error, and cycle timing before changing
+  motor tuning.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,

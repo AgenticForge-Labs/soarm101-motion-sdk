@@ -49,6 +49,10 @@ class SOARM101Config:
 
     max_command_step_radians: float = DEFAULT_MAX_COMMAND_STEP_RAD
     max_ik_waypoint_jump_radians: float = 0.50
+    # The official URDF is the generic fallback. Once a real arm has a
+    # mechanical-stop calibration, that measured range becomes the pose-joint
+    # authority, inset from each measured stop by this margin.
+    calibrated_joint_stop_margin_rad: float = math.radians(1.0)
     cartesian_waypoint_spacing_m: float = 0.005
     cartesian_waypoint_spacing_rad: float = 0.08
     cartesian_position_tolerance_m: float = 0.0005
@@ -130,6 +134,7 @@ class SOARM101Config:
             "max_angular_acceleration": self.max_angular_acceleration,
             "max_command_step_radians": self.max_command_step_radians,
             "max_ik_waypoint_jump_radians": self.max_ik_waypoint_jump_radians,
+            "calibrated_joint_stop_margin_rad": self.calibrated_joint_stop_margin_rad,
             "cartesian_waypoint_spacing_m": self.cartesian_waypoint_spacing_m,
             "cartesian_waypoint_spacing_rad": self.cartesian_waypoint_spacing_rad,
             "cartesian_position_tolerance_m": self.cartesian_position_tolerance_m,
@@ -157,7 +162,6 @@ class SOARM101Config:
                 raise ConfigurationError(f"{name} must be a positive finite value")
         if not math.isfinite(self.minimum_workspace_z_m):
             raise ConfigurationError("minimum_workspace_z_m must be finite")
-
         ceilings = {
             "default_joint_speed": (self.default_joint_speed, self.max_joint_speed),
             "default_joint_acceleration": (

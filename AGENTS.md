@@ -76,15 +76,29 @@ changes require development discipline; robot use requires conservative hardware
     teleoperation (STS3215 speed_raw=0, acceleration_raw=254); host trajectory planning owns
     speed and acceleration shaping. Hardware did not show a benefit from the temporary
     bounded-acceleration launch in #73, so Cartesian timing uses the symmetric half-cosine
-    profile again. Position-only smoothness work belongs in Cartesian-constrained IK
+    profile again. Hardware after #74 remained very shaky, but review of the public
+    managed controller confirmed that real `move_linear()` execution was already using
+    the documented teleoperation profile (speed_raw=0, acceleration_raw=254). Treat the
+    shake as unresolved rather than changing servo behavior by assumption. If forward
+    position-only IK hits a numerical pocket while the endpoint is known reachable,
+    deterministic planning may use the exact
+    read-only endpoint solution as a reverse boundary condition, but it must re-solve every
+    Cartesian sample at the unchanged hard tolerance and reconnect continuously to the
+    measured start. Hardware #75 showed the forward and reverse solves converging to nearly
+    the same ~0.65 mm residual, so endpoint reachability alone is not evidence that the
+    intervening straight line is feasible. Before any further powered elevated replay,
+    preflight every full paper segment read-only and inspect the failing sample's XYZ
+    residual, Jacobian conditioning, and effective joint-limit margin. Position-only
+    smoothness work belongs in Cartesian-constrained IK
     reprojection/diagnostics, not motor PID or another unmeasured launch heuristic. The calibrated workspace is authoritative for paper
     height; the generic model workspace may remain destination-only where documented. All
     joint, IK continuity, step/rate/acceleration, following-error, effort, fault,
     communication, settle, provenance, and timing guards remain active. Broader autonomous
     Cartesian use remains unvalidated until the hardware evidence is reviewed.
-12. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
-    agents; task-solving strategies, observe/action loops, model/provider instructions, and
-    benchmark policy belong outside the SDK-facing CLI reference.
+12. Keep `docs/agent-arm101-cli.md` and `cli_use.md` technical and policy-neutral. They
+    document the CLI contract, common commands, units, coordinate semantics, outputs, and
+    enforced safety behavior. Agent task strategies, observe/action loops, model/provider
+    instructions, and benchmark policy belong outside the SDK-facing CLI documentation.
 
 ## Repository boundary
 

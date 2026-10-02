@@ -506,11 +506,16 @@ def test_stream_accepts_calibrated_rest_but_rejects_farther_out():
         arm.start_joint_stream(frequency_hz=5)
         baseline = backend.read_joint_positions()
         arm.stream_joint_target(baseline)
+        effective_lower = arm.get_joint_limits()["shoulder_lift"][0]
         before = len(backend.command_history)
         with pytest.raises(SafetyViolationError, match="outside"):
-            arm.stream_joint_target(dict(baseline, shoulder_lift=-1.80))
+            arm.stream_joint_target(
+                dict(baseline, shoulder_lift=effective_lower - 0.001)
+            )
         assert len(backend.command_history) == before
-        arm.stream_joint_target(dict(baseline, shoulder_lift=-1.79))
+        arm.stream_joint_target(
+            dict(baseline, shoulder_lift=effective_lower + 0.001)
+        )
     finally:
         arm.disconnect()
 
