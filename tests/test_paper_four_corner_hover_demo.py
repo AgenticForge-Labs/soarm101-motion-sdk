@@ -695,6 +695,7 @@ def test_full_segment_preflight_plans_adjacent_endpoints_without_motion() -> Non
         "C_UP": np.array([0.2, 0.0, 0.1]),
     }
 
+    planning_limits = {name: (-1.5, 1.5) for name in joint_names}
     result = module.preflight_demo_segments(
         Arm(),
         positions,
@@ -702,14 +703,17 @@ def test_full_segment_preflight_plans_adjacent_endpoints_without_motion() -> Non
         endpoint_seeds=seeds,
         speed_mm_s=20.0,
         acceleration_mm_s2=100.0,
+        planning_limits=planning_limits,
     )
 
     assert [item["segment"] for item in result] == ["A_UP->B_UP", "B_UP->C_UP"]
     assert len(calls) == 2
     assert calls[0][0] == seeds["A_UP"]
     assert calls[0][2]["target_seed"] == seeds["B_UP"]
+    assert calls[0][2]["limits_override"] == planning_limits
     assert calls[1][0] == seeds["B_UP"]
     assert calls[1][2]["target_seed"] == seeds["C_UP"]
+    assert calls[1][2]["limits_override"] == planning_limits
 
 
 def test_startup_clearance_gate_uses_measured_rise_not_target_shortfall() -> None:
@@ -814,3 +818,37 @@ def test_center_up_is_true_midpoint_of_both_paper_axes() -> None:
         )
     )
     assert "CENTER_UP" in seeds
+
+
+def test_calibration_margin_joint_limits_use_measured_stops_not_model_limits() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    measured = {
+        "shoulder_pan": (-2.11, 2.11),
+        "shoulder_lift": (-1.83, 1.83),
+        "elbow_flex": (-1.70, 1.70),
+        "wrist_flex": (-1.81, 1.81),
+        "wrist_roll": (-2.94, 2.94),
+    }
+    arm = SimpleNamespace(
+        backend=SimpleNamespace(
+            calibration=SimpleNamespace(
+                motors={
+                    name: SimpleNamespace(radians_limits=limits)
+                    for name, limits in measured.items()
+                }
+            )
+        )
+    )
+
+    limits, rows = module.calibration_margin_joint_limits(
+        arm,
+        stop_margin_deg=3.0,
+    )
+
+    margin = np.deg2rad(3.0)
+    assert limits["wrist_flex"][0] == pytest.approx(measured["wrist_flex"][0] + margin)
+    assert limits["wrist_flex"][1] == pytest.approx(measured["wrist_flex"][1] - margin)
+    wrist = next(row for row in rows if row["joint"] == "wrist_flex")
+    assert wrist["diagnostic_deg"][1] > wrist["model_deg"][1]
