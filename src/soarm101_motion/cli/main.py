@@ -23,7 +23,7 @@ from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, JOINT_LIMITS, MOTO
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
-from soarm101_motion.poses import PoseLibrary, SavedPose
+from soarm101_motion.poses import PoseLibrary, SavedPose, sleep_joint_positions
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
@@ -228,10 +228,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
     }
     effective_limits = resolve_effective_joint_limits(
         calibrated_limits,
-        calibration_extension_stop_margin_rad=(
-            config.calibration_extension_stop_margin_rad
-        ),
-        calibration_extension_joints=config.calibration_extension_joints,
+        calibrated_joint_stop_margin_rad=config.calibrated_joint_stop_margin_rad,
     )
     joints: dict[str, object] = {}
     for name in ARM_JOINTS:
@@ -260,11 +257,15 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         "robot_id": robot_id,
         "calibration_path": str(calibration_path),
         "calibration_id": calibration.calibration_id,
-        "calibration_extension_stop_margin_deg": float(
-            config.calibration_extension_stop_margin_rad * 180.0 / pi
+        "calibrated_joint_stop_margin_deg": float(
+            config.calibrated_joint_stop_margin_rad * 180.0 / pi
         ),
-        "calibration_extension_joints": list(config.calibration_extension_joints),
         "joints": joints,
+        "sleep_pose_rad": sleep_joint_positions(effective_limits),
+        "sleep_pose_deg": {
+            name: float(value * 180.0 / pi)
+            for name, value in sleep_joint_positions(effective_limits).items()
+        },
         "coarse_cartesian_envelope_mm": {
             "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
             "maximum_tcp_reach": float(config.maximum_tcp_reach_m * 1000.0),
@@ -285,8 +286,8 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         print(f"robot_id: {robot_id}")
         print(f"calibration: {calibration_path}")
         print(
-            "calibration extension stop margin: "
-            f"{payload['calibration_extension_stop_margin_deg']:.1f} deg"
+            "calibrated joint stop margin: "
+            f"{payload['calibrated_joint_stop_margin_deg']:.1f} deg"
         )
         print("joint                         calibrated                   model               effective")
         for name in ARM_JOINTS:
