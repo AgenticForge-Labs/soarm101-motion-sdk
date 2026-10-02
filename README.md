@@ -156,8 +156,9 @@ solution for that boundary condition. The reverse path must reconnect continuous
 measured start and still satisfy the unchanged tolerance everywhere. This keeps the
 Cartesian line authoritative while reducing redundant-joint numerical wander. The previous
 per-sample servo speed throttling remains superseded because it could produce visible
-stick-slip on gravity-loaded joints; calibrated Cartesian execution now explicitly sends
-the fixed teleoperation profile rather than enabling synchronized per-sample servo speeds. The normal joint, IK,
+stick-slip on gravity-loaded joints. The public managed Cartesian controller continues to
+use the fixed teleoperation profile; the #74 shake therefore remains a separate unresolved
+trajectory/IK/tracking problem rather than evidence for another servo-profile change. The normal joint, IK,
 rate/acceleration, following-error, fault, effort/contact, communication, settle,
 provenance, and timing guards remain active. The measured workspace owns paper height;
 the generic model workspace is used only where explicitly documented as a secondary
