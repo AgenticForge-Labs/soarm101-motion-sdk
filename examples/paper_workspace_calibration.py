@@ -604,6 +604,95 @@ def preflight_joint_seeds(
     return seeds
 
 
+def preflight_demo_segments(
+    arm: SOARM101,
+    positions: dict[str, np.ndarray],
+    *,
+    rotation: np.ndarray,
+    endpoint_seeds: dict[str, dict[str, float]],
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+) -> list[dict[str, object]]:
+    """Plan every elevated paper segment read-only before any powered traversal."""
+
+    names = list(positions)
+    results: list[dict[str, object]] = []
+    for start_name, end_name in zip(names, names[1:]):
+        try:
+            plan = arm.motion.plan_linear_from(
+                endpoint_seeds[start_name],
+                Pose(positions[end_name], rotation),
+                tcp=arm.active_tcp,
+                orientation_mode="position_only",
+                speed=speed_mm_s / 1000.0,
+                acceleration=acceleration_mm_s2 / 1000.0,
+                target_seed=endpoint_seeds[end_name],
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"{start_name}->{end_name} full Cartesian segment preflight failed: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        matrix = np.array(
+            [[sample[name] for name in ARM_JOINTS] for sample in plan.command_samples],
+            dtype=float,
+        )
+        dt = 1.0 / arm.config.command_frequency_hz
+        step = np.diff(matrix, axis=0)
+        velocity = step / dt if step.size else np.zeros((0, len(ARM_JOINTS)))
+        acceleration = (
+            np.diff(velocity, axis=0) / dt
+            if len(velocity) > 1
+            else np.zeros((0, len(ARM_JOINTS)))
+        )
+        jerk = (
+            np.diff(acceleration, axis=0) / dt
+            if len(acceleration) > 1
+            else np.zeros((0, len(ARM_JOINTS)))
+        )
+        result: dict[str, object] = {
+            "segment": f"{start_name}->{end_name}",
+            "sample_count": len(plan.command_samples),
+            "duration_s": float(plan.duration_s),
+            "max_joint_step_rad": float(np.max(np.abs(step))) if step.size else 0.0,
+            "max_joint_speed_rad_s": (
+                float(np.max(np.abs(velocity))) if velocity.size else 0.0
+            ),
+            "max_joint_acceleration_rad_s2": (
+                float(np.max(np.abs(acceleration))) if acceleration.size else 0.0
+            ),
+            "max_joint_jerk_rad_s3": (
+                float(np.max(np.abs(jerk))) if jerk.size else 0.0
+            ),
+        }
+
+        calibration = getattr(arm.backend, "calibration", None)
+        if calibration is not None and len(plan.command_samples) > 1:
+            raw = np.array(
+                [
+                    [
+                        calibration.motors[name].radians_to_raw(sample[name])
+                        for name in ARM_JOINTS
+                    ]
+                    for sample in plan.command_samples
+                ],
+                dtype=int,
+            )
+            raw_delta = np.diff(raw, axis=0)
+            result["encoder_zero_delta_fraction"] = {
+                name: float(np.mean(raw_delta[:, index] == 0))
+                for index, name in enumerate(ARM_JOINTS)
+            }
+            result["max_encoder_step_ticks"] = {
+                name: int(np.max(np.abs(raw_delta[:, index])))
+                for index, name in enumerate(ARM_JOINTS)
+            }
+
+        results.append(result)
+    return results
+
+
 def run_demo_targets(
     arm: SOARM101,
     calibration: WorkspaceCalibration,
@@ -986,6 +1075,23 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
 
+            endpoint_seeds = preflight_joint_seeds(preflight)
+            print("\nRead-only full Cartesian segment preflight...")
+            segment_preflight = preflight_demo_segments(
+                arm,
+                demo_positions,
+                rotation=up.rotation,
+                endpoint_seeds=endpoint_seeds,
+                speed_mm_s=args.speed_mm_s,
+                acceleration_mm_s2=args.acceleration_mm_s2,
+            )
+            for item in segment_preflight:
+                print(
+                    f"  {item['segment']}: {item['sample_count']} samples, "
+                    f"{item['duration_s']:.2f} s, max step "
+                    f"{np.degrees(item['max_joint_step_rad']):.3f} deg"
+                )
+
             report["replayed_at"] = datetime.now(timezone.utc).isoformat()
             report["demo_target_strategy"] = (
                 "workspace_z_leveling_from_reachable_endpoint_xy"
@@ -993,6 +1099,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
             report["baseline_estimated_workspace_z_mm"] = baseline_z_mm
             report["startup_clearance_preflight"] = startup_preflight
             report["demo_preflight"] = preflight
+            report["segment_preflight"] = segment_preflight
             report["demo_targets_model_xyz_mm"] = {
                 name: [float(value * 1000.0) for value in position]
                 for name, position in demo_positions.items()
@@ -1080,7 +1187,7 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
-                    target_seeds=preflight_joint_seeds(preflight),
+                    target_seeds=endpoint_seeds,
                 )
             except Exception as exc:
                 report["demo_completed"] = False
@@ -1435,6 +1542,23 @@ def main() -> int:
                     f"{args.reference_height_mm:.1f} mm; "
                     f"IK error {item['position_error_mm']:.2f} mm"
                 )
+            endpoint_seeds = preflight_joint_seeds(preflight)
+            print("\nRead-only full Cartesian segment preflight...")
+            segment_preflight = preflight_demo_segments(
+                arm,
+                demo_positions,
+                rotation=d_up.rotation,
+                endpoint_seeds=endpoint_seeds,
+                speed_mm_s=args.speed_mm_s,
+                acceleration_mm_s2=args.acceleration_mm_s2,
+            )
+            report["segment_preflight"] = segment_preflight
+            for item in segment_preflight:
+                print(
+                    f"  {item['segment']}: {item['sample_count']} samples, "
+                    f"{item['duration_s']:.2f} s, max step "
+                    f"{np.degrees(item['max_joint_step_rad']):.3f} deg"
+                )
             args.output.write_text(
                 json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
@@ -1473,7 +1597,7 @@ def main() -> int:
                     speed_mm_s=args.speed_mm_s,
                     acceleration_mm_s2=args.acceleration_mm_s2,
                     report_moves=moves,
-                    target_seeds=preflight_joint_seeds(preflight),
+                    target_seeds=endpoint_seeds,
                 )
             except Exception as exc:
                 report["demo_completed"] = False
