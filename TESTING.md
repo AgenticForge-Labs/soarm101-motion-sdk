@@ -103,11 +103,16 @@ must never narrow the normal executable range, change executable `move-linear` o
 joint-space limits, or accept any explicit read-only bound outside the active calibration.
 The current calibration records wider mechanical travel than the nominal model, including
 wrist flex ±103.9° versus the model's ±95°. Hardware-side read-only comparison at 107 mm
-failed under the normal +95° wrist-flex boundary but planned all four straight segments
-with a 3.0° inset from measured stops. That feasible plan used wrist flex through +100.91°,
-exactly the measured +103.91° stop minus 3°, so the tested margin is binding. Use
-`--limit-margin-search-only` to binary-search the largest measured-stop inset that remains
-feasible before any executable limit policy is changed.
+failed under the old +95° wrist-flex boundary. A completed torque-off margin search found
+5.430° feasible and 5.469° infeasible; the largest feasible tested solution used wrist flex
+through +98.48° and remained 5.43° from the measured +103.91° stop.
+
+Executable motion now uses a 4° calibration-extension stop margin. On this arm that provides
+about +99.91° positive wrist-flex authority, roughly 1.43° beyond the observed paper-path
+requirement. Before powered paper replay, verify `soarm101 limits --json` reports the
+expected calibrated/model/effective ranges and that read-only full-segment preflight passes
+under the normal runtime limits. This policy does not authorize commanding the measured
+mechanical stops and does not resolve the separate visible-shake issue.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
