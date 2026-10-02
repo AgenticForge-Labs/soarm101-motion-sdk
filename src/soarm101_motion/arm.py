@@ -18,7 +18,6 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     HOME_JOINTS,
-    JOINT_LIMITS,
 )
 from soarm101_motion.exceptions import (
     ConfigurationError,
@@ -32,6 +31,7 @@ from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO1
 from soarm101_motion.motion import MotionController, MotionHandle
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
+    resolve_effective_joint_limits,
     validate_joint_targets,
     validate_workspace_configuration,
     validate_workspace_path,
@@ -349,22 +349,21 @@ class SOARM101:
         reset()
 
     def get_joint_limits(self) -> dict[str, tuple[float, float]]:
-        """Return effective model/calibration limits for the five pose joints."""
-        limits = dict(JOINT_LIMITS)
+        """Return executable pose-joint limits for this calibrated arm."""
         calibration = getattr(self.backend, "calibration", None)
-        if calibration is None:
-            return limits
-        for name in ARM_JOINTS:
-            motor = calibration.motors.get(name)
-            if motor is None:
-                continue
-            model_lower, model_upper = limits[name]
-            calibrated_lower, calibrated_upper = motor.radians_limits
-            lower = max(model_lower, calibrated_lower)
-            upper = min(model_upper, calibrated_upper)
-            if lower < upper:
-                limits[name] = (lower, upper)
-        return limits
+        calibrated_limits = None
+        if calibration is not None:
+            calibrated_limits = {
+                name: motor.radians_limits
+                for name, motor in calibration.motors.items()
+                if name in ARM_JOINTS
+            }
+        return resolve_effective_joint_limits(
+            calibrated_limits,
+            calibration_extension_stop_margin_rad=(
+                self.config.calibration_extension_stop_margin_rad
+            ),
+        )
 
     def get_joint_positions(self) -> JointState:
         return JointState(self.backend.read_joint_positions(), time.monotonic())
@@ -434,6 +433,7 @@ class SOARM101:
             options=IKOptions(
                 orientation_mode=orientation_mode,
                 look_at=np.asarray(look_at, dtype=float) if look_at is not None else None,
+                joint_limits=self.get_joint_limits(),
             ),
         )
         if result.success and self.config.enable_workspace_checks:
