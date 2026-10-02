@@ -64,6 +64,26 @@ Show the saved workstation configuration:
 soarm101 workstation show --json
 ```
 
+Show the saved mechanical calibration ranges, nominal model limits, effective runtime
+limits, and coarse Cartesian envelope without opening hardware:
+
+```bash
+soarm101 limits --robot-id so101 --json
+```
+
+Use `--calibration PATH` to inspect a specific calibration file.
+
+`limits` reports three ranges for each pose joint:
+
+```text
+calibrated = measured mechanical stop-to-stop range from the saved calibration
+model      = nominal SO-101 kinematic-model planning range
+effective  = intersection(calibrated, model), used by normal executable motion
+```
+
+The coarse Cartesian `maximum_tcp_reach` is an outer radial envelope. It does not mean
+that every XYZ point inside that radius is reachable.
+
 These commands do not command arm motion.
 
 ## TCP coordinates
