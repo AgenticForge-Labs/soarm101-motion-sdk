@@ -18,7 +18,7 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     HOME_JOINTS,
-    SLEEP_JOINTS,
+    SLEEP_LIMIT_SELECTORS,
 )
 from soarm101_motion.exceptions import (
     ConfigurationError,
@@ -415,6 +415,29 @@ class SOARM101:
 
     move_gohome = move_home
 
+    def get_sleep_joint_positions(self) -> dict[str, float]:
+        """Return the calibrated natural Sleep posture for this arm.
+
+        On a calibrated physical arm the lower/upper values already include the
+        configured measured-stop inset. Simulation or an explicitly uncalibrated
+        backend falls back to the generic model limits through get_joint_limits().
+        """
+
+        limits = self.get_joint_limits()
+        result: dict[str, float] = {}
+        for name in ARM_JOINTS:
+            lower, upper = limits[name]
+            selector = SLEEP_LIMIT_SELECTORS[name]
+            if selector == "lower":
+                result[name] = float(lower)
+            elif selector == "upper":
+                result[name] = float(upper)
+            elif selector == "midpoint":
+                result[name] = float((lower + upper) / 2.0)
+            else:
+                raise RuntimeError(f"unsupported Sleep selector for {name}: {selector}")
+        return result
+
     def move_sleep(
         self,
         *,
@@ -422,9 +445,9 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to the built-in compact sleep posture through normal safety guards."""
+        """Move to this arm's calibration-derived natural Sleep posture."""
         return self.move_joints(
-            SLEEP_JOINTS,
+            self.get_sleep_joint_positions(),
             speed=speed,
             acceleration=acceleration,
             wait=wait,
