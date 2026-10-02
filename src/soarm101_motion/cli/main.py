@@ -273,8 +273,8 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             "base_keepout_height": float(config.base_keepout_height_m * 1000.0),
         },
         "notes": [
-            "effective joint limits keep nominal model authority and add calibration-proven extension only for explicitly validated joints where the configured stop margin remains",
-            "the calibration stop margin never narrows the pre-existing model/calibration intersection",
+            "URDF/model joint limits are the generic fallback/reference; calibrated real arms use measured pose-joint travel with the configured stop margin",
+            "calibration remains the physical authority if a measured range is narrower than the model range",
             "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
             "normal Cartesian CLI coordinates are in the soarm101/base model frame",
         ],
