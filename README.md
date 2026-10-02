@@ -153,8 +153,10 @@ refined path is used only when it lowers discrete joint jerk. If forward sequent
 hits a numerical pocket, a reachable endpoint solution can seed a reverse solve of those
 same Cartesian samples; the paper replay reuses its exact read-only endpoint-preflight
 solution for that boundary condition. The reverse path must reconnect continuously to the
-measured start and still satisfy the unchanged tolerance everywhere. This keeps the
-Cartesian line authoritative while reducing redundant-joint numerical wander. The previous
+measured start and still satisfy the unchanged tolerance everywhere. Because reachable
+endpoints do not guarantee a reachable straight line, the paper workflow also preflights
+every complete elevated segment read-only before it offers powered traversal. This keeps
+the Cartesian line authoritative while reducing redundant-joint numerical wander. The previous
 per-sample servo speed throttling remains superseded because it could produce visible
 stick-slip on gravity-loaded joints. The public managed Cartesian controller continues to
 use the fixed teleoperation profile; the #74 shake therefore remains a separate unresolved
