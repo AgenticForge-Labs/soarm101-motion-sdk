@@ -149,10 +149,19 @@ Separately, when soft IK continuity/joint-centering regularization prevents a ge
 reachable sample from meeting the hard tolerance, a task-space-only refinement is attempted
 without relaxing that tolerance.
 
-Because `move_linear()` remains shaky despite the existing teleoperation-style servo
-profile, the next comparison should be planned joint derivatives, encoder-quantized command
-deltas, measured following error, and actual cycle timing; that would isolate remaining
-IK/Jacobian/quantization effects from servo tracking.
+Hardware #75 testing also showed that the endpoint-seeded reverse fallback does not
+resolve A_UP->B_UP: forward and reverse planning converged to essentially the same
+0.648/0.646 mm miss. That pattern can indicate a true local reachability/singularity or
+joint-limit boundary rather than a seed-direction problem. The paper workflow therefore
+preflights every complete elevated segment read-only before powered traversal and reports
+the exact failing sample, signed XYZ residual, positional Jacobian conditioning, and
+nearest effective joint-limit margin.
+
+Because `move_linear()` also remains very shaky despite the existing teleoperation-style
+servo profile, once a complete paper path is actually feasible the next comparison should
+be planned joint derivatives, encoder-quantized command deltas, measured following error,
+and actual cycle timing; that would isolate remaining IK/Jacobian/quantization effects from
+servo tracking.
 
 ## Current hardware finding
 
