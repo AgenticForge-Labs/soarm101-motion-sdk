@@ -30,9 +30,11 @@
   a nominal model boundary, not the measured physical stop. Hardware-side read-only
   comparison at the saved 107 mm paper height confirmed the distinction: the normal
   model/effective bounds failed A_UP->B_UP at the +95° wrist-flex cap, while calibration-
-  derived bounds inset only 0.1° from the measured stops planned all four straight
-  Cartesian segments successfully. Executable limits remain unchanged pending margin
-  analysis.
+  derived bounds inset 3.0° from the measured stops planned all four straight Cartesian
+  segments successfully. The feasible path used wrist flex up to +100.91°, exactly the
+  +103.91° measured stop minus the 3° inset, so the margin is binding. Added a torque-off
+  binary-search diagnostic to find the largest measured-stop margin that still keeps the
+  107 mm path feasible. Executable limits remain unchanged pending that result.
 - Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
   the calibrated workspace Z range for the nearest height whose endpoints and complete
   straight paper path are feasible under the unchanged model/calibration joint limits.
