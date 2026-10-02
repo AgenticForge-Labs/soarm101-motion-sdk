@@ -714,6 +714,10 @@ def test_full_segment_preflight_plans_adjacent_endpoints_without_motion() -> Non
     assert calls[1][0] == seeds["B_UP"]
     assert calls[1][2]["target_seed"] == seeds["C_UP"]
     assert calls[1][2]["limits_override"] == planning_limits
+    first_motion = result[0]["per_joint_motion"]["shoulder_pan"]
+    assert first_motion["min_position_rad"] == pytest.approx(0.0)
+    assert first_motion["max_position_rad"] == pytest.approx(0.1)
+    assert first_motion["min_margin_to_planning_limit_rad"] == pytest.approx(1.4)
 
 
 def test_startup_clearance_gate_uses_measured_rise_not_target_shortfall() -> None:
@@ -850,5 +854,8 @@ def test_calibration_margin_joint_limits_use_measured_stops_not_model_limits() -
     margin = np.deg2rad(3.0)
     assert limits["wrist_flex"][0] == pytest.approx(measured["wrist_flex"][0] + margin)
     assert limits["wrist_flex"][1] == pytest.approx(measured["wrist_flex"][1] - margin)
+    # Elbow calibration has little extra travel; a large stop margin must not
+    # shrink the normal model/calibration intersection.
+    assert limits["elbow_flex"] == pytest.approx(module.JOINT_LIMITS["elbow_flex"])
     wrist = next(row for row in rows if row["joint"] == "wrist_flex")
     assert wrist["diagnostic_deg"][1] > wrist["model_deg"][1]
