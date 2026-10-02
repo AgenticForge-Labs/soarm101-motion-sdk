@@ -191,6 +191,7 @@ class MotionController:
             calibration_extension_stop_margin_rad=(
                 self.config.calibration_extension_stop_margin_rad
             ),
+            calibration_extension_joints=self.config.calibration_extension_joints,
         )
 
     def _limits_for_present(self, present: Mapping[str, float]) -> dict[str, tuple[float, float]]:
