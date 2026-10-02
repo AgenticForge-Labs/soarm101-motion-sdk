@@ -8,11 +8,11 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
 - Do not depend on software stop as an emergency stop.
 - Do not force joints during calibration.
 - Confirm motor voltage, calibration, direction, TCP, and limits on the exact assembly.
-- Executable pose-joint authority uses the nominal model/calibration range. Extra
-  calibration-derived travel is permitted only for explicitly validated joints; the
-  current default allowlist is `wrist_flex`, which retains a 4° margin inside its measured
-  mechanical stop. Other joints stay at the normal model/calibration intersection until
-  separately characterized. Never treat a measured mechanical stop as a command target.
+- The official URDF/model limits are the generic fallback/reference. For a calibrated
+  real arm, executable pose-joint authority follows the measured mechanical-stop
+  calibration with a 1° inset from each stop by default. Calibration remains authoritative
+  if it is narrower than the model. Never treat a measured mechanical stop itself as a
+  command target.
 - Inspect voltage, temperature, current, and status using `soarm101 diagnose`.
 
 ## Transient torque-control replies
