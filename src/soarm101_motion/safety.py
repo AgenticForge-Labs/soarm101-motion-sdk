@@ -23,6 +23,7 @@ def resolve_effective_joint_limits(
     calibrated_limits: Mapping[str, tuple[float, float]] | None,
     *,
     calibration_extension_stop_margin_rad: float,
+    calibration_extension_joints: Sequence[str],
     model_limits: Mapping[str, tuple[float, float]] = JOINT_LIMITS,
 ) -> dict[str, tuple[float, float]]:
     """Resolve executable pose-joint limits from model and measured calibration.
@@ -32,15 +33,22 @@ def resolve_effective_joint_limits(
     measured stop-to-stop range leaves the configured margin before the physical stop.
     The margin never narrows the pre-existing model/calibration intersection.
 
-    This keeps nominal model limits as the baseline while allowing arm-specific
-    calibration to prove conservative extra travel without ever commanding the
-    measured mechanical stop itself.
+    This keeps nominal model limits as the baseline while allowing explicitly
+    authorized joints to use arm-specific calibration as evidence for conservative
+    extra travel without ever commanding the measured mechanical stop itself.
     """
 
     margin = float(calibration_extension_stop_margin_rad)
     if not math.isfinite(margin) or margin < 0.0:
         raise ValueError(
             "calibration_extension_stop_margin_rad must be nonnegative and finite"
+        )
+    extension_joints = tuple(calibration_extension_joints)
+    unknown_extension_joints = set(extension_joints) - set(ARM_JOINTS)
+    if unknown_extension_joints:
+        raise ValueError(
+            "unknown calibration extension joints: "
+            + ", ".join(sorted(unknown_extension_joints))
         )
 
     resolved = {
@@ -72,19 +80,20 @@ def resolve_effective_joint_limits(
                 f"calibrated range for {name} does not overlap the model limits"
             )
 
-        inset_lower = calibrated_lower + margin
-        inset_upper = calibrated_upper - margin
-
-        # Never narrow today's normal model/calibration intersection. Extend only
-        # when measured calibration leaves the configured margin beyond it.
         lower = normal_lower
         upper = normal_upper
-        if inset_lower < normal_lower:
-            lower = inset_lower
-        if inset_upper > normal_upper:
-            upper = inset_upper
+        if name in extension_joints:
+            inset_lower = calibrated_lower + margin
+            inset_upper = calibrated_upper - margin
 
-        # Calibration remains the physical authority.
+            # Never narrow today's normal model/calibration intersection. Extend only
+            # when measured calibration leaves the configured margin beyond it.
+            if inset_lower < normal_lower:
+                lower = inset_lower
+            if inset_upper > normal_upper:
+                upper = inset_upper
+
+        # Calibration remains the physical authority for every joint.
         lower = max(lower, calibrated_lower)
         upper = min(upper, calibrated_upper)
         if lower >= upper:
