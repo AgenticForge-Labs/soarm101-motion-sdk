@@ -84,7 +84,12 @@ changes require development discipline; robot use requires conservative hardware
     deterministic planning may use the exact
     read-only endpoint solution as a reverse boundary condition, but it must re-solve every
     Cartesian sample at the unchanged hard tolerance and reconnect continuously to the
-    measured start. Position-only smoothness work belongs in Cartesian-constrained IK
+    measured start. Hardware #75 showed the forward and reverse solves converging to nearly
+    the same ~0.65 mm residual, so endpoint reachability alone is not evidence that the
+    intervening straight line is feasible. Before any further powered elevated replay,
+    preflight every full paper segment read-only and inspect the failing sample's XYZ
+    residual, Jacobian conditioning, and effective joint-limit margin. Position-only
+    smoothness work belongs in Cartesian-constrained IK
     reprojection/diagnostics, not motor PID or another unmeasured launch heuristic. The calibrated workspace is authoritative for paper
     height; the generic model workspace may remain destination-only where documented. All
     joint, IK continuity, step/rate/acceleration, following-error, effort, fault,
