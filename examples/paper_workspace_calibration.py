@@ -503,7 +503,7 @@ def diagnose_paper_joint_limit_comparison(
     acceleration_mm_s2: float,
     stop_margin_deg: float,
 ) -> dict[str, object]:
-    """Compare the saved reference-height path under nominal and calibrated limits.
+    """Compare the saved path under current runtime and alternate calibrated limits.
 
     No torque is enabled and no motor command is issued.
     """
@@ -535,7 +535,7 @@ def diagnose_paper_joint_limit_comparison(
     print(
         f"Reference-height path: {calibration.reference_height_m * 1000.0:.1f} mm"
     )
-    print("\nCurrent nominal/effective planning limits:")
+    print("\nCurrent executable planning limits:")
     try:
         nominal_segments = preflight_demo_segments(
             arm,
