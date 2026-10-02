@@ -124,8 +124,11 @@ effort, fault, communication, and completion guards, but intentionally skips the
 coarse workspace-geometry check. The designed folded posture places link centerlines closer
 than the generic 25 mm self-clearance heuristic on this arm, so that heuristic produces a
 known false positive for Sleep. This exception is specific to the calibration-derived Sleep
-primitive; ordinary joint motion continues to use the coarse workspace check. Sleep does not
-move the gripper and is never automatic.
+primitive; ordinary joint motion continues to use the coarse workspace check. After the arm
+fold completes, Sleep closes the stock gripper to a target 1° inside its calibrated closed
+mechanical stop by default. Verify `soarm101 limits --json` reports the derived normalized
+and raw gripper target before the physical test, then confirm the gripper stops short of the
+mechanical endpoint without an effort/fault trip. Sleep is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
