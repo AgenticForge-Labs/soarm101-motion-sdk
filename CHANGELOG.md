@@ -27,7 +27,12 @@
   on every pose joint: shoulder pan ±121.1° vs ±110°, shoulder lift ±105.1° vs ±100°,
   elbow flex ±97.0° vs about ±96.8°, wrist flex ±103.9° vs ±95°, and wrist roll
   ±168.8° vs roughly -157.2°/+162.8°. This means the prior +95° wrist-flex failure was
-  a nominal model boundary, not the measured physical stop.
+  a nominal model boundary, not the measured physical stop. Hardware-side read-only
+  comparison at the saved 107 mm paper height confirmed the distinction: the normal
+  model/effective bounds failed A_UP->B_UP at the +95° wrist-flex cap, while calibration-
+  derived bounds inset only 0.1° from the measured stops planned all four straight
+  Cartesian segments successfully. Executable limits remain unchanged pending margin
+  analysis.
 - Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
   the calibrated workspace Z range for the nearest height whose endpoints and complete
   straight paper path are feasible under the unchanged model/calibration joint limits.
