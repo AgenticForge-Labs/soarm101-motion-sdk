@@ -419,6 +419,65 @@ class SOARM101:
         """Return this arm's natural Sleep pose from its executable limits."""
         return sleep_joint_positions(self.get_joint_limits())
 
+    def _sleep_gripper(self) -> SO101Gripper | None:
+        if isinstance(self.tool, SO101Gripper):
+            return self.tool
+        primary = getattr(self.tool, "primary", None)
+        return primary if isinstance(primary, SO101Gripper) else None
+
+    def get_sleep_gripper_position(self) -> float | None:
+        """Return the stock gripper Sleep target inset from its calibrated closed stop."""
+        gripper = self._sleep_gripper()
+        if gripper is None:
+            return None
+        return gripper.calibrated_closed_position(
+            stop_margin_rad=self.config.calibrated_gripper_stop_margin_rad
+        )
+
+    @staticmethod
+    def _wait_sleep_child(
+        handle: MotionHandle[MotionResult],
+        cancel_event: object,
+    ) -> MotionResult:
+        while not handle.done:
+            if bool(getattr(cancel_event, "is_set")()):
+                handle.cancel()
+            time.sleep(0.01)
+        return handle.wait()
+
+    def _execute_sleep(
+        self,
+        cancel_event: object,
+        *,
+        speed: float | None,
+        acceleration: float | None,
+    ) -> MotionResult:
+        arm_handle = self.move_joints(
+            self.get_sleep_joint_positions(),
+            speed=speed,
+            acceleration=acceleration,
+            wait=False,
+            workspace_check="off",
+        )
+        assert isinstance(arm_handle, MotionHandle)
+        arm_result = self._wait_sleep_child(arm_handle, cancel_event)
+        final_positions = dict(arm_result.final_positions)
+
+        gripper = self._sleep_gripper()
+        gripper_target = self.get_sleep_gripper_position()
+        if gripper is not None and gripper_target is not None:
+            gripper_handle = gripper.move(gripper_target, wait=False)
+            assert isinstance(gripper_handle, MotionHandle)
+            gripper_result = self._wait_sleep_child(gripper_handle, cancel_event)
+            final_positions.update(gripper_result.final_positions)
+
+        return MotionResult(
+            accepted=arm_result.accepted,
+            completed=arm_result.completed,
+            message=arm_result.message,
+            final_positions=final_positions,
+        )
+
     def move_sleep(
         self,
         *,
@@ -426,22 +485,28 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to this arm's calibration-derived natural Sleep posture.
+        """Fold the arm into Sleep, then close the stock gripper safely.
 
-        Sleep intentionally bypasses only the generic coarse workspace geometry
-        check. The calibrated folded posture places non-neighboring link
+        If the stock gripper is present, Sleep closes it to a target inset from
+        the calibrated closed mechanical stop by the configured gripper stop
+        margin (1 degree by default).
+
+        Sleep intentionally bypasses only the generic coarse arm workspace
+        geometry check. The calibrated folded posture places non-neighboring link
         centerlines closer than the generic 25 mm self-clearance heuristic even
-        though the physical arm is designed to fold there. Calibrated joint
-        limits, host trajectory/rate/acceleration checks, following-error,
-        effort, fault, communication, and completion guards remain active.
+        though the physical arm is designed to fold there. Calibrated joint/tool
+        limits, trajectory/rate/acceleration checks, following-error, effort,
+        fault, communication, and completion guards remain active.
         """
-        return self.move_joints(
-            self.get_sleep_joint_positions(),
-            speed=speed,
-            acceleration=acceleration,
-            wait=wait,
-            workspace_check="off",
+        handle = MotionHandle(
+            lambda event: self._execute_sleep(
+                event,
+                speed=speed,
+                acceleration=acceleration,
+            )
         )
+        handle.start()
+        return handle.wait() if wait else handle
 
     def solve_ik(
         self,
