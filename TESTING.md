@@ -107,14 +107,17 @@ failed under the old +95° wrist-flex boundary. A completed torque-off margin se
 5.430° feasible and 5.469° infeasible; the largest feasible tested solution used wrist flex
 through +98.48° and remained 5.43° from the measured +103.91° stop.
 
-Executable motion now permits calibrated extension only for `wrist_flex`, with a 4°
-measured-stop margin. On this arm that provides about +99.91° positive wrist-flex
-authority, roughly 1.43° beyond the observed paper-path requirement. Other pose joints
-remain at the normal model/calibration intersection despite wider measured stop ranges.
-Before powered paper replay, verify `soarm101 limits --json` reports that policy and that
-read-only full-segment preflight passes under the normal runtime limits. This change does
-not authorize commanding a measured mechanical stop and does not resolve the separate
-visible-shake issue.
+Executable motion now treats URDF/model joint limits as the generic fallback/reference.
+When a real arm has a valid mechanical-stop calibration, all five pose joints may use the
+measured travel with a 1° inset from each stop; a narrower measured range remains
+authoritative. Before powered paper replay, verify `soarm101 limits --json` reports the
+expected ~1° inset and that read-only full-segment preflight passes under the normal runtime
+limits. This change does not authorize commanding a measured mechanical stop and does not
+resolve the separate visible-shake issue.
+
+Also validate the built-in Sleep posture first in simulation, then with a clear physical
+workspace at low speed. Sleep is `[0°, -50°, +65°, +30°, 0°]`, uses normal joint/workspace
+guards, does not move the gripper, and is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
