@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from soarm101_motion import Pose, SOARM101
-from soarm101_motion.exceptions import InvalidCommandError
+from soarm101_motion.exceptions import InvalidCommandError, SafetyViolationError
 
 
 
@@ -83,6 +83,8 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
         )
         sleep = arm.get_sleep_joint_positions()
         arm.enable()
+        with pytest.raises(SafetyViolationError, match="coarse self-clearance"):
+            arm.move_joints(sleep, speed=0.2, acceleration=0.5)
         result = arm.move_sleep(speed=0.2, acceleration=0.5)
         final = dict(arm.get_joint_positions().positions)
 
