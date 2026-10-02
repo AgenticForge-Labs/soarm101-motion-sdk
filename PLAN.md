@@ -91,14 +91,15 @@ its own persistent connection for live controls; it must not launch CLI subproce
   one calibrated-Z startup clearance move, then constant-height Cartesian
   `move_linear()` replay A_UP→B_UP→C_UP→D_UP→CENTER_UP at 20 Hz. Verify all targets
   share the trained workspace Z and compare physical smoothness directly with teleoperation.
-- [ ] Re-run the paper Cartesian path after the endpoint-seeded reverse-IK change.
-  Confirm A_UP->B_UP can use the endpoint-preflight solution as a reverse-planning boundary
-  when forward sequential IK hits the observed ~0.8 mm numerical pocket; the 0.5 mm hard
-  tolerance remains unchanged. The severe visible shake is a separate unresolved issue:
-  the public managed controller was already using the intended teleoperation-style
-  `speed_raw=0`, `acceleration_raw=254` profile. If shake remains, inspect planned joint
-  derivatives, encoder-quantized command deltas, following error, and cycle timing before
-  changing motor tuning.
+- [ ] Diagnose the A_UP->B_UP straight-line feasibility before any further powered
+  paper replay. Hardware #75 evidence shows forward and endpoint-seeded reverse IK both
+  converge near the same residual (0.648/0.646 mm) against the unchanged 0.5 mm tolerance.
+  Require read-only full-segment preflight of every elevated paper segment and inspect the
+  failing sample's residual vector, Jacobian conditioning, and joint-limit margin to decide
+  whether this is optimizer behavior or a real model-workspace boundary. The severe visible
+  shake remains a separate unresolved issue; after planning is feasible, inspect planned
+  joint derivatives, encoder quantization, following error, and cycle timing before changing
+  motor tuning.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
