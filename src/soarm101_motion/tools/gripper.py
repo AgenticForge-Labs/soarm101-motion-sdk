@@ -67,6 +67,35 @@ class SO101Gripper(RobotTool):
     def get_position(self) -> float:
         return self._backend().read_tool_position(STOCK_GRIPPER)
 
+    def calibrated_closed_position(self, *, stop_margin_rad: float) -> float:
+        """Return a normalized close target inset from the calibrated mechanical stop.
+
+        Normalized gripper direction is always 0=closed and 1=open even when the
+        underlying motor drive direction is reversed. The requested angular inset
+        is converted to a fraction of the calibrated raw travel, so the result is
+        independent of motor drive direction.
+        """
+        margin = float(stop_margin_rad)
+        if not isfinite(margin) or margin < 0.0:
+            raise InvalidCommandError("gripper stop margin must be nonnegative and finite")
+        backend = self._backend()
+        calibration = getattr(backend, "calibration", None)
+        if calibration is None:
+            return self.closed_position
+        motor = calibration.motors.get(STOCK_GRIPPER)
+        if motor is None:
+            raise InvalidCommandError("active calibration is missing the stock gripper")
+        lower, upper = motor.radians_limits
+        travel = float(upper - lower)
+        if margin >= travel:
+            raise InvalidCommandError(
+                "gripper stop margin must be smaller than calibrated gripper travel"
+            )
+        normalized_inset = margin / travel
+        return self.closed_position + (
+            self.open_position - self.closed_position
+        ) * normalized_inset
+
     def begin_opening(
         self,
         position: float,
