@@ -42,6 +42,11 @@
   remains authoritative. This gives the current arm nearly all of its measured travel,
   including wrist flex to about ±102.91°. Endpoint IK, joint motion, Cartesian planning,
   live streaming, and the limits CLI share this resolver.
+- Sleep now closes the stock gripper after the arm fold completes. The close target is
+  derived from the active gripper calibration and defaults to 1° inside the calibrated
+  closed mechanical stop rather than normalized 0.0 at the stop itself. The conversion is
+  drive-direction independent, and `soarm101 limits --json` reports the normalized/raw
+  Sleep gripper target for read-only inspection.
 - Added a calibration-derived Sleep posture for demos and power-down preparation.
   Sleep is computed from the active executable limits: shoulder pan midpoint, shoulder lift
   lower limit, elbow flex upper limit, wrist flex lower limit, and wrist roll midpoint.
