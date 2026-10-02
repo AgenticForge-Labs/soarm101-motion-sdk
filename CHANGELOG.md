@@ -15,8 +15,8 @@
   margin. This prevents repeated shaky powered entry motion when a later elevated segment
   is already known to be unplannable.
 - Added `soarm101 limits --json` as a hardware-free view of saved mechanical calibration
-  ranges, nominal model limits, their effective runtime intersection, and the configured
-  coarse Cartesian envelope.
+  ranges, nominal model limits, the arm-specific executable range, the active calibrated
+  extension stop margin, and the configured coarse Cartesian envelope.
 - Added a read-only paper `--limit-compare-only` diagnostic. It compares the saved
   reference-height Cartesian path under the unchanged executable model/calibration
   intersection versus calibration-derived joint bounds inset from the measured mechanical
