@@ -47,7 +47,6 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     JOINT_LIMITS,
-    SLEEP_JOINTS,
 )
 from soarm101_motion.gui.arm_status import RobotStatusPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
@@ -78,6 +77,7 @@ class MainWindow(QMainWindow):
     relax_requested = Signal()
     stop_requested = Signal()
     move_joints_requested = Signal(object)
+    sleep_requested = Signal(object)
     jog_requested = Signal(object)
     absolute_pose_requested = Signal(object)
     gripper_requested = Signal(object)
@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
         self.relax_requested.connect(self._worker.relax)
         self.stop_requested.connect(self._worker.stop)
         self.move_joints_requested.connect(self._worker.move_joints)
+        self.sleep_requested.connect(self._worker.move_sleep)
         self.jog_requested.connect(self._worker.jog_cartesian)
         self.absolute_pose_requested.connect(self._worker.move_absolute_pose)
         self.gripper_requested.connect(self._worker.move_gripper)
@@ -5227,12 +5228,8 @@ class MainWindow(QMainWindow):
         self._refresh_sidebar_context()
 
     def _go_sleep(self) -> None:
-        self.move_joints_requested.emit(
+        self.sleep_requested.emit(
             {
-                "joints_deg": {
-                    name: degrees(float(SLEEP_JOINTS[name]))
-                    for name in ARM_JOINTS
-                },
                 "speed_deg_s": 8.0,
                 "acceleration_deg_s2": 25.0,
             }
