@@ -10,6 +10,7 @@ from scipy.spatial.transform import Rotation
 from soarm101_motion import Pose, SOARM101, SOARM101Config
 from soarm101_motion.exceptions import (
     CommunicationError,
+    ConfigurationError,
     InvalidCommandError,
     MotionCancelledError,
     MotionTimeoutError,
@@ -68,6 +69,13 @@ def test_calibrated_joint_extension_resolver_rejects_nonoverlapping_calibration(
             calibration_extension_stop_margin_rad=np.deg2rad(4.0),
             calibration_extension_joints=("wrist_flex",),
         )
+
+
+
+def test_calibrated_extension_config_rejects_unknown_joint() -> None:
+    with pytest.raises(ConfigurationError, match="calibration_extension_joints"):
+        SOARM101Config(calibration_extension_joints=("not_a_joint",))
+
 
 
 
