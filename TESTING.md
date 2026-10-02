@@ -104,9 +104,10 @@ joint-space limits, or accept any explicit read-only bound outside the active ca
 The current calibration records wider mechanical travel than the nominal model, including
 wrist flex ±103.9° versus the model's ±95°. Hardware-side read-only comparison at 107 mm
 failed under the normal +95° wrist-flex boundary but planned all four straight segments
-with a 0.1° inset from measured stops. The next diagnostic must report the actual joint
-range used by that feasible path and its nearest measured-stop margin before any executable
-limit policy is changed.
+with a 3.0° inset from measured stops. That feasible plan used wrist flex through +100.91°,
+exactly the measured +103.91° stop minus 3°, so the tested margin is binding. Use
+`--limit-margin-search-only` to binary-search the largest measured-stop inset that remains
+feasible before any executable limit policy is changed.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
