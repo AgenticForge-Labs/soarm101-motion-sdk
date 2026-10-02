@@ -37,10 +37,13 @@
   107 mm path feasible. The completed search bounded that transition between 5.430° feasible
   and 5.469° infeasible; the boundary solution used wrist flex through +98.48°, leaving
   5.43° to the measured +103.91° stop. Runtime joint authority now keeps the nominal
-  model/calibration range and adds calibration-proven extension only where a 4° stop margin
-  remains. On this arm that yields about +99.91° positive wrist-flex authority, leaving
-  about 1.43° of planning headroom beyond the observed 107 mm path requirement. Endpoint IK,
-  joint motion, Cartesian planning, live streaming, and the limits CLI share this resolver.
+  model/calibration range and permits calibrated extension only for explicitly validated
+  joints. The current default allowlist is `wrist_flex` with a 4° stop margin; on this arm
+  that yields about +99.91° positive wrist-flex authority and ~1.43° of planning headroom
+  beyond the observed 107 mm path requirement. The wider measured ranges on shoulder pan,
+  shoulder lift, elbow flex, and wrist roll remain diagnostic evidence and do not expand
+  executable authority. Endpoint IK, joint motion, Cartesian planning, live streaming, and
+  the limits CLI share this resolver.
 - Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
   the calibrated workspace Z range for the nearest height whose endpoints and complete
   straight paper path are feasible under the unchanged model/calibration joint limits.
