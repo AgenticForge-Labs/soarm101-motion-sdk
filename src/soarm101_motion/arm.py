@@ -18,6 +18,7 @@ from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     HOME_JOINTS,
+    SLEEP_JOINTS,
 )
 from soarm101_motion.exceptions import (
     ConfigurationError,
@@ -416,6 +417,21 @@ class SOARM101:
         )
 
     move_gohome = move_home
+
+    def move_sleep(
+        self,
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        wait: bool = True,
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        """Move to the built-in compact sleep posture through normal safety guards."""
+        return self.move_joints(
+            SLEEP_JOINTS,
+            speed=speed,
+            acceleration=acceleration,
+            wait=wait,
+        )
 
     def solve_ik(
         self,
