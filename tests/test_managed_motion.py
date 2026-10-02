@@ -62,7 +62,7 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
 
     import numpy as np
 
-    from soarm101_motion.constants import ARM_JOINTS
+    from soarm101_motion.constants import ARM_JOINTS, STOCK_GRIPPER
 
     measured_deg = {
         "shoulder_pan": (-121.14285714285717, 121.14285714285717),
