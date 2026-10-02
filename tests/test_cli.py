@@ -254,3 +254,27 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     assert wrist_effective_upper > degrees(JOINT_LIMITS["wrist_flex"][1])
 
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
+
+
+def test_sleep_cli_requires_confirmation_and_runs_in_simulation(capsys) -> None:
+    assert main(["sleep", "--simulation"]) == 2
+    assert "Refusing to move without --yes" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "sleep",
+                "--simulation",
+                "--speed-deg-s",
+                "8",
+                "--acceleration-deg-s2",
+                "25",
+                "--json",
+                "--yes",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["accepted"] is True
+    assert payload["completed"] is True
