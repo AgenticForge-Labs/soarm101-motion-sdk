@@ -10,7 +10,6 @@ from scipy.spatial.transform import Rotation
 from soarm101_motion import Pose, SOARM101, SOARM101Config
 from soarm101_motion.exceptions import (
     CommunicationError,
-    ConfigurationError,
     InvalidCommandError,
     MotionCancelledError,
     MotionTimeoutError,
@@ -23,7 +22,7 @@ from soarm101_motion.safety import resolve_effective_joint_limits
 from test_safety_hardening import make_backend
 
 
-def test_calibrated_joint_extension_resolver_preserves_baseline_and_adds_margin() -> None:
+def test_calibrated_joint_resolver_uses_measured_range_inside_margin() -> None:
     from soarm101_motion.constants import JOINT_LIMITS
 
     margin = np.deg2rad(1.0)
@@ -33,16 +32,16 @@ def test_calibrated_joint_extension_resolver_preserves_baseline_and_adds_margin(
 
     limits = resolve_effective_joint_limits(
         calibrated,
-        calibration_extension_stop_margin_rad=margin,
-        calibration_extension_joints=tuple(JOINT_LIMITS),
+        calibrated_joint_stop_margin_rad=margin,
     )
 
     assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(-102.9120879121)
     assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(102.9120879121)
-    assert limits["elbow_flex"] == pytest.approx(JOINT_LIMITS["elbow_flex"])
+    assert np.degrees(limits["elbow_flex"][0]) == pytest.approx(-95.9670329670)
+    assert np.degrees(limits["elbow_flex"][1]) == pytest.approx(95.9670329670)
 
 
-def test_calibrated_joint_extension_resolver_does_not_narrow_existing_intersection() -> None:
+def test_calibrated_joint_resolver_uses_narrower_calibration_as_authority() -> None:
     from soarm101_motion.constants import JOINT_LIMITS
 
     calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
@@ -50,32 +49,24 @@ def test_calibrated_joint_extension_resolver_does_not_narrow_existing_intersecti
 
     limits = resolve_effective_joint_limits(
         calibrated,
-        calibration_extension_stop_margin_rad=np.deg2rad(1.0),
-        calibration_extension_joints=tuple(JOINT_LIMITS),
+        calibrated_joint_stop_margin_rad=np.deg2rad(1.0),
     )
 
-    assert limits["shoulder_pan"] == pytest.approx((-1.5, 1.5))
+    margin = np.deg2rad(1.0)
+    assert limits["shoulder_pan"] == pytest.approx((-1.5 + margin, 1.5 - margin))
 
 
-def test_calibrated_joint_extension_resolver_rejects_nonoverlapping_calibration() -> None:
+def test_calibrated_joint_resolver_rejects_range_smaller_than_stop_margin() -> None:
     from soarm101_motion.constants import JOINT_LIMITS
 
     calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
-    calibrated["wrist_flex"] = (2.0, 2.2)
+    calibrated["wrist_flex"] = (-0.005, 0.005)
 
-    with pytest.raises(SafetyViolationError, match="does not overlap"):
+    with pytest.raises(SafetyViolationError, match="too small"):
         resolve_effective_joint_limits(
             calibrated,
-            calibration_extension_stop_margin_rad=np.deg2rad(1.0),
-            calibration_extension_joints=tuple(JOINT_LIMITS),
+            calibrated_joint_stop_margin_rad=np.deg2rad(1.0),
         )
-
-
-
-def test_calibrated_extension_config_rejects_unknown_joint() -> None:
-    with pytest.raises(ConfigurationError, match="calibration_extension_joints"):
-        SOARM101Config(calibration_extension_joints=("not_a_joint",))
-
 
 
 
