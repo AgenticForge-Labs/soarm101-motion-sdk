@@ -173,14 +173,16 @@ Orientation modes are:
 
 A failed solve exits non-zero.
 
-## Built-in Sleep posture
+## Calibrated Sleep posture
 
 ```bash
 soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 ```
 
-This performs a guarded joint-space move to the built-in compact posture
-`[0°, -50°, +65°, +30°, 0°]`. It does not change the gripper and is never triggered
+Sleep is computed from the active follower's executable joint limits: shoulder pan
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
+wrist roll midpoint. On a calibrated arm the endpoint limits are already inset 1° from the
+measured mechanical stops. The command does not change the gripper and is never triggered
 automatically by connection or torque enable.
 
 ## Relative Cartesian linear jog
