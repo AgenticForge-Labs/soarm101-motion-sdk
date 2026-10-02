@@ -18,7 +18,14 @@
   the calibrated workspace Z range for the nearest height whose endpoints and complete
   straight paper path are feasible under the unchanged model/calibration joint limits.
   Explicit-start Cartesian planning is now genuinely read-only and no longer requires
-  torque to be enabled.
+  torque to be enabled. On the saved paper calibration, the nearest-first 5 mm sweep
+  continued to hit the wrist-flex upper limit through 125 mm and found all four straight
+  segments feasible at 130 mm (+23 mm from the measured 107 mm reference). Because 130 mm
+  is above the measured reference, it remains extrapolated workspace geometry rather than
+  powered-motion validation.
+- Feasible height-sweep results now print per-segment planned joint step/speed/acceleration/
+  jerk plus per-joint jerk, direction reversals, encoder zero-delta fraction, and maximum
+  encoder step. These are read-only diagnostics for the unresolved visible shake.
 
 
 - Hardware replay after #74 remained very shaky and A_UP->B_UP still failed safely during
