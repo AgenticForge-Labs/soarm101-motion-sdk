@@ -96,8 +96,10 @@ its own persistent connection for live controls; it must not launch CLI subproce
   converge near the same residual (0.648/0.646 mm) against the unchanged 0.5 mm tolerance.
   Require read-only full-segment preflight of every elevated paper segment and inspect the
   failing sample's residual vector, Jacobian conditioning, and joint-limit margin to decide
-  whether this is optimizer behavior or a real model-workspace boundary. The severe visible
-  shake remains a separate unresolved issue; after planning is feasible, inspect planned
+  whether this is optimizer behavior or a real model-workspace boundary. Use the torque-off
+  paper-height sweep to find the nearest constant workspace Z whose complete path is feasible
+  before considering another powered replay. The severe visible shake remains a separate
+  unresolved issue; after planning is feasible, inspect planned
   joint derivatives, encoder quantization, following error, and cycle timing before changing
   motor tuning.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
