@@ -98,7 +98,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
   failing sample's residual vector, Jacobian conditioning, and joint-limit margin to decide
   whether this is optimizer behavior or a real model-workspace boundary. Use the torque-off
   paper-height sweep to find the nearest constant workspace Z whose complete path is feasible
-  before considering another powered replay. The severe visible shake remains a separate
+  before considering another powered replay. The first 5 mm sweep found 130 mm (+23 mm from
+  the measured 107 mm reference) fully feasible, while candidates through 125 mm remained
+  wrist-flex limited. Treat 130 mm as extrapolated calibration geometry until separately
+  validated. Inspect its planned joint/encoder diagnostics before any powered use. The severe
+  visible shake remains a separate
   unresolved issue; after planning is feasible, inspect planned
   joint derivatives, encoder quantization, following error, and cycle timing before changing
   motor tuning.
