@@ -22,33 +22,21 @@ FloatArray = NDArray[np.float64]
 def resolve_effective_joint_limits(
     calibrated_limits: Mapping[str, tuple[float, float]] | None,
     *,
-    calibration_extension_stop_margin_rad: float,
-    calibration_extension_joints: Sequence[str],
+    calibrated_joint_stop_margin_rad: float,
     model_limits: Mapping[str, tuple[float, float]] = JOINT_LIMITS,
 ) -> dict[str, tuple[float, float]]:
     """Resolve executable pose-joint limits from model and measured calibration.
 
-    The URDF/model range is the generic fallback. For joints authorized to use an
-    active mechanical-stop calibration, the measured range becomes the physical
-    authority after insetting both ends by the configured stop margin. That rule
-    applies whether calibration is wider or narrower than the generic model range.
-
-    Joints not authorized for calibrated travel use the conservative intersection
-    of model and calibration. The measured mechanical stop itself is never exposed
-    as a normal executable target when the margin is nonzero.
+    The URDF/model range is the generic fallback. When a mechanical-stop
+    calibration is available, the measured range is authoritative after insetting
+    both ends by the configured stop margin. The measured stop itself is therefore
+    never exposed as a normal target when the margin is nonzero.
     """
 
-    margin = float(calibration_extension_stop_margin_rad)
+    margin = float(calibrated_joint_stop_margin_rad)
     if not math.isfinite(margin) or margin < 0.0:
         raise ValueError(
-            "calibration_extension_stop_margin_rad must be nonnegative and finite"
-        )
-    extension_joints = tuple(calibration_extension_joints)
-    unknown_extension_joints = set(extension_joints) - set(ARM_JOINTS)
-    if unknown_extension_joints:
-        raise ValueError(
-            "unknown calibration extension joints: "
-            + ", ".join(sorted(unknown_extension_joints))
+            "calibrated_joint_stop_margin_rad must be nonnegative and finite"
         )
 
     resolved = {
@@ -61,7 +49,6 @@ def resolve_effective_joint_limits(
     for name in ARM_JOINTS:
         if name not in calibrated_limits:
             continue
-        model_lower, model_upper = resolved[name]
         calibrated_lower, calibrated_upper = (
             float(calibrated_limits[name][0]),
             float(calibrated_limits[name][1]),
@@ -73,24 +60,12 @@ def resolve_effective_joint_limits(
         ):
             raise SafetyViolationError(f"invalid calibrated joint range for {name}")
 
-        overlap_lower = max(model_lower, calibrated_lower)
-        overlap_upper = min(model_upper, calibrated_upper)
-        if overlap_lower >= overlap_upper:
+        lower = calibrated_lower + margin
+        upper = calibrated_upper - margin
+        if lower >= upper:
             raise SafetyViolationError(
-                f"calibrated range for {name} does not overlap the model limits"
+                f"calibrated range for {name} is too small for the configured stop margin"
             )
-
-        if name in extension_joints:
-            lower = calibrated_lower + margin
-            upper = calibrated_upper - margin
-            if lower >= upper:
-                raise SafetyViolationError(
-                    f"calibrated range for {name} is too small for the configured stop margin"
-                )
-        else:
-            lower = overlap_lower
-            upper = overlap_upper
-
         resolved[name] = (lower, upper)
 
     return resolved
