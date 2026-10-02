@@ -30,6 +30,7 @@ class IKOptions:
     joint_center_weight: float = 0.002
     max_evaluations: int = 500
     multi_start: bool = True
+    joint_limits: Mapping[str, tuple[float, float]] | None = None
 
 
 def _axis_angle_residual(actual_axis: FloatArray, desired_axis: FloatArray) -> FloatArray:
@@ -95,13 +96,35 @@ class IKSolver:
         options: IKOptions | None = None,
     ) -> IKResult:
         options = options or IKOptions()
+        if options.joint_limits is None:
+            lower_bounds = self.model.lower_bounds
+            upper_bounds = self.model.upper_bounds
+        else:
+            missing = set(self.model.joint_names) - set(options.joint_limits)
+            if missing:
+                raise ValueError(
+                    "joint_limits is missing joints: " + ", ".join(sorted(missing))
+                )
+            lower_bounds = np.array(
+                [float(options.joint_limits[name][0]) for name in self.model.joint_names],
+                dtype=float,
+            )
+            upper_bounds = np.array(
+                [float(options.joint_limits[name][1]) for name in self.model.joint_names],
+                dtype=float,
+            )
+            if np.any(~np.isfinite(lower_bounds)) or np.any(~np.isfinite(upper_bounds)):
+                raise ValueError("joint_limits must contain finite bounds")
+            if np.any(lower_bounds >= upper_bounds):
+                raise ValueError("joint_limits lower bounds must be less than upper bounds")
+
         seed_vector = np.clip(
             self.model.vector(seed),
-            self.model.lower_bounds,
-            self.model.upper_bounds,
+            lower_bounds,
+            upper_bounds,
         )
-        center = (self.model.lower_bounds + self.model.upper_bounds) / 2.0
-        span = self.model.upper_bounds - self.model.lower_bounds
+        center = (lower_bounds + upper_bounds) / 2.0
+        span = upper_bounds - lower_bounds
 
         def task_residual(q: FloatArray) -> FloatArray:
             actual = self.model.forward(q, tcp=tcp)
@@ -123,23 +146,23 @@ class IKSolver:
                     center,
                     np.clip(
                         seed_vector + np.array([0.2, -0.3, 0.3, 0.0, 0.0]),
-                        self.model.lower_bounds,
-                        self.model.upper_bounds,
+                        lower_bounds,
+                        upper_bounds,
                     ),
                     np.clip(
                         seed_vector + np.array([-0.2, 0.3, -0.3, 0.0, 0.0]),
-                        self.model.lower_bounds,
-                        self.model.upper_bounds,
+                        lower_bounds,
+                        upper_bounds,
                     ),
                     np.clip(
                         center + 0.20 * span * np.array([1, -1, 1, -1, 0]),
-                        self.model.lower_bounds,
-                        self.model.upper_bounds,
+                        lower_bounds,
+                        upper_bounds,
                     ),
                     np.clip(
                         center + 0.20 * span * np.array([-1, 1, -1, 1, 0]),
-                        self.model.lower_bounds,
-                        self.model.upper_bounds,
+                        lower_bounds,
+                        upper_bounds,
                     ),
                 ]
             )
@@ -167,7 +190,7 @@ class IKSolver:
                 least_squares(
                     residual,
                     x0=start,
-                    bounds=(self.model.lower_bounds, self.model.upper_bounds),
+                    bounds=(lower_bounds, upper_bounds),
                     method="trf",
                     xtol=1e-10,
                     ftol=1e-10,
@@ -193,7 +216,7 @@ class IKSolver:
                     least_squares(
                         task_residual,
                         x0=result.x,
-                        bounds=(self.model.lower_bounds, self.model.upper_bounds),
+                        bounds=(lower_bounds, upper_bounds),
                         method="trf",
                         xtol=1e-10,
                         ftol=1e-10,
