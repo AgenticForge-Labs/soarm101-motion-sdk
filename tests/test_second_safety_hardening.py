@@ -18,7 +18,54 @@ from soarm101_motion.exceptions import (
 )
 from soarm101_motion.hardware.simulation import SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver
+from soarm101_motion.safety import resolve_effective_joint_limits
 from test_safety_hardening import make_backend
+
+
+def test_calibrated_joint_extension_resolver_preserves_baseline_and_adds_margin() -> None:
+    from soarm101_motion.constants import JOINT_LIMITS
+
+    margin = np.deg2rad(4.0)
+    calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
+    calibrated["wrist_flex"] = tuple(np.deg2rad((-103.9120879121, 103.9120879121)))
+    calibrated["elbow_flex"] = tuple(np.deg2rad((-96.9670329670, 96.9670329670)))
+
+    limits = resolve_effective_joint_limits(
+        calibrated,
+        calibration_extension_stop_margin_rad=margin,
+    )
+
+    assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(-99.9120879121)
+    assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(99.9120879121)
+    assert limits["elbow_flex"] == pytest.approx(JOINT_LIMITS["elbow_flex"])
+
+
+def test_calibrated_joint_extension_resolver_does_not_narrow_existing_intersection() -> None:
+    from soarm101_motion.constants import JOINT_LIMITS
+
+    calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
+    calibrated["shoulder_pan"] = (-1.5, 1.5)
+
+    limits = resolve_effective_joint_limits(
+        calibrated,
+        calibration_extension_stop_margin_rad=np.deg2rad(4.0),
+    )
+
+    assert limits["shoulder_pan"] == pytest.approx((-1.5, 1.5))
+
+
+def test_calibrated_joint_extension_resolver_rejects_nonoverlapping_calibration() -> None:
+    from soarm101_motion.constants import JOINT_LIMITS
+
+    calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
+    calibrated["wrist_flex"] = (2.0, 2.2)
+
+    with pytest.raises(SafetyViolationError, match="does not overlap"):
+        resolve_effective_joint_limits(
+            calibrated,
+            calibration_extension_stop_margin_rad=np.deg2rad(4.0),
+        )
+
 
 
 class FailingWriteBackend(SimulationBackend):
