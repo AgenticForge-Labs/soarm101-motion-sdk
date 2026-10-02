@@ -96,7 +96,16 @@ forward and reverse A_UP->B_UP solves converged to 0.648 mm and 0.646 mm respect
 against the unchanged 0.5 mm tolerance. Before another powered replay, the script must
 preflight every elevated segment from its endpoint IK solutions. A failure must identify
 the exact command-rate sample and line progress and report signed XYZ residual, positional
-Jacobian conditioning, and nearest effective joint-limit margin. The replay-only
+Jacobian conditioning, and nearest effective joint-limit margin. The replay-only `--limit-compare-only` diagnostic must also keep torque disabled.
+It compares the saved reference-height path under normal effective limits with read-only
+calibration-derived limits inset from the measured mechanical stops. The diagnostic must
+never change executable `move-linear` or joint-space limits, and any explicit read-only
+bound must remain inside the active calibration. The current calibration records wider
+mechanical travel than the nominal model, including wrist flex ±103.9° versus the model's
+±95°, so use this comparison to determine whether the 107 mm A_UP->B_UP miss is primarily
+the nominal URDF/model boundary before changing path height or executable limits.
+
+The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
 nearest constant calibrated workspace Z whose endpoints and all four straight segments
 preflight successfully. The saved calibration's 5 mm sweep found the first feasible path at
