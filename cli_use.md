@@ -81,11 +81,11 @@ model      = nominal SO-101 kinematic-model planning range
 effective  = executable range for this arm
 ```
 
-The executable range keeps the nominal model authority. Calibration-derived extension is
-allowed only for explicitly validated joints; the current default allowlist is
-`wrist_flex`, based on the saved 107 mm paper-path diagnostics. That extension stops 4°
-inside the measured mechanical stop by default. Other joints remain at the normal
-model/calibration intersection even if their calibration records wider mechanical travel.
+The URDF/model range is the generic fallback and reference. Once a real arm has a saved
+mechanical-stop calibration, executable pose-joint travel follows that arm-specific
+calibration while staying 1° inside each measured stop by default. If a measured range is
+narrower than the URDF range, calibration still remains the physical authority. The stop
+itself is never a normal command target.
 
 The coarse Cartesian `maximum_tcp_reach` is an outer radial envelope. It does not mean
 that every XYZ point inside that radius is reachable.
