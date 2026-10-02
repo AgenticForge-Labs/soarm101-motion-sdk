@@ -13,13 +13,13 @@ from pathlib import Path
 import numpy as np
 
 from soarm101_motion import SOARM101, SOARM101Config, __version__
-from soarm101_motion.calibration import default_calibration_path
+from soarm101_motion.calibration import SO101Calibration, default_calibration_path
 from soarm101_motion.camera import (
     CameraCapture,
     CameraSettings,
     discover_camera_devices,
 )
-from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, MOTOR_IDS
+from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, JOINT_LIMITS, MOTOR_IDS
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
@@ -204,6 +204,88 @@ def _cmd_read(args: argparse.Namespace) -> int:
         print("TCP pose (m, rad):", " ".join(f"{value:.6f}" for value in pose))
     return 0
 
+
+
+def _cmd_limits(args: argparse.Namespace) -> int:
+    """Report model, calibration, and effective joint/workspace limits without hardware."""
+
+    robot_id = str(args.robot_id)
+    if args.calibration:
+        calibration_path = Path(args.calibration).expanduser()
+    else:
+        profile = WorkstationProfileStore().load()
+        if profile.follower.robot_id == robot_id and profile.follower.calibration:
+            calibration_path = Path(profile.follower.calibration).expanduser()
+        else:
+            calibration_path = default_calibration_path(robot_id)
+
+    calibration = SO101Calibration.load(calibration_path)
+    config = SOARM101Config(robot_id=robot_id)
+    joints: dict[str, object] = {}
+    for name in ARM_JOINTS:
+        calibrated_lower, calibrated_upper = calibration.motors[name].radians_limits
+        model_lower, model_upper = JOINT_LIMITS[name]
+        effective_lower = max(calibrated_lower, model_lower)
+        effective_upper = min(calibrated_upper, model_upper)
+        joints[name] = {
+            "model_rad": [float(model_lower), float(model_upper)],
+            "model_deg": [
+                float(model_lower * 180.0 / pi),
+                float(model_upper * 180.0 / pi),
+            ],
+            "calibrated_rad": [float(calibrated_lower), float(calibrated_upper)],
+            "calibrated_deg": [
+                float(calibrated_lower * 180.0 / pi),
+                float(calibrated_upper * 180.0 / pi),
+            ],
+            "effective_rad": [float(effective_lower), float(effective_upper)],
+            "effective_deg": [
+                float(effective_lower * 180.0 / pi),
+                float(effective_upper * 180.0 / pi),
+            ],
+        }
+
+    payload = {
+        "robot_id": robot_id,
+        "calibration_path": str(calibration_path),
+        "calibration_id": calibration.calibration_id,
+        "joints": joints,
+        "coarse_cartesian_envelope_mm": {
+            "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
+            "maximum_tcp_reach": float(config.maximum_tcp_reach_m * 1000.0),
+            "minimum_self_clearance": float(config.minimum_self_clearance_m * 1000.0),
+            "base_keepout_radius": float(config.base_keepout_radius_m * 1000.0),
+            "base_keepout_height": float(config.base_keepout_height_m * 1000.0),
+        },
+        "notes": [
+            "effective joint limits are the intersection of model and calibrated ranges",
+            "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
+            "normal Cartesian CLI coordinates are in the soarm101/base model frame",
+        ],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"robot_id: {robot_id}")
+        print(f"calibration: {calibration_path}")
+        print("joint                         calibrated                   model               effective")
+        for name in ARM_JOINTS:
+            item = joints[name]
+            assert isinstance(item, dict)
+            calibrated = item["calibrated_deg"]
+            model = item["model_deg"]
+            effective = item["effective_deg"]
+            print(
+                f"{name:16s} "
+                f"{calibrated[0]:7.1f}..{calibrated[1]:7.1f}  "
+                f"{model[0]:7.1f}..{model[1]:7.1f}  "
+                f"{effective[0]:7.1f}..{effective[1]:7.1f}"
+            )
+        print(
+            "coarse TCP reach: "
+            f"{payload['coarse_cartesian_envelope_mm']['maximum_tcp_reach']:.1f} mm"
+        )
+    return 0
 
 def _cmd_diagnose(args: argparse.Namespace) -> int:
     config = _hardware_config(
@@ -853,6 +935,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_options(read)
     read.add_argument("--json", action="store_true")
     read.set_defaults(func=_cmd_read)
+
+    limits = sub.add_parser(
+        "limits",
+        help="show saved calibrated, model, and effective joint/workspace limits",
+    )
+    limits.add_argument("--robot-id", default="so101")
+    limits.add_argument("--calibration")
+    limits.add_argument("--json", action="store_true")
+    limits.set_defaults(func=_cmd_limits)
 
     diagnose = sub.add_parser(
         "diagnose", help="read motor model, voltage, temperature, and status without configuration writes"
