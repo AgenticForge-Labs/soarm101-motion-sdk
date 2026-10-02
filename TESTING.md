@@ -91,10 +91,15 @@ The IK solver also performs a task-space-only refinement when soft continuity/jo
 regularization would otherwise leave a target just outside the hard Cartesian tolerance.
 Do not loosen the tolerance to make such a case pass.
 
-For the next supervised replay, confirm A_UP->B_UP gets past planning. Treat visible shake
-as a separate diagnostic: capture planned joint derivatives, encoder-quantized command
-deltas, measured following error, and actual cycle timing before changing motor PID or
-power settings.
+Hardware validation of the endpoint-seeded reverse fallback still failed safely:
+forward and reverse A_UP->B_UP solves converged to 0.648 mm and 0.646 mm respectively
+against the unchanged 0.5 mm tolerance. Before another powered replay, the script must
+preflight every elevated segment from its endpoint IK solutions. A failure must identify
+the exact command-rate sample and line progress and report signed XYZ residual, positional
+Jacobian conditioning, and nearest effective joint-limit margin. Only after the straight
+path itself is shown feasible should visible shake be characterized with planned joint
+derivatives, encoder-quantized command deltas, measured following error, and actual cycle
+timing before changing motor PID or power settings.
 
 ### Paper linear-motion settle criterion
 
