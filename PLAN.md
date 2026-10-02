@@ -98,10 +98,13 @@ its own persistent connection for live controls; it must not launch CLI subproce
   failing sample's residual vector, Jacobian conditioning, and joint-limit margin to decide
   whether this is optimizer behavior or a real model-workspace boundary. Use the torque-off
   calibration-limit comparison first: the active mechanical-stop calibration is wider than
-  the nominal model on every pose joint, including wrist flex ±103.9° versus ±95°. Use the
-  torque-off `--limit-compare-only` diagnostic to test the original 107 mm path with
-  calibration-derived bounds inset from the measured stops while leaving executable limits
-  unchanged. Then use the paper-height sweep only as a separate geometry comparison. The
+  the nominal model on every pose joint, including wrist flex ±103.9° versus ±95°. The
+  torque-off `--limit-compare-only` run has now shown the original 107 mm path is feasible
+  with calibration-derived bounds inset 0.1° from measured stops while the unchanged normal
+  bounds fail at +95° wrist flex. Next quantify the actual joint extrema and nearest
+  measured-stop margin on that feasible path before deciding whether executable limits
+  should gain calibration-derived extensions. Then use the paper-height sweep only as a
+  separate geometry comparison. The
   first 5 mm sweep found 130 mm (+23 mm from
   the measured 107 mm reference) fully feasible, while candidates through 125 mm remained
   wrist-flex limited. Treat 130 mm as extrapolated calibration geometry until separately
