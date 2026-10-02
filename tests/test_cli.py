@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from soarm101_motion.cli.main import _arm_from_args, build_parser, main
 from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
 
@@ -187,3 +189,47 @@ def test_explicit_session_port_overrides_saved_workstation_follower(
 
     assert arm.config.port == "/dev/ttyUSB3"
     assert arm.config.robot_id == "explicit"
+
+
+def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> None:
+    from soarm101_motion.constants import ALL_MOTORS, MOTOR_IDS
+
+    calibration_path = tmp_path / "so101.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "test",
+                "motors": {
+                    name: {
+                        "motor_id": MOTOR_IDS[name],
+                        "drive_mode": 0,
+                        "homing_offset": 0,
+                        "range_min": 700,
+                        "range_max": 3394,
+                    }
+                    for name in ALL_MOTORS
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "limits",
+                "--robot-id",
+                "so101",
+                "--calibration",
+                str(calibration_path),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["calibration_path"] == str(calibration_path)
+    assert payload["joints"]["shoulder_pan"]["calibrated_deg"][1] > 110.0
+    assert payload["joints"]["shoulder_pan"]["effective_deg"][1] == pytest.approx(110.0)
+    assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
