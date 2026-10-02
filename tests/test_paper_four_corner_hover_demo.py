@@ -557,6 +557,63 @@ def test_preflight_joint_seeds_extracts_exact_endpoint_solutions() -> None:
     assert seeds["A_UP"]["wrist_roll"] == pytest.approx(0.2)
 
 
+def test_full_segment_preflight_plans_adjacent_endpoints_without_motion() -> None:
+    from types import SimpleNamespace
+
+    module = _load_example_module()
+    calls = []
+
+    joint_names = (
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+    )
+    seeds = {
+        "A_UP": {name: 0.0 for name in joint_names},
+        "B_UP": {name: 0.1 for name in joint_names},
+        "C_UP": {name: 0.2 for name in joint_names},
+    }
+
+    class Motion:
+        def plan_linear_from(self, start_joints, target, **kwargs):
+            calls.append((dict(start_joints), target.position.copy(), dict(kwargs)))
+            samples = (
+                dict(start_joints),
+                dict(kwargs["target_seed"]),
+            )
+            return SimpleNamespace(command_samples=samples, duration_s=1.0)
+
+    class Arm:
+        motion = Motion()
+        active_tcp = None
+        config = SimpleNamespace(command_frequency_hz=20.0)
+        backend = SimpleNamespace(calibration=None)
+
+    positions = {
+        "A_UP": np.array([0.0, 0.0, 0.1]),
+        "B_UP": np.array([0.1, 0.0, 0.1]),
+        "C_UP": np.array([0.2, 0.0, 0.1]),
+    }
+
+    result = module.preflight_demo_segments(
+        Arm(),
+        positions,
+        rotation=np.eye(3),
+        endpoint_seeds=seeds,
+        speed_mm_s=20.0,
+        acceleration_mm_s2=100.0,
+    )
+
+    assert [item["segment"] for item in result] == ["A_UP->B_UP", "B_UP->C_UP"]
+    assert len(calls) == 2
+    assert calls[0][0] == seeds["A_UP"]
+    assert calls[0][2]["target_seed"] == seeds["B_UP"]
+    assert calls[1][0] == seeds["B_UP"]
+    assert calls[1][2]["target_seed"] == seeds["C_UP"]
+
+
 def test_startup_clearance_gate_uses_measured_rise_not_target_shortfall() -> None:
     module = _load_example_module()
 
