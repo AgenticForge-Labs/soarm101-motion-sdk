@@ -38,9 +38,9 @@ def resolve_effective_joint_limits(
     """
 
     margin = float(calibration_extension_stop_margin_rad)
-    if not math.isfinite(margin) or margin <= 0.0:
+    if not math.isfinite(margin) or margin < 0.0:
         raise ValueError(
-            "calibration_extension_stop_margin_rad must be positive and finite"
+            "calibration_extension_stop_margin_rad must be nonnegative and finite"
         )
 
     resolved = {
