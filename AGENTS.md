@@ -95,11 +95,10 @@ changes require development discipline; robot use requires conservative hardware
     joint, IK continuity, step/rate/acceleration, following-error, effort, fault,
     communication, settle, provenance, and timing guards remain active. Broader autonomous
     Cartesian use remains unvalidated until the hardware evidence is reviewed.
-12. Keep `docs/agent-arm101-cli.md` policy-neutral. It documents the tool contract for external
-    agents. Use `drive_me.md` for the practical agent operating model: observe/preflight/act/
-    verify, model-frame XYZ semantics, validated human-readable direction mapping, and the
-    preferred constrained-capability hierarchy. Model/provider instructions and benchmark
-    policy still belong outside the SDK.
+12. Keep `docs/agent-arm101-cli.md` and `cli_use.md` technical and policy-neutral. They
+    document the CLI contract, common commands, units, coordinate semantics, outputs, and
+    enforced safety behavior. Agent task strategies, observe/action loops, model/provider
+    instructions, and benchmark policy belong outside the SDK-facing CLI documentation.
 
 ## Repository boundary
 
