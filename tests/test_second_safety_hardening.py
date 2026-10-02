@@ -33,6 +33,7 @@ def test_calibrated_joint_extension_resolver_preserves_baseline_and_adds_margin(
     limits = resolve_effective_joint_limits(
         calibrated,
         calibration_extension_stop_margin_rad=margin,
+        calibration_extension_joints=("wrist_flex",),
     )
 
     assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(-99.9120879121)
@@ -49,6 +50,7 @@ def test_calibrated_joint_extension_resolver_does_not_narrow_existing_intersecti
     limits = resolve_effective_joint_limits(
         calibrated,
         calibration_extension_stop_margin_rad=np.deg2rad(4.0),
+        calibration_extension_joints=("wrist_flex",),
     )
 
     assert limits["shoulder_pan"] == pytest.approx((-1.5, 1.5))
@@ -64,6 +66,7 @@ def test_calibrated_joint_extension_resolver_rejects_nonoverlapping_calibration(
         resolve_effective_joint_limits(
             calibrated,
             calibration_extension_stop_margin_rad=np.deg2rad(4.0),
+            calibration_extension_joints=("wrist_flex",),
         )
 
 
