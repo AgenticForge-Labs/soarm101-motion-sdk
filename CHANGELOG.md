@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Hardware validation of the endpoint-seeded reverse fallback still failed safely on
+  A_UP->B_UP. The forward solve bottomed out at 0.648 mm and the reverse solve at
+  0.646 mm against the unchanged 0.5 mm Cartesian tolerance, while both endpoints still
+  preflighted at 0.00 mm. Because both directions converged to essentially the same miss,
+  the next question is geometric reachability/singularity/joint-limit interaction rather
+  than another directional solver heuristic.
+- Paper replay now performs read-only full-segment preflight for
+  A_UP->B_UP->C_UP->D_UP->CENTER_UP before offering powered traversal. A failing IK sample
+  reports command-rate sample index, line progress, target XYZ, signed XYZ residual, best
+  joint solution, positional Jacobian conditioning, and nearest effective joint-limit
+  margin. This prevents repeated shaky powered entry motion when a later elevated segment
+  is already known to be unplannable.
+
+
 - Hardware replay after #74 remained very shaky and A_UP->B_UP still failed safely during
   pre-motion planning, now at 0.794 mm against the unchanged 0.5 mm Cartesian tolerance.
   Review of the public managed controller confirmed that real Cartesian execution was
