@@ -383,6 +383,41 @@ def diagnose_paper_height_sweep(
             f"({height_mm - reference_mm:+.1f}): FEASIBLE "
             f"for all {len(segments)} segments"
         )
+        print("  Planned-motion diagnostics at this feasible height:")
+        for segment in segments:
+            print(
+                f"    {segment['segment']}: {segment['sample_count']} samples, "
+                f"{float(segment['duration_s']):.2f} s, "
+                f"max step={np.degrees(float(segment['max_joint_step_rad'])):.3f} deg, "
+                f"max speed={np.degrees(float(segment['max_joint_speed_rad_s'])):.2f} deg/s, "
+                f"max accel={np.degrees(float(segment['max_joint_acceleration_rad_s2'])):.2f} "
+                f"deg/s^2, max jerk={np.degrees(float(segment['max_joint_jerk_rad_s3'])):.1f} "
+                "deg/s^3"
+            )
+            per_joint = segment["per_joint_motion"]
+            assert isinstance(per_joint, dict)
+            zero_fraction = segment.get("encoder_zero_delta_fraction", {})
+            max_ticks = segment.get("max_encoder_step_ticks", {})
+            for joint in ARM_JOINTS:
+                motion = per_joint[joint]
+                assert isinstance(motion, dict)
+                zero = (
+                    float(zero_fraction[joint])
+                    if isinstance(zero_fraction, dict) and joint in zero_fraction
+                    else float("nan")
+                )
+                ticks = (
+                    int(max_ticks[joint])
+                    if isinstance(max_ticks, dict) and joint in max_ticks
+                    else -1
+                )
+                print(
+                    f"      {joint}: step="
+                    f"{np.degrees(float(motion['max_step_rad'])):.3f} deg, "
+                    f"jerk={np.degrees(float(motion['max_jerk_rad_s3'])):.1f} deg/s^3, "
+                    f"reversals={int(motion['direction_reversals'])}, "
+                    f"encoder-zero={zero:.1%}, max-tick-step={ticks}"
+                )
         return {
             "reference_height_mm": reference_mm,
             "minimum_height_mm": minimum_height_mm,
@@ -757,6 +792,41 @@ def preflight_demo_segments(
             if len(acceleration) > 1
             else np.zeros((0, len(ARM_JOINTS)))
         )
+        per_joint_motion = {
+            name: {
+                "max_step_rad": (
+                    float(np.max(np.abs(step[:, index]))) if step.size else 0.0
+                ),
+                "max_speed_rad_s": (
+                    float(np.max(np.abs(velocity[:, index]))) if velocity.size else 0.0
+                ),
+                "max_acceleration_rad_s2": (
+                    float(np.max(np.abs(acceleration[:, index])))
+                    if acceleration.size
+                    else 0.0
+                ),
+                "max_jerk_rad_s3": (
+                    float(np.max(np.abs(jerk[:, index]))) if jerk.size else 0.0
+                ),
+                "direction_reversals": (
+                    int(
+                        np.count_nonzero(
+                            np.diff(
+                                np.sign(
+                                    step[:, index][
+                                        np.abs(step[:, index]) > 1e-10
+                                    ]
+                                )
+                            )
+                            != 0
+                        )
+                    )
+                    if step.size
+                    else 0
+                ),
+            }
+            for index, name in enumerate(ARM_JOINTS)
+        }
         result: dict[str, object] = {
             "segment": f"{start_name}->{end_name}",
             "sample_count": len(plan.command_samples),
@@ -771,6 +841,7 @@ def preflight_demo_segments(
             "max_joint_jerk_rad_s3": (
                 float(np.max(np.abs(jerk))) if jerk.size else 0.0
             ),
+            "per_joint_motion": per_joint_motion,
         }
 
         calibration = getattr(arm.backend, "calibration", None)
