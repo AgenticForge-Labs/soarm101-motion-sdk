@@ -426,12 +426,21 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to this arm's calibration-derived natural Sleep posture."""
+        """Move to this arm's calibration-derived natural Sleep posture.
+
+        Sleep intentionally bypasses only the generic coarse workspace geometry
+        check. The calibrated folded posture places non-neighboring link
+        centerlines closer than the generic 25 mm self-clearance heuristic even
+        though the physical arm is designed to fold there. Calibrated joint
+        limits, host trajectory/rate/acceleration checks, following-error,
+        effort, fault, communication, and completion guards remain active.
+        """
         return self.move_joints(
             self.get_sleep_joint_positions(),
             speed=speed,
             acceleration=acceleration,
             wait=wait,
+            workspace_check="off",
         )
 
     def solve_ik(
