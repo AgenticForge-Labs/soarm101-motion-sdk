@@ -7,7 +7,7 @@ from soarm101_motion.exceptions import InvalidCommandError
 
 
 
-def test_calibrated_extensions_keep_four_degree_stop_margin() -> None:
+def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() -> None:
     from types import SimpleNamespace
 
     import numpy as np
@@ -36,17 +36,39 @@ def test_calibrated_extensions_keep_four_degree_stop_margin() -> None:
 
     for name in ARM_JOINTS:
         assert limits[name] == pytest.approx(controller_limits[name])
-    assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(
-        measured_deg["wrist_flex"][1] - 4.0
+
+    assert np.degrees(limits["shoulder_pan"]) == pytest.approx(
+        (measured_deg["shoulder_pan"][0] + 1.0, measured_deg["shoulder_pan"][1] - 1.0)
     )
-    assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(
-        measured_deg["wrist_flex"][0] + 4.0
+    assert np.degrees(limits["shoulder_lift"]) == pytest.approx(
+        (
+            measured_deg["shoulder_lift"][0] + 1.0,
+            measured_deg["shoulder_lift"][1] - 1.0,
+        )
     )
-    # Only wrist_flex is runtime-authorized for calibrated extension.
-    assert limits["shoulder_pan"] == pytest.approx(JOINT_LIMITS["shoulder_pan"])
-    assert limits["shoulder_lift"] == pytest.approx(JOINT_LIMITS["shoulder_lift"])
+    # Calibration has only ~0.14 degree extra travel beyond the model here, so the
+    # one-degree inset must not shrink the existing model/calibration intersection.
     assert limits["elbow_flex"] == pytest.approx(JOINT_LIMITS["elbow_flex"])
-    assert limits["wrist_roll"] == pytest.approx(JOINT_LIMITS["wrist_roll"])
+    assert np.degrees(limits["wrist_flex"]) == pytest.approx(
+        (measured_deg["wrist_flex"][0] + 1.0, measured_deg["wrist_flex"][1] - 1.0)
+    )
+    assert np.degrees(limits["wrist_roll"]) == pytest.approx(
+        (measured_deg["wrist_roll"][0] + 1.0, measured_deg["wrist_roll"][1] - 1.0)
+    )
+
+
+def test_builtin_sleep_pose_is_guarded_and_reachable_in_simulation() -> None:
+    from soarm101_motion.constants import SLEEP_JOINTS
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        result = arm.move_sleep(speed=0.2, acceleration=0.5)
+        final = dict(arm.get_joint_positions().positions)
+
+    assert result.completed is True
+    for name, target in SLEEP_JOINTS.items():
+        assert final[name] == pytest.approx(target, abs=arm.config.joint_position_tolerance_rad)
+
 
 
 def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
