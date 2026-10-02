@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -437,17 +438,17 @@ class SOARM101:
     @staticmethod
     def _wait_sleep_child(
         handle: MotionHandle[MotionResult],
-        cancel_event: object,
+        cancel_event: threading.Event,
     ) -> MotionResult:
         while not handle.done:
-            if bool(getattr(cancel_event, "is_set")()):
+            if cancel_event.is_set():
                 handle.cancel()
             time.sleep(0.01)
         return handle.wait()
 
     def _execute_sleep(
         self,
-        cancel_event: object,
+        cancel_event: threading.Event,
         *,
         speed: float | None,
         acceleration: float | None,
