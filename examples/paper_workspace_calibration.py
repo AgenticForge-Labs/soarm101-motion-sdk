@@ -1077,14 +1077,30 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
 
             endpoint_seeds = preflight_joint_seeds(preflight)
             print("\nRead-only full Cartesian segment preflight...")
-            segment_preflight = preflight_demo_segments(
-                arm,
-                demo_positions,
-                rotation=up.rotation,
-                endpoint_seeds=endpoint_seeds,
-                speed_mm_s=args.speed_mm_s,
-                acceleration_mm_s2=args.acceleration_mm_s2,
-            )
+            try:
+                segment_preflight = preflight_demo_segments(
+                    arm,
+                    demo_positions,
+                    rotation=up.rotation,
+                    endpoint_seeds=endpoint_seeds,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                )
+            except Exception as exc:
+                report["demo_completed"] = False
+                report["autonomous_motion_attempted"] = False
+                report["segment_preflight_error"] = f"{type(exc).__name__}: {exc}"
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                _hold_until_operator_release(
+                    arm,
+                    f"Read-only segment preflight stopped: {type(exc).__name__}: {exc}",
+                )
+                arm.relax()
+                print("Motors relaxed.")
+                return 2
             for item in segment_preflight:
                 print(
                     f"  {item['segment']}: {item['sample_count']} samples, "
@@ -1544,14 +1560,30 @@ def main() -> int:
                 )
             endpoint_seeds = preflight_joint_seeds(preflight)
             print("\nRead-only full Cartesian segment preflight...")
-            segment_preflight = preflight_demo_segments(
-                arm,
-                demo_positions,
-                rotation=d_up.rotation,
-                endpoint_seeds=endpoint_seeds,
-                speed_mm_s=args.speed_mm_s,
-                acceleration_mm_s2=args.acceleration_mm_s2,
-            )
+            try:
+                segment_preflight = preflight_demo_segments(
+                    arm,
+                    demo_positions,
+                    rotation=d_up.rotation,
+                    endpoint_seeds=endpoint_seeds,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                )
+            except Exception as exc:
+                report["demo_completed"] = False
+                report["autonomous_motion_attempted"] = False
+                report["segment_preflight_error"] = f"{type(exc).__name__}: {exc}"
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                _hold_until_operator_release(
+                    arm,
+                    f"Read-only segment preflight stopped: {type(exc).__name__}: {exc}",
+                )
+                arm.relax()
+                print("Motors relaxed.")
+                return 2
             report["segment_preflight"] = segment_preflight
             for item in segment_preflight:
                 print(
