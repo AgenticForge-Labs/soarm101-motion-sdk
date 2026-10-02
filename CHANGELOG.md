@@ -14,6 +14,20 @@
   joint solution, positional Jacobian conditioning, and nearest effective joint-limit
   margin. This prevents repeated shaky powered entry motion when a later elevated segment
   is already known to be unplannable.
+- Added `soarm101 limits --json` as a hardware-free view of saved mechanical calibration
+  ranges, nominal model limits, their effective runtime intersection, and the configured
+  coarse Cartesian envelope.
+- Added a read-only paper `--limit-compare-only` diagnostic. It compares the saved
+  reference-height Cartesian path under the unchanged executable model/calibration
+  intersection versus calibration-derived joint bounds inset from the measured mechanical
+  stops by `--calibration-stop-margin-deg`. Explicit diagnostic IK bounds are accepted
+  only by read-only planning and may never exceed the active calibration; executable
+  `move-linear`/joint motion limits are unchanged.
+- The current arm calibration measured wider stop-to-stop travel than the nominal model
+  on every pose joint: shoulder pan ±121.1° vs ±110°, shoulder lift ±105.1° vs ±100°,
+  elbow flex ±97.0° vs about ±96.8°, wrist flex ±103.9° vs ±95°, and wrist roll
+  ±168.8° vs roughly -157.2°/+162.8°. This means the prior +95° wrist-flex failure was
+  a nominal model boundary, not the measured physical stop.
 - Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
   the calibrated workspace Z range for the nearest height whose endpoints and complete
   straight paper path are feasible under the unchanged model/calibration joint limits.
