@@ -1011,7 +1011,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sleep = sub.add_parser(
         "sleep",
-        help="move to the built-in compact sleep posture through normal safety guards",
+        help="move to the calibration-derived natural Sleep posture through normal safety guards",
     )
     add_session_options(sleep)
     sleep.add_argument("--speed-deg-s", type=float, default=8.0)
