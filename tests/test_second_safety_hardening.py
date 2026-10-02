@@ -26,7 +26,7 @@ from test_safety_hardening import make_backend
 def test_calibrated_joint_extension_resolver_preserves_baseline_and_adds_margin() -> None:
     from soarm101_motion.constants import JOINT_LIMITS
 
-    margin = np.deg2rad(4.0)
+    margin = np.deg2rad(1.0)
     calibrated = {name: JOINT_LIMITS[name] for name in JOINT_LIMITS}
     calibrated["wrist_flex"] = tuple(np.deg2rad((-103.9120879121, 103.9120879121)))
     calibrated["elbow_flex"] = tuple(np.deg2rad((-96.9670329670, 96.9670329670)))
@@ -34,11 +34,11 @@ def test_calibrated_joint_extension_resolver_preserves_baseline_and_adds_margin(
     limits = resolve_effective_joint_limits(
         calibrated,
         calibration_extension_stop_margin_rad=margin,
-        calibration_extension_joints=("wrist_flex",),
+        calibration_extension_joints=tuple(JOINT_LIMITS),
     )
 
-    assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(-99.9120879121)
-    assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(99.9120879121)
+    assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(-102.9120879121)
+    assert np.degrees(limits["wrist_flex"][1]) == pytest.approx(102.9120879121)
     assert limits["elbow_flex"] == pytest.approx(JOINT_LIMITS["elbow_flex"])
 
 
@@ -50,8 +50,8 @@ def test_calibrated_joint_extension_resolver_does_not_narrow_existing_intersecti
 
     limits = resolve_effective_joint_limits(
         calibrated,
-        calibration_extension_stop_margin_rad=np.deg2rad(4.0),
-        calibration_extension_joints=("wrist_flex",),
+        calibration_extension_stop_margin_rad=np.deg2rad(1.0),
+        calibration_extension_joints=tuple(JOINT_LIMITS),
     )
 
     assert limits["shoulder_pan"] == pytest.approx((-1.5, 1.5))
@@ -66,8 +66,8 @@ def test_calibrated_joint_extension_resolver_rejects_nonoverlapping_calibration(
     with pytest.raises(SafetyViolationError, match="does not overlap"):
         resolve_effective_joint_limits(
             calibrated,
-            calibration_extension_stop_margin_rad=np.deg2rad(4.0),
-            calibration_extension_joints=("wrist_flex",),
+            calibration_extension_stop_margin_rad=np.deg2rad(1.0),
+            calibration_extension_joints=tuple(JOINT_LIMITS),
         )
 
 
