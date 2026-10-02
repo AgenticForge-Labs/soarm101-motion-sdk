@@ -9,6 +9,7 @@ from pathlib import Path
 
 from soarm101_motion.constants import (
     ALL_MOTORS,
+    ARM_JOINTS,
     DEFAULT_COMMAND_FREQUENCY_HZ,
     DEFAULT_JOINT_ACCEL_RAD_S2,
     DEFAULT_JOINT_SPEED_RAD_S,
@@ -54,6 +55,11 @@ class SOARM101Config:
     # measured mechanical stop. This never narrows the normal model/calibration
     # intersection; it only governs calibrated extensions beyond nominal limits.
     calibration_extension_stop_margin_rad: float = math.radians(4.0)
+    # Only joints with hardware evidence should use calibrated travel beyond the
+    # official model/URDF planning range. The 107 mm paper-path diagnostics have
+    # characterized wrist_flex; other joints remain at the normal model/calibration
+    # intersection until separately validated.
+    calibration_extension_joints: tuple[str, ...] = ("wrist_flex",)
     cartesian_waypoint_spacing_m: float = 0.005
     cartesian_waypoint_spacing_rad: float = 0.08
     cartesian_position_tolerance_m: float = 0.0005
@@ -165,6 +171,16 @@ class SOARM101Config:
                 raise ConfigurationError(f"{name} must be a positive finite value")
         if not math.isfinite(self.minimum_workspace_z_m):
             raise ConfigurationError("minimum_workspace_z_m must be finite")
+        unknown_extension_joints = set(self.calibration_extension_joints) - set(ARM_JOINTS)
+        if unknown_extension_joints:
+            raise ConfigurationError(
+                "calibration_extension_joints contains unknown joints: "
+                + ", ".join(sorted(unknown_extension_joints))
+            )
+        if len(set(self.calibration_extension_joints)) != len(
+            self.calibration_extension_joints
+        ):
+            raise ConfigurationError("calibration_extension_joints must not contain duplicates")
 
         ceilings = {
             "default_joint_speed": (self.default_joint_speed, self.max_joint_speed),
