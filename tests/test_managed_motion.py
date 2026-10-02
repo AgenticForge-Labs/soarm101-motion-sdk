@@ -12,7 +12,7 @@ def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() ->
 
     import numpy as np
 
-    from soarm101_motion.constants import ARM_JOINTS
+    from soarm101_motion.constants import ARM_JOINTS, STOCK_GRIPPER
 
     measured_deg = {
         "shoulder_pan": (-121.14285714285717, 121.14285714285717),
@@ -73,20 +73,24 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
     }
 
     with SOARM101.simulated() as arm:
-        arm.backend.calibration = SimpleNamespace(
-            motors={
-                name: SimpleNamespace(
-                    radians_limits=tuple(np.deg2rad(measured_deg[name]))
-                )
-                for name in ARM_JOINTS
-            }
+        motors = {
+            name: SimpleNamespace(
+                radians_limits=tuple(np.deg2rad(measured_deg[name]))
+            )
+            for name in ARM_JOINTS
+        }
+        motors[STOCK_GRIPPER] = SimpleNamespace(
+            radians_limits=(0.0, float(np.deg2rad(100.0)))
         )
+        arm.backend.calibration = SimpleNamespace(motors=motors)
         sleep = arm.get_sleep_joint_positions()
+        sleep_gripper = arm.get_sleep_gripper_position()
         arm.enable()
         with pytest.raises(SafetyViolationError, match="coarse self-clearance"):
             arm.move_joints(sleep, speed=0.2, acceleration=0.5)
         result = arm.move_sleep(speed=0.2, acceleration=0.5)
         final = dict(arm.get_joint_positions().positions)
+        final_gripper = arm.tool.get_position()
 
     assert np.degrees(sleep["shoulder_pan"]) == pytest.approx(0.0)
     assert np.degrees(sleep["shoulder_lift"]) == pytest.approx(
@@ -99,6 +103,9 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
         measured_deg["wrist_flex"][0] + 1.0
     )
     assert np.degrees(sleep["wrist_roll"]) == pytest.approx(0.0)
+    assert sleep_gripper == pytest.approx(0.01)
+    assert final_gripper == pytest.approx(sleep_gripper)
+    assert result.final_positions[STOCK_GRIPPER] == pytest.approx(sleep_gripper)
     assert result.completed is True
     for name, target in sleep.items():
         assert final[name] == pytest.approx(
