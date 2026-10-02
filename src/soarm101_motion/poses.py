@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
 HOME_POSE_NAME = "home"
 REST_POSE_NAME = "rest"
-SLEEP_POSE_NAME = "sleep"
 
 
 def sleep_joint_positions(
