@@ -94,6 +94,27 @@ JSON fields:
 
 The TCP is the SDK's active stock-gripper TCP in the `soarm101/base` frame.
 
+## Saved calibration and workspace limits
+
+```bash
+soarm101 limits --robot-id ROBOT_ID --json
+```
+
+This command reads the saved calibration file only; it does not open the serial port or
+enable torque. `--calibration PATH` selects a specific calibration file.
+
+For each pose joint it reports:
+
+- `calibrated_rad` / `calibrated_deg`: measured mechanical-stop range;
+- `model_rad` / `model_deg`: nominal kinematic-model planning range; and
+- `effective_rad` / `effective_deg`: their intersection, used by normal executable
+  motion.
+
+It also reports the configured coarse model-space Cartesian envelope, including maximum
+TCP reach, minimum model Z, base keep-out dimensions, and minimum self-clearance. Maximum
+TCP reach is an outer radial guard, not a guarantee that every XYZ point inside it is
+kinematically reachable.
+
 ## Motor diagnostics
 
 ```bash
