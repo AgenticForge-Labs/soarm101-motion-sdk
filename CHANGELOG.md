@@ -42,10 +42,14 @@
   remains authoritative. This gives the current arm nearly all of its measured travel,
   including wrist flex to about ±102.91°. Endpoint IK, joint motion, Cartesian planning,
   live streaming, and the limits CLI share this resolver.
-- Added a built-in compact Sleep posture for demos and power-down preparation:
-  shoulder pan 0°, shoulder lift -50°, elbow flex +65°, wrist flex +30°, wrist roll 0°.
-  It is exposed through `SOARM101.move_sleep()`, `soarm101 sleep --yes`, and a GUI
-  **Go Sleep** control. Sleep is never commanded automatically on connect or torque enable.
+- Added a calibration-derived Sleep posture for demos and power-down preparation.
+  Sleep is computed from the active executable limits: shoulder pan midpoint, shoulder lift
+  lower limit, elbow flex upper limit, wrist flex lower limit, and wrist roll midpoint.
+  On a calibrated arm those endpoint limits are already 1° inside the measured mechanical
+  stops. It is exposed through `SOARM101.get_sleep_joint_positions()`,
+  `SOARM101.move_sleep()`, `soarm101 sleep --yes`, and a GUI **Go Sleep** control.
+  `soarm101 limits --json` reports the exact derived Sleep pose without moving hardware.
+  Sleep is never commanded automatically on connect or torque enable.
 - Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
   the calibrated workspace Z range for the nearest height whose endpoints and complete
   straight paper path are feasible under the unchanged model/calibration joint limits.
