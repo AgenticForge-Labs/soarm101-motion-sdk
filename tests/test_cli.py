@@ -232,8 +232,10 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["calibration_path"] == str(calibration_path)
-    assert payload["joints"]["shoulder_pan"]["calibrated_deg"][1] > 110.0
-    assert payload["joints"]["shoulder_pan"]["effective_deg"][1] == pytest.approx(
-        degrees(JOINT_LIMITS["shoulder_pan"][1])
-    )
+    calibrated_upper = payload["joints"]["shoulder_pan"]["calibrated_deg"][1]
+    effective_upper = payload["joints"]["shoulder_pan"]["effective_deg"][1]
+    assert calibrated_upper > degrees(JOINT_LIMITS["shoulder_pan"][1]) + 4.0
+    assert payload["calibration_extension_stop_margin_deg"] == pytest.approx(4.0)
+    assert effective_upper == pytest.approx(calibrated_upper - 4.0)
+    assert effective_upper > degrees(JOINT_LIMITS["shoulder_pan"][1])
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
