@@ -236,6 +236,79 @@ def test_position_only_linear_plan_uses_endpoint_seed_for_reverse_ik_fallback(
     )
 
 
+def test_plan_linear_from_uses_explicit_start_without_changing_backend_state() -> None:
+    import numpy as np
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        measured = dict(arm.get_joint_positions().positions)
+        start = dict(measured)
+        start["shoulder_pan"] += 0.02
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+
+        plan = arm.motion.plan_linear_from(
+            start,
+            target,
+            tcp=arm.active_tcp,
+            orientation_mode="position_only",
+            speed=0.01,
+            acceleration=0.05,
+        )
+
+        assert plan.command_samples[0] == pytest.approx(start)
+        assert dict(arm.get_joint_positions().positions) == pytest.approx(measured)
+
+
+def test_cartesian_ik_failure_reports_sample_residual_and_conditioning(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.exceptions import IKError
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.010, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+
+        def fail(target_pose, *, seed, tcp, options):
+            del target_pose, tcp, options
+            return SimpleNamespace(
+                success=False,
+                joints=dict(seed),
+                position_error_m=0.00065,
+                message="forced diagnostic failure",
+            )
+
+        monkeypatch.setattr(arm.motion.ik, "solve", fail)
+        with pytest.raises(IKError) as excinfo:
+            arm.motion.plan_linear_from(
+                start,
+                target,
+                tcp=arm.active_tcp,
+                orientation_mode="position_only",
+                speed=0.01,
+                acceleration=0.05,
+            )
+
+    message = str(excinfo.value)
+    assert "sample" in message
+    assert "line progress=" in message
+    assert "residual=(" in message
+    assert "sigma_min=" in message
+    assert "nearest effective joint limit=" in message
+
+
 def test_cosine_cruise_profile_uses_requested_speed_as_cruise_ceiling() -> None:
     from soarm101_motion.motion.controller import MotionController
 
