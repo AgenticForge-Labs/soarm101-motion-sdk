@@ -24,6 +24,7 @@ from soarm101_motion.exceptions import (
     ConfigurationError,
     InvalidCommandError,
     InvalidJointError,
+    MotionCancelledError,
     RobotConnectionError,
     SafetyViolationError,
 )
@@ -463,6 +464,8 @@ class SOARM101:
         assert isinstance(arm_handle, MotionHandle)
         arm_result = self._wait_sleep_child(arm_handle, cancel_event)
         final_positions = dict(arm_result.final_positions)
+        if cancel_event.is_set():
+            raise MotionCancelledError("Sleep motion cancelled before gripper close")
 
         gripper = self._sleep_gripper()
         gripper_target = self.get_sleep_gripper_position()
