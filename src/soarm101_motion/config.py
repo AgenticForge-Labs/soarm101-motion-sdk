@@ -54,12 +54,11 @@ class SOARM101Config:
     # model/URDF range, but executable motion must stay this far inside each
     # measured mechanical stop. This never narrows the normal model/calibration
     # intersection; it only governs calibrated extensions beyond nominal limits.
-    calibration_extension_stop_margin_rad: float = math.radians(4.0)
-    # Only joints with hardware evidence should use calibrated travel beyond the
-    # official model/URDF planning range. The 107 mm paper-path diagnostics have
-    # characterized wrist_flex; other joints remain at the normal model/calibration
-    # intersection until separately validated.
-    calibration_extension_joints: tuple[str, ...] = ("wrist_flex",)
+    calibration_extension_stop_margin_rad: float = math.radians(1.0)
+    # The official URDF remains the generic fallback/reference. Once a real arm has
+    # a mechanical-stop calibration, use that per-arm evidence to extend all pose
+    # joints toward their measured stops while retaining a small endpoint margin.
+    calibration_extension_joints: tuple[str, ...] = ARM_JOINTS
     cartesian_waypoint_spacing_m: float = 0.005
     cartesian_waypoint_spacing_rad: float = 0.08
     cartesian_position_tolerance_m: float = 0.0005
