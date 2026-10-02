@@ -49,7 +49,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
-from soarm101_motion.constants import ARM_JOINTS, DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+from soarm101_motion.constants import ARM_JOINTS, DEFAULT_TELEOP_STREAM_FREQUENCY_HZ, JOINT_LIMITS
 from soarm101_motion.kinematics import IKOptions
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
@@ -439,6 +439,175 @@ def diagnose_paper_height_sweep(
     }
 
 
+
+def calibration_margin_joint_limits(
+    arm: SOARM101,
+    *,
+    stop_margin_deg: float,
+) -> tuple[
+    dict[str, tuple[float, float]],
+    list[dict[str, object]],
+]:
+    """Return measured calibration limits inset from each mechanical stop.
+
+    This is diagnostic geometry only. Normal executable motion still uses the
+    model/calibration intersection.
+    """
+
+    calibration = getattr(arm.backend, "calibration", None)
+    if calibration is None:
+        raise RuntimeError("active arm has no motor calibration")
+    margin_rad = float(np.deg2rad(stop_margin_deg))
+    limits: dict[str, tuple[float, float]] = {}
+    rows: list[dict[str, object]] = []
+    for name in ARM_JOINTS:
+        calibrated_lower, calibrated_upper = calibration.motors[name].radians_limits
+        diagnostic_lower = float(calibrated_lower + margin_rad)
+        diagnostic_upper = float(calibrated_upper - margin_rad)
+        if diagnostic_lower >= diagnostic_upper:
+            raise ValueError(
+                f"stop margin {stop_margin_deg:.1f} deg leaves no usable range for {name}"
+            )
+        model_lower, model_upper = JOINT_LIMITS[name]
+        limits[name] = (diagnostic_lower, diagnostic_upper)
+        rows.append(
+            {
+                "joint": name,
+                "calibrated_deg": [
+                    float(np.degrees(calibrated_lower)),
+                    float(np.degrees(calibrated_upper)),
+                ],
+                "model_deg": [
+                    float(np.degrees(model_lower)),
+                    float(np.degrees(model_upper)),
+                ],
+                "diagnostic_deg": [
+                    float(np.degrees(diagnostic_lower)),
+                    float(np.degrees(diagnostic_upper)),
+                ],
+            }
+        )
+    return limits, rows
+
+
+def diagnose_paper_joint_limit_comparison(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    corners: dict[str, Sample],
+    up_sample: Sample,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    stop_margin_deg: float,
+) -> dict[str, object]:
+    """Compare the saved reference-height path under nominal and calibrated limits.
+
+    No torque is enabled and no motor command is issued.
+    """
+
+    positions, preferred_seeds, _ = workspace_height_demo_targets(
+        calibration,
+        arm,
+        corners=corners,
+        up_sample=up_sample,
+    )
+    positions, preferred_seeds = ordered_paper_replay_targets(
+        positions,
+        preferred_seeds,
+    )
+    endpoint_preflight = preflight_demo_targets(
+        arm,
+        positions,
+        preferred_seeds=preferred_seeds,
+        rotation=rotation,
+    )
+    endpoint_seeds = preflight_joint_seeds(endpoint_preflight)
+
+    comparison: dict[str, object] = {
+        "reference_height_mm": float(calibration.reference_height_m * 1000.0),
+        "stop_margin_deg": float(stop_margin_deg),
+        "endpoint_preflight": endpoint_preflight,
+    }
+
+    print(
+        f"Reference-height path: {calibration.reference_height_m * 1000.0:.1f} mm"
+    )
+    print("\nCurrent nominal/effective planning limits:")
+    try:
+        nominal_segments = preflight_demo_segments(
+            arm,
+            positions,
+            rotation=rotation,
+            endpoint_seeds=endpoint_seeds,
+            speed_mm_s=speed_mm_s,
+            acceleration_mm_s2=acceleration_mm_s2,
+        )
+    except Exception as exc:
+        comparison["nominal"] = {
+            "feasible": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        print(f"  FAIL — {exc}")
+    else:
+        comparison["nominal"] = {
+            "feasible": True,
+            "segments": nominal_segments,
+        }
+        print(f"  FEASIBLE for all {len(nominal_segments)} segments")
+
+    diagnostic_limits, limit_rows = calibration_margin_joint_limits(
+        arm,
+        stop_margin_deg=stop_margin_deg,
+    )
+    comparison["calibration_margin_limits"] = limit_rows
+    print(
+        f"\nCalibration-derived planning limits with {stop_margin_deg:.1f} deg "
+        "inset from measured stops:"
+    )
+    for row in limit_rows:
+        calibrated = row["calibrated_deg"]
+        model = row["model_deg"]
+        diagnostic = row["diagnostic_deg"]
+        assert isinstance(calibrated, list)
+        assert isinstance(model, list)
+        assert isinstance(diagnostic, list)
+        print(
+            f"  {row['joint']:15s} measured "
+            f"{calibrated[0]:+6.1f}..{calibrated[1]:+6.1f} deg; "
+            f"model {model[0]:+6.1f}..{model[1]:+6.1f}; "
+            f"diagnostic {diagnostic[0]:+6.1f}..{diagnostic[1]:+6.1f}"
+        )
+
+    try:
+        calibrated_segments = preflight_demo_segments(
+            arm,
+            positions,
+            rotation=rotation,
+            endpoint_seeds=endpoint_seeds,
+            speed_mm_s=speed_mm_s,
+            acceleration_mm_s2=acceleration_mm_s2,
+            planning_limits=diagnostic_limits,
+        )
+    except Exception as exc:
+        comparison["calibration_margin"] = {
+            "feasible": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        print(f"  RESULT: FAIL — {exc}")
+    else:
+        comparison["calibration_margin"] = {
+            "feasible": True,
+            "segments": calibrated_segments,
+        }
+        print(
+            f"  RESULT: FEASIBLE for all {len(calibrated_segments)} segments "
+            "under read-only calibration-derived limits"
+        )
+
+    return comparison
+
+
 def workspace_z_offset_target(
     calibration: WorkspaceCalibration,
     model_position_m: np.ndarray,
@@ -753,6 +922,7 @@ def preflight_demo_segments(
     endpoint_seeds: dict[str, dict[str, float]],
     speed_mm_s: float,
     acceleration_mm_s2: float,
+    planning_limits: dict[str, tuple[float, float]] | None = None,
 ) -> list[dict[str, object]]:
     """Plan every elevated paper segment read-only before any powered traversal."""
 
@@ -768,6 +938,7 @@ def preflight_demo_segments(
                 speed=speed_mm_s / 1000.0,
                 acceleration=acceleration_mm_s2 / 1000.0,
                 target_seed=endpoint_seeds[end_name],
+                limits_override=planning_limits,
             )
         except Exception as exc:
             raise RuntimeError(
@@ -1171,6 +1342,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="workspace-Z increment tested by --height-sweep-only",
     )
+    parser.add_argument(
+        "--limit-compare-only",
+        action="store_true",
+        help=(
+            "with --replay, keep torque off and compare the saved reference-height "
+            "Cartesian path under current model/effective limits versus measured "
+            "calibration limits inset from the mechanical stops"
+        ),
+    )
+    parser.add_argument(
+        "--calibration-stop-margin-deg",
+        type=float,
+        default=3.0,
+        help=(
+            "per-side inset from measured mechanical-stop calibration used only by "
+            "--limit-compare-only; executable motion limits are unchanged"
+        ),
+    )
     return parser
 
 
@@ -1189,6 +1378,42 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 raise RuntimeError(
                     "saved workspace calibration does not match the active motor calibration"
                 )
+
+            if args.limit_compare_only:
+                print("Paper workspace joint-limit comparison — READ ONLY")
+                print(
+                    "Torque remains disabled. No startup lift or paper motion will be commanded."
+                )
+                demo = diagnose_paper_joint_limit_comparison(
+                    arm,
+                    saved,
+                    corners=corner_samples,
+                    up_sample=up,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    stop_margin_deg=args.calibration_stop_margin_deg,
+                )
+                report["joint_limit_comparison"] = demo
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                nominal = demo["nominal"]
+                calibrated = demo["calibration_margin"]
+                assert isinstance(nominal, dict)
+                assert isinstance(calibrated, dict)
+                if calibrated.get("feasible"):
+                    print(
+                        "\nCalibration-derived limits make the saved reference-height "
+                        "path feasible in read-only planning."
+                    )
+                    return 0
+                print(
+                    "\nThe saved reference-height path is still not fully feasible "
+                    "under calibration-derived diagnostic limits."
+                )
+                return 2
 
             if args.height_sweep_only:
                 print("Paper workspace constant-height feasibility sweep — READ ONLY")
@@ -1503,6 +1728,12 @@ def main() -> int:
         raise SystemExit("--replay and --measure-only cannot be used together")
     if args.height_sweep_only and not args.replay:
         raise SystemExit("--height-sweep-only requires --replay")
+    if args.limit_compare_only and not args.replay:
+        raise SystemExit("--limit-compare-only requires --replay")
+    if args.limit_compare_only and args.height_sweep_only:
+        raise SystemExit("--limit-compare-only and --height-sweep-only cannot be combined")
+    if args.calibration_stop_margin_deg < 0.0:
+        raise SystemExit("--calibration-stop-margin-deg cannot be negative")
     if args.height_sweep_min_mm <= 0.0:
         raise SystemExit("--height-sweep-min-mm must be positive")
     if args.height_sweep_max_mm <= args.height_sweep_min_mm:
