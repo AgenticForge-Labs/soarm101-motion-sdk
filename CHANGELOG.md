@@ -49,7 +49,11 @@
   stops. It is exposed through `SOARM101.get_sleep_joint_positions()`,
   `SOARM101.move_sleep()`, `soarm101 sleep --yes`, and a GUI **Go Sleep** control.
   `soarm101 limits --json` reports the exact derived Sleep pose without moving hardware.
-  Sleep is never commanded automatically on connect or torque enable.
+  Sleep is never commanded automatically on connect or torque enable. The dedicated Sleep
+  primitive skips only the generic coarse workspace-geometry check because the designed
+  folded posture violates the generic 25 mm link-centerline self-clearance heuristic; normal
+  joint motion still uses that check, and calibrated joint, trajectory, following-error,
+  effort, fault, communication, and completion guards remain active.
 - Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
   the calibrated workspace Z range for the nearest height whose endpoints and complete
   straight paper path are feasible under the unchanged model/calibration joint limits.
