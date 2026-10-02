@@ -14,6 +14,11 @@
   joint solution, positional Jacobian conditioning, and nearest effective joint-limit
   margin. This prevents repeated shaky powered entry motion when a later elevated segment
   is already known to be unplannable.
+- Added `--height-sweep-only` for replay diagnostics. It keeps torque disabled and searches
+  the calibrated workspace Z range for the nearest height whose endpoints and complete
+  straight paper path are feasible under the unchanged model/calibration joint limits.
+  Explicit-start Cartesian planning is now genuinely read-only and no longer requires
+  torque to be enabled.
 
 
 - Hardware replay after #74 remained very shaky and A_UP->B_UP still failed safely during
