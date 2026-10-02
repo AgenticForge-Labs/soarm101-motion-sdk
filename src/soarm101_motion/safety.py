@@ -94,7 +94,8 @@ def resolve_effective_joint_limits(
     return resolved
 
 
-def validate_joint_targets(    targets: Mapping[str, float],
+def validate_joint_targets(
+    targets: Mapping[str, float],
     limits: Mapping[str, tuple[float, float]] = JOINT_LIMITS,
 ) -> dict[str, float]:
     validated: dict[str, float] = {}
