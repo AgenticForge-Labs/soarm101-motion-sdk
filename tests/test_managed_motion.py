@@ -115,9 +115,19 @@ def test_linear_plan_solves_ik_at_each_command_rate_cartesian_sample(monkeypatch
             joints = dict(start_joints)
             joints["shoulder_pan"] += 0.02 * progress_like**2
             joints["wrist_roll"] += 0.01 * progress_like**3
-            return SimpleNamespace(joints=joints)
+            return SimpleNamespace(
+                success=True,
+                joints=joints,
+                position_error_m=0.0,
+                message="synthetic command-rate IK solution",
+            )
 
-        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", nonlinear_solution)
+        monkeypatch.setattr(arm.motion.ik, "solve", nonlinear_solution)
+        monkeypatch.setattr(
+            arm.motion,
+            "_smooth_position_only_cartesian_samples",
+            lambda samples, cartesian, **kwargs: samples,
+        )
         plan = arm.motion.plan_linear(
             target,
             orientation_mode="position_only",
@@ -144,13 +154,13 @@ def test_linear_plan_solves_ik_at_each_command_rate_cartesian_sample(monkeypatch
 
 
 def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch) -> None:
-    import numpy as np
+    from types import SimpleNamespace
 
-    from soarm101_motion.exceptions import IKError
+    import numpy as np
 
     with SOARM101.simulated() as arm:
         arm.enable()
-        original = arm.motion.ik.solve_or_raise
+        original = arm.motion.ik.solve
         calls: list[bool] = []
         failed_once = False
 
@@ -159,12 +169,15 @@ def test_linear_plan_retries_failed_intermediate_ik_with_multi_start(monkeypatch
             calls.append(bool(options.multi_start))
             if not options.multi_start and not failed_once:
                 failed_once = True
-                raise IKError(
-                    "IK did not meet tolerance: position=0.000556 m, orientation=0.000000 rad"
+                return SimpleNamespace(
+                    success=False,
+                    joints=dict(seed),
+                    position_error_m=0.000556,
+                    message="synthetic single-start miss",
                 )
             return original(target, seed=seed, tcp=tcp, options=options)
 
-        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", flaky)
+        monkeypatch.setattr(arm.motion.ik, "solve", flaky)
         current = arm.get_position()
         target = Pose(
             current.position + np.array([-0.010, 0.0, 0.004]),
@@ -189,8 +202,6 @@ def test_position_only_linear_plan_uses_endpoint_seed_for_reverse_ik_fallback(
 
     import numpy as np
 
-    from soarm101_motion.exceptions import IKError
-
     with SOARM101.simulated() as arm:
         arm.enable()
         start = dict(arm.get_joint_positions().positions)
@@ -211,15 +222,30 @@ def test_position_only_linear_plan_uses_endpoint_seed_for_reverse_ik_fallback(
             reverse_branch = float(seed["wrist_roll"]) > float(start["wrist_roll"]) + 1e-8
             if not reverse_branch and 0.45 <= progress <= 0.55:
                 induced_failures += 1
-                raise IKError("forward continuation trapped in local IK minimum")
+                return SimpleNamespace(
+                    success=False,
+                    joints=dict(seed),
+                    position_error_m=0.001,
+                    message="forward continuation trapped in local IK minimum",
+                )
 
             joints = dict(start)
             joints["shoulder_pan"] += 0.02 * progress
             if reverse_branch:
                 joints["wrist_roll"] += 0.04 * progress
-            return SimpleNamespace(joints=joints)
+            return SimpleNamespace(
+                success=True,
+                joints=joints,
+                position_error_m=0.0,
+                message="synthetic branch solution",
+            )
 
-        monkeypatch.setattr(arm.motion.ik, "solve_or_raise", branch_sensitive_solution)
+        monkeypatch.setattr(arm.motion.ik, "solve", branch_sensitive_solution)
+        monkeypatch.setattr(
+            arm.motion,
+            "_smooth_position_only_cartesian_samples",
+            lambda samples, cartesian, **kwargs: samples,
+        )
         plan = arm.motion.plan_linear(
             target,
             orientation_mode="position_only",
