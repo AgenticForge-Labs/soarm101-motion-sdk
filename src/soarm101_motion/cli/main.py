@@ -19,7 +19,13 @@ from soarm101_motion.camera import (
     CameraSettings,
     discover_camera_devices,
 )
-from soarm101_motion.constants import ALL_MOTORS, ARM_JOINTS, JOINT_LIMITS, MOTOR_IDS
+from soarm101_motion.constants import (
+    ALL_MOTORS,
+    ARM_JOINTS,
+    JOINT_LIMITS,
+    MOTOR_IDS,
+    STOCK_GRIPPER,
+)
 from soarm101_motion.control import jog_linear_cli_units
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
@@ -27,6 +33,7 @@ from soarm101_motion.poses import PoseLibrary, SavedPose, sleep_joint_positions
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
+from soarm101_motion.tools import SO101Gripper
 from soarm101_motion.trajectories import TrajectoryLibrary
 from soarm101_motion.types import MotionResult, Pose
 from soarm101_motion.workstation import (
@@ -230,6 +237,12 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         calibrated_limits,
         calibrated_joint_stop_margin_rad=config.calibrated_joint_stop_margin_rad,
     )
+    gripper_motor = calibration.motors[STOCK_GRIPPER]
+    sleep_gripper_position = SO101Gripper.closed_position_from_calibration(
+        gripper_motor,
+        stop_margin_rad=config.calibrated_gripper_stop_margin_rad,
+    )
+    sleep_gripper_raw = gripper_motor.normalized_to_raw(sleep_gripper_position)
     joints: dict[str, object] = {}
     for name in ARM_JOINTS:
         calibrated_lower, calibrated_upper = calibrated_limits[name]
@@ -260,11 +273,23 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         "calibrated_joint_stop_margin_deg": float(
             config.calibrated_joint_stop_margin_rad * 180.0 / pi
         ),
+        "calibrated_gripper_stop_margin_deg": float(
+            config.calibrated_gripper_stop_margin_rad * 180.0 / pi
+        ),
         "joints": joints,
         "sleep_pose_rad": sleep_joint_positions(effective_limits),
         "sleep_pose_deg": {
             name: float(value * 180.0 / pi)
             for name, value in sleep_joint_positions(effective_limits).items()
+        },
+        "sleep_gripper": {
+            "normalized": float(sleep_gripper_position),
+            "raw": int(sleep_gripper_raw),
+            "drive_mode": int(gripper_motor.drive_mode),
+            "calibrated_raw": [
+                int(gripper_motor.range_min),
+                int(gripper_motor.range_max),
+            ],
         },
         "coarse_cartesian_envelope_mm": {
             "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
@@ -276,6 +301,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         "notes": [
             "URDF/model joint limits are the generic fallback/reference; calibrated real arms use measured pose-joint travel with the configured stop margin",
             "calibration remains the physical authority if a measured range is narrower than the model range",
+            "Sleep closes the stock gripper to the calibrated closed stop inset by the configured gripper margin",
             "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
             "normal Cartesian CLI coordinates are in the soarm101/base model frame",
         ],
@@ -288,6 +314,12 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         print(
             "calibrated joint stop margin: "
             f"{payload['calibrated_joint_stop_margin_deg']:.1f} deg"
+        )
+        print(
+            "calibrated gripper stop margin: "
+            f"{payload['calibrated_gripper_stop_margin_deg']:.1f} deg; "
+            f"Sleep normalized={payload['sleep_gripper']['normalized']:.4f}, "
+            f"raw={payload['sleep_gripper']['raw']}"
         )
         print("joint                         calibrated                   model               effective")
         for name in ARM_JOINTS:
