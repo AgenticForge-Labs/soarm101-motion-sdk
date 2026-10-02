@@ -1328,7 +1328,7 @@ class MainWindow(QMainWindow):
             "Capture the follower's fresh measured pose, including during live teleoperation."
         )
         self.go_rest_button = QPushButton("Go Rest")
-        self.sleep_status = QLabel("Sleep: built-in compact pose")
+        self.sleep_status = QLabel("Sleep: calibrated natural pose")
         self.go_sleep_button = QPushButton("Go Sleep")
         self.go_sleep_button.setToolTip(
             "Move to the built-in compact sleep posture through normal joint/workspace guards."
