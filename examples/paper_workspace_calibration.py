@@ -51,6 +51,7 @@ from scipy.spatial.transform import Rotation
 from soarm101_motion import Pose, SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS, DEFAULT_TELEOP_STREAM_FREQUENCY_HZ, JOINT_LIMITS
 from soarm101_motion.kinematics import IKOptions
+from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.workstation import WorkstationProfileStore
 from soarm101_motion.workspace import WorkspaceCalibration, WorkspaceCalibrationStore, fit_paper_workspace
 
@@ -448,39 +449,30 @@ def calibration_margin_joint_limits(
     dict[str, tuple[float, float]],
     list[dict[str, object]],
 ]:
-    """Return diagnostic limits that extend normal limits only where calibration permits.
+    """Return diagnostic calibrated extensions using the runtime limit resolver.
 
-    The requested stop margin is applied to the measured mechanical range. The existing
-    model/calibration intersection is never narrowed; calibration only contributes extra
-    travel where the inset measured range extends beyond the normal executable limits.
-
-    This is diagnostic geometry only. Normal executable motion still uses the
-    model/calibration intersection.
+    The requested stop margin may be zero for read-only characterization. The
+    normal model/calibration authority is never narrowed; calibration contributes
+    only extra travel that remains outside the requested stop margin.
     """
 
     calibration = getattr(arm.backend, "calibration", None)
     if calibration is None:
         raise RuntimeError("active arm has no motor calibration")
     margin_rad = float(np.deg2rad(stop_margin_deg))
-    limits: dict[str, tuple[float, float]] = {}
+    calibrated_limits = {
+        name: calibration.motors[name].radians_limits
+        for name in ARM_JOINTS
+    }
+    limits = resolve_effective_joint_limits(
+        calibrated_limits,
+        calibration_extension_stop_margin_rad=margin_rad,
+    )
     rows: list[dict[str, object]] = []
     for name in ARM_JOINTS:
-        calibrated_lower, calibrated_upper = calibration.motors[name].radians_limits
-        inset_lower = float(calibrated_lower + margin_rad)
-        inset_upper = float(calibrated_upper - margin_rad)
-        if inset_lower >= inset_upper:
-            raise ValueError(
-                f"stop margin {stop_margin_deg:.1f} deg leaves no usable range for {name}"
-            )
+        calibrated_lower, calibrated_upper = calibrated_limits[name]
         model_lower, model_upper = JOINT_LIMITS[name]
-        normal_lower = max(float(calibrated_lower), float(model_lower))
-        normal_upper = min(float(calibrated_upper), float(model_upper))
-        # Diagnostic extension must never make the existing executable range narrower.
-        # It only adds calibrated travel where the requested mechanical-stop margin
-        # still leaves room beyond the normal model/calibration intersection.
-        diagnostic_lower = min(normal_lower, inset_lower)
-        diagnostic_upper = max(normal_upper, inset_upper)
-        limits[name] = (diagnostic_lower, diagnostic_upper)
+        diagnostic_lower, diagnostic_upper = limits[name]
         rows.append(
             {
                 "joint": name,
@@ -499,7 +491,6 @@ def calibration_margin_joint_limits(
             }
         )
     return limits, rows
-
 
 def diagnose_paper_joint_limit_comparison(
     arm: SOARM101,
