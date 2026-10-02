@@ -231,7 +231,7 @@ soarm101 move-joints --port /dev/ttyACM0 --robot-id so101 \
 soarm101 pose capture home --port /dev/ttyACM0 --robot-id so101
 soarm101 pose go home --port /dev/ttyACM0 --robot-id so101 --yes
 
-# Move to the built-in compact demo/rest posture
+# Move to this follower's calibration-derived natural Sleep posture
 soarm101 sleep --port /dev/ttyACM0 --robot-id so101 --yes
 
 # Operate the stock gripper
