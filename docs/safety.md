@@ -72,6 +72,10 @@ immediately drop the arm.
 - Motion failures issue a best-effort hold.
 - `wait=True` verifies measured completion.
 - Stock-gripper moves participate in the arm-level stop lifecycle.
+- Sleep folds the arm first and then closes the stock gripper to a calibration-derived
+  target 1° inside the measured closed mechanical stop by default. It does not intentionally
+  drive the gripper into the calibrated endpoint; the saved gripper range and drive mode
+  remain authoritative.
 - Calibration snapshots and restores motor EEPROM on failure when possible.
 - Torque enable rolls back motors already energized when a later enable fails.
 
