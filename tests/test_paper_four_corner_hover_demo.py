@@ -854,9 +854,10 @@ def test_calibration_margin_joint_limits_use_measured_stops_not_model_limits() -
     margin = np.deg2rad(3.0)
     assert limits["wrist_flex"][0] == pytest.approx(measured["wrist_flex"][0] + margin)
     assert limits["wrist_flex"][1] == pytest.approx(measured["wrist_flex"][1] - margin)
-    # Elbow calibration has little extra travel; a large stop margin must not
-    # shrink the normal model/calibration intersection.
-    assert limits["elbow_flex"] == pytest.approx(module.JOINT_LIMITS["elbow_flex"])
+    # Measured calibration is the runtime authority even when the requested
+    # stop margin makes the executable range narrower than the generic model.
+    assert limits["elbow_flex"][0] == pytest.approx(measured["elbow_flex"][0] + margin)
+    assert limits["elbow_flex"][1] == pytest.approx(measured["elbow_flex"][1] - margin)
     wrist = next(row for row in rows if row["joint"] == "wrist_flex")
     assert wrist["diagnostic_deg"][1] > wrist["model_deg"][1]
 
