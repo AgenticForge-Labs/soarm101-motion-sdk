@@ -295,7 +295,9 @@ def test_plan_linear_from_accepts_calibration_bounded_diagnostic_limits(monkeypa
     from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
 
     class FakeMotor:
-        radians_limits = (-2.5, 2.5)
+        # Wider than every nominal model joint and the +0.10 rad wrist-flex
+        # diagnostic extension used below.
+        radians_limits = (-3.2, 3.2)
 
     with SOARM101.simulated() as arm:
         arm.backend.calibration = SimpleNamespace(
@@ -333,6 +335,42 @@ def test_plan_linear_from_accepts_calibration_bounded_diagnostic_limits(monkeypa
     assert plan.command_samples
     assert observed
     assert all(item == diagnostic_limits for item in observed if item is not None)
+
+
+
+def test_plan_linear_from_rejects_diagnostic_limits_beyond_calibration() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, JOINT_LIMITS
+    from soarm101_motion.exceptions import SafetyViolationError
+
+    class FakeMotor:
+        radians_limits = (-2.5, 2.5)
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: FakeMotor() for name in ARM_JOINTS}
+        )
+        start = dict(arm.get_joint_positions().positions)
+        start_pose = arm.model.forward(start, tcp=arm.active_tcp)
+        target = Pose(
+            start_pose.position + np.array([-0.005, 0.0, 0.0]),
+            start_pose.rotation,
+        )
+        diagnostic_limits = dict(JOINT_LIMITS)
+
+        with pytest.raises(SafetyViolationError, match="exceeds calibrated range"):
+            arm.motion.plan_linear_from(
+                start,
+                target,
+                tcp=arm.active_tcp,
+                orientation_mode="position_only",
+                speed=0.01,
+                acceleration=0.05,
+                limits_override=diagnostic_limits,
+            )
 
 
 def test_plan_linear_from_uses_explicit_start_without_changing_backend_state() -> None:
