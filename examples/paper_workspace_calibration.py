@@ -253,6 +253,7 @@ def workspace_height_demo_targets(
     *,
     corners: dict[str, Sample],
     up_sample: Sample,
+    target_workspace_z_m: float | None = None,
 ) -> tuple[
     dict[str, np.ndarray],
     dict[str, dict[str, float]],
@@ -277,7 +278,11 @@ def workspace_height_demo_targets(
         corners=corners,
         up_sample=up_sample,
     )
-    target_z = float(calibration.reference_height_m)
+    target_z = float(
+        calibration.reference_height_m
+        if target_workspace_z_m is None
+        else target_workspace_z_m
+    )
     positions: dict[str, np.ndarray] = {}
     baseline_z_mm: dict[str, float] = {}
     for name, position in baseline.items():
@@ -296,6 +301,107 @@ def workspace_height_demo_targets(
                 target_z,
             )
     return positions, preferred_seeds, baseline_z_mm
+
+
+def diagnose_paper_height_sweep(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    corners: dict[str, Sample],
+    up_sample: Sample,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    minimum_height_mm: float,
+    maximum_height_mm: float,
+    step_mm: float,
+) -> dict[str, object]:
+    """Find the nearest constant workspace height with a fully feasible paper path.
+
+    This is read-only: it uses saved teaching, the calibrated workspace transform,
+    endpoint IK, and explicit-start Cartesian planning. It does not enable torque or
+    issue motor commands.
+    """
+
+    reference_mm = float(calibration.reference_height_m * 1000.0)
+    raw = np.arange(minimum_height_mm, maximum_height_mm + 0.5 * step_mm, step_mm)
+    candidates = sorted(
+        (float(value) for value in raw),
+        key=lambda value: (abs(value - reference_mm), value < reference_mm, value),
+    )
+    attempts: list[dict[str, object]] = []
+
+    for height_mm in candidates:
+        positions, preferred_seeds, _ = workspace_height_demo_targets(
+            calibration,
+            arm,
+            corners=corners,
+            up_sample=up_sample,
+            target_workspace_z_m=height_mm / 1000.0,
+        )
+        positions, preferred_seeds = ordered_paper_replay_targets(
+            positions,
+            preferred_seeds,
+        )
+        attempt: dict[str, object] = {
+            "workspace_height_mm": height_mm,
+            "offset_from_reference_mm": height_mm - reference_mm,
+            "extrapolated_above_reference": height_mm > reference_mm + 1e-9,
+        }
+        try:
+            endpoint_preflight = preflight_demo_targets(
+                arm,
+                positions,
+                preferred_seeds=preferred_seeds,
+                rotation=rotation,
+            )
+            endpoint_seeds = preflight_joint_seeds(endpoint_preflight)
+            segments = preflight_demo_segments(
+                arm,
+                positions,
+                rotation=rotation,
+                endpoint_seeds=endpoint_seeds,
+                speed_mm_s=speed_mm_s,
+                acceleration_mm_s2=acceleration_mm_s2,
+            )
+        except Exception as exc:
+            attempt["feasible"] = False
+            attempt["error"] = f"{type(exc).__name__}: {exc}"
+            attempts.append(attempt)
+            print(
+                f"  {height_mm:.1f} mm "
+                f"({height_mm - reference_mm:+.1f}): FAIL — {exc}"
+            )
+            continue
+
+        attempt["feasible"] = True
+        attempt["endpoint_preflight"] = endpoint_preflight
+        attempt["segments"] = segments
+        attempts.append(attempt)
+        print(
+            f"  {height_mm:.1f} mm "
+            f"({height_mm - reference_mm:+.1f}): FEASIBLE "
+            f"for all {len(segments)} segments"
+        )
+        return {
+            "reference_height_mm": reference_mm,
+            "minimum_height_mm": minimum_height_mm,
+            "maximum_height_mm": maximum_height_mm,
+            "step_mm": step_mm,
+            "attempts": attempts,
+            "nearest_feasible_height_mm": height_mm,
+            "nearest_feasible_offset_mm": height_mm - reference_mm,
+        }
+
+    return {
+        "reference_height_mm": reference_mm,
+        "minimum_height_mm": minimum_height_mm,
+        "maximum_height_mm": maximum_height_mm,
+        "step_mm": step_mm,
+        "attempts": attempts,
+        "nearest_feasible_height_mm": None,
+        "nearest_feasible_offset_mm": None,
+    }
 
 
 def workspace_z_offset_target(
@@ -968,6 +1074,32 @@ def build_parser() -> argparse.ArgumentParser:
             "software levels all paper targets to that workspace Z before replay"
         ),
     )
+    parser.add_argument(
+        "--height-sweep-only",
+        action="store_true",
+        help=(
+            "with --replay, keep torque off and search read-only for the nearest "
+            "constant workspace height whose complete paper path is IK-feasible"
+        ),
+    )
+    parser.add_argument(
+        "--height-sweep-min-mm",
+        type=float,
+        default=60.0,
+        help="minimum calibrated workspace Z tested by --height-sweep-only",
+    )
+    parser.add_argument(
+        "--height-sweep-max-mm",
+        type=float,
+        default=160.0,
+        help="maximum calibrated workspace Z tested by --height-sweep-only",
+    )
+    parser.add_argument(
+        "--height-sweep-step-mm",
+        type=float,
+        default=5.0,
+        help="workspace-Z increment tested by --height-sweep-only",
+    )
     return parser
 
 
@@ -986,6 +1118,44 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 raise RuntimeError(
                     "saved workspace calibration does not match the active motor calibration"
                 )
+
+            if args.height_sweep_only:
+                print("Paper workspace constant-height feasibility sweep — READ ONLY")
+                print(
+                    "Torque remains disabled. No startup lift or paper motion will be commanded."
+                )
+                demo = diagnose_paper_height_sweep(
+                    arm,
+                    saved,
+                    corners=corner_samples,
+                    up_sample=up,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    minimum_height_mm=args.height_sweep_min_mm,
+                    maximum_height_mm=args.height_sweep_max_mm,
+                    step_mm=args.height_sweep_step_mm,
+                )
+                report["height_sweep"] = demo
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                nearest = demo["nearest_feasible_height_mm"]
+                if nearest is None:
+                    print("\nNo fully feasible constant-height paper path was found.")
+                    return 2
+                extrapolated = float(nearest) > saved.reference_height_m * 1000.0 + 1e-9
+                suffix = (
+                    " (above the measured reference; extrapolated workspace Z)"
+                    if extrapolated
+                    else ""
+                )
+                print(
+                    f"\nNearest fully feasible constant height: {float(nearest):.1f} mm"
+                    f"{suffix}"
+                )
+                return 0
 
             print("Paper workspace replay")
             print(
@@ -1260,6 +1430,14 @@ def main() -> int:
         raise SystemExit("--settle-timeout-s must be positive")
     if args.replay and args.measure_only:
         raise SystemExit("--replay and --measure-only cannot be used together")
+    if args.height_sweep_only and not args.replay:
+        raise SystemExit("--height-sweep-only requires --replay")
+    if args.height_sweep_min_mm <= 0.0:
+        raise SystemExit("--height-sweep-min-mm must be positive")
+    if args.height_sweep_max_mm <= args.height_sweep_min_mm:
+        raise SystemExit("--height-sweep-max-mm must exceed --height-sweep-min-mm")
+    if args.height_sweep_step_mm <= 0.0:
+        raise SystemExit("--height-sweep-step-mm must be positive")
     if args.startup_lift_mm <= 0.0:
         raise SystemExit("--startup-lift-mm must be positive")
     if args.startup_min_rise_mm <= 0.0:
