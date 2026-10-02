@@ -55,10 +55,8 @@ An agent can choose a validated capability such as moving to a taught point or e
 The SDK exposes a provider-neutral command surface for coding agents and other automation
 clients. [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise CLI
 contract—commands, units, structured output, coordinate/orientation semantics, and enforced
-guards. [`drive_me.md`](drive_me.md) is the practical agent operating guide: how to read the
-arm, reason about model-frame XYZ, preflight with IK, make bounded jogs, use absolute linear
-moves, capture observations, and translate validated physical direction labels into signed
-model-axis deltas. The `agent-as-code/` directory remains a
+guards. [`cli_use.md`](cli_use.md) is the compact technical usage reference for common CLI
+commands, units, model-frame XYZ semantics, motion modes, JSON output, and safety behavior. The `agent-as-code/` directory remains a
 small experiment helper; machine-local ports, calibration references, and named cameras come
 from the shared workstation profile rather than being duplicated in experiment files. Agent
 launchers, model selection, and sandboxing are intentionally outside the Motion SDK.
