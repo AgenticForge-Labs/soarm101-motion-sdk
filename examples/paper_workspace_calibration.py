@@ -646,6 +646,178 @@ def diagnose_paper_joint_limit_comparison(
     return comparison
 
 
+
+def diagnose_paper_limit_margin_search(
+    arm: SOARM101,
+    calibration: WorkspaceCalibration,
+    *,
+    corners: dict[str, Sample],
+    up_sample: Sample,
+    rotation: np.ndarray,
+    speed_mm_s: float,
+    acceleration_mm_s2: float,
+    maximum_margin_deg: float,
+    tolerance_deg: float,
+) -> dict[str, object]:
+    """Find the largest measured-stop inset that keeps the 107 mm path feasible.
+
+    The search is read-only. Larger margins only remove calibration-derived extension;
+    the normal executable model/calibration intersection is never narrowed.
+    """
+
+    positions, preferred_seeds, _ = workspace_height_demo_targets(
+        calibration,
+        arm,
+        corners=corners,
+        up_sample=up_sample,
+    )
+    positions, preferred_seeds = ordered_paper_replay_targets(
+        positions,
+        preferred_seeds,
+    )
+    endpoint_preflight = preflight_demo_targets(
+        arm,
+        positions,
+        preferred_seeds=preferred_seeds,
+        rotation=rotation,
+    )
+    endpoint_seeds = preflight_joint_seeds(endpoint_preflight)
+
+    attempts: list[dict[str, object]] = []
+
+    def evaluate(margin_deg: float) -> tuple[bool, list[dict[str, object]] | None, str | None]:
+        limits, rows = calibration_margin_joint_limits(
+            arm,
+            stop_margin_deg=margin_deg,
+        )
+        try:
+            segments = preflight_demo_segments(
+                arm,
+                positions,
+                rotation=rotation,
+                endpoint_seeds=endpoint_seeds,
+                speed_mm_s=speed_mm_s,
+                acceleration_mm_s2=acceleration_mm_s2,
+                planning_limits=limits,
+            )
+        except Exception as exc:
+            attempts.append(
+                {
+                    "margin_deg": float(margin_deg),
+                    "feasible": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "limits": rows,
+                }
+            )
+            print(f"  margin {margin_deg:.3f} deg: FAIL")
+            return False, None, f"{type(exc).__name__}: {exc}"
+        attempts.append(
+            {
+                "margin_deg": float(margin_deg),
+                "feasible": True,
+                "segments": segments,
+                "limits": rows,
+            }
+        )
+        print(f"  margin {margin_deg:.3f} deg: FEASIBLE")
+        return True, segments, None
+
+    print(
+        f"Reference-height path: {calibration.reference_height_m * 1000.0:.1f} mm"
+    )
+    print(
+        f"Searching measured-stop margin from 0.0 to {maximum_margin_deg:.2f} deg "
+        f"at {tolerance_deg:.3f} deg resolution..."
+    )
+
+    low = 0.0
+    high = float(maximum_margin_deg)
+    low_ok, low_segments, low_error = evaluate(low)
+    if not low_ok:
+        return {
+            "reference_height_mm": float(calibration.reference_height_m * 1000.0),
+            "maximum_margin_deg": float(maximum_margin_deg),
+            "tolerance_deg": float(tolerance_deg),
+            "attempts": attempts,
+            "largest_feasible_margin_deg": None,
+            "smallest_infeasible_margin_deg": 0.0,
+            "error": low_error,
+        }
+
+    high_ok, high_segments, _ = evaluate(high)
+    if high_ok:
+        best_segments = high_segments
+        assert best_segments is not None
+        largest = high
+        smallest_infeasible: float | None = None
+    else:
+        best_segments = low_segments
+        assert best_segments is not None
+        while high - low > tolerance_deg:
+            mid = (low + high) / 2.0
+            ok, segments, _ = evaluate(mid)
+            if ok:
+                low = mid
+                assert segments is not None
+                best_segments = segments
+            else:
+                high = mid
+        largest = low
+        smallest_infeasible = high
+
+    joint_usage: dict[str, dict[str, float]] = {}
+    for joint in ARM_JOINTS:
+        minima: list[float] = []
+        maxima: list[float] = []
+        for segment in best_segments:
+            per_joint = segment["per_joint_motion"]
+            assert isinstance(per_joint, dict)
+            motion = per_joint[joint]
+            assert isinstance(motion, dict)
+            minima.append(float(motion["min_position_rad"]))
+            maxima.append(float(motion["max_position_rad"]))
+        measured_lower, measured_upper = arm.backend.calibration.motors[joint].radians_limits
+        used_lower = min(minima)
+        used_upper = max(maxima)
+        stop_margin_rad = min(
+            used_lower - float(measured_lower),
+            float(measured_upper) - used_upper,
+        )
+        joint_usage[joint] = {
+            "min_used_deg": float(np.degrees(used_lower)),
+            "max_used_deg": float(np.degrees(used_upper)),
+            "nearest_measured_stop_margin_deg": float(np.degrees(stop_margin_rad)),
+        }
+
+    print(
+        f"\nLargest feasible measured-stop margin: >= {largest:.3f} deg"
+    )
+    if smallest_infeasible is not None:
+        print(
+            f"Smallest known infeasible margin: <= {smallest_infeasible:.3f} deg"
+        )
+    print("Joint usage at the largest feasible tested margin:")
+    for joint, usage in joint_usage.items():
+        print(
+            f"  {joint:15s} used "
+            f"{usage['min_used_deg']:+7.2f}..{usage['max_used_deg']:+7.2f} deg; "
+            f"nearest measured stop margin="
+            f"{usage['nearest_measured_stop_margin_deg']:.2f} deg"
+        )
+
+    return {
+        "reference_height_mm": float(calibration.reference_height_m * 1000.0),
+        "maximum_margin_deg": float(maximum_margin_deg),
+        "tolerance_deg": float(tolerance_deg),
+        "attempts": attempts,
+        "largest_feasible_margin_deg": float(largest),
+        "smallest_infeasible_margin_deg": (
+            None if smallest_infeasible is None else float(smallest_infeasible)
+        ),
+        "joint_usage_at_largest_feasible_margin": joint_usage,
+    }
+
+
 def workspace_z_offset_target(
     calibration: WorkspaceCalibration,
     model_position_m: np.ndarray,
@@ -1408,6 +1580,26 @@ def build_parser() -> argparse.ArgumentParser:
             "--limit-compare-only; executable motion limits are unchanged"
         ),
     )
+    parser.add_argument(
+        "--limit-margin-search-only",
+        action="store_true",
+        help=(
+            "with --replay, keep torque off and binary-search the largest measured-stop "
+            "margin that still makes the saved reference-height Cartesian path feasible"
+        ),
+    )
+    parser.add_argument(
+        "--limit-margin-search-max-deg",
+        type=float,
+        default=10.0,
+        help="maximum measured-stop margin tested by --limit-margin-search-only",
+    )
+    parser.add_argument(
+        "--limit-margin-search-tolerance-deg",
+        type=float,
+        default=0.05,
+        help="binary-search resolution for --limit-margin-search-only",
+    )
     return parser
 
 
@@ -1426,6 +1618,29 @@ def run_saved_replay(args: argparse.Namespace, config: SOARM101Config) -> int:
                 raise RuntimeError(
                     "saved workspace calibration does not match the active motor calibration"
                 )
+
+            if args.limit_margin_search_only:
+                print("Paper workspace joint-limit margin search — READ ONLY")
+                print(
+                    "Torque remains disabled. No startup lift or paper motion will be commanded."
+                )
+                demo = diagnose_paper_limit_margin_search(
+                    arm,
+                    saved,
+                    corners=corner_samples,
+                    up_sample=up,
+                    rotation=up.rotation,
+                    speed_mm_s=args.speed_mm_s,
+                    acceleration_mm_s2=args.acceleration_mm_s2,
+                    maximum_margin_deg=args.limit_margin_search_max_deg,
+                    tolerance_deg=args.limit_margin_search_tolerance_deg,
+                )
+                report["joint_limit_margin_search"] = demo
+                args.output.write_text(
+                    json.dumps(report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                return 0 if demo["largest_feasible_margin_deg"] is not None else 2
 
             if args.limit_compare_only:
                 print("Paper workspace joint-limit comparison — READ ONLY")
@@ -1780,8 +1995,26 @@ def main() -> int:
         raise SystemExit("--limit-compare-only requires --replay")
     if args.limit_compare_only and args.height_sweep_only:
         raise SystemExit("--limit-compare-only and --height-sweep-only cannot be combined")
+    if args.limit_margin_search_only and not args.replay:
+        raise SystemExit("--limit-margin-search-only requires --replay")
+    if args.limit_margin_search_only and (
+        args.limit_compare_only or args.height_sweep_only
+    ):
+        raise SystemExit(
+            "--limit-margin-search-only cannot be combined with "
+            "--limit-compare-only or --height-sweep-only"
+        )
     if args.calibration_stop_margin_deg < 0.0:
         raise SystemExit("--calibration-stop-margin-deg cannot be negative")
+    if args.limit_margin_search_max_deg <= 0.0:
+        raise SystemExit("--limit-margin-search-max-deg must be positive")
+    if args.limit_margin_search_tolerance_deg <= 0.0:
+        raise SystemExit("--limit-margin-search-tolerance-deg must be positive")
+    if args.limit_margin_search_tolerance_deg >= args.limit_margin_search_max_deg:
+        raise SystemExit(
+            "--limit-margin-search-tolerance-deg must be smaller than "
+            "--limit-margin-search-max-deg"
+        )
     if args.height_sweep_min_mm <= 0.0:
         raise SystemExit("--height-sweep-min-mm must be positive")
     if args.height_sweep_max_mm <= args.height_sweep_min_mm:
