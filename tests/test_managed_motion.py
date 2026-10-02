@@ -42,9 +42,11 @@ def test_calibrated_extensions_keep_four_degree_stop_margin() -> None:
     assert np.degrees(limits["wrist_flex"][0]) == pytest.approx(
         measured_deg["wrist_flex"][0] + 4.0
     )
-    # The elbow has too little extra calibrated travel for a 4 degree extension;
-    # retaining the normal model/calibration intersection must not shrink it.
+    # Only wrist_flex is runtime-authorized for calibrated extension.
+    assert limits["shoulder_pan"] == pytest.approx(JOINT_LIMITS["shoulder_pan"])
+    assert limits["shoulder_lift"] == pytest.approx(JOINT_LIMITS["shoulder_lift"])
     assert limits["elbow_flex"] == pytest.approx(JOINT_LIMITS["elbow_flex"])
+    assert limits["wrist_roll"] == pytest.approx(JOINT_LIMITS["wrist_roll"])
 
 
 def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
