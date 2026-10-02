@@ -111,9 +111,10 @@ For each pose joint it reports:
 
 The URDF/model limits are the generic fallback/reference. For a calibrated real arm,
 normal executable pose-joint authority follows the saved mechanical-stop calibration with
-a 1° inset from each measured stop by default. `calibration_extension_stop_margin_deg`
-and `calibration_extension_joints` report that policy. Calibration remains the physical
-authority if a measured range is narrower than the model range.
+a 1° inset from each measured stop by default. `calibrated_joint_stop_margin_deg`
+reports that policy. The same output includes `sleep_pose_rad` and `sleep_pose_deg`,
+derived from those executable limits. Calibration remains the physical authority if a
+measured range is narrower than the model range.
 
 It also reports the configured coarse model-space Cartesian envelope, including maximum
 TCP reach, minimum model Z, base keep-out dimensions, and minimum self-clearance. Maximum
