@@ -860,7 +860,11 @@ class MotionController:
     ) -> PlannedPath:
         """Read-only Cartesian planning from an explicit validated start configuration."""
 
-        self._require_ready()
+        state = self.backend.get_hardware_state()
+        if not state.connected:
+            raise RobotConnectionError("robot is not connected")
+        if state.faulted:
+            raise HardwareFaultError(state.fault_message or "robot is faulted")
         limits = self._effective_limits()
         start = validate_joint_targets(start_joints, limits=limits)
         return self._plan_linear_from_start(
