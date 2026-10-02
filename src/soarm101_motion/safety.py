@@ -28,14 +28,14 @@ def resolve_effective_joint_limits(
 ) -> dict[str, tuple[float, float]]:
     """Resolve executable pose-joint limits from model and measured calibration.
 
-    The nominal model range remains available whenever it overlaps the measured
-    mechanical range. Calibration may extend that nominal authority only where the
-    measured stop-to-stop range leaves the configured margin before the physical stop.
-    The margin never narrows the pre-existing model/calibration intersection.
+    The URDF/model range is the generic fallback. For joints authorized to use an
+    active mechanical-stop calibration, the measured range becomes the physical
+    authority after insetting both ends by the configured stop margin. That rule
+    applies whether calibration is wider or narrower than the generic model range.
 
-    This keeps nominal model limits as the baseline while allowing explicitly
-    authorized joints to use arm-specific calibration as evidence for conservative
-    extra travel without ever commanding the measured mechanical stop itself.
+    Joints not authorized for calibrated travel use the conservative intersection
+    of model and calibration. The measured mechanical stop itself is never exposed
+    as a normal executable target when the margin is nonzero.
     """
 
     margin = float(calibration_extension_stop_margin_rad)
@@ -73,35 +73,27 @@ def resolve_effective_joint_limits(
         ):
             raise SafetyViolationError(f"invalid calibrated joint range for {name}")
 
-        normal_lower = max(model_lower, calibrated_lower)
-        normal_upper = min(model_upper, calibrated_upper)
-        if normal_lower >= normal_upper:
+        overlap_lower = max(model_lower, calibrated_lower)
+        overlap_upper = min(model_upper, calibrated_upper)
+        if overlap_lower >= overlap_upper:
             raise SafetyViolationError(
                 f"calibrated range for {name} does not overlap the model limits"
             )
 
-        lower = normal_lower
-        upper = normal_upper
         if name in extension_joints:
-            inset_lower = calibrated_lower + margin
-            inset_upper = calibrated_upper - margin
+            lower = calibrated_lower + margin
+            upper = calibrated_upper - margin
+            if lower >= upper:
+                raise SafetyViolationError(
+                    f"calibrated range for {name} is too small for the configured stop margin"
+                )
+        else:
+            lower = overlap_lower
+            upper = overlap_upper
 
-            # Never narrow today's normal model/calibration intersection. Extend only
-            # when measured calibration leaves the configured margin beyond it.
-            if inset_lower < normal_lower:
-                lower = inset_lower
-            if inset_upper > normal_upper:
-                upper = inset_upper
-
-        # Calibration remains the physical authority for every joint.
-        lower = max(lower, calibrated_lower)
-        upper = min(upper, calibrated_upper)
-        if lower >= upper:
-            raise SafetyViolationError(f"resolved joint range for {name} is empty")
         resolved[name] = (lower, upper)
 
     return resolved
-
 
 def validate_joint_targets(
     targets: Mapping[str, float],
