@@ -19,8 +19,82 @@ if TYPE_CHECKING:
 FloatArray = NDArray[np.float64]
 
 
-def validate_joint_targets(
-    targets: Mapping[str, float],
+def resolve_effective_joint_limits(
+    calibrated_limits: Mapping[str, tuple[float, float]] | None,
+    *,
+    calibration_extension_stop_margin_rad: float,
+    model_limits: Mapping[str, tuple[float, float]] = JOINT_LIMITS,
+) -> dict[str, tuple[float, float]]:
+    """Resolve executable pose-joint limits from model and measured calibration.
+
+    The nominal model range remains available whenever it overlaps the measured
+    mechanical range. Calibration may extend that nominal authority only where the
+    measured stop-to-stop range leaves the configured margin before the physical stop.
+    The margin never narrows the pre-existing model/calibration intersection.
+
+    This keeps nominal model limits as the baseline while allowing arm-specific
+    calibration to prove conservative extra travel without ever commanding the
+    measured mechanical stop itself.
+    """
+
+    margin = float(calibration_extension_stop_margin_rad)
+    if not math.isfinite(margin) or margin <= 0.0:
+        raise ValueError(
+            "calibration_extension_stop_margin_rad must be positive and finite"
+        )
+
+    resolved = {
+        name: (float(model_limits[name][0]), float(model_limits[name][1]))
+        for name in ARM_JOINTS
+    }
+    if calibrated_limits is None:
+        return resolved
+
+    for name in ARM_JOINTS:
+        if name not in calibrated_limits:
+            continue
+        model_lower, model_upper = resolved[name]
+        calibrated_lower, calibrated_upper = (
+            float(calibrated_limits[name][0]),
+            float(calibrated_limits[name][1]),
+        )
+        if (
+            not math.isfinite(calibrated_lower)
+            or not math.isfinite(calibrated_upper)
+            or calibrated_lower >= calibrated_upper
+        ):
+            raise SafetyViolationError(f"invalid calibrated joint range for {name}")
+
+        normal_lower = max(model_lower, calibrated_lower)
+        normal_upper = min(model_upper, calibrated_upper)
+        if normal_lower >= normal_upper:
+            raise SafetyViolationError(
+                f"calibrated range for {name} does not overlap the model limits"
+            )
+
+        inset_lower = calibrated_lower + margin
+        inset_upper = calibrated_upper - margin
+
+        # Never narrow today's normal model/calibration intersection. Extend only
+        # when measured calibration leaves the configured margin beyond it.
+        lower = normal_lower
+        upper = normal_upper
+        if inset_lower < normal_lower:
+            lower = inset_lower
+        if inset_upper > normal_upper:
+            upper = inset_upper
+
+        # Calibration remains the physical authority.
+        lower = max(lower, calibrated_lower)
+        upper = min(upper, calibrated_upper)
+        if lower >= upper:
+            raise SafetyViolationError(f"resolved joint range for {name} is empty")
+        resolved[name] = (lower, upper)
+
+    return resolved
+
+
+def validate_joint_targets(    targets: Mapping[str, float],
     limits: Mapping[str, tuple[float, float]] = JOINT_LIMITS,
 ) -> dict[str, float]:
     validated: dict[str, float] = {}
