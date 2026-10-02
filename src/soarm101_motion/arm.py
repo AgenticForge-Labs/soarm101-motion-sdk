@@ -361,10 +361,7 @@ class SOARM101:
             }
         return resolve_effective_joint_limits(
             calibrated_limits,
-            calibration_extension_stop_margin_rad=(
-                self.config.calibration_extension_stop_margin_rad
-            ),
-            calibration_extension_joints=self.config.calibration_extension_joints,
+            calibrated_joint_stop_margin_rad=self.config.calibrated_joint_stop_margin_rad,
         )
 
     def get_joint_positions(self) -> JointState:
