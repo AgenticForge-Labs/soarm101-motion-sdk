@@ -65,11 +65,25 @@ soarm101 agent gripper close
 These targets stay one configured calibrated angular margin inside the corresponding
 mechanical endpoint on physical hardware.
 
-The bounded Cartesian surface is translation-only in the SDK base/model frame:
+The bounded agent also exposes one-joint relative adjustments:
 
 ```bash
-soarm101 agent jog --x-mm 5 --y-mm 0 --z-mm 0
+soarm101 agent joint shoulder_pan --delta-deg 20
 ```
+
+Only one named pose joint changes per command, the absolute delta is capped at 30 degrees,
+normal calibrated joint/workspace/path checks remain active, and the follower remains held
+after completion.
+
+The bounded Cartesian surface is translation-only and may use either the fixed SDK
+base/model frame or the current gripper/TCP frame:
+
+```bash
+soarm101 agent jog --frame world --x-mm 5 --y-mm 0 --z-mm 0
+soarm101 agent jog --frame tool --x-mm 0 --y-mm 0 --z-mm 5
+```
+
+Tool-frame XYZ follows the current TCP axes and therefore rotates with the gripper.
 
 The command requires a matching saved workspace calibration and applies an additional
 physical-space policy before the normal SDK jog:
