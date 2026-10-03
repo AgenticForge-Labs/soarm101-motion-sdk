@@ -266,7 +266,11 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
 
 
-def test_sleep_cli_requires_confirmation_and_runs_in_simulation(capsys) -> None:
+def test_sleep_cli_requires_confirmation_and_runs_in_simulation(
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda *args, **kwargs: "")
     assert main(["sleep", "--simulation"]) == 2
     assert "Refusing to move without --yes" in capsys.readouterr().err
 
@@ -289,3 +293,4 @@ def test_sleep_cli_requires_confirmation_and_runs_in_simulation(capsys) -> None:
     assert payload["accepted"] is True
     assert payload["completed"] is True
     assert payload["final_positions"]["so101_gripper"] == pytest.approx(0.0)
+    assert "Press ENTER to relax" in capsys.readouterr().err
