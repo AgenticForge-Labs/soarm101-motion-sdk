@@ -70,10 +70,13 @@ human action through `soarm101 relax`, which requires ENTER confirmation.
 
 Agent Cartesian jogs are deliberately narrower than the general CLI: translation only,
 normal guarded SDK execution, and an additional physical-height policy derived from the
-matching measured workspace calibration. Above 100 mm physical height, physical displacement
-per command is limited to 50 mm; at or below 100 mm it is limited to 10 mm; a target below
-the calibrated ground plane is rejected. The workspace transform is used for this extra
-safety check only and does not authorize arbitrary physical-space trajectories.
+matching measured workspace calibration. Above 100 mm physical height, requested physical
+displacement per command is limited to 50 mm; at or below 100 mm it is limited to 10 mm.
+The planned target must remain at least 10 mm above the calibrated ground plane so ordinary
+joint settle/model error does not consume the entire floor clearance. These are conservative
+command-space bounds rather than achieved-position guarantees. The workspace transform is
+used for this extra safety check only and does not authorize arbitrary physical-space
+trajectories.
 
 ## Runtime safeguards
 
