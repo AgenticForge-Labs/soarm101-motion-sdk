@@ -1030,7 +1030,15 @@ def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
             "cameras": "read_only",
             "capture": list(AGENT_CAMERA_NAMES),
             "go_pose": f"saved poses beginning with {AGENT_POSE_PREFIX!r}",
-            "jog": "world-frame translation only",
+            "joint": {
+                "mode": "single-joint relative angle",
+                "joints": list(ARM_JOINTS),
+                "max_abs_delta_deg": AGENT_JOINT_MAX_DELTA_DEG,
+            },
+            "jog": {
+                "frames": ["world", "tool"],
+                "translation_only": True,
+            },
             "gripper": ["open", "close"],
             "sleep": True,
             "stop": "always_available",
@@ -1727,11 +1735,21 @@ def build_parser() -> argparse.ArgumentParser:
     agent_pose.add_argument("name")
     agent_pose.set_defaults(func=_cmd_agent_go_pose)
 
+    agent_joint = agent_sub.add_parser(
+        "joint",
+        help="bounded relative adjustment of one named arm joint",
+    )
+    add_session_options(agent_joint)
+    agent_joint.add_argument("joint", choices=ARM_JOINTS)
+    agent_joint.add_argument("--delta-deg", type=float, required=True)
+    agent_joint.set_defaults(func=_cmd_agent_joint)
+
     agent_jog = agent_sub.add_parser(
         "jog",
-        help="bounded world-frame translation using measured physical-height limits",
+        help="bounded world- or tool-frame translation using measured physical-height limits",
     )
     add_session_options(agent_jog)
+    agent_jog.add_argument("--frame", choices=("world", "tool"), default="world")
     agent_jog.add_argument("--x-mm", type=float, default=0.0)
     agent_jog.add_argument("--y-mm", type=float, default=0.0)
     agent_jog.add_argument("--z-mm", type=float, default=0.0)
