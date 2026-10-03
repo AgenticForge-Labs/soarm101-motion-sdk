@@ -60,6 +60,8 @@ def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() ->
 def test_joint_planner_preserves_exact_validated_endpoint_at_effective_limit() -> None:
     from types import SimpleNamespace
 
+    import numpy as np
+
     from soarm101_motion.constants import ARM_JOINTS
 
     initial_positions = {name: 0.0 for name in ARM_JOINTS}
