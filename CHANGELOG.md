@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added bounded single-joint relative agent adjustments (one named joint, max 30° per
+  command) and tool-frame translation through the existing `agent jog` capability.
+  Agent tool-frame jogs use the current gripper/TCP axes while retaining the same physical
+  displacement/height policy and normal SDK motion guards.
+- Fixed the general `move-joints` CLI so a successful physical joint move remains
+  torque-held after process exit instead of dropping the arm on disconnect.
+
 - Added a bounded `soarm101 agent ...` robot/camera interface for external reasoning
   agents. Human-interactive `agent arm` parks the follower and creates a time-limited
   lease bound to robot/calibration identity; non-interactive arming fails closed.
