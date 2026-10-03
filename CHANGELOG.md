@@ -20,12 +20,21 @@
   calibrated Sleep, STOP/HOLD, and world/model-frame translational jogs. Named
   `overhead`/`wrist` cameras are available through the same deterministic capture layer.
 - Agent jogs additionally use the matching measured workspace transform as safety evidence:
-  maximum physical displacement is 50 mm above 100 mm physical height and 10 mm at or below
-  100 mm, and targets below the calibrated ground plane are rejected. `agent capabilities`
-  now also exposes human direction guidance derived from the same paper/workspace calibration:
+  requested physical displacement is limited to 50 mm above 100 mm physical height and
+  10 mm at or below 100 mm. Targets must remain at least 10 mm above the calibrated ground
+  plane, preserving clearance for ordinary joint settle/model error observed during physical
+  validation. `agent capabilities` now also exposes human direction guidance derived from
+  the same paper/workspace calibration:
   left/right, forward/back, and up/down are reported as model/world XYZ deltas per physical
   millimeter, so reasoning agents can use the existing `agent jog` command without guessing
   model-axis signs.
+- Physical bounded-agent validation on 2026-10-03 confirmed human-interactive arming,
+  calibration-bound lease expiry/fail-closed behavior, both named camera captures, saved-pose
+  departure from Sleep, persistent hold, >100 mm and <=100 mm jog request ceilings,
+  STOP/HOLD without authority, and ENTER-confirmed human relax. Saved-pose joint transit
+  remained visibly shaky while moving but became stable once holding; small jogs also showed
+  a few millimeters of achieved workspace-position difference from the policy-predicted
+  target, motivating the 10 mm ground-plane margin rather than weakening motion guards.
 - Added an opt-in object-to-container robot/camera skill with a fresh-overhead-image
   completion contract under `agent-as-code/skills/robot-camera/`.
 - Saved joint-pose replay can now leave a measured starting pose that is already inside the
