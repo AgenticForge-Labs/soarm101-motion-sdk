@@ -112,6 +112,30 @@ soarm101 agent stop
 Every successful agent motion ends holding its reached position. The agent does not relax
 the arm. Torque release is a human-only action.
 
+## Human direction words for this workstation
+
+For the current physical workstation orientation, use these verified human-direction
+translations with the existing world-frame `agent jog` command:
+
+- `left` = positive world/model Y
+- `right` = negative world/model Y
+
+Examples:
+
+```bash
+# move 10 mm left
+soarm101 agent jog --x-mm 0 --y-mm 10 --z-mm 0
+
+# move 10 mm right
+soarm101 agent jog --x-mm 0 --y-mm -10 --z-mm 0
+```
+
+Do not infer `forward`, `back`, `up`, or `down` from model X/Y/Z yet. Those
+human directions have not been physically verified for this workstation, and model axes
+are not guaranteed to match physical table/up directions. If a task uses one of those
+unverified words, inspect available known poses/cameras or report that the direction mapping
+needs human confirmation rather than guessing.
+
 ## Object-to-container task strategy
 
 Use the overhead camera as the authoritative wide view for understanding task state and
