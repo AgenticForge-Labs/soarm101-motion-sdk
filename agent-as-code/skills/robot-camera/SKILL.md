@@ -1,3 +1,8 @@
+---
+name: soarm101-robot-camera
+description: Operate the bounded SO-ARM101 robot and overhead/wrist cameras for object-to-container manipulation tasks.
+---
+
 # Bounded SO-ARM101 robot + camera skill
 
 Use this skill only for an already configured SO-ARM101 workstation where a human has
@@ -48,7 +53,9 @@ soarm101 agent poses
 
 Only use the `soarm101 agent ...` robot-control surface. Do not import the Python SDK,
 call the unrestricted `soarm101 move-*` commands, change calibration/configuration, or
-write servo registers.
+write servo registers. The agent runner should enforce this command boundary when possible;
+the human-arming lease is an operational gate and is not a substitute for shell sandboxing
+against an agent with unrestricted same-user filesystem/process access.
 
 ## Allowed robot actions
 
