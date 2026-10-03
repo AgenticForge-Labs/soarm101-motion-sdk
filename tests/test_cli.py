@@ -228,6 +228,13 @@ def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     assert pose["completed"] is True
     assert pose["holding"] is True
 
+    assert main(["agent", "joint", "shoulder_pan", "--delta-deg", "5", "--simulation"]) == 0
+    joint = json.loads(capsys.readouterr().out)
+    assert joint["completed"] is True
+    assert joint["joint"] == "shoulder_pan"
+    assert joint["delta_deg"] == pytest.approx(5.0)
+    assert joint["holding"] is True
+
     assert main(["agent", "gripper", "close", "--simulation"]) == 0
     gripper = json.loads(capsys.readouterr().out)
     assert gripper["completed"] is True
@@ -241,6 +248,46 @@ def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     assert main(["agent", "disarm"]) == 0
     disarmed = json.loads(capsys.readouterr().out)
     assert disarmed["armed"] is False
+
+
+
+def test_agent_joint_rejects_large_delta(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from soarm101_motion.agent_control import AgentAuthorityStore
+
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    AgentAuthorityStore().issue(
+        robot_id="so101",
+        calibration_id="simulation",
+        minutes=1.0,
+    )
+    assert (
+        main(
+            [
+                "agent",
+                "joint",
+                "shoulder_pan",
+                "--delta-deg",
+                "31",
+                "--simulation",
+            ]
+        )
+        == 1
+    )
+    assert "per-command limit" in capsys.readouterr().err
+
+
+def test_agent_jog_parser_accepts_tool_frame() -> None:
+    args = build_parser().parse_args(
+        ["agent", "jog", "--frame", "tool", "--x-mm", "5", "--simulation"]
+    )
+    assert args.frame == "tool"
 
 
 def test_agent_motion_fails_closed_without_human_authority(
