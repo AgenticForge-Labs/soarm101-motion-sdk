@@ -188,7 +188,9 @@ wrist roll midpoint. On a calibrated arm the endpoint limits are already inset 1
 measured mechanical stops. After the arm reaches that fold, the stock gripper closes to a
 target 1° inside its calibrated closed mechanical stop by default. The target is derived
 from the saved gripper encoder range and normalized so calibration handles either motor
-drive direction. Sleep is never triggered automatically by connection or torque enable.
+drive direction. Sleep is never triggered automatically by connection or torque enable. After the commanded
+Sleep move completes, the CLI keeps torque enabled and waits for the operator to press ENTER
+before it relaxes the arm.
 
 ## Relative Cartesian linear jog
 
@@ -311,7 +313,16 @@ soarm101 pose go NAME --port PORT --robot-id ROBOT_ID --mode linear --yes
 ```
 
 Saved physical poses carry calibration provenance. Replay fails closed when provenance does not
-match the connected follower.
+match the connected follower. Joint/angular saved-pose replay also supports leaving the built-in
+Sleep posture: while the measured start still matches Sleep, only the known coarse self-clearance
+false positive may be ignored until the path first clears that heuristic. Every other workspace
+guard remains active, and self-clearance becomes authoritative again immediately after the path
+clears it.
+
+A successful physical `pose go` intentionally leaves follower torque enabled after the CLI
+disconnects, so the robot remains holding the reached pose. It does not relax automatically.
+Use `soarm101 relax` when a human is ready to release the arm; that command always waits for
+an explicit ENTER confirmation before disabling torque.
 
 ## Process semantics
 
