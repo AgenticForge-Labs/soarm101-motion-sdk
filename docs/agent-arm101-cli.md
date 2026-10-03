@@ -88,13 +88,16 @@ Tool-frame XYZ follows the current TCP axes and therefore rotates with the gripp
 The command requires a matching saved workspace calibration and applies an additional
 physical-space policy before the normal SDK jog:
 
-- current physical height > 100 mm: maximum physical displacement 50 mm;
-- current physical height <= 100 mm: maximum physical displacement 10 mm;
-- target physical height below 0 mm/calibrated ground plane: rejected.
+- current physical height > 100 mm: maximum requested physical displacement 50 mm;
+- current physical height <= 100 mm: maximum requested physical displacement 10 mm;
+- target physical height below 10 mm above the calibrated ground plane: rejected.
 
-The displacement limit is the norm of the inverse-mapped physical displacement, not an
-independent per-axis allowance. The workspace mapping is used only for this safety
-measurement; actual motion still executes through the normal model-frame guarded jog.
+The displacement limit is the norm of the inverse-mapped requested physical displacement,
+not an independent per-axis allowance or a metrology guarantee. Hardware validation showed
+that ordinary joint settle tolerance can leave the achieved workspace position a few
+millimeters from the planned target, so the agent policy reserves a 10 mm ground-plane
+margin. The workspace mapping is used only for this additional safety measurement; actual
+motion still executes through the normal model-frame guarded jog and its SDK safety checks.
 
 Sleep and STOP/HOLD are:
 
