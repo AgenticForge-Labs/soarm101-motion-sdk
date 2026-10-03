@@ -467,21 +467,15 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to saved joint coordinates, permitting a tightly bounded Sleep exit."""
+        """Move to saved joint coordinates with a bounded exit from an existing fold."""
         current, target = self._resolve_joint_target(positions, relative=False)
-        if self.config.enable_workspace_checks and self._is_near_sleep_pose(current):
-            self._validate_sleep_exit_workspace_path(current, target)
-            return self.motion.move_joints(
-                positions,
-                speed=speed,
-                acceleration=acceleration,
-                relative=False,
-                wait=wait,
-            )
-        return self.move_joints(
+        if self.config.enable_workspace_checks:
+            self._validate_saved_pose_exit_workspace_path(current, target)
+        return self.motion.move_joints(
             positions,
             speed=speed,
             acceleration=acceleration,
+            relative=False,
             wait=wait,
         )
 
