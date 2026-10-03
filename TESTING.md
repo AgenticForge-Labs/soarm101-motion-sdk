@@ -1,4 +1,30 @@
-# Testing roadmap
+# Testing
+
+## Bounded agent CLI
+
+Automated tests cover authority expiry/identity matching, non-interactive arming rejection,
+agent-only pose filtering, simulation motion commands, and the measured-height jog policy.
+Before physical agent use, run a supervised validation from a clear workspace:
+
+```bash
+soarm101 agent arm --minutes 15
+soarm101 agent capabilities
+soarm101 agent state
+soarm101 agent poses
+soarm101 agent cameras
+soarm101 agent go-pose agent_start_overhead
+soarm101 agent capture overhead
+soarm101 agent capture wrist
+```
+
+Confirm every successful motion remains torque-held. Confirm missing/expired authority
+rejects motion. From measured heights above and below 100 mm, validate that physical jog
+requests over 50 mm / 10 mm respectively are rejected before motion and that a target below
+the calibrated ground plane is rejected. Begin with much smaller supervised jogs than the
+policy maxima. STOP/HOLD must remain available without authority. End the session by
+disarming authority, then use human-confirmed `soarm101 relax` only when physically safe.
+
+ roadmap
 
 This file is the handoff checklist for physical testing. Implementation can continue in
 simulation before any of these steps are run. Work through the sections in order when
