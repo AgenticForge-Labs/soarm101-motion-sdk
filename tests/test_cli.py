@@ -210,6 +210,7 @@ def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     assert capabilities["poses"] == ["agent_start_overhead"]
     assert capabilities["actions"]["gripper"] == ["open", "close"]
     assert capabilities["jog_policy"]["physical_height_threshold_mm"] == pytest.approx(100.0)
+    assert capabilities["jog_policy"]["minimum_target_height_mm"] == pytest.approx(10.0)
 
     assert (
         main(
