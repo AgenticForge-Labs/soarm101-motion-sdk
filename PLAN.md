@@ -46,7 +46,10 @@ Robo Director is the primary source of cross-repository integration requirements
 - [x] Shared machine-local workstation profile for follower/leader addressing, calibration
   references, and named cameras consumed by GUI, CLI, and external agents.
 - [x] Model-agnostic `agent-as-code/` machine setup and multi-view capture helper plus a
-  neutral SDK-level agent CLI contract that does not prescribe task strategy.
+  neutral SDK-level agent CLI contract.
+- [x] Bounded `soarm101 agent ...` facade with human-interactive time-limited motion
+  authority, `agent_*` saved poses, overhead/wrist capture, safe gripper endpoints,
+  Sleep/STOP-HOLD, and measured-height-limited translational jogs.
 
 ## Director ecosystem integration 0.2
 
@@ -128,9 +131,10 @@ its own persistent connection for live controls; it must not launch CLI subproce
 
 ## Later
 
-- [ ] Revisit optional agent sandboxing only after direct CLI/camera robot loops are
-  physically validated. The earlier OpenShell experiment is deferred and is not an
-  architectural dependency for initial agent control.
+- [ ] Revisit optional agent sandboxing after the bounded CLI/camera robot loop is
+  physically validated. The bounded CLI is the robot capability boundary; a sandbox may
+  further restrict shell/filesystem access but is not an architectural dependency for the
+  initial experiment.
 - [ ] Investigate true leader gravity compensation as a separate feature. Compare the
   Trossen leader/SDK approach before selecting a control strategy; do not couple this to
   the current position-hold parking implementation.
