@@ -143,10 +143,12 @@ resolve the separate visible-shake issue.
 
 Also validate the calibrated Sleep posture first in simulation, then with a clear physical
 workspace at low speed. After Sleep completes, verify the CLI remains torque-held until the
-operator presses ENTER and that ENTER then relaxes the arm. From the held Sleep posture, replay
-a known-safe saved joint pose and verify the initial known coarse self-clearance false positive
-does not block departure; the path must still fail if any non-self-clearance workspace guard
-fails, or if self-clearance becomes invalid again after the path has first cleared it. Sleep is derived from the active executable limits: shoulder pan
+operator presses ENTER and that ENTER then relaxes the arm. From the held folded posture,
+replay a known-safe saved joint pose and verify sample 0 does not block departure solely
+because the arm is already inside the coarse self-clearance envelope. The path must fail if
+any non-self-clearance workspace guard fails, if minimum self-clearance decreases while
+exiting, if the path never reaches the configured clearance threshold, or if ordinary
+self-clearance becomes invalid again after the path has cleared it. Sleep is derived from the active executable limits: shoulder pan
 midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
 wrist roll midpoint. On a calibrated physical follower those endpoints are already 1°
 inside the measured mechanical stops. Sleep retains calibrated joint limits plus trajectory, rate/acceleration, following-error,
