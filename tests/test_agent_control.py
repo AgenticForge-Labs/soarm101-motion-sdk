@@ -107,13 +107,13 @@ def test_agent_jog_tightens_to_10_mm_near_ground() -> None:
         )
 
 
-def test_agent_jog_rejects_crossing_calibrated_ground() -> None:
+def test_agent_jog_rejects_entering_calibrated_ground_margin() -> None:
     workspace = _identity_workspace()
-    with pytest.raises(PermissionError, match="ground plane"):
+    with pytest.raises(PermissionError, match="10.0 mm calibrated ground-plane safety margin"):
         evaluate_agent_jog(
             workspace,
             active_calibration_id="sha256:motor",
-            current_model_position_m=(0.1, 0.1, 0.005),
+            current_model_position_m=(0.1, 0.1, 0.015),
             delta_model_m=(0.0, 0.0, -0.006),
         )
 
