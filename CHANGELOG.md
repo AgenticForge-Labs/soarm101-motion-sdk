@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Saved joint-pose replay can now leave the built-in Sleep posture without being rejected at
+  path sample 0 by Sleep's known coarse self-clearance false positive. The exception is narrow:
+  the measured start must match Sleep, only initial self-clearance failures are deferred, every
+  other workspace guard remains active, and self-clearance becomes authoritative again after
+  the path first clears it.
+- Physical `pose go` now preserves torque hold after the CLI disconnects instead of
+  automatically relaxing at command exit. `soarm101 relax` requires explicit ENTER
+  confirmation. Sleep likewise holds after reaching the folded posture and only relaxes after
+  the operator presses ENTER.
 - Hardware validation of the endpoint-seeded reverse fallback still failed safely on
   A_UP->B_UP. The forward solve bottomed out at 0.648 mm and the reverse solve at
   0.646 mm against the unchanged 0.5 mm Cartesian tolerance, while both endpoints still
