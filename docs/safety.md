@@ -57,6 +57,15 @@ immediately drop the arm.
 
 ## Runtime safeguards
 
+A successful physical `soarm101 pose go` is intentionally a **park/hold** operation:
+the CLI closes its serial session without disabling servo torque so the follower remains
+at the reached pose. Closing the terminal or returning to the shell is therefore not a
+release action. Use `soarm101 relax` when a human is ready to release the mechanism;
+that command requires an explicit ENTER confirmation. The Sleep CLI follows the same
+principle while the session is still open: it reaches and holds Sleep, then waits for
+ENTER before disabling torque. Unexpected command interruption before that confirmation
+leaves the arm holding rather than dropping it.
+
 - Normal connection and read-only diagnosis do not rewrite motor configuration.
 - Direct hardware writes are rejected while torque is disabled.
 - Enabling torque latches measured positions as goals. A relaxed mechanism can settle a
