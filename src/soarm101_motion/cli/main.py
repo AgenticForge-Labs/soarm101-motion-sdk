@@ -19,6 +19,7 @@ from soarm101_motion.agent_control import (
     AGENT_JOG_HIGH_MAX_DISTANCE_M,
     AGENT_JOG_LOW_MAX_DISTANCE_M,
     AGENT_JOG_MINIMUM_TARGET_HEIGHT_M,
+    AGENT_JOINT_MAX_DELTA_DEG,
     AGENT_POSE_PREFIX,
     DEFAULT_AUTHORITY_MINUTES,
     MAX_AUTHORITY_MINUTES,
@@ -38,7 +39,7 @@ from soarm101_motion.constants import (
     MOTOR_IDS,
     STOCK_GRIPPER,
 )
-from soarm101_motion.control import jog_linear_cli_units
+from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
 from soarm101_motion.poses import PoseLibrary, SavedPose, sleep_joint_positions
