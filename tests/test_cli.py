@@ -463,8 +463,9 @@ def test_sleep_cli_requires_confirmation_and_runs_in_simulation(
         )
         == 0
     )
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
     assert payload["accepted"] is True
     assert payload["completed"] is True
     assert payload["final_positions"]["so101_gripper"] == pytest.approx(0.0)
-    assert "Press ENTER to relax" in capsys.readouterr().err
+    assert "Press ENTER to relax" in captured.err
