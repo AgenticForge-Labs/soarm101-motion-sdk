@@ -13,11 +13,12 @@
   100 mm, and targets below the calibrated ground plane are rejected.
 - Added an opt-in object-to-container robot/camera skill with a fresh-overhead-image
   completion contract under `agent-as-code/skills/robot-camera/`.
-- Saved joint-pose replay can now leave the built-in Sleep posture without being rejected at
-  path sample 0 by Sleep's known coarse self-clearance false positive. The exception is narrow:
-  the measured start must match Sleep, only initial self-clearance failures are deferred, every
-  other workspace guard remains active, and self-clearance becomes authoritative again after
-  the path first clears it.
+- Saved joint-pose replay can now leave a measured starting pose that is already inside the
+  coarse centerline self-clearance envelope without rejecting solely at path sample 0. The
+  exception is property-based rather than pose-name-based: all non-self-clearance workspace
+  guards must pass at every sample, minimum self-clearance may not decrease while inside the
+  envelope, the path must eventually clear the configured threshold, and ordinary full
+  workspace validation resumes immediately afterward.
 - Physical `pose go` now preserves torque hold after the CLI disconnects instead of
   automatically relaxing at command exit. `soarm101 relax` requires explicit ENTER
   confirmation. Sleep likewise holds after reaching the folded posture and only relaxes after
