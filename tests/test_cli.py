@@ -124,6 +124,50 @@ def test_agent_facing_motion_commands_support_json_in_simulation(capsys) -> None
 
 
 
+def test_agent_capabilities_expose_calibrated_human_directions(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from soarm101_motion.workspace import WorkspaceCalibrationStore, fit_paper_workspace
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+
+    width = 0.2159
+    height = 0.2794
+    workspace = fit_paper_workspace(
+        {
+            "A": (0.0, 0.0, 0.0),
+            "B": (width, 0.0, 0.0),
+            "C": (width, height, 0.0),
+            "D": (0.0, height, 0.0),
+        },
+        (0.0, height, 0.050),
+        robot_id="so101",
+        arm_calibration_id="sha256:test",
+        width_m=width,
+        height_m=height,
+        reference_height_m=0.050,
+    )
+    WorkspaceCalibrationStore("so101").save(workspace)
+
+    assert main(["agent", "capabilities", "--robot-id", "so101"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    directions = payload["world_directions"]
+    assert directions["available"] is True
+    vectors = directions["model_delta_mm_per_physical_mm"]
+    assert vectors["right"] == pytest.approx([1.0, 0.0, 0.0])
+    assert vectors["left"] == pytest.approx([-1.0, 0.0, 0.0])
+    assert vectors["forward"] == pytest.approx([0.0, 1.0, 0.0])
+    assert vectors["back"] == pytest.approx([0.0, -1.0, 0.0])
+    assert vectors["up"] == pytest.approx([0.0, 0.0, 1.0])
+    assert vectors["down"] == pytest.approx([0.0, 0.0, -1.0])
+
+
 def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     tmp_path,
     monkeypatch,
