@@ -56,7 +56,10 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
     return SOARM101Config(**values)
 
 
-def _arm_from_args(args: argparse.Namespace) -> SOARM101:
+def _arm_from_args(
+    args: argparse.Namespace,
+    **config_overrides: object,
+) -> SOARM101:
     if getattr(args, "simulation", False):
         return SOARM101.simulated(realtime=True)
     if args.port:
@@ -83,6 +86,7 @@ def _arm_from_args(args: argparse.Namespace) -> SOARM101:
         and follower.calibration
     ):
         overrides["calibration_path"] = Path(follower.calibration)
+    overrides.update(config_overrides)
     return SOARM101(_hardware_config(args, **overrides))
 
 
@@ -445,13 +449,19 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
-    with _arm_from_args(args) as arm:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
         result = arm.move_sleep(
             speed=args.speed_deg_s * pi / 180.0,
             acceleration=args.acceleration_deg_s2 * pi / 180.0,
         )
         _print_motion_result(result, as_json=args.json)
+        print(
+            "Sleep complete and holding. Press ENTER to relax the arm.",
+            file=sys.stderr,
+        )
+        input()
+        arm.relax()
     return 0
 
 
@@ -566,10 +576,19 @@ def _cmd_pose_go(args: argparse.Namespace) -> int:
         print("Refusing to move hardware without --yes.", file=sys.stderr)
         return 2
     pose = PoseLibrary(args.robot_id).require(args.name)
-    with _arm_from_args(args) as arm:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        arm.require_artifact_calibration(
+            {
+                "source_robot_id": pose.source_robot_id,
+                "source_calibration_id": pose.source_calibration_id,
+                "target_robot_id": pose.target_robot_id,
+                "target_calibration_id": pose.target_calibration_id,
+            },
+            artifact_label=f"saved pose {args.name!r}",
+        )
         arm.enable()
         if args.mode == "joint":
-            result = arm.move_joints(
+            result = arm.move_joints_from_saved_pose(
                 pose.joints,
                 speed=args.speed_deg_s * pi / 180.0,
                 acceleration=args.acceleration_deg_s2 * pi / 180.0,
@@ -583,6 +602,19 @@ def _cmd_pose_go(args: argparse.Namespace) -> int:
             )
         print(result)
         print(arm.tool.move(pose.gripper))
+        arm.hold()
+        print("Pose reached; follower remains torque-held.", file=sys.stderr)
+    return 0
+
+def _cmd_relax(args: argparse.Namespace) -> int:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        print(
+            "Relax will disable follower torque. Press ENTER to confirm relax.",
+            file=sys.stderr,
+        )
+        input()
+        arm.relax()
+    print("Follower relaxed.")
     return 0
 
 
@@ -1103,6 +1135,13 @@ def build_parser() -> argparse.ArgumentParser:
     linear.add_argument("--yes", action="store_true")
     linear.add_argument("--json", action="store_true")
     linear.set_defaults(func=_cmd_move_linear)
+
+    relax = sub.add_parser(
+        "relax",
+        help="disable follower torque after explicit ENTER confirmation",
+    )
+    add_session_options(relax)
+    relax.set_defaults(func=_cmd_relax)
 
     pose = sub.add_parser("pose", help="list, capture, and replay GUI named poses")
     pose_sub = pose.add_subparsers(dest="pose_command", required=True)
