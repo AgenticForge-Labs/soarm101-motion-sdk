@@ -953,12 +953,55 @@ def _agent_require_authority(args: argparse.Namespace, arm: SOARM101) -> dict[st
     return authority.status_payload()
 
 
+def _agent_world_direction_payload(robot_id: str) -> dict[str, object]:
+    try:
+        workspace = WorkspaceCalibrationStore(robot_id).load()
+    except Exception as exc:
+        return {
+            "available": False,
+            "reason": str(exc),
+        }
+
+    linear = np.asarray(workspace.physical_to_model_linear, dtype=float)
+
+    def delta_for_physical_axis(axis: tuple[float, float, float]) -> list[float]:
+        physical_mm = np.asarray(axis, dtype=float) / 1000.0
+        model_delta_mm = linear @ physical_mm * 1000.0
+        return [float(value) for value in model_delta_mm]
+
+    return {
+        "available": True,
+        "source": "paper/workspace calibration",
+        "convention": {
+            "right": "+physical_x (A->B)",
+            "left": "-physical_x (B->A)",
+            "forward": "+physical_y (A->D / B->C)",
+            "back": "-physical_y (D->A / C->B)",
+            "up": "+physical_z (D->UP)",
+            "down": "-physical_z (UP->D)",
+        },
+        "model_delta_mm_per_physical_mm": {
+            "right": delta_for_physical_axis((1.0, 0.0, 0.0)),
+            "left": delta_for_physical_axis((-1.0, 0.0, 0.0)),
+            "forward": delta_for_physical_axis((0.0, 1.0, 0.0)),
+            "back": delta_for_physical_axis((0.0, -1.0, 0.0)),
+            "up": delta_for_physical_axis((0.0, 0.0, 1.0)),
+            "down": delta_for_physical_axis((0.0, 0.0, -1.0)),
+        },
+        "usage": (
+            "multiply the chosen direction vector by the requested physical distance in mm "
+            "and pass the resulting XYZ values to 'soarm101 agent jog'"
+        ),
+    }
+
+
 def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
     profile = WorkstationProfileStore().load()
     return {
         "authority": AgentAuthorityStore().status(),
         "poses": _agent_pose_names(robot_id),
         "cameras": _agent_camera_names(profile),
+        "world_directions": _agent_world_direction_payload(robot_id),
         "actions": {
             "state": "read_only",
             "poses": "read_only",
