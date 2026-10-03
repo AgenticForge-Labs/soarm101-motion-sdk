@@ -123,6 +123,147 @@ def test_agent_facing_motion_commands_support_json_in_simulation(capsys) -> None
 
 
 
+
+def test_agent_cli_arm_capabilities_and_motion_in_simulation(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "soarm101_motion.cli.main._confirm_agent_arm_interactive",
+        lambda minutes: None,
+    )
+
+    assert (
+        main(
+            [
+                "pose",
+                "capture",
+                "agent_start_overhead",
+                "--robot-id",
+                "so101",
+                "--simulation",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(["agent", "arm", "--simulation", "--minutes", "1"]) == 0
+    armed = json.loads(capsys.readouterr().out)
+    assert armed["armed"] is True
+    assert armed["calibration_id"] == "simulation"
+    assert armed["holding"] is True
+
+    assert main(["agent", "capabilities", "--robot-id", "so101"]) == 0
+    capabilities = json.loads(capsys.readouterr().out)
+    assert capabilities["authority"]["armed"] is True
+    assert capabilities["poses"] == ["agent_start_overhead"]
+    assert capabilities["actions"]["gripper"] == ["open", "close"]
+    assert capabilities["jog_policy"]["physical_height_threshold_mm"] == pytest.approx(100.0)
+
+    assert (
+        main(
+            [
+                "agent",
+                "go-pose",
+                "agent_start_overhead",
+                "--robot-id",
+                "so101",
+                "--simulation",
+            ]
+        )
+        == 0
+    )
+    pose = json.loads(capsys.readouterr().out)
+    assert pose["completed"] is True
+    assert pose["holding"] is True
+
+    assert main(["agent", "gripper", "close", "--simulation"]) == 0
+    gripper = json.loads(capsys.readouterr().out)
+    assert gripper["completed"] is True
+    assert gripper["target"] == "close"
+
+    assert main(["agent", "sleep", "--simulation"]) == 0
+    sleep = json.loads(capsys.readouterr().out)
+    assert sleep["completed"] is True
+    assert sleep["holding"] is True
+
+    assert main(["agent", "disarm"]) == 0
+    disarmed = json.loads(capsys.readouterr().out)
+    assert disarmed["armed"] is False
+
+
+def test_agent_motion_fails_closed_without_human_authority(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    assert main(["agent", "gripper", "open", "--simulation"]) == 1
+    assert "human must run 'soarm101 agent arm'" in capsys.readouterr().err
+
+
+def test_agent_arm_rejects_noninteractive_terminal(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["agent", "arm", "--simulation"]) == 1
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_agent_stop_does_not_require_motion_authority(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    assert main(["agent", "stop", "--simulation"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["completed"] is True
+    assert payload["holding"] is True
+
+
+def test_agent_jog_is_not_enabled_without_measured_workspace(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from soarm101_motion.agent_control import AgentAuthorityStore
+
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    AgentAuthorityStore().issue(
+        robot_id="so101",
+        calibration_id="simulation",
+        minutes=1.0,
+    )
+    assert (
+        main(
+            [
+                "agent",
+                "jog",
+                "--simulation",
+                "--x-mm",
+                "1",
+            ]
+        )
+        == 1
+    )
+    assert "measured workspace calibration" in capsys.readouterr().err
+
+
 def test_session_cli_defaults_to_saved_workstation_follower(tmp_path, monkeypatch) -> None:
     workstation = tmp_path / "workstation.json"
     calibration = tmp_path / "bench-follower.json"
