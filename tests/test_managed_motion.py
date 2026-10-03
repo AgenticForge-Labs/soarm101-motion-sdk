@@ -115,6 +115,83 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
 
 
 
+def test_saved_pose_can_exit_known_sleep_self_clearance_exception(monkeypatch) -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        sleep = arm.get_sleep_joint_positions()
+        arm.move_sleep(speed=0.2, acceleration=0.5)
+        calls = 0
+
+        import soarm101_motion.arm as arm_module
+
+        original = arm_module.validate_workspace_configuration
+
+        def sleep_exit_validator(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                raise SafetyViolationError(
+                    "workspace check: coarse self-clearance between "
+                    "shoulder_pan->shoulder_lift and elbow_flex->wrist_flex "
+                    "is 0.018 m, below 0.025 m"
+                )
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            arm_module,
+            "validate_workspace_configuration",
+            sleep_exit_validator,
+        )
+        target = {name: 0.0 for name in ARM_JOINTS}
+        result = arm.move_joints_from_saved_pose(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+        )
+
+    assert result.completed is True
+    assert calls > 2
+
+
+def test_saved_pose_sleep_exit_rejects_self_clearance_after_path_clears(monkeypatch) -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.move_sleep(speed=0.2, acceleration=0.5)
+
+        import soarm101_motion.arm as arm_module
+
+        calls = 0
+
+        def staged_validator(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SafetyViolationError(
+                    "workspace check: coarse self-clearance initial Sleep exception"
+                )
+            if calls == 3:
+                raise SafetyViolationError(
+                    "workspace check: coarse self-clearance returned later"
+                )
+
+        monkeypatch.setattr(
+            arm_module,
+            "validate_workspace_configuration",
+            staged_validator,
+        )
+        target = {name: 0.0 for name in ARM_JOINTS}
+        with pytest.raises(SafetyViolationError, match="sample 2"):
+            arm.move_joints_from_saved_pose(
+                target,
+                speed=0.2,
+                acceleration=0.5,
+            )
+
+
 def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
     from types import SimpleNamespace
 
