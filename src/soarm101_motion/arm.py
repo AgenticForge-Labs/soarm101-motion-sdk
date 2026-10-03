@@ -221,30 +221,18 @@ class SOARM101:
         validate_joint_targets(target, limits=limits)
         return current, target
 
-    def _is_near_sleep_pose(self, joints: Mapping[str, float]) -> bool:
-        sleep = self.get_sleep_joint_positions()
-        tolerance = max(self.config.joint_position_tolerance_rad * 2.0, math.radians(2.0))
-        return all(
-            abs(float(joints[name]) - float(sleep[name])) <= tolerance
-            for name in ARM_JOINTS
-        )
-
-    def _validate_sleep_exit_workspace_path(
+    def _validate_saved_pose_exit_workspace_path(
         self,
         current: Mapping[str, float],
         target: Mapping[str, float],
     ) -> None:
-        """Validate a joint path that starts at the known folded Sleep posture.
+        """Allow a saved-pose path to leave an already-present coarse self-clearance state.
 
-        Sleep intentionally violates only the generic coarse self-clearance heuristic.
-        While leaving that exact neighborhood, ignore only that one heuristic until the
-        first fully valid sample. Every other workspace guard remains active at every
-        sample, and self-clearance becomes authoritative again once the path clears it.
+        If the measured starting configuration already violates only the generic
+        centerline self-clearance heuristic, the path may proceed only while minimum
+        self-clearance is nondecreasing and until it reaches the normal configured
+        clearance threshold. Other workspace guards remain authoritative throughout.
         """
-        if not self._is_near_sleep_pose(current):
-            raise SafetyViolationError(
-                "Sleep-exit workspace exception requires the measured start to match Sleep"
-            )
         max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
         steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
         samples = tuple(
@@ -254,34 +242,70 @@ class SOARM101:
             }
             for fraction in np.linspace(0.0, 1.0, steps)
         )
-        cleared_self_clearance = False
-        last_deferred: SafetyViolationError | None = None
+
+        workspace_without_self = {
+            **self._workspace_kwargs(),
+            "minimum_self_clearance_m": 0.0,
+        }
         for index, joints in enumerate(samples):
             try:
                 validate_workspace_configuration(
                     self.model,
                     joints,
                     tcp=self.active_tcp,
-                    **self._workspace_kwargs(),
+                    **workspace_without_self,
                 )
             except SafetyViolationError as exc:
-                if (
-                    not cleared_self_clearance
-                    and "coarse self-clearance" in str(exc)
-                ):
-                    last_deferred = exc
-                    continue
                 raise SafetyViolationError(
                     f"workspace path sample {index}: {exc}"
                 ) from exc
-            else:
-                cleared_self_clearance = True
-        if not cleared_self_clearance:
-            assert last_deferred is not None
-            raise SafetyViolationError(
-                "saved-pose target never exits the Sleep self-clearance exception: "
-                f"{last_deferred}"
+
+        required_clearance = float(self.config.minimum_self_clearance_m)
+        clearances = tuple(
+            minimum_workspace_self_clearance(
+                self.model,
+                joints,
+                tcp=self.active_tcp,
             )
+            for joints in samples
+        )
+        if clearances[0] >= required_clearance:
+            validate_workspace_path(
+                self.model,
+                samples,
+                tcp=self.active_tcp,
+                **self._workspace_kwargs(),
+            )
+            return
+
+        monotonic_tolerance_m = 0.0005
+        previous = clearances[0]
+        cleared_index = None
+        for index, clearance in enumerate(clearances[1:], start=1):
+            if clearance + monotonic_tolerance_m < previous:
+                raise SafetyViolationError(
+                    "saved-pose path starts inside coarse self-clearance but moves "
+                    f"deeper at sample {index}: {clearance:.3f} m after "
+                    f"{previous:.3f} m"
+                )
+            previous = max(previous, clearance)
+            if clearance >= required_clearance:
+                cleared_index = index
+                break
+
+        if cleared_index is None:
+            raise SafetyViolationError(
+                "saved-pose path starts inside coarse self-clearance and never exits "
+                f"the {required_clearance:.3f} m envelope; target clearance is "
+                f"{clearances[-1]:.3f} m"
+            )
+
+        validate_workspace_path(
+            self.model,
+            samples[cleared_index:],
+            tcp=self.active_tcp,
+            **self._workspace_kwargs(),
+        )
 
     def _validate_joint_workspace_path(
         self,
