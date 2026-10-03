@@ -55,6 +55,25 @@ For supervised paper Cartesian validation, a motion exception transitions to STO
 and waits for the operator before relaxing, so a failed gravity-loaded move does not
 immediately drop the arm.
 
+## Agent motion authority
+
+The bounded `soarm101 agent ...` interface separates human authorization from agent
+reasoning. A human must run `soarm101 agent arm` from an interactive terminal. Successful
+arming parks/holds the follower and creates a time-limited authority lease bound to the
+robot and calibration identity. Non-interactive arming is rejected. Expired, missing, or
+calibration-mismatched authority fails closed.
+
+Agent actions never relax the follower. Named poses, jogs, gripper actions, and Sleep end
+holding. STOP/HOLD remains available even without an active lease. Torque release remains a
+human action through `soarm101 relax`, which requires ENTER confirmation.
+
+Agent Cartesian jogs are deliberately narrower than the general CLI: translation only,
+normal guarded SDK execution, and an additional physical-height policy derived from the
+matching measured workspace calibration. Above 100 mm physical height, physical displacement
+per command is limited to 50 mm; at or below 100 mm it is limited to 10 mm; a target below
+the calibrated ground plane is rejected. The workspace transform is used for this extra
+safety check only and does not authorize arbitrary physical-space trajectories.
+
 ## Runtime safeguards
 
 A successful physical `soarm101 pose go` is intentionally a **park/hold** operation:
