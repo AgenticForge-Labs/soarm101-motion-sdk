@@ -123,6 +123,239 @@ def test_agent_facing_motion_commands_support_json_in_simulation(capsys) -> None
 
 
 
+
+def test_agent_capabilities_expose_calibrated_human_directions(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from soarm101_motion.workspace import WorkspaceCalibrationStore, fit_paper_workspace
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+
+    width = 0.2159
+    height = 0.2794
+    workspace = fit_paper_workspace(
+        {
+            "A": (0.0, 0.0, 0.0),
+            "B": (width, 0.0, 0.0),
+            "C": (width, height, 0.0),
+            "D": (0.0, height, 0.0),
+        },
+        (0.0, height, 0.050),
+        robot_id="so101",
+        arm_calibration_id="sha256:test",
+        width_m=width,
+        height_m=height,
+        reference_height_m=0.050,
+    )
+    WorkspaceCalibrationStore("so101").save(workspace)
+
+    assert main(["agent", "capabilities", "--robot-id", "so101"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    directions = payload["world_directions"]
+    assert directions["available"] is True
+    vectors = directions["model_delta_mm_per_physical_mm"]
+    assert vectors["right"] == pytest.approx([1.0, 0.0, 0.0])
+    assert vectors["left"] == pytest.approx([-1.0, 0.0, 0.0])
+    assert vectors["forward"] == pytest.approx([0.0, 1.0, 0.0])
+    assert vectors["back"] == pytest.approx([0.0, -1.0, 0.0])
+    assert vectors["up"] == pytest.approx([0.0, 0.0, 1.0])
+    assert vectors["down"] == pytest.approx([0.0, 0.0, -1.0])
+
+
+def test_agent_cli_arm_capabilities_and_motion_in_simulation(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "soarm101_motion.cli.main._confirm_agent_arm_interactive",
+        lambda minutes: None,
+    )
+
+    assert (
+        main(
+            [
+                "pose",
+                "capture",
+                "agent_start_overhead",
+                "--robot-id",
+                "so101",
+                "--simulation",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(["agent", "arm", "--simulation", "--minutes", "1"]) == 0
+    armed = json.loads(capsys.readouterr().out)
+    assert armed["armed"] is True
+    assert armed["calibration_id"] == "simulation"
+    assert armed["holding"] is True
+
+    assert main(["agent", "capabilities", "--robot-id", "so101"]) == 0
+    capabilities = json.loads(capsys.readouterr().out)
+    assert capabilities["authority"]["armed"] is True
+    assert capabilities["poses"] == ["agent_start_overhead"]
+    assert capabilities["actions"]["gripper"] == ["open", "close"]
+    assert capabilities["jog_policy"]["physical_height_threshold_mm"] == pytest.approx(100.0)
+    assert capabilities["jog_policy"]["minimum_target_height_mm"] == pytest.approx(10.0)
+
+    assert (
+        main(
+            [
+                "agent",
+                "go-pose",
+                "agent_start_overhead",
+                "--robot-id",
+                "so101",
+                "--simulation",
+            ]
+        )
+        == 0
+    )
+    pose = json.loads(capsys.readouterr().out)
+    assert pose["completed"] is True
+    assert pose["holding"] is True
+
+    assert main(["agent", "joint", "shoulder_pan", "--delta-deg", "5", "--simulation"]) == 0
+    joint = json.loads(capsys.readouterr().out)
+    assert joint["completed"] is True
+    assert joint["joint"] == "shoulder_pan"
+    assert joint["delta_deg"] == pytest.approx(5.0)
+    assert joint["holding"] is True
+
+    assert main(["agent", "gripper", "close", "--simulation"]) == 0
+    gripper = json.loads(capsys.readouterr().out)
+    assert gripper["completed"] is True
+    assert gripper["target"] == "close"
+
+    assert main(["agent", "sleep", "--simulation"]) == 0
+    sleep = json.loads(capsys.readouterr().out)
+    assert sleep["completed"] is True
+    assert sleep["holding"] is True
+
+    assert main(["agent", "disarm"]) == 0
+    disarmed = json.loads(capsys.readouterr().out)
+    assert disarmed["armed"] is False
+
+
+
+def test_agent_joint_rejects_large_delta(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from soarm101_motion.agent_control import AgentAuthorityStore
+
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    AgentAuthorityStore().issue(
+        robot_id="so101",
+        calibration_id="simulation",
+        minutes=1.0,
+    )
+    assert (
+        main(
+            [
+                "agent",
+                "joint",
+                "shoulder_pan",
+                "--delta-deg",
+                "31",
+                "--simulation",
+            ]
+        )
+        == 1
+    )
+    assert "per-command limit" in capsys.readouterr().err
+
+
+def test_agent_jog_parser_accepts_tool_frame() -> None:
+    args = build_parser().parse_args(
+        ["agent", "jog", "--frame", "tool", "--x-mm", "5", "--simulation"]
+    )
+    assert args.frame == "tool"
+
+
+def test_agent_motion_fails_closed_without_human_authority(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    assert main(["agent", "gripper", "open", "--simulation"]) == 1
+    assert "human must run 'soarm101 agent arm'" in capsys.readouterr().err
+
+
+def test_agent_arm_rejects_noninteractive_terminal(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["agent", "arm", "--simulation"]) == 1
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_agent_stop_does_not_require_motion_authority(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    assert main(["agent", "stop", "--simulation"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["completed"] is True
+    assert payload["holding"] is True
+
+
+def test_agent_jog_is_not_enabled_without_measured_workspace(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from soarm101_motion.agent_control import AgentAuthorityStore
+
+    monkeypatch.setenv(
+        "SOARM101_AGENT_AUTHORITY_PATH",
+        str(tmp_path / "authority.json"),
+    )
+    AgentAuthorityStore().issue(
+        robot_id="so101",
+        calibration_id="simulation",
+        minutes=1.0,
+    )
+    assert (
+        main(
+            [
+                "agent",
+                "jog",
+                "--simulation",
+                "--x-mm",
+                "1",
+            ]
+        )
+        == 1
+    )
+    assert "measured workspace calibration" in capsys.readouterr().err
+
+
 def test_session_cli_defaults_to_saved_workstation_follower(tmp_path, monkeypatch) -> None:
     workstation = tmp_path / "workstation.json"
     calibration = tmp_path / "bench-follower.json"
@@ -191,6 +424,39 @@ def test_explicit_session_port_overrides_saved_workstation_follower(
     assert arm.config.robot_id == "explicit"
 
 
+def test_pose_go_can_request_persistent_torque_on_disconnect() -> None:
+    args = build_parser().parse_args(
+        [
+            "pose",
+            "go",
+            "agent_start_overhead",
+            "--port",
+            "/dev/ttyACM9",
+            "--robot-id",
+            "so101",
+            "--yes",
+        ]
+    )
+    arm = _arm_from_args(args, disable_torque_on_disconnect=False)
+    assert arm.config.disable_torque_on_disconnect is False
+
+
+def test_relax_cli_always_requires_enter_confirmation(monkeypatch, capsys) -> None:
+    confirmations = 0
+
+    def confirm(*args, **kwargs):
+        nonlocal confirmations
+        confirmations += 1
+        return ""
+
+    monkeypatch.setattr("builtins.input", confirm)
+    assert main(["relax", "--simulation"]) == 0
+    assert confirmations == 1
+    captured = capsys.readouterr()
+    assert "Press ENTER to confirm relax" in captured.err
+    assert "Follower relaxed." in captured.out
+
+
 def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> None:
     from math import degrees
 
@@ -233,6 +499,10 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     payload = json.loads(capsys.readouterr().out)
     assert payload["calibration_path"] == str(calibration_path)
     assert payload["calibrated_joint_stop_margin_deg"] == pytest.approx(1.0)
+    assert payload["calibrated_gripper_stop_margin_deg"] == pytest.approx(1.0)
+    assert 0.0 < payload["sleep_gripper"]["normalized"] < 0.1
+    assert payload["sleep_gripper"]["raw"] > 700
+    assert payload["sleep_gripper"]["calibrated_raw"] == [700, 3394]
 
     shoulder_calibrated_upper = payload["joints"]["shoulder_pan"]["calibrated_deg"][1]
     shoulder_effective_upper = payload["joints"]["shoulder_pan"]["effective_deg"][1]
@@ -262,7 +532,11 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
 
 
-def test_sleep_cli_requires_confirmation_and_runs_in_simulation(capsys) -> None:
+def test_sleep_cli_requires_confirmation_and_runs_in_simulation(
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda *args, **kwargs: "")
     assert main(["sleep", "--simulation"]) == 2
     assert "Refusing to move without --yes" in capsys.readouterr().err
 
@@ -281,6 +555,9 @@ def test_sleep_cli_requires_confirmation_and_runs_in_simulation(capsys) -> None:
         )
         == 0
     )
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
     assert payload["accepted"] is True
     assert payload["completed"] is True
+    assert payload["final_positions"]["so101_gripper"] == pytest.approx(0.0)
+    assert "Press ENTER to relax" in captured.err

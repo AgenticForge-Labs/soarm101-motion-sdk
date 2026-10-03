@@ -14,6 +14,112 @@ soarm101 workstation show --json
 
 This reads `~/.config/soarm101/workstation.json` and does not open hardware.
 
+## Bounded external-agent surface
+
+External reasoning agents should use the smaller `soarm101 agent ...` facade rather than
+the full operator/developer CLI. All agent commands emit JSON.
+
+A human explicitly starts motion authority from an interactive terminal:
+
+```bash
+soarm101 agent arm --minutes 60
+```
+
+Arming parks/holds the follower and writes a time-limited authority lease under the user's
+local state directory. The lease is bound to robot ID and calibration ID. Arming is rejected
+when stdin is non-interactive, and motion fails closed if the lease is missing, expired, or
+does not match the connected robot/calibration.
+
+Read-only discovery does not require authority:
+
+```bash
+soarm101 agent capabilities
+soarm101 agent state
+soarm101 agent poses
+soarm101 agent cameras
+soarm101 agent capture overhead
+soarm101 agent capture wrist
+```
+
+When a saved paper/workspace calibration is available, `agent capabilities` also reports
+`world_directions`. The paper calibration defines physical +X as A->B, physical +Y as
+A->D/B->C, and physical +Z as the manually measured D->UP direction. The CLI labels those
+as right/left, forward/back, and up/down respectively and reports the corresponding
+model/world XYZ delta per physical millimeter. Agents can multiply that vector by the
+requested physical distance and pass the result to the existing `agent jog` command.
+No separate semantic-motion primitive is introduced.
+
+Only saved poses beginning with `agent_` are exposed:
+
+```bash
+soarm101 agent go-pose agent_start_overhead
+```
+
+The bounded gripper surface is:
+
+```bash
+soarm101 agent gripper open
+soarm101 agent gripper close
+```
+
+These targets stay one configured calibrated angular margin inside the corresponding
+mechanical endpoint on physical hardware.
+
+The bounded agent also exposes one-joint relative adjustments:
+
+```bash
+soarm101 agent joint shoulder_pan --delta-deg 20
+```
+
+Only one named pose joint changes per command, the absolute delta is capped at 30 degrees,
+normal calibrated joint/workspace/path checks remain active, and the follower remains held
+after completion.
+
+The bounded Cartesian surface is translation-only and may use either the fixed SDK
+base/model frame or the current gripper/TCP frame:
+
+```bash
+soarm101 agent jog --frame world --x-mm 5 --y-mm 0 --z-mm 0
+soarm101 agent jog --frame tool --x-mm 0 --y-mm 0 --z-mm 5
+```
+
+Tool-frame XYZ follows the current TCP axes and therefore rotates with the gripper.
+
+The command requires a matching saved workspace calibration and applies an additional
+physical-space policy before the normal SDK jog:
+
+- current physical height > 100 mm: maximum requested physical displacement 50 mm;
+- current physical height <= 100 mm: maximum requested physical displacement 10 mm;
+- target physical height below 10 mm above the calibrated ground plane: rejected.
+
+The displacement limit is the norm of the inverse-mapped requested physical displacement,
+not an independent per-axis allowance or a metrology guarantee. Hardware validation showed
+that ordinary joint settle tolerance can leave the achieved workspace position a few
+millimeters from the planned target, so the agent policy reserves a 10 mm ground-plane
+margin. The workspace mapping is used only for this additional safety measurement; actual
+motion still executes through the normal model-frame guarded jog and its SDK safety checks.
+
+Sleep and STOP/HOLD are:
+
+```bash
+soarm101 agent sleep
+soarm101 agent stop
+```
+
+Successful agent motion remains torque-held at the reached pose. `agent stop` is available
+even without active motion authority. Relax is intentionally not exposed to the agent.
+A human releases torque separately with `soarm101 relax`, which requires explicit ENTER
+confirmation.
+
+A human may remove future agent motion authority without changing the current hold:
+
+```bash
+soarm101 agent disarm
+```
+
+The optional task-specific robot/camera skill under `agent-as-code/` is outside this
+technical contract.
+
 ## Session selection
 
 Commands that support either hardware or simulation accept:
@@ -113,8 +219,11 @@ The URDF/model limits are the generic fallback/reference. For a calibrated real 
 normal executable pose-joint authority follows the saved mechanical-stop calibration with
 a 1° inset from each measured stop by default. `calibrated_joint_stop_margin_deg`
 reports that policy. The same output includes `sleep_pose_rad` and `sleep_pose_deg`,
-derived from those executable limits. Calibration remains the physical authority if a
-measured range is narrower than the model range.
+derived from those executable limits, plus `sleep_gripper` and
+`calibrated_gripper_stop_margin_deg`. The gripper Sleep target is the calibrated closed
+mechanical stop inset 1° toward open by default and is reported in both normalized and raw
+encoder coordinates. Calibration remains the physical authority if a measured range is
+narrower than the model range.
 
 It also reports the configured coarse model-space Cartesian envelope, including maximum
 TCP reach, minimum model Z, base keep-out dimensions, and minimum self-clearance. Maximum
@@ -182,8 +291,12 @@ soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 Sleep is computed from the active follower's executable joint limits: shoulder pan
 midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
 wrist roll midpoint. On a calibrated arm the endpoint limits are already inset 1° from the
-measured mechanical stops. The command does not change the gripper and is never triggered
-automatically by connection or torque enable.
+measured mechanical stops. After the arm reaches that fold, the stock gripper closes to a
+target 1° inside its calibrated closed mechanical stop by default. The target is derived
+from the saved gripper encoder range and normalized so calibration handles either motor
+drive direction. Sleep is never triggered automatically by connection or torque enable. After the commanded
+Sleep move completes, the CLI keeps torque enabled and waits for the operator to press ENTER
+before it relaxes the arm.
 
 ## Relative Cartesian linear jog
 
@@ -306,7 +419,18 @@ soarm101 pose go NAME --port PORT --robot-id ROBOT_ID --mode linear --yes
 ```
 
 Saved physical poses carry calibration provenance. Replay fails closed when provenance does not
-match the connected follower.
+match the connected follower. Joint/angular saved-pose replay can also leave a measured starting
+configuration that is already inside the coarse centerline self-clearance envelope. This is not
+a bypass: every floor/reach/base guard must pass for every sample, minimum self-clearance may not
+decrease while the path remains inside the envelope, the path must eventually reach the configured
+clearance threshold, and ordinary full workspace validation becomes authoritative from that point
+onward. This permits a real folded/parked pose to unfold without treating sample 0 as a newly
+commanded collision.
+
+A successful physical `pose go` intentionally leaves follower torque enabled after the CLI
+disconnects, so the robot remains holding the reached pose. It does not relax automatically.
+Use `soarm101 relax` when a human is ready to release the arm; that command always waits for
+an explicit ENTER confirmation before disabling torque.
 
 ## Process semantics
 

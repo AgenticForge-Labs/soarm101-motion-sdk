@@ -55,7 +55,39 @@ For supervised paper Cartesian validation, a motion exception transitions to STO
 and waits for the operator before relaxing, so a failed gravity-loaded move does not
 immediately drop the arm.
 
+## Agent motion authority
+
+The bounded `soarm101 agent ...` interface separates human authorization from agent
+reasoning. A human must run `soarm101 agent arm` from an interactive terminal. Successful
+arming parks/holds the follower and creates a time-limited authority lease bound to the
+robot and calibration identity. Non-interactive arming is rejected. Expired, missing, or
+calibration-mismatched authority fails closed.
+
+Agent actions never relax the follower. Named poses, bounded single-joint adjustments,
+world/tool-frame jogs, gripper actions, and Sleep end holding. Single-joint agent adjustments
+are relative, affect exactly one named arm joint, and are limited to 30 degrees per command. STOP/HOLD remains available even without an active lease. Torque release remains a
+human action through `soarm101 relax`, which requires ENTER confirmation.
+
+Agent Cartesian jogs are deliberately narrower than the general CLI: translation only,
+normal guarded SDK execution, and an additional physical-height policy derived from the
+matching measured workspace calibration. Above 100 mm physical height, requested physical
+displacement per command is limited to 50 mm; at or below 100 mm it is limited to 10 mm.
+The planned target must remain at least 10 mm above the calibrated ground plane so ordinary
+joint settle/model error does not consume the entire floor clearance. These are conservative
+command-space bounds rather than achieved-position guarantees. The workspace transform is
+used for this extra safety check only and does not authorize arbitrary physical-space
+trajectories.
+
 ## Runtime safeguards
+
+A successful physical `soarm101 pose go` is intentionally a **park/hold** operation:
+the CLI closes its serial session without disabling servo torque so the follower remains
+at the reached pose. Closing the terminal or returning to the shell is therefore not a
+release action. Use `soarm101 relax` when a human is ready to release the mechanism;
+that command requires an explicit ENTER confirmation. The Sleep CLI follows the same
+principle while the session is still open: it reaches and holds Sleep, then waits for
+ENTER before disabling torque. Unexpected command interruption before that confirmation
+leaves the arm holding rather than dropping it.
 
 - Normal connection and read-only diagnosis do not rewrite motor configuration.
 - Direct hardware writes are rejected while torque is disabled.
@@ -72,6 +104,10 @@ immediately drop the arm.
 - Motion failures issue a best-effort hold.
 - `wait=True` verifies measured completion.
 - Stock-gripper moves participate in the arm-level stop lifecycle.
+- Sleep folds the arm first and then closes the stock gripper to a calibration-derived
+  target 1° inside the measured closed mechanical stop by default. It does not intentionally
+  drive the gripper into the calibrated endpoint; the saved gripper range and drive mode
+  remain authoritative.
 - Calibration snapshots and restores motor EEPROM on failure when possible.
 - Torque enable rolls back motors already energized when a later enable fails.
 

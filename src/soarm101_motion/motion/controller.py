@@ -489,7 +489,7 @@ class MotionController:
 
         def builder(duration: float) -> tuple[dict[str, float], ...]:
             steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
-            return tuple(
+            samples = [
                 {
                     name: start[name]
                     + (target[name] - start[name])
@@ -497,7 +497,13 @@ class MotionController:
                     for name in ARM_JOINTS
                 }
                 for index in range(steps)
-            )
+            ]
+            # Preserve the already-validated endpoints exactly. Reconstructing the
+            # final sample as start + (target - start) can round one ULP beyond a
+            # target that intentionally sits on an executable joint-limit boundary.
+            samples[0] = {name: float(start[name]) for name in ARM_JOINTS}
+            samples[-1] = {name: float(target[name]) for name in ARM_JOINTS}
+            return tuple(samples)
 
         samples, duration = self._retime(
             builder,

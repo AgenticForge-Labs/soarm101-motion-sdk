@@ -1,4 +1,64 @@
-# Testing roadmap
+# Testing
+
+## Bounded agent CLI
+
+Automated tests cover authority expiry/identity matching, non-interactive arming rejection,
+agent-only pose filtering, simulation motion commands, and the measured-height jog policy.
+Before physical agent use, run a supervised validation from a clear workspace:
+
+```bash
+soarm101 agent arm --minutes 15
+soarm101 agent capabilities
+soarm101 agent state
+soarm101 agent poses
+soarm101 agent cameras
+soarm101 agent go-pose agent_start_overhead
+soarm101 agent capture overhead
+soarm101 agent capture wrist
+```
+
+Confirm every successful motion remains torque-held. Confirm missing/expired authority
+rejects motion. After reaching `agent_start_overhead`, run `soarm101 agent sleep` and
+confirm the calibrated fold is accepted without an apparent equal-to-limit rejection; the
+arm must remain inside the configured 1° measured-stop inset and hold after completion.
+From measured heights above and below 100 mm, validate that physical jog
+requests over 50 mm / 10 mm respectively are rejected before motion and that targets entering
+the 10 mm calibrated ground-plane safety margin are rejected. Begin with much smaller
+supervised jogs than the policy maxima. STOP/HOLD must remain available without authority.
+End the session by disarming authority, then use human-confirmed `soarm101 relax` only when
+physically safe.
+
+### Bounded-agent physical validation record — 2026-10-03
+
+Validation began from PR #76 head `2d220f56d30a9d5d8f222faec4b72f4d5b5e181d`
+with the target workstation's saved follower, calibration, workspace calibration, and named
+camera profiles. The focused agent/CLI tests passed 27/27; the repository's normal full CI was
+already green at that head.
+
+- `agent state` resolved `so101` and the active calibration/workspace identity correctly.
+- Fresh `overhead` and `wrist` captures succeeded through their saved stable device paths.
+- Human-interactive one-minute arming enabled/held without a visible startup jump. Expiry
+  changed authority to unarmed, and a subsequent `agent go-pose` failed closed before motion.
+- After re-arming, `agent go-pose agent_start_overhead` completed from the folded/Sleep-like
+  start and remained torque-held after process exit. Transit was visibly shaky while moving,
+  but the arm became stable once it reached the target. Treat joint-transit shake as a
+  separate motion-quality follow-up rather than a hold failure.
+- At about 127 mm measured physical height, a 55 mm requested jog was rejected against the
+  50 mm ceiling and a roughly 3 mm jog completed and held.
+- After conservative downward steps, at about 97.5 mm measured physical height an 11 mm
+  requested jog was rejected against the 10 mm ceiling and a roughly 3 mm jog completed and
+  held.
+- Several low-height jogs finished a few millimeters from the workspace-predicted height while
+  still satisfying the SDK's joint completion tolerance. The agent floor rule therefore keeps
+  a 10 mm planned-target margin above the calibrated ground plane; do not use the command
+  bounds as achieved-position metrology.
+- After `agent disarm`, `agent stop` remained available and held the measured pose.
+- `soarm101 relax` kept torque enabled until explicit ENTER confirmation, then relaxed the
+  follower.
+- The real arm was deliberately not driven near the floor merely to exercise the floor guard.
+  Automated policy tests cover rejection of targets entering the configured margin.
+
+## Testing roadmap
 
 This file is the handoff checklist for physical testing. Implementation can continue in
 simulation before any of these steps are run. Work through the sections in order when
@@ -116,7 +176,13 @@ limits. This change does not authorize commanding a measured mechanical stop and
 resolve the separate visible-shake issue.
 
 Also validate the calibrated Sleep posture first in simulation, then with a clear physical
-workspace at low speed. Sleep is derived from the active executable limits: shoulder pan
+workspace at low speed. After Sleep completes, verify the CLI remains torque-held until the
+operator presses ENTER and that ENTER then relaxes the arm. From the held folded posture,
+replay a known-safe saved joint pose and verify sample 0 does not block departure solely
+because the arm is already inside the coarse self-clearance envelope. The path must fail if
+any non-self-clearance workspace guard fails, if minimum self-clearance decreases while
+exiting, if the path never reaches the configured clearance threshold, or if ordinary
+self-clearance becomes invalid again after the path has cleared it. Sleep is derived from the active executable limits: shoulder pan
 midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
 wrist roll midpoint. On a calibrated physical follower those endpoints are already 1°
 inside the measured mechanical stops. Sleep retains calibrated joint limits plus trajectory, rate/acceleration, following-error,
@@ -124,8 +190,11 @@ effort, fault, communication, and completion guards, but intentionally skips the
 coarse workspace-geometry check. The designed folded posture places link centerlines closer
 than the generic 25 mm self-clearance heuristic on this arm, so that heuristic produces a
 known false positive for Sleep. This exception is specific to the calibration-derived Sleep
-primitive; ordinary joint motion continues to use the coarse workspace check. Sleep does not
-move the gripper and is never automatic.
+primitive; ordinary joint motion continues to use the coarse workspace check. After the arm
+fold completes, Sleep closes the stock gripper to a target 1° inside its calibrated closed
+mechanical stop by default. Verify `soarm101 limits --json` reports the derived normalized
+and raw gripper target before the physical test, then confirm the gripper stops short of the
+mechanical endpoint without an effort/fault trip. Sleep is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the

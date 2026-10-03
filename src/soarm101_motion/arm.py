@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -23,6 +24,7 @@ from soarm101_motion.exceptions import (
     ConfigurationError,
     InvalidCommandError,
     InvalidJointError,
+    MotionCancelledError,
     RobotConnectionError,
     SafetyViolationError,
 )
@@ -32,6 +34,7 @@ from soarm101_motion.motion import MotionController, MotionHandle
 from soarm101_motion.poses import sleep_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
+    minimum_workspace_self_clearance,
     resolve_effective_joint_limits,
     validate_joint_targets,
     validate_workspace_configuration,
@@ -218,6 +221,92 @@ class SOARM101:
         validate_joint_targets(target, limits=limits)
         return current, target
 
+    def _validate_saved_pose_exit_workspace_path(
+        self,
+        current: Mapping[str, float],
+        target: Mapping[str, float],
+    ) -> None:
+        """Allow a saved-pose path to leave an already-present coarse self-clearance state.
+
+        If the measured starting configuration already violates only the generic
+        centerline self-clearance heuristic, the path may proceed only while minimum
+        self-clearance is nondecreasing and until it reaches the normal configured
+        clearance threshold. Other workspace guards remain authoritative throughout.
+        """
+        max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
+        steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
+        samples = tuple(
+            {
+                name: current[name] + (target[name] - current[name]) * fraction
+                for name in ARM_JOINTS
+            }
+            for fraction in np.linspace(0.0, 1.0, steps)
+        )
+
+        workspace_without_self = {
+            **self._workspace_kwargs(),
+            "minimum_self_clearance_m": 0.0,
+        }
+        for index, joints in enumerate(samples):
+            try:
+                validate_workspace_configuration(
+                    self.model,
+                    joints,
+                    tcp=self.active_tcp,
+                    **workspace_without_self,
+                )
+            except SafetyViolationError as exc:
+                raise SafetyViolationError(
+                    f"workspace path sample {index}: {exc}"
+                ) from exc
+
+        required_clearance = float(self.config.minimum_self_clearance_m)
+        clearances = tuple(
+            minimum_workspace_self_clearance(
+                self.model,
+                joints,
+                tcp=self.active_tcp,
+            )
+            for joints in samples
+        )
+        if clearances[0] >= required_clearance:
+            validate_workspace_path(
+                self.model,
+                samples,
+                tcp=self.active_tcp,
+                **self._workspace_kwargs(),
+            )
+            return
+
+        monotonic_tolerance_m = 0.0005
+        previous = clearances[0]
+        cleared_index = None
+        for index, clearance in enumerate(clearances[1:], start=1):
+            if clearance + monotonic_tolerance_m < previous:
+                raise SafetyViolationError(
+                    "saved-pose path starts inside coarse self-clearance but moves "
+                    f"deeper at sample {index}: {clearance:.3f} m after "
+                    f"{previous:.3f} m"
+                )
+            previous = max(previous, clearance)
+            if clearance >= required_clearance:
+                cleared_index = index
+                break
+
+        if cleared_index is None:
+            raise SafetyViolationError(
+                "saved-pose path starts inside coarse self-clearance and never exits "
+                f"the {required_clearance:.3f} m envelope; target clearance is "
+                f"{clearances[-1]:.3f} m"
+            )
+
+        validate_workspace_path(
+            self.model,
+            samples[cleared_index:],
+            tcp=self.active_tcp,
+            **self._workspace_kwargs(),
+        )
+
     def _validate_joint_workspace_path(
         self,
         positions: Mapping[str, float] | Sequence[float],
@@ -370,6 +459,26 @@ class SOARM101:
     def get_position(self, *, tcp: Pose | None = None) -> Pose:
         return self.model.forward(self.backend.read_joint_positions(), tcp=tcp or self.active_tcp)
 
+    def move_joints_from_saved_pose(
+        self,
+        positions: Mapping[str, float] | Sequence[float],
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        wait: bool = True,
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        """Move to saved joint coordinates with a bounded exit from an existing fold."""
+        current, target = self._resolve_joint_target(positions, relative=False)
+        if self.config.enable_workspace_checks:
+            self._validate_saved_pose_exit_workspace_path(current, target)
+        return self.motion.move_joints(
+            positions,
+            speed=speed,
+            acceleration=acceleration,
+            relative=False,
+            wait=wait,
+        )
+
     def move_joints(
         self,
         positions: Mapping[str, float] | Sequence[float],
@@ -419,6 +528,67 @@ class SOARM101:
         """Return this arm's natural Sleep pose from its executable limits."""
         return sleep_joint_positions(self.get_joint_limits())
 
+    def _sleep_gripper(self) -> SO101Gripper | None:
+        if isinstance(self.tool, SO101Gripper):
+            return self.tool
+        primary = getattr(self.tool, "primary", None)
+        return primary if isinstance(primary, SO101Gripper) else None
+
+    def get_sleep_gripper_position(self) -> float | None:
+        """Return the stock gripper Sleep target inset from its calibrated closed stop."""
+        gripper = self._sleep_gripper()
+        if gripper is None:
+            return None
+        return gripper.calibrated_closed_position(
+            stop_margin_rad=self.config.calibrated_gripper_stop_margin_rad
+        )
+
+    @staticmethod
+    def _wait_sleep_child(
+        handle: MotionHandle[MotionResult],
+        cancel_event: threading.Event,
+    ) -> MotionResult:
+        while not handle.done:
+            if cancel_event.is_set():
+                handle.cancel()
+            time.sleep(0.01)
+        return handle.wait()
+
+    def _execute_sleep(
+        self,
+        cancel_event: threading.Event,
+        *,
+        speed: float | None,
+        acceleration: float | None,
+    ) -> MotionResult:
+        arm_handle = self.move_joints(
+            self.get_sleep_joint_positions(),
+            speed=speed,
+            acceleration=acceleration,
+            wait=False,
+            workspace_check="off",
+        )
+        assert isinstance(arm_handle, MotionHandle)
+        arm_result = self._wait_sleep_child(arm_handle, cancel_event)
+        final_positions = dict(arm_result.final_positions)
+        if cancel_event.is_set():
+            raise MotionCancelledError("Sleep motion cancelled before gripper close")
+
+        gripper = self._sleep_gripper()
+        gripper_target = self.get_sleep_gripper_position()
+        if gripper is not None and gripper_target is not None:
+            gripper_handle = gripper.move(gripper_target, wait=False)
+            assert isinstance(gripper_handle, MotionHandle)
+            gripper_result = self._wait_sleep_child(gripper_handle, cancel_event)
+            final_positions.update(gripper_result.final_positions)
+
+        return MotionResult(
+            accepted=arm_result.accepted,
+            completed=arm_result.completed,
+            message=arm_result.message,
+            final_positions=final_positions,
+        )
+
     def move_sleep(
         self,
         *,
@@ -426,22 +596,28 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to this arm's calibration-derived natural Sleep posture.
+        """Fold the arm into Sleep, then close the stock gripper safely.
 
-        Sleep intentionally bypasses only the generic coarse workspace geometry
-        check. The calibrated folded posture places non-neighboring link
+        If the stock gripper is present, Sleep closes it to a target inset from
+        the calibrated closed mechanical stop by the configured gripper stop
+        margin (1 degree by default).
+
+        Sleep intentionally bypasses only the generic coarse arm workspace
+        geometry check. The calibrated folded posture places non-neighboring link
         centerlines closer than the generic 25 mm self-clearance heuristic even
-        though the physical arm is designed to fold there. Calibrated joint
-        limits, host trajectory/rate/acceleration checks, following-error,
-        effort, fault, communication, and completion guards remain active.
+        though the physical arm is designed to fold there. Calibrated joint/tool
+        limits, trajectory/rate/acceleration checks, following-error, effort,
+        fault, communication, and completion guards remain active.
         """
-        return self.move_joints(
-            self.get_sleep_joint_positions(),
-            speed=speed,
-            acceleration=acceleration,
-            wait=wait,
-            workspace_check="off",
+        handle = MotionHandle(
+            lambda event: self._execute_sleep(
+                event,
+                speed=speed,
+                acceleration=acceleration,
+            )
         )
+        handle.start()
+        return handle.wait() if wait else handle
 
     def solve_ik(
         self,

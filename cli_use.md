@@ -32,6 +32,50 @@ soarm101 COMMAND --simulation
 
 Do not open the same physical serial port from the GUI and CLI simultaneously.
 
+## Bounded agent control
+
+For external reasoning agents, prefer the bounded facade over the unrestricted CLI:
+
+```bash
+# Human/operator step from an interactive terminal
+soarm101 agent arm --minutes 60
+
+# Agent-visible discovery/observation
+soarm101 agent capabilities
+soarm101 agent state
+soarm101 agent poses
+soarm101 agent cameras
+soarm101 agent capture overhead
+soarm101 agent capture wrist
+
+# Bounded motion
+soarm101 agent go-pose agent_start_overhead
+soarm101 agent gripper open
+soarm101 agent gripper close
+soarm101 agent jog --x-mm 5 --y-mm 0 --z-mm 0
+soarm101 agent sleep
+soarm101 agent stop
+```
+
+Agent motion authority is time-limited and bound to robot/calibration identity. Only
+`agent_*` saved poses, logical `overhead`/`wrist` cameras, open/close gripper,
+Sleep, STOP/HOLD, and translation-only jogs are exposed.
+
+Agent jog uses the matching measured workspace transform to enforce requested physical
+displacement limits of 50 mm when current physical height is above 100 mm and 10 mm when at
+or below 100 mm. The planned target must remain at least 10 mm above the calibrated ground
+plane, preserving margin for ordinary hardware settle/model error. These are command-space
+bounds, not metrology guarantees. The normal SDK guards still apply. Successful actions
+remain holding. Agents cannot relax torque.
+
+```bash
+# Human/operator only
+soarm101 agent disarm
+soarm101 relax
+```
+
+`relax` always requires explicit ENTER confirmation.
+
 ## Read-only commands
 
 List candidate serial ports:
@@ -157,7 +201,8 @@ soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 
 `soarm101 limits --robot-id so101 --json` reports the exact derived
 `sleep_pose_deg` without moving hardware. Sleep is a normal guarded joint-space move and
-is never commanded automatically on connect or torque enable.
+is never commanded automatically on connect or torque enable. After Sleep finishes, the CLI
+holds the arm and waits for ENTER before disabling torque.
 
 ## Relative Cartesian jog
 
@@ -374,7 +419,24 @@ soarm101 pose go NAME \
   --yes
 ```
 
-Saved physical poses are tied to calibration provenance.
+Saved physical poses are tied to calibration provenance. A successful physical
+`pose go` leaves the follower holding the reached pose even after the CLI disconnects.
+It does not relax automatically.
+
+When joint/angular replay starts from a measured pose that is already inside the coarse
+self-clearance envelope, the SDK may permit a controlled exit. All non-self-clearance
+workspace checks must pass at every sample, minimum self-clearance may not decrease while
+inside the envelope, and the path must reach the normal clearance threshold. Ordinary full
+workspace checking resumes from that point.
+
+To release torque manually:
+
+```bash
+soarm101 relax --robot-id so101
+```
+
+The relax command always requires an explicit ENTER confirmation; there is no non-interactive
+confirmation bypass.
 
 ## Cameras
 

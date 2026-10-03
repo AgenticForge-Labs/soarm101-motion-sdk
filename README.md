@@ -52,14 +52,27 @@ An agent can choose a validated capability such as moving to a taught point or e
 
 ### Agent-facing CLI
 
-The SDK exposes a provider-neutral command surface for coding agents and other automation
-clients. [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise CLI
-contract—commands, units, structured output, coordinate/orientation semantics, and enforced
-guards. [`cli_use.md`](cli_use.md) is the compact technical usage reference for common CLI
-commands, units, model-frame XYZ semantics, motion modes, JSON output, and safety behavior. The `agent-as-code/` directory remains a
-small experiment helper; machine-local ports, calibration references, and named cameras come
-from the shared workstation profile rather than being duplicated in experiment files. Agent
-launchers, model selection, and sandboxing are intentionally outside the Motion SDK.
+The unrestricted `soarm101` CLI remains the human/developer interface. External reasoning
+agents should instead use the bounded `soarm101 agent ...` surface. A human first runs
+`soarm101 agent arm` from an interactive terminal; this parks the follower and creates a
+time-limited authority lease bound to the active robot and calibration. The agent cannot
+noninteractively create that authority.
+
+The bounded surface exposes read-only state, `agent_*` saved poses, named `overhead` and
+`wrist` camera capture, calibration-inset gripper open/close, Sleep, STOP/HOLD, and
+translation-only Cartesian jogs. Jog policy uses the measured workspace transform only as
+safety evidence: above 100 mm physical height a command may request at most 50 mm of physical
+displacement; at or below 100 mm the request limit is 10 mm; targets must remain at least
+10 mm above the calibrated ground plane. These are conservative command-space bounds rather
+than metrology guarantees; normal SDK motion guards remain authoritative.
+
+[`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise technical
+contract. [`cli_use.md`](cli_use.md) is the compact operational reference. The optional
+task-facing robot/camera skill lives under
+[`agent-as-code/skills/robot-camera/SKILL.md`](agent-as-code/skills/robot-camera/SKILL.md);
+it is deliberately outside the neutral SDK CLI contract. Machine-local ports, calibration
+references, and named cameras still come from the shared workstation profile. Agent launchers,
+model selection, and sandboxing remain outside the Motion SDK.
 
 ## Get started
 
@@ -199,7 +212,7 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 
 The follower has five pose joints; the stock gripper is a separate tool actuator. The SDK includes forward kinematics to estimate the tool pose from joint readings, inverse kinematics for finding joint targets, and Cartesian motion planning for linear moves. These calculations use the arm model and calibration, so check the TCP, joint directions, and coordinate frame against your own assembly before relying on Cartesian accuracy. The Manual workspace exposes this explicitly: its joint-center view uses the SDK FK model, renders the gripper from the modeled wrist/gripper-link frame, and keeps the gripper controls visible below both angular and Cartesian modes. Each Cartesian jog reports the requested and achieved TCP so physical/model direction mismatches can be diagnosed rather than hidden.
 
-The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration. A separate **Sleep** pose is derived from each follower's calibrated executable limits, providing a natural folded posture for demos and power-down preparation without replacing user-saved Home/Rest. Because that designed fold is closer than the generic coarse 25 mm link-centerline self-clearance heuristic, the dedicated Sleep primitive skips only that coarse workspace-geometry check; calibrated joint, trajectory, following-error, effort, fault, and completion guards remain active.
+The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration. A separate **Sleep** operation is derived from each follower's calibration, providing a natural folded posture for demos and power-down preparation without replacing user-saved Home/Rest. Sleep folds the five pose joints first, then closes the stock gripper to a target **1° inside its calibrated closed mechanical stop** by default rather than driving directly into the stop. The gripper target is converted from the saved encoder calibration into the normalized 0=closed / 1=open convention, so reversed motor drive direction is handled by calibration. Because the designed arm fold is closer than the generic coarse 25 mm link-centerline self-clearance heuristic, the dedicated Sleep primitive skips only that coarse arm workspace-geometry check; calibrated joint/tool limits, trajectory, following-error, effort, fault, and completion guards remain active.
 
 The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. A resizable workspace keeps the task tabs on the left and the persistent follower sidebar on the right, including Setup and Log, so robot state never disappears while changing workflows. If vertical space is tight, the model/readout area scrolls while Enable hold, STOP/HOLD, and Relax remain pinned and visible. Programs are stored using the existing `MotionSequence` format, so GUI Programs and SDK/CLI sequence execution share the same guarded runner and provenance rules. See [Programs and saved positions](docs/programs.md) for the simple position-program workflow. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
 
@@ -230,6 +243,8 @@ soarm101 move-joints --port /dev/ttyACM0 --robot-id so101 \
 # Capture and replay a named pose
 soarm101 pose capture home --port /dev/ttyACM0 --robot-id so101
 soarm101 pose go home --port /dev/ttyACM0 --robot-id so101 --yes
+# Successful pose replay remains torque-held; release only with explicit ENTER confirmation
+soarm101 relax --port /dev/ttyACM0 --robot-id so101
 
 # Move to this follower's calibration-derived natural Sleep posture
 soarm101 sleep --port /dev/ttyACM0 --robot-id so101 --yes

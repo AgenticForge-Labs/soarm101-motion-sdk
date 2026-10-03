@@ -143,6 +143,29 @@ def _segment_distance(a0: FloatArray, a1: FloatArray, b0: FloatArray, b1: FloatA
     return float(np.linalg.norm(closest_a - closest_b))
 
 
+def minimum_workspace_self_clearance(
+    model: "SO101KinematicModel",
+    joints: Mapping[str, float],
+    *,
+    tcp: "Pose | None" = None,
+) -> float:
+    """Return the smallest coarse centerline distance between nonadjacent links."""
+    points = model.link_points(joints, tcp=tcp)
+    ordered = tuple(points.values())
+    segments = tuple(zip(ordered[:-1], ordered[1:], strict=True))
+    minimum = float("inf")
+    for first_index, (first_start, first_end) in enumerate(segments):
+        for second_index in range(first_index + 2, len(segments)):
+            if second_index - first_index <= 1:
+                continue
+            second_start, second_end = segments[second_index]
+            minimum = min(
+                minimum,
+                _segment_distance(first_start, first_end, second_start, second_end),
+            )
+    return minimum
+
+
 def validate_workspace_configuration(
     model: "SO101KinematicModel",
     joints: Mapping[str, float],

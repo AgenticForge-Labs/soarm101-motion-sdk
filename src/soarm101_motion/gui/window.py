@@ -1328,10 +1328,11 @@ class MainWindow(QMainWindow):
             "Capture the follower's fresh measured pose, including during live teleoperation."
         )
         self.go_rest_button = QPushButton("Go Rest")
-        self.sleep_status = QLabel("Sleep: calibrated natural pose")
+        self.sleep_status = QLabel("Sleep: calibrated fold + gripper close")
         self.go_sleep_button = QPushButton("Go Sleep")
         self.go_sleep_button.setToolTip(
-            "Move to this follower's calibration-derived natural Sleep posture through normal guards."
+            "Fold to the calibrated Sleep posture, then close the stock gripper "
+            "1 degree inside its calibrated closed stop."
         )
         self.save_home_button.clicked.connect(
             lambda _checked=False: self._save_named_pose(HOME_POSE_NAME)

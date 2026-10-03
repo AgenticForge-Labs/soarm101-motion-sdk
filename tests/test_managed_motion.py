@@ -57,12 +57,56 @@ def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() ->
     )
 
 
-def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
+def test_joint_planner_preserves_exact_validated_endpoint_at_effective_limit() -> None:
     from types import SimpleNamespace
 
     import numpy as np
 
     from soarm101_motion.constants import ARM_JOINTS
+
+    initial_positions = {name: 0.0 for name in ARM_JOINTS}
+    initial_positions["elbow_flex"] = -1.6
+
+    with SOARM101.simulated(initial_positions=initial_positions) as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: SimpleNamespace(radians_limits=(-2.0, 2.0))
+                for name in ARM_JOINTS
+            }
+        )
+        arm.backend.calibration.motors["elbow_flex"] = SimpleNamespace(
+            radians_limits=tuple(
+                np.deg2rad((-96.96703296703296, 96.96703296703296))
+            )
+        )
+        target = arm.get_joint_limits()["elbow_flex"][1]
+
+        # This is the hardware regression: mathematically evaluating the endpoint
+        # as start + (target - start) can round one ULP above target.
+        reconstructed = initial_positions["elbow_flex"] + (
+            target - initial_positions["elbow_flex"]
+        )
+        assert reconstructed > target
+
+        arm.enable()
+        result = arm.move_joints(
+            {"elbow_flex": target},
+            speed=0.2,
+            acceleration=0.5,
+            workspace_check="off",
+        )
+        final = arm.backend.command_history[-1]["elbow_flex"]  # type: ignore[attr-defined]
+
+    assert result.completed is True
+    assert final == target
+
+
+def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, STOCK_GRIPPER
 
     measured_deg = {
         "shoulder_pan": (-121.14285714285717, 121.14285714285717),
@@ -73,20 +117,24 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
     }
 
     with SOARM101.simulated() as arm:
-        arm.backend.calibration = SimpleNamespace(
-            motors={
-                name: SimpleNamespace(
-                    radians_limits=tuple(np.deg2rad(measured_deg[name]))
-                )
-                for name in ARM_JOINTS
-            }
+        motors = {
+            name: SimpleNamespace(
+                radians_limits=tuple(np.deg2rad(measured_deg[name]))
+            )
+            for name in ARM_JOINTS
+        }
+        motors[STOCK_GRIPPER] = SimpleNamespace(
+            radians_limits=(0.0, float(np.deg2rad(100.0)))
         )
+        arm.backend.calibration = SimpleNamespace(motors=motors)
         sleep = arm.get_sleep_joint_positions()
+        sleep_gripper = arm.get_sleep_gripper_position()
         arm.enable()
         with pytest.raises(SafetyViolationError, match="coarse self-clearance"):
             arm.move_joints(sleep, speed=0.2, acceleration=0.5)
         result = arm.move_sleep(speed=0.2, acceleration=0.5)
         final = dict(arm.get_joint_positions().positions)
+        final_gripper = arm.tool.get_position()
 
     assert np.degrees(sleep["shoulder_pan"]) == pytest.approx(0.0)
     assert np.degrees(sleep["shoulder_lift"]) == pytest.approx(
@@ -99,6 +147,9 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
         measured_deg["wrist_flex"][0] + 1.0
     )
     assert np.degrees(sleep["wrist_roll"]) == pytest.approx(0.0)
+    assert sleep_gripper == pytest.approx(0.01)
+    assert final_gripper == pytest.approx(sleep_gripper)
+    assert result.final_positions[STOCK_GRIPPER] == pytest.approx(sleep_gripper)
     assert result.completed is True
     for name, target in sleep.items():
         assert final[name] == pytest.approx(
@@ -107,6 +158,95 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
         )
 
 
+
+def test_saved_pose_can_monotonically_exit_existing_self_clearance(monkeypatch) -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    import soarm101_motion.arm as arm_module
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.move_sleep(speed=0.2, acceleration=0.5)
+        clearances = iter((0.019, 0.020, 0.022, 0.026))
+
+        monkeypatch.setattr(
+            arm_module,
+            "minimum_workspace_self_clearance",
+            lambda *args, **kwargs: next(clearances, 0.026),
+        )
+        monkeypatch.setattr(
+            arm_module,
+            "validate_workspace_configuration",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            arm_module,
+            "validate_workspace_path",
+            lambda *args, **kwargs: None,
+        )
+        target = {name: 0.0 for name in ARM_JOINTS}
+        result = arm.move_joints_from_saved_pose(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+        )
+
+    assert result.completed is True
+
+
+def test_saved_pose_rejects_path_that_moves_deeper_into_self_clearance(monkeypatch) -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    import soarm101_motion.arm as arm_module
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.move_sleep(speed=0.2, acceleration=0.5)
+        clearances = iter((0.019, 0.018, 0.026))
+        monkeypatch.setattr(
+            arm_module,
+            "minimum_workspace_self_clearance",
+            lambda *args, **kwargs: next(clearances, 0.026),
+        )
+        monkeypatch.setattr(
+            arm_module,
+            "validate_workspace_configuration",
+            lambda *args, **kwargs: None,
+        )
+        target = {name: 0.0 for name in ARM_JOINTS}
+        with pytest.raises(SafetyViolationError, match="moves deeper"):
+            arm.move_joints_from_saved_pose(
+                target,
+                speed=0.2,
+                acceleration=0.5,
+            )
+
+
+def test_saved_pose_rejects_path_that_never_clears_self_clearance(monkeypatch) -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    import soarm101_motion.arm as arm_module
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.move_sleep(speed=0.2, acceleration=0.5)
+        monkeypatch.setattr(
+            arm_module,
+            "minimum_workspace_self_clearance",
+            lambda *args, **kwargs: 0.020,
+        )
+        monkeypatch.setattr(
+            arm_module,
+            "validate_workspace_configuration",
+            lambda *args, **kwargs: None,
+        )
+        target = {name: 0.0 for name in ARM_JOINTS}
+        with pytest.raises(SafetyViolationError, match="never exits"):
+            arm.move_joints_from_saved_pose(
+                target,
+                speed=0.2,
+                acceleration=0.5,
+            )
 
 def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
     from types import SimpleNamespace

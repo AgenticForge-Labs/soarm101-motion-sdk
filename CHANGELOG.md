@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+- Fixed boundary-valid joint moves (including calibrated Sleep) that could fail when the
+  trajectory planner reconstructed the final sample one floating-point ULP beyond an exact
+  effective joint-limit target. Joint planning now preserves the already-validated start and
+  target samples exactly; calibrated stop margins and limit guards are unchanged.
+- Added bounded single-joint relative agent adjustments (one named joint, max 30° per
+  command) and tool-frame translation through the existing `agent jog` capability.
+  Agent tool-frame jogs use the current gripper/TCP axes while retaining the same physical
+  displacement/height policy and normal SDK motion guards.
+- Fixed the general `move-joints` CLI so a successful physical joint move remains
+  torque-held after process exit instead of dropping the arm on disconnect.
+
+- Added a bounded `soarm101 agent ...` robot/camera interface for external reasoning
+  agents. Human-interactive `agent arm` parks the follower and creates a time-limited
+  lease bound to robot/calibration identity; non-interactive arming fails closed.
+- Agent motion exposes only `agent_*` saved poses, calibration-inset gripper open/close,
+  calibrated Sleep, STOP/HOLD, and world/model-frame translational jogs. Named
+  `overhead`/`wrist` cameras are available through the same deterministic capture layer.
+- Agent jogs additionally use the matching measured workspace transform as safety evidence:
+  requested physical displacement is limited to 50 mm above 100 mm physical height and
+  10 mm at or below 100 mm. Targets must remain at least 10 mm above the calibrated ground
+  plane, preserving clearance for ordinary joint settle/model error observed during physical
+  validation. `agent capabilities` now also exposes human direction guidance derived from
+  the same paper/workspace calibration:
+  left/right, forward/back, and up/down are reported as model/world XYZ deltas per physical
+  millimeter, so reasoning agents can use the existing `agent jog` command without guessing
+  model-axis signs.
+- Physical bounded-agent validation on 2026-10-03 confirmed human-interactive arming,
+  calibration-bound lease expiry/fail-closed behavior, both named camera captures, saved-pose
+  departure from Sleep, persistent hold, >100 mm and <=100 mm jog request ceilings,
+  STOP/HOLD without authority, and ENTER-confirmed human relax. Saved-pose joint transit
+  remained visibly shaky while moving but became stable once holding; small jogs also showed
+  a few millimeters of achieved workspace-position difference from the policy-predicted
+  target, motivating the 10 mm ground-plane margin rather than weakening motion guards.
+- Added an opt-in object-to-container robot/camera skill with a fresh-overhead-image
+  completion contract under `agent-as-code/skills/robot-camera/`.
+- Saved joint-pose replay can now leave a measured starting pose that is already inside the
+  coarse centerline self-clearance envelope without rejecting solely at path sample 0. The
+  exception is property-based rather than pose-name-based: all non-self-clearance workspace
+  guards must pass at every sample, minimum self-clearance may not decrease while inside the
+  envelope, the path must eventually clear the configured threshold, and ordinary full
+  workspace validation resumes immediately afterward.
+- Physical `pose go` now preserves torque hold after the CLI disconnects instead of
+  automatically relaxing at command exit. `soarm101 relax` requires explicit ENTER
+  confirmation. Sleep likewise holds after reaching the folded posture and only relaxes after
+  the operator presses ENTER.
 - Hardware validation of the endpoint-seeded reverse fallback still failed safely on
   A_UP->B_UP. The forward solve bottomed out at 0.648 mm and the reverse solve at
   0.646 mm against the unchanged 0.5 mm Cartesian tolerance, while both endpoints still
@@ -42,6 +87,11 @@
   remains authoritative. This gives the current arm nearly all of its measured travel,
   including wrist flex to about ±102.91°. Endpoint IK, joint motion, Cartesian planning,
   live streaming, and the limits CLI share this resolver.
+- Sleep now closes the stock gripper after the arm fold completes. The close target is
+  derived from the active gripper calibration and defaults to 1° inside the calibrated
+  closed mechanical stop rather than normalized 0.0 at the stop itself. The conversion is
+  drive-direction independent, and `soarm101 limits --json` reports the normalized/raw
+  Sleep gripper target for read-only inspection.
 - Added a calibration-derived Sleep posture for demos and power-down preparation.
   Sleep is computed from the active executable limits: shoulder pan midpoint, shoulder lift
   lower limit, elbow flex upper limit, wrist flex lower limit, and wrist roll midpoint.

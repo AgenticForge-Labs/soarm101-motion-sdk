@@ -245,7 +245,7 @@ class SequenceRunner:
                 if not math.isfinite(value):
                     raise ValueError(f"joint override {joint!r} must be finite")
                 joint_target[joint] = math.radians(value)
-            result = self.arm.move_joints(
+            result = self.arm.move_joints_from_saved_pose(
                 joint_target,
                 speed=self._scaled(self.arm.config.default_joint_speed, speed_scale),
                 acceleration=self._scaled(
