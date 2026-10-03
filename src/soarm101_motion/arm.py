@@ -34,6 +34,7 @@ from soarm101_motion.motion import MotionController, MotionHandle
 from soarm101_motion.poses import sleep_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
+    minimum_workspace_self_clearance,
     resolve_effective_joint_limits,
     validate_joint_targets,
     validate_workspace_configuration,
