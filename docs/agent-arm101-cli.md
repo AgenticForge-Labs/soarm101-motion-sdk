@@ -14,6 +14,87 @@ soarm101 workstation show --json
 
 This reads `~/.config/soarm101/workstation.json` and does not open hardware.
 
+## Bounded external-agent surface
+
+External reasoning agents should use the smaller `soarm101 agent ...` facade rather than
+the full operator/developer CLI. All agent commands emit JSON.
+
+A human explicitly starts motion authority from an interactive terminal:
+
+```bash
+soarm101 agent arm --minutes 60
+```
+
+Arming parks/holds the follower and writes a time-limited authority lease under the user's
+local state directory. The lease is bound to robot ID and calibration ID. Arming is rejected
+when stdin is non-interactive, and motion fails closed if the lease is missing, expired, or
+does not match the connected robot/calibration.
+
+Read-only discovery does not require authority:
+
+```bash
+soarm101 agent capabilities
+soarm101 agent state
+soarm101 agent poses
+soarm101 agent cameras
+soarm101 agent capture overhead
+soarm101 agent capture wrist
+```
+
+Only saved poses beginning with `agent_` are exposed:
+
+```bash
+soarm101 agent go-pose agent_start_overhead
+```
+
+The bounded gripper surface is:
+
+```bash
+soarm101 agent gripper open
+soarm101 agent gripper close
+```
+
+These targets stay one configured calibrated angular margin inside the corresponding
+mechanical endpoint on physical hardware.
+
+The bounded Cartesian surface is translation-only in the SDK base/model frame:
+
+```bash
+soarm101 agent jog --x-mm 5 --y-mm 0 --z-mm 0
+```
+
+The command requires a matching saved workspace calibration and applies an additional
+physical-space policy before the normal SDK jog:
+
+- current physical height > 100 mm: maximum physical displacement 50 mm;
+- current physical height <= 100 mm: maximum physical displacement 10 mm;
+- target physical height below 0 mm/calibrated ground plane: rejected.
+
+The displacement limit is the norm of the inverse-mapped physical displacement, not an
+independent per-axis allowance. The workspace mapping is used only for this safety
+measurement; actual motion still executes through the normal model-frame guarded jog.
+
+Sleep and STOP/HOLD are:
+
+```bash
+soarm101 agent sleep
+soarm101 agent stop
+```
+
+Successful agent motion remains torque-held at the reached pose. `agent stop` is available
+even without active motion authority. Relax is intentionally not exposed to the agent.
+A human releases torque separately with `soarm101 relax`, which requires explicit ENTER
+confirmation.
+
+A human may remove future agent motion authority without changing the current hold:
+
+```bash
+soarm101 agent disarm
+```
+
+The optional task-specific robot/camera skill under `agent-as-code/` is outside this
+technical contract.
+
 ## Session selection
 
 Commands that support either hardware or simulation accept:
