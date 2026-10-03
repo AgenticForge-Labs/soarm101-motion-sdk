@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a narrow host-side HTTP/JSON broker for isolated reasoning agents. The broker
+  serializes an explicit allowlist of bounded agent actions, delegates to the existing
+  `soarm101 agent` CLI, requires a bearer token, records JSONL request evidence, and
+  returns camera captures as bytes plus SHA-256 so sandboxes need no host camera mount.
+  Added a standard-library-only `robotctl` client intended to be copied into OpenShell or
+  other isolated workers without installing the unrestricted Motion SDK.
+
 - Fixed boundary-valid joint moves (including calibrated Sleep) that could fail when the
   trajectory planner reconstructed the final sample one floating-point ULP beyond an exact
   effective joint-limit target. Joint planning now preserves the already-validated start and
