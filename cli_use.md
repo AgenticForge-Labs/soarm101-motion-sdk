@@ -157,7 +157,8 @@ soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 
 `soarm101 limits --robot-id so101 --json` reports the exact derived
 `sleep_pose_deg` without moving hardware. Sleep is a normal guarded joint-space move and
-is never commanded automatically on connect or torque enable.
+is never commanded automatically on connect or torque enable. After Sleep finishes, the CLI
+holds the arm and waits for ENTER before disabling torque.
 
 ## Relative Cartesian jog
 
@@ -374,7 +375,23 @@ soarm101 pose go NAME \
   --yes
 ```
 
-Saved physical poses are tied to calibration provenance.
+Saved physical poses are tied to calibration provenance. A successful physical
+`pose go` leaves the follower holding the reached pose even after the CLI disconnects.
+It does not relax automatically.
+
+When joint/angular replay starts from the calibration-derived Sleep posture, the SDK permits
+only the known initial coarse self-clearance false positive while the path exits the folded
+Sleep neighborhood. All other workspace checks remain active, and the self-clearance check
+is re-enabled as soon as the path clears it.
+
+To release torque manually:
+
+```bash
+soarm101 relax --robot-id so101
+```
+
+The relax command always requires an explicit ENTER confirmation; there is no non-interactive
+confirmation bypass.
 
 ## Cameras
 
