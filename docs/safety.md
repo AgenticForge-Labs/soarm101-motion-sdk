@@ -63,8 +63,9 @@ arming parks/holds the follower and creates a time-limited authority lease bound
 robot and calibration identity. Non-interactive arming is rejected. Expired, missing, or
 calibration-mismatched authority fails closed.
 
-Agent actions never relax the follower. Named poses, jogs, gripper actions, and Sleep end
-holding. STOP/HOLD remains available even without an active lease. Torque release remains a
+Agent actions never relax the follower. Named poses, bounded single-joint adjustments,
+world/tool-frame jogs, gripper actions, and Sleep end holding. Single-joint agent adjustments
+are relative, affect exactly one named arm joint, and are limited to 30 degrees per command. STOP/HOLD remains available even without an active lease. Torque release remains a
 human action through `soarm101 relax`, which requires ENTER confirmation.
 
 Agent Cartesian jogs are deliberately narrower than the general CLI: translation only,
