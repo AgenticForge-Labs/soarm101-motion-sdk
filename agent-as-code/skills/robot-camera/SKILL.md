@@ -74,6 +74,26 @@ Useful installed viewpoints may include:
 
 Discover the actual list rather than assuming every example exists.
 
+Adjust exactly one named arm joint by a relative angle:
+
+```bash
+soarm101 agent joint shoulder_pan --delta-deg 20
+soarm101 agent joint shoulder_lift --delta-deg -5
+soarm101 agent joint elbow_flex --delta-deg 5
+soarm101 agent joint wrist_flex --delta-deg -5
+soarm101 agent joint wrist_roll --delta-deg 10
+```
+
+Use this when the intent is explicitly about a joint angle or articulation. The bounded
+agent command changes only one joint per action, enforces a per-command angle limit, uses
+the normal joint/workspace/path safety checks, and remains torque-held afterward. Prefer
+small adjustments and re-observe after consequential changes.
+
+For `shoulder_pan`, the current SO-ARM101 kinematic model establishes that positive
+`--delta-deg` rotates clockwise when viewed from directly above the base; negative rotates
+counterclockwise. For other joints, use the signed joint-coordinate convention rather than
+inventing human directional names unless they have been explicitly established.
+
 Open or close the gripper:
 
 ```bash
@@ -81,13 +101,21 @@ soarm101 agent gripper open
 soarm101 agent gripper close
 ```
 
-Make a bounded model/base-frame translational adjustment:
+Make a bounded Cartesian translational adjustment in either the calibrated world/model
+frame or the current gripper/TCP frame:
 
 ```bash
-soarm101 agent jog --x-mm 5 --y-mm 0 --z-mm 0
+# fixed world/model coordinates
+soarm101 agent jog --frame world --x-mm 5 --y-mm 0 --z-mm 0
+
+# current gripper/TCP coordinates
+soarm101 agent jog --frame tool --x-mm 0 --y-mm 0 --z-mm 5
 ```
 
-Agent jogs are translation-only. Deterministic policy measures the proposed displacement
+Use `--frame world` for table/workspace directions such as calibrated left/right/up/down.
+Use `--frame tool` when the requested motion is from the gripper's own current perspective
+(for example, a small approach/retract/lateral correction aligned with the tool). Tool-frame
+X/Y/Z are the current TCP axes and rotate with the gripper. Agent jogs are translation-only. Deterministic policy measures the proposed displacement
 and height through the saved physical workspace calibration:
 
 - above 100 mm physical height: maximum 50 mm physical displacement per command;
