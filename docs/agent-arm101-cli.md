@@ -41,6 +41,14 @@ soarm101 agent capture overhead
 soarm101 agent capture wrist
 ```
 
+When a saved paper/workspace calibration is available, `agent capabilities` also reports
+`world_directions`. The paper calibration defines physical +X as A->B, physical +Y as
+A->D/B->C, and physical +Z as the manually measured D->UP direction. The CLI labels those
+as right/left, forward/back, and up/down respectively and reports the corresponding
+model/world XYZ delta per physical millimeter. Agents can multiply that vector by the
+requested physical distance and pass the result to the existing `agent jog` command.
+No separate semantic-motion primitive is introduced.
+
 Only saved poses beginning with `agent_` are exposed:
 
 ```bash
