@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added a bounded `soarm101 agent ...` robot/camera interface for external reasoning
+  agents. Human-interactive `agent arm` parks the follower and creates a time-limited
+  lease bound to robot/calibration identity; non-interactive arming fails closed.
+- Agent motion exposes only `agent_*` saved poses, calibration-inset gripper open/close,
+  calibrated Sleep, STOP/HOLD, and world/model-frame translational jogs. Named
+  `overhead`/`wrist` cameras are available through the same deterministic capture layer.
+- Agent jogs additionally use the matching measured workspace transform as safety evidence:
+  maximum physical displacement is 50 mm above 100 mm physical height and 10 mm at or below
+  100 mm, and targets below the calibrated ground plane are rejected.
+- Added an opt-in object-to-container robot/camera skill with a fresh-overhead-image
+  completion contract under `agent-as-code/skills/robot-camera/`.
 - Saved joint-pose replay can now leave the built-in Sleep posture without being rejected at
   path sample 0 by Sleep's known coarse self-clearance false positive. The exception is narrow:
   the measured start must match Sleep, only initial self-clearance failures are deferred, every
