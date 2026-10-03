@@ -112,29 +112,32 @@ soarm101 agent stop
 Every successful agent motion ends holding its reached position. The agent does not relax
 the arm. Torque release is a human-only action.
 
-## Human direction words for this workstation
+## Human direction words
 
-For the current physical workstation orientation, use these verified human-direction
-translations with the existing world-frame `agent jog` command:
+Do not infer human directions from the raw model X/Y/Z signs or from saved poses.
 
-- `left` = positive world/model Y
-- `right` = negative world/model Y
+Read `soarm101 agent capabilities` and use its `world_directions` block. The values come
+from the already-measured paper/workspace calibration:
 
-Examples:
+- physical +X is A -> B (right); physical -X is left;
+- physical +Y is A -> D / B -> C (forward, toward the top/long edge of the calibrated paper);
+- physical -Y is back;
+- physical +Z is D -> UP (up); physical -Z is down.
+
+`model_delta_mm_per_physical_mm` gives the model/world XYZ delta corresponding to one
+millimeter of each physical human direction. To move a requested physical distance, multiply
+that direction vector by the requested distance in millimeters and pass the resulting XYZ
+values to the existing command:
 
 ```bash
-# move 10 mm left
-soarm101 agent jog --x-mm 0 --y-mm 10 --z-mm 0
-
-# move 10 mm right
-soarm101 agent jog --x-mm 0 --y-mm -10 --z-mm 0
+soarm101 agent jog --x-mm DX --y-mm DY --z-mm DZ
 ```
 
-Do not infer `forward`, `back`, `up`, or `down` from model X/Y/Z yet. Those
-human directions have not been physically verified for this workstation, and model axes
-are not guaranteed to match physical table/up directions. If a task uses one of those
-unverified words, inspect available known poses/cameras or report that the direction mapping
-needs human confirmation rather than guessing.
+Example: if `world_directions.model_delta_mm_per_physical_mm.left` is
+`[0.10, 0.98, -0.02]`, moving 10 mm left means jogging
+`[1.0, 9.8, -0.2]` mm in model/world XYZ.
+
+If `world_directions.available` is false, do not guess the mapping.
 
 ## Object-to-container task strategy
 
