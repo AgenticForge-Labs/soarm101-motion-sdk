@@ -452,10 +452,12 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
     values = [value * pi / 180.0 if args.degrees else value for value in args.joints]
-    with _arm_from_args(args) as arm:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
         result = arm.move_joints(values, speed=args.speed, acceleration=args.acceleration)
+        arm.hold()
         _print_motion_result(result, as_json=args.json)
+        print("Joint move complete; follower remains torque-held.", file=sys.stderr)
     return 0
 
 
@@ -1217,6 +1219,43 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_agent_joint(args: argparse.Namespace) -> int:
+    delta_deg = float(args.delta_deg)
+    if not np.isfinite(delta_deg) or abs(delta_deg) <= 1e-9:
+        raise ValueError("agent joint delta must be finite and non-zero")
+    if abs(delta_deg) > AGENT_JOINT_MAX_DELTA_DEG:
+        raise PermissionError(
+            f"agent joint delta {delta_deg:.1f} deg exceeds "
+            f"{AGENT_JOINT_MAX_DELTA_DEG:.1f} deg per-command limit"
+        )
+    delta_rad = delta_deg * pi / 180.0
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        authority = _agent_require_authority(args, arm)
+        before = dict(arm.get_joint_positions().positions)
+        arm.enable()
+        result = arm.move_joints(
+            {args.joint: delta_rad},
+            relative=True,
+            speed=8.0 * pi / 180.0,
+            acceleration=25.0 * pi / 180.0,
+        )
+        arm.hold()
+        after = dict(arm.get_joint_positions().positions)
+    print(json.dumps({
+        "accepted": result.accepted,
+        "completed": result.completed,
+        "action": "joint",
+        "joint": args.joint,
+        "delta_deg": delta_deg,
+        "before_deg": before[args.joint] * 180.0 / pi,
+        "after_deg": after[args.joint] * 180.0 / pi,
+        "holding": True,
+        "authority": authority,
+        "message": result.message,
+    }, indent=2))
+    return 0
+
+
 def _cmd_agent_jog(args: argparse.Namespace) -> int:
     delta_mm = np.asarray([args.x_mm, args.y_mm, args.z_mm], dtype=float)
     if not np.all(np.isfinite(delta_mm)):
@@ -1233,16 +1272,21 @@ def _cmd_agent_jog(args: argparse.Namespace) -> int:
             )
         workspace = WorkspaceCalibrationStore(arm.config.robot_id).load()
         current = arm.get_position()
+        target = relative_target_pose(
+            current,
+            translation_m=delta_mm / 1000.0,
+            frame=args.frame,
+        )
         decision = evaluate_agent_jog(
             workspace,
             active_calibration_id=calibration_id,
             current_model_position_m=current.position,
-            delta_model_m=delta_mm / 1000.0,
+            delta_model_m=target.position - current.position,
         )
         arm.enable()
         result = jog_linear_cli_units(
             arm,
-            frame="world",
+            frame=args.frame,
             translation_mm=tuple(float(value) for value in delta_mm),
             rotation_rpy_deg=(0.0, 0.0, 0.0),
             orientation_mode="compatible",
