@@ -64,6 +64,35 @@ The camera layer deliberately stops at raw observation: it does not identify obj
 task state, plan motion, or bypass motion safety. Agent reasoning remains above the same
 constrained SDK primitives used manually.
 
+## Bounded agent authority and CLI
+
+The full CLI is an operator/developer surface. External reasoning agents use a smaller
+deterministic facade:
+
+```text
+human interactive authorization
+  -> time-limited robot+calibration authority lease
+  -> soarm101 agent semantic capability
+  -> existing SDK primitive
+  -> existing deterministic safety guards
+  -> hardware
+```
+
+The lease is machine-local runtime state under the user's local state directory, expires
+automatically, and is invalid if the robot or calibration identity changes. Arming parks the
+follower by latching/holding its current measured pose. Agent actions do not relax torque;
+successful motion returns to holding. Human `soarm101 relax` remains outside the agent
+surface and requires explicit interactive confirmation.
+
+The bounded facade does not introduce a second motion or camera implementation. Named-pose
+moves call the saved-pose SDK path, camera capture calls the same `CameraCapture` path, and
+agent jog calls the normal guarded Cartesian jog. Only `agent_*` saved poses and the
+configured logical `overhead`/`wrist` cameras are exposed. Agent jog is world/model-frame
+translation only. A matching measured workspace calibration is consumed as *safety evidence*
+to calculate physical current/target height and physical displacement; it does not replace
+the existing model-space motion planner or promote workspace calibration to general execution
+authority.
+
 ### Cartesian linear trajectory parameterization
 
 `move_linear()` owns a Cartesian trajectory, not a sparse joint polyline. The host uses
