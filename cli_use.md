@@ -421,10 +421,11 @@ Saved physical poses are tied to calibration provenance. A successful physical
 `pose go` leaves the follower holding the reached pose even after the CLI disconnects.
 It does not relax automatically.
 
-When joint/angular replay starts from the calibration-derived Sleep posture, the SDK permits
-only the known initial coarse self-clearance false positive while the path exits the folded
-Sleep neighborhood. All other workspace checks remain active, and the self-clearance check
-is re-enabled as soon as the path clears it.
+When joint/angular replay starts from a measured pose that is already inside the coarse
+self-clearance envelope, the SDK may permit a controlled exit. All non-self-clearance
+workspace checks must pass at every sample, minimum self-clearance may not decrease while
+inside the envelope, and the path must reach the normal clearance threshold. Ordinary full
+workspace checking resumes from that point.
 
 To release torque manually:
 
