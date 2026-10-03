@@ -962,6 +962,23 @@ def _agent_world_direction_payload(robot_id: str) -> dict[str, object]:
             "reason": str(exc),
         }
 
+    authority = AgentAuthorityStore().load()
+    if (
+        authority is not None
+        and authority.active()
+        and authority.robot_id == robot_id
+        and authority.calibration_id != workspace.arm_calibration_id
+    ):
+        return {
+            "available": False,
+            "reason": (
+                "workspace calibration does not match the currently armed motor calibration"
+            ),
+            "workspace_id": workspace.workspace_id,
+            "workspace_arm_calibration_id": workspace.arm_calibration_id,
+            "authority_calibration_id": authority.calibration_id,
+        }
+
     linear = np.asarray(workspace.physical_to_model_linear, dtype=float)
 
     def delta_for_physical_axis(axis: tuple[float, float, float]) -> list[float]:
@@ -972,6 +989,8 @@ def _agent_world_direction_payload(robot_id: str) -> dict[str, object]:
     return {
         "available": True,
         "source": "paper/workspace calibration",
+        "workspace_id": workspace.workspace_id,
+        "arm_calibration_id": workspace.arm_calibration_id,
         "convention": {
             "right": "+physical_x (A->B)",
             "left": "-physical_x (B->A)",
