@@ -61,9 +61,10 @@ noninteractively create that authority.
 The bounded surface exposes read-only state, `agent_*` saved poses, named `overhead` and
 `wrist` camera capture, calibration-inset gripper open/close, Sleep, STOP/HOLD, and
 translation-only Cartesian jogs. Jog policy uses the measured workspace transform only as
-safety evidence: above 100 mm physical height a command may move at most 50 mm physically;
-at or below 100 mm the limit is 10 mm; targets below the calibrated ground plane are rejected.
-Normal SDK motion guards remain authoritative.
+safety evidence: above 100 mm physical height a command may request at most 50 mm of physical
+displacement; at or below 100 mm the request limit is 10 mm; targets must remain at least
+10 mm above the calibrated ground plane. These are conservative command-space bounds rather
+than metrology guarantees; normal SDK motion guards remain authoritative.
 
 [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise technical
 contract. [`cli_use.md`](cli_use.md) is the compact operational reference. The optional
