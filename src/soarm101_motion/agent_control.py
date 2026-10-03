@@ -24,7 +24,7 @@ MAX_AUTHORITY_MINUTES = 480.0
 AGENT_JOG_HEIGHT_THRESHOLD_M = 0.100
 AGENT_JOG_HIGH_MAX_DISTANCE_M = 0.050
 AGENT_JOG_LOW_MAX_DISTANCE_M = 0.010
-AGENT_JOG_MINIMUM_TARGET_HEIGHT_M = 0.0
+AGENT_JOG_MINIMUM_TARGET_HEIGHT_M = 0.010
 AGENT_JOINT_MAX_DELTA_DEG = 30.0
 
 
@@ -251,7 +251,8 @@ def evaluate_agent_jog(
     if target_height < AGENT_JOG_MINIMUM_TARGET_HEIGHT_M - 1e-9:
         raise PermissionError(
             f"agent jog target physical height {target_height * 1000.0:.1f} mm "
-            "would cross the calibrated ground plane"
+            f"would enter the {AGENT_JOG_MINIMUM_TARGET_HEIGHT_M * 1000.0:.1f} mm "
+            "calibrated ground-plane safety margin"
         )
 
     return AgentJogDecision(
