@@ -13,6 +13,18 @@ from pathlib import Path
 import numpy as np
 
 from soarm101_motion import SOARM101, SOARM101Config, __version__
+from soarm101_motion.agent_control import (
+    AGENT_CAMERA_NAMES,
+    AGENT_JOG_HEIGHT_THRESHOLD_M,
+    AGENT_JOG_HIGH_MAX_DISTANCE_M,
+    AGENT_JOG_LOW_MAX_DISTANCE_M,
+    AGENT_JOG_MINIMUM_TARGET_HEIGHT_M,
+    AGENT_POSE_PREFIX,
+    DEFAULT_AUTHORITY_MINUTES,
+    MAX_AUTHORITY_MINUTES,
+    AgentAuthorityStore,
+    evaluate_agent_jog,
+)
 from soarm101_motion.calibration import SO101Calibration, default_calibration_path
 from soarm101_motion.camera import (
     CameraCapture,
@@ -36,6 +48,7 @@ from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
 from soarm101_motion.tools import SO101Gripper
 from soarm101_motion.trajectories import TrajectoryLibrary
 from soarm101_motion.types import MotionResult, Pose
+from soarm101_motion.workspace import WorkspaceCalibrationStore
 from soarm101_motion.workstation import (
     ArmConnectionProfile,
     WorkstationProfile,
@@ -63,7 +76,7 @@ def _arm_from_args(
     if getattr(args, "simulation", False):
         return SOARM101.simulated(realtime=True)
     if args.port:
-        return SOARM101(_hardware_config(args))
+        return SOARM101(_hardware_config(args, **config_overrides))
 
     follower = WorkstationProfileStore().load().follower
     if not follower.port:
@@ -906,6 +919,360 @@ def _cmd_camera_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def _agent_calibration_id(arm: SOARM101, *, simulation: bool) -> str:
+    calibration_id = arm.calibration_id
+    if calibration_id:
+        return calibration_id
+    if simulation:
+        return "simulation"
+    raise RuntimeError("agent motion requires an active calibrated follower")
+
+
+def _agent_pose_names(robot_id: str) -> list[str]:
+    return [
+        name
+        for name in PoseLibrary(robot_id).names()
+        if name.startswith(AGENT_POSE_PREFIX)
+    ]
+
+
+def _agent_camera_names(profile: WorkstationProfile) -> list[str]:
+    return [name for name in AGENT_CAMERA_NAMES if name in profile.cameras]
+
+
+def _agent_require_authority(args: argparse.Namespace, arm: SOARM101) -> dict[str, object]:
+    calibration_id = _agent_calibration_id(
+        arm,
+        simulation=bool(getattr(args, "simulation", False)),
+    )
+    authority = AgentAuthorityStore().require(
+        robot_id=arm.config.robot_id,
+        calibration_id=calibration_id,
+    )
+    return authority.status_payload()
+
+
+def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
+    profile = WorkstationProfileStore().load()
+    return {
+        "authority": AgentAuthorityStore().status(),
+        "poses": _agent_pose_names(robot_id),
+        "cameras": _agent_camera_names(profile),
+        "actions": {
+            "state": "read_only",
+            "poses": "read_only",
+            "cameras": "read_only",
+            "capture": list(AGENT_CAMERA_NAMES),
+            "go_pose": f"saved poses beginning with {AGENT_POSE_PREFIX!r}",
+            "jog": "world-frame translation only",
+            "gripper": ["open", "close"],
+            "sleep": True,
+            "stop": "always_available",
+        },
+        "jog_policy": {
+            "physical_height_threshold_mm": AGENT_JOG_HEIGHT_THRESHOLD_M * 1000.0,
+            "max_distance_above_threshold_mm": AGENT_JOG_HIGH_MAX_DISTANCE_M * 1000.0,
+            "max_distance_at_or_below_threshold_mm": AGENT_JOG_LOW_MAX_DISTANCE_M * 1000.0,
+            "minimum_target_height_mm": AGENT_JOG_MINIMUM_TARGET_HEIGHT_M * 1000.0,
+            "workspace_height_source": "saved measured workspace calibration",
+        },
+        "relax": "not exposed; human-only via 'soarm101 relax'",
+    }
+
+
+def _confirm_agent_arm_interactive(minutes: float) -> None:
+    if not sys.stdin.isatty():
+        raise PermissionError(
+            "agent motion can only be armed by a human from an interactive terminal"
+        )
+    input(
+        "AGENT MOTION AUTHORITY\n"
+        f"This will park/hold the follower and authorize bounded agent motion for "
+        f"{minutes:g} minutes. Keep physical power accessible.\n"
+        "Press ENTER to arm the agent session, or Ctrl-C to cancel: "
+    )
+
+
+def _cmd_agent_arm(args: argparse.Namespace) -> int:
+    minutes = float(args.minutes)
+    if minutes <= 0.0 or minutes > MAX_AUTHORITY_MINUTES:
+        raise ValueError(
+            f"--minutes must be within (0, {MAX_AUTHORITY_MINUTES:g}]"
+        )
+    _confirm_agent_arm_interactive(minutes)
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        arm.enable()
+        arm.hold()
+        calibration_id = _agent_calibration_id(
+            arm,
+            simulation=bool(getattr(args, "simulation", False)),
+        )
+        authority = AgentAuthorityStore().issue(
+            robot_id=arm.config.robot_id,
+            calibration_id=calibration_id,
+            minutes=minutes,
+        )
+    payload = authority.status_payload()
+    payload["holding"] = True
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def _cmd_agent_disarm(_: argparse.Namespace) -> int:
+    AgentAuthorityStore().clear()
+    print(
+        json.dumps(
+            {
+                "armed": False,
+                "holding": "unchanged",
+                "note": "motion authority removed; use human-confirmed 'soarm101 relax' to release torque",
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_agent_capabilities(args: argparse.Namespace) -> int:
+    print(json.dumps(_agent_capabilities_payload(args.robot_id), indent=2))
+    return 0
+
+
+def _cmd_agent_poses(args: argparse.Namespace) -> int:
+    print(json.dumps({"poses": _agent_pose_names(args.robot_id)}, indent=2))
+    return 0
+
+
+def _cmd_agent_cameras(_: argparse.Namespace) -> int:
+    profile = WorkstationProfileStore().load()
+    print(json.dumps({"cameras": _agent_camera_names(profile)}, indent=2))
+    return 0
+
+
+def _cmd_agent_capture(args: argparse.Namespace) -> int:
+    name = str(args.name).strip()
+    if name not in AGENT_CAMERA_NAMES:
+        raise PermissionError(
+            f"agent camera {name!r} is not allowed; allowed names: "
+            + ", ".join(AGENT_CAMERA_NAMES)
+        )
+    profile = WorkstationProfileStore().load()
+    if name not in profile.cameras:
+        raise KeyError(f"agent camera {name!r} is not configured")
+    print(
+        json.dumps(
+            _capture_named_camera(name, profile.camera(name), args.output),
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_agent_state(args: argparse.Namespace) -> int:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        joints = dict(arm.get_joint_positions().positions)
+        tcp = arm.get_position().xyz_rpy()
+        gripper = float(arm.tool.get_position())
+        calibration_id = _agent_calibration_id(
+            arm,
+            simulation=bool(getattr(args, "simulation", False)),
+        )
+        physical_height_mm: float | None = None
+        workspace_error: str | None = None
+        if calibration_id != "simulation":
+            try:
+                workspace = WorkspaceCalibrationStore(arm.config.robot_id).load()
+                if workspace.arm_calibration_id != calibration_id:
+                    raise ValueError(
+                        "workspace calibration does not match active motor calibration"
+                    )
+                physical = workspace.physical_position_from_model(tcp[:3])
+                physical_height_mm = float(physical[2] * 1000.0)
+            except Exception as exc:
+                workspace_error = str(exc)
+    print(
+        json.dumps(
+            {
+                "authority": AgentAuthorityStore().status(),
+                "robot_id": arm.config.robot_id,
+                "calibration_id": calibration_id,
+                "joint_positions_rad": joints,
+                "tcp_xyz_mm": [float(value * 1000.0) for value in tcp[:3]],
+                "tcp_rpy_deg": [float(value * 180.0 / pi) for value in tcp[3:]],
+                "gripper": gripper,
+                "physical_height_mm": physical_height_mm,
+                "workspace_height_error": workspace_error,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
+    name = str(args.name).strip()
+    if not name.startswith(AGENT_POSE_PREFIX):
+        raise PermissionError(
+            f"agent pose names must begin with {AGENT_POSE_PREFIX!r}"
+        )
+    pose = PoseLibrary(args.robot_id).require(name)
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        authority = _agent_require_authority(args, arm)
+        arm.require_artifact_calibration(
+            {
+                "source_robot_id": pose.source_robot_id,
+                "source_calibration_id": pose.source_calibration_id,
+                "target_robot_id": pose.target_robot_id,
+                "target_calibration_id": pose.target_calibration_id,
+            },
+            artifact_label=f"agent saved pose {name!r}",
+        )
+        arm.enable()
+        arm_result = arm.move_joints_from_saved_pose(
+            pose.joints,
+            speed=8.0 * pi / 180.0,
+            acceleration=25.0 * pi / 180.0,
+        )
+        gripper_result = arm.tool.move(pose.gripper)
+        arm.hold()
+    print(
+        json.dumps(
+            {
+                "accepted": True,
+                "completed": True,
+                "action": "go_pose",
+                "pose": name,
+                "holding": True,
+                "authority": authority,
+                "arm": asdict(arm_result),
+                "gripper": asdict(gripper_result),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_agent_jog(args: argparse.Namespace) -> int:
+    delta_mm = np.asarray([args.x_mm, args.y_mm, args.z_mm], dtype=float)
+    if not np.all(np.isfinite(delta_mm)):
+        raise ValueError("agent jog deltas must be finite")
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        authority = _agent_require_authority(args, arm)
+        calibration_id = _agent_calibration_id(
+            arm,
+            simulation=bool(getattr(args, "simulation", False)),
+        )
+        if calibration_id == "simulation":
+            raise PermissionError(
+                "agent jog requires a measured workspace calibration and is not enabled in simulation"
+            )
+        workspace = WorkspaceCalibrationStore(arm.config.robot_id).load()
+        current = arm.get_position()
+        decision = evaluate_agent_jog(
+            workspace,
+            active_calibration_id=calibration_id,
+            current_model_position_m=current.position,
+            delta_model_m=delta_mm / 1000.0,
+        )
+        arm.enable()
+        result = jog_linear_cli_units(
+            arm,
+            frame="world",
+            translation_mm=tuple(float(value) for value in delta_mm),
+            rotation_rpy_deg=(0.0, 0.0, 0.0),
+            orientation_mode="compatible",
+            speed_mm_s=10.0,
+            acceleration_mm_s2=40.0,
+        )
+        arm.hold()
+    print(
+        json.dumps(
+            {
+                "accepted": result.accepted,
+                "completed": result.completed,
+                "action": "jog",
+                "holding": True,
+                "authority": authority,
+                "policy": decision.to_payload(),
+                "final_positions": result.final_positions,
+                "message": result.message,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_agent_gripper(args: argparse.Namespace) -> int:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        authority = _agent_require_authority(args, arm)
+        arm.enable()
+        closed = float(arm.get_sleep_gripper_position())
+        target = closed if args.target == "close" else 1.0 - closed
+        result = arm.tool.move(target)
+        arm.hold()
+    print(
+        json.dumps(
+            {
+                "accepted": result.accepted,
+                "completed": result.completed,
+                "action": "gripper",
+                "target": args.target,
+                "normalized_target": target,
+                "holding": True,
+                "authority": authority,
+                "final_positions": result.final_positions,
+                "message": result.message,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_agent_sleep(args: argparse.Namespace) -> int:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        authority = _agent_require_authority(args, arm)
+        arm.enable()
+        result = arm.move_sleep(
+            speed=8.0 * pi / 180.0,
+            acceleration=25.0 * pi / 180.0,
+        )
+        arm.hold()
+    payload = asdict(result)
+    payload.update(
+        {
+            "action": "sleep",
+            "holding": True,
+            "authority": authority,
+        }
+    )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def _cmd_agent_stop(args: argparse.Namespace) -> int:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        arm.enable()
+        arm.stop()
+        joints = dict(arm.get_joint_positions().positions)
+    print(
+        json.dumps(
+            {
+                "accepted": True,
+                "completed": True,
+                "action": "stop",
+                "holding": True,
+                "joint_positions_rad": joints,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _workstation_payload(profile: WorkstationProfile) -> dict[str, object]:
     return {
         "schema_version": profile.schema_version,
@@ -1190,6 +1557,100 @@ def build_parser() -> argparse.ArgumentParser:
     sequence_run.add_argument("--stop-index", type=int)
     sequence_run.add_argument("--yes", action="store_true")
     sequence_run.set_defaults(func=_cmd_sequence_run)
+
+    agent = sub.add_parser(
+        "agent",
+        help="bounded robot/camera capabilities for external reasoning agents",
+    )
+    agent_sub = agent.add_subparsers(dest="agent_command", required=True)
+
+    agent_arm = agent_sub.add_parser(
+        "arm",
+        help="human-authorize a time-bounded agent motion session and park the follower",
+    )
+    add_session_options(agent_arm)
+    agent_arm.add_argument(
+        "--minutes",
+        type=float,
+        default=DEFAULT_AUTHORITY_MINUTES,
+        help=f"motion authority duration; maximum {MAX_AUTHORITY_MINUTES:g} minutes",
+    )
+    agent_arm.set_defaults(func=_cmd_agent_arm)
+
+    agent_disarm = agent_sub.add_parser(
+        "disarm",
+        help="remove agent motion authority without relaxing the follower",
+    )
+    agent_disarm.set_defaults(func=_cmd_agent_disarm)
+
+    agent_capabilities = agent_sub.add_parser(
+        "capabilities",
+        help="show the bounded actions, named poses/cameras, and authority state",
+    )
+    agent_capabilities.add_argument("--robot-id", default="so101")
+    agent_capabilities.set_defaults(func=_cmd_agent_capabilities)
+
+    agent_state = agent_sub.add_parser("state", help="read robot state without commanding motion")
+    add_session_options(agent_state)
+    agent_state.set_defaults(func=_cmd_agent_state)
+
+    agent_poses = agent_sub.add_parser("poses", help="list saved agent_* poses")
+    agent_poses.add_argument("--robot-id", default="so101")
+    agent_poses.set_defaults(func=_cmd_agent_poses)
+
+    agent_cameras = agent_sub.add_parser(
+        "cameras",
+        help="list configured agent-visible cameras",
+    )
+    agent_cameras.set_defaults(func=_cmd_agent_cameras)
+
+    agent_capture = agent_sub.add_parser(
+        "capture",
+        help="capture a fresh still from the overhead or wrist camera",
+    )
+    agent_capture.add_argument("name", choices=AGENT_CAMERA_NAMES)
+    agent_capture.add_argument("--output")
+    agent_capture.set_defaults(func=_cmd_agent_capture)
+
+    agent_pose = agent_sub.add_parser(
+        "go-pose",
+        help="move to a calibration-bound saved agent_* pose and remain holding",
+    )
+    add_session_options(agent_pose)
+    agent_pose.add_argument("name")
+    agent_pose.set_defaults(func=_cmd_agent_go_pose)
+
+    agent_jog = agent_sub.add_parser(
+        "jog",
+        help="bounded world-frame translation using measured physical-height limits",
+    )
+    add_session_options(agent_jog)
+    agent_jog.add_argument("--x-mm", type=float, default=0.0)
+    agent_jog.add_argument("--y-mm", type=float, default=0.0)
+    agent_jog.add_argument("--z-mm", type=float, default=0.0)
+    agent_jog.set_defaults(func=_cmd_agent_jog)
+
+    agent_gripper = agent_sub.add_parser(
+        "gripper",
+        help="open or close the stock gripper using calibration-inset endpoints",
+    )
+    add_session_options(agent_gripper)
+    agent_gripper.add_argument("target", choices=("open", "close"))
+    agent_gripper.set_defaults(func=_cmd_agent_gripper)
+
+    agent_sleep = agent_sub.add_parser(
+        "sleep",
+        help="move to calibrated Sleep and remain holding",
+    )
+    add_session_options(agent_sleep)
+    agent_sleep.set_defaults(func=_cmd_agent_sleep)
+
+    agent_stop = agent_sub.add_parser(
+        "stop",
+        help="STOP/HOLD the follower; available even without active agent authority",
+    )
+    add_session_options(agent_stop)
+    agent_stop.set_defaults(func=_cmd_agent_stop)
 
     camera = sub.add_parser("camera", help="discover, configure, and capture named USB cameras")
     camera_sub = camera.add_subparsers(dest="camera_command", required=True)
