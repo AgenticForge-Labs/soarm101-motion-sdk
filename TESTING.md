@@ -18,7 +18,10 @@ soarm101 agent capture wrist
 ```
 
 Confirm every successful motion remains torque-held. Confirm missing/expired authority
-rejects motion. From measured heights above and below 100 mm, validate that physical jog
+rejects motion. After reaching `agent_start_overhead`, run `soarm101 agent sleep` and
+confirm the calibrated fold is accepted without an apparent equal-to-limit rejection; the
+arm must remain inside the configured 1° measured-stop inset and hold after completion.
+From measured heights above and below 100 mm, validate that physical jog
 requests over 50 mm / 10 mm respectively are rejected before motion and that a target below
 the calibrated ground plane is rejected. Begin with much smaller supervised jogs than the
 policy maxima. STOP/HOLD must remain available without authority. End the session by

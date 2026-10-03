@@ -57,6 +57,48 @@ def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() ->
     )
 
 
+def test_joint_planner_preserves_exact_validated_endpoint_at_effective_limit() -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.constants import ARM_JOINTS
+
+    initial_positions = {name: 0.0 for name in ARM_JOINTS}
+    initial_positions["elbow_flex"] = -1.6
+
+    with SOARM101.simulated(initial_positions=initial_positions) as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={
+                name: SimpleNamespace(radians_limits=(-2.0, 2.0))
+                for name in ARM_JOINTS
+            }
+        )
+        arm.backend.calibration.motors["elbow_flex"] = SimpleNamespace(
+            radians_limits=tuple(
+                np.deg2rad((-96.96703296703296, 96.96703296703296))
+            )
+        )
+        target = arm.get_joint_limits()["elbow_flex"][1]
+
+        # This is the hardware regression: mathematically evaluating the endpoint
+        # as start + (target - start) can round one ULP above target.
+        reconstructed = initial_positions["elbow_flex"] + (
+            target - initial_positions["elbow_flex"]
+        )
+        assert reconstructed > target
+
+        arm.enable()
+        result = arm.move_joints(
+            {"elbow_flex": target},
+            speed=0.2,
+            acceleration=0.5,
+            workspace_check="off",
+        )
+        final = arm.backend.command_history[-1]["elbow_flex"]  # type: ignore[attr-defined]
+
+    assert result.completed is True
+    assert final == target
+
+
 def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
     from types import SimpleNamespace
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed boundary-valid joint moves (including calibrated Sleep) that could fail when the
+  trajectory planner reconstructed the final sample one floating-point ULP beyond an exact
+  effective joint-limit target. Joint planning now preserves the already-validated start and
+  target samples exactly; calibrated stop margins and limit guards are unchanged.
 - Added bounded single-joint relative agent adjustments (one named joint, max 30° per
   command) and tool-frame translation through the existing `agent jog` capability.
   Agent tool-frame jogs use the current gripper/TCP axes while retaining the same physical
