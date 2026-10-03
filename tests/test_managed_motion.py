@@ -120,7 +120,6 @@ def test_saved_pose_can_exit_known_sleep_self_clearance_exception(monkeypatch) -
 
     with SOARM101.simulated() as arm:
         arm.enable()
-        sleep = arm.get_sleep_joint_positions()
         arm.move_sleep(speed=0.2, acceleration=0.5)
         calls = 0
 
