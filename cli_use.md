@@ -32,6 +32,48 @@ soarm101 COMMAND --simulation
 
 Do not open the same physical serial port from the GUI and CLI simultaneously.
 
+## Bounded agent control
+
+For external reasoning agents, prefer the bounded facade over the unrestricted CLI:
+
+```bash
+# Human/operator step from an interactive terminal
+soarm101 agent arm --minutes 60
+
+# Agent-visible discovery/observation
+soarm101 agent capabilities
+soarm101 agent state
+soarm101 agent poses
+soarm101 agent cameras
+soarm101 agent capture overhead
+soarm101 agent capture wrist
+
+# Bounded motion
+soarm101 agent go-pose agent_start_overhead
+soarm101 agent gripper open
+soarm101 agent gripper close
+soarm101 agent jog --x-mm 5 --y-mm 0 --z-mm 0
+soarm101 agent sleep
+soarm101 agent stop
+```
+
+Agent motion authority is time-limited and bound to robot/calibration identity. Only
+`agent_*` saved poses, logical `overhead`/`wrist` cameras, open/close gripper,
+Sleep, STOP/HOLD, and translation-only jogs are exposed.
+
+Agent jog uses the matching measured workspace transform to enforce a physical displacement
+limit of 50 mm when current physical height is above 100 mm and 10 mm when at or below
+100 mm. A target below the calibrated ground plane is rejected. The normal SDK guards still
+apply. Successful actions remain holding. Agents cannot relax torque.
+
+```bash
+# Human/operator only
+soarm101 agent disarm
+soarm101 relax
+```
+
+`relax` always requires explicit ENTER confirmation.
+
 ## Read-only commands
 
 List candidate serial ports:
