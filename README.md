@@ -52,14 +52,26 @@ An agent can choose a validated capability such as moving to a taught point or e
 
 ### Agent-facing CLI
 
-The SDK exposes a provider-neutral command surface for coding agents and other automation
-clients. [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise CLI
-contract—commands, units, structured output, coordinate/orientation semantics, and enforced
-guards. [`cli_use.md`](cli_use.md) is the compact technical usage reference for common CLI
-commands, units, model-frame XYZ semantics, motion modes, JSON output, and safety behavior. The `agent-as-code/` directory remains a
-small experiment helper; machine-local ports, calibration references, and named cameras come
-from the shared workstation profile rather than being duplicated in experiment files. Agent
-launchers, model selection, and sandboxing are intentionally outside the Motion SDK.
+The unrestricted `soarm101` CLI remains the human/developer interface. External reasoning
+agents should instead use the bounded `soarm101 agent ...` surface. A human first runs
+`soarm101 agent arm` from an interactive terminal; this parks the follower and creates a
+time-limited authority lease bound to the active robot and calibration. The agent cannot
+noninteractively create that authority.
+
+The bounded surface exposes read-only state, `agent_*` saved poses, named `overhead` and
+`wrist` camera capture, calibration-inset gripper open/close, Sleep, STOP/HOLD, and
+translation-only Cartesian jogs. Jog policy uses the measured workspace transform only as
+safety evidence: above 100 mm physical height a command may move at most 50 mm physically;
+at or below 100 mm the limit is 10 mm; targets below the calibrated ground plane are rejected.
+Normal SDK motion guards remain authoritative.
+
+[`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise technical
+contract. [`cli_use.md`](cli_use.md) is the compact operational reference. The optional
+task-facing robot/camera skill lives under
+[`agent-as-code/skills/robot-camera/SKILL.md`](agent-as-code/skills/robot-camera/SKILL.md);
+it is deliberately outside the neutral SDK CLI contract. Machine-local ports, calibration
+references, and named cameras still come from the shared workstation profile. Agent launchers,
+model selection, and sandboxing remain outside the Motion SDK.
 
 ## Get started
 
