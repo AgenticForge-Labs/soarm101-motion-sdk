@@ -3,9 +3,13 @@
 This directory contains small experiment-local support files for external coding agents that
 operate an already configured SO-ARM101 through the public `soarm101` CLI.
 
-The Motion SDK does not define an agent policy, reasoning loop, model, provider, launcher, or
-sandbox. The generic tool contract is documented in
-[`docs/agent-arm101-cli.md`](../docs/agent-arm101-cli.md).
+The Motion SDK does not define a model, provider, launcher, or sandbox. The bounded technical
+tool contract is documented in [`docs/agent-arm101-cli.md`](../docs/agent-arm101-cli.md).
+
+For experiments that intentionally provide task guidance, an opt-in robot/camera skill is
+available at [`skills/robot-camera/SKILL.md`](skills/robot-camera/SKILL.md). It is not part
+of the neutral SDK contract and should only be supplied when the experiment is meant to use
+that strategy/completion policy.
 
 ## Hardware setup is shared
 
@@ -63,13 +67,16 @@ python agent-as-code/capture_observation.py \
   --label test
 ```
 
-It is not a second camera implementation. An agent may instead call the CLI directly:
+It is not a second camera implementation. An external reasoning agent should normally use the bounded camera surface directly:
 
 ```bash
-soarm101 camera capture --name overhead --json
-soarm101 camera capture --name wrist --json
-soarm101 camera capture --all --json
+soarm101 agent cameras
+soarm101 agent capture overhead
+soarm101 agent capture wrist
 ```
+
+The unrestricted `soarm101 camera ...` commands remain available to human/developer
+workflows.
 
 ## Agent runs
 
@@ -81,8 +88,12 @@ another coding agent, or a custom harness. The SDK-side inputs can be limited to
 - the neutral CLI contract in `docs/agent-arm101-cli.md`; and
 - the shared workstation profile exposed through the CLI.
 
-For runs intended to measure an agent's own task strategy, do not add an SDK-provided
-problem-solving policy to those inputs.
+Before bounded physical motion, a human runs `soarm101 agent arm` interactively. The
+agent then uses only `soarm101 agent ...` commands; it does not arm, disarm, relax, import
+the Python SDK, or call unrestricted motion commands.
+
+For runs intended to measure an agent's own task strategy, omit the optional task-facing
+skill and provide only the bounded CLI contract/capabilities.
 
 The GUI and CLI cannot own the same follower serial port simultaneously. A CLI capture also
 cannot open a physical camera while the GUI already owns that same device.
