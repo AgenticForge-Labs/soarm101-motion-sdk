@@ -191,6 +191,39 @@ def test_explicit_session_port_overrides_saved_workstation_follower(
     assert arm.config.robot_id == "explicit"
 
 
+def test_pose_go_can_request_persistent_torque_on_disconnect() -> None:
+    args = build_parser().parse_args(
+        [
+            "pose",
+            "go",
+            "agent_start_overhead",
+            "--port",
+            "/dev/ttyACM9",
+            "--robot-id",
+            "so101",
+            "--yes",
+        ]
+    )
+    arm = _arm_from_args(args, disable_torque_on_disconnect=False)
+    assert arm.config.disable_torque_on_disconnect is False
+
+
+def test_relax_cli_always_requires_enter_confirmation(monkeypatch, capsys) -> None:
+    confirmations = 0
+
+    def confirm(*args, **kwargs):
+        nonlocal confirmations
+        confirmations += 1
+        return ""
+
+    monkeypatch.setattr("builtins.input", confirm)
+    assert main(["relax", "--simulation"]) == 0
+    assert confirmations == 1
+    captured = capsys.readouterr()
+    assert "Press ENTER to confirm relax" in captured.err
+    assert "Follower relaxed." in captured.out
+
+
 def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> None:
     from math import degrees
 
