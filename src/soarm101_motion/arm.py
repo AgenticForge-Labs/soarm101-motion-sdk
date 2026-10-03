@@ -220,6 +220,68 @@ class SOARM101:
         validate_joint_targets(target, limits=limits)
         return current, target
 
+    def _is_near_sleep_pose(self, joints: Mapping[str, float]) -> bool:
+        sleep = self.get_sleep_joint_positions()
+        tolerance = max(self.config.joint_position_tolerance_rad * 2.0, math.radians(2.0))
+        return all(
+            abs(float(joints[name]) - float(sleep[name])) <= tolerance
+            for name in ARM_JOINTS
+        )
+
+    def _validate_sleep_exit_workspace_path(
+        self,
+        current: Mapping[str, float],
+        target: Mapping[str, float],
+    ) -> None:
+        """Validate a joint path that starts at the known folded Sleep posture.
+
+        Sleep intentionally violates only the generic coarse self-clearance heuristic.
+        While leaving that exact neighborhood, ignore only that one heuristic until the
+        first fully valid sample. Every other workspace guard remains active at every
+        sample, and self-clearance becomes authoritative again once the path clears it.
+        """
+        if not self._is_near_sleep_pose(current):
+            raise SafetyViolationError(
+                "Sleep-exit workspace exception requires the measured start to match Sleep"
+            )
+        max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
+        steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
+        samples = tuple(
+            {
+                name: current[name] + (target[name] - current[name]) * fraction
+                for name in ARM_JOINTS
+            }
+            for fraction in np.linspace(0.0, 1.0, steps)
+        )
+        cleared_self_clearance = False
+        last_deferred: SafetyViolationError | None = None
+        for index, joints in enumerate(samples):
+            try:
+                validate_workspace_configuration(
+                    self.model,
+                    joints,
+                    tcp=self.active_tcp,
+                    **self._workspace_kwargs(),
+                )
+            except SafetyViolationError as exc:
+                if (
+                    not cleared_self_clearance
+                    and "coarse self-clearance" in str(exc)
+                ):
+                    last_deferred = exc
+                    continue
+                raise SafetyViolationError(
+                    f"workspace path sample {index}: {exc}"
+                ) from exc
+            else:
+                cleared_self_clearance = True
+        if not cleared_self_clearance:
+            assert last_deferred is not None
+            raise SafetyViolationError(
+                "saved-pose target never exits the Sleep self-clearance exception: "
+                f"{last_deferred}"
+            )
+
     def _validate_joint_workspace_path(
         self,
         positions: Mapping[str, float] | Sequence[float],
@@ -371,6 +433,32 @@ class SOARM101:
 
     def get_position(self, *, tcp: Pose | None = None) -> Pose:
         return self.model.forward(self.backend.read_joint_positions(), tcp=tcp or self.active_tcp)
+
+    def move_joints_from_saved_pose(
+        self,
+        positions: Mapping[str, float] | Sequence[float],
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        wait: bool = True,
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        """Move to saved joint coordinates, permitting a tightly bounded Sleep exit."""
+        current, target = self._resolve_joint_target(positions, relative=False)
+        if self.config.enable_workspace_checks and self._is_near_sleep_pose(current):
+            self._validate_sleep_exit_workspace_path(current, target)
+            return self.motion.move_joints(
+                positions,
+                speed=speed,
+                acceleration=acceleration,
+                relative=False,
+                wait=wait,
+            )
+        return self.move_joints(
+            positions,
+            speed=speed,
+            acceleration=acceleration,
+            wait=wait,
+        )
 
     def move_joints(
         self,
