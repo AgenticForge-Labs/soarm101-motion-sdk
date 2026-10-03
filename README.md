@@ -230,6 +230,8 @@ soarm101 move-joints --port /dev/ttyACM0 --robot-id so101 \
 # Capture and replay a named pose
 soarm101 pose capture home --port /dev/ttyACM0 --robot-id so101
 soarm101 pose go home --port /dev/ttyACM0 --robot-id so101 --yes
+# Successful pose replay remains torque-held; release only with explicit ENTER confirmation
+soarm101 relax --port /dev/ttyACM0 --robot-id so101
 
 # Move to this follower's calibration-derived natural Sleep posture
 soarm101 sleep --port /dev/ttyACM0 --robot-id so101 --yes
