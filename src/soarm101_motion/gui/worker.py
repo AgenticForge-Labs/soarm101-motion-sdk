@@ -1250,7 +1250,7 @@ class RobotWorker(QObject):
 
             def execute_pose(*, wait: bool) -> Any:
                 if mode == "joint":
-                    return arm.move_joints(
+                    return arm.move_joints_from_saved_pose(
                         pose.joints,
                         speed=radians(float(values["speed_deg_s"])),
                         acceleration=radians(float(values["acceleration_deg_s2"])),
