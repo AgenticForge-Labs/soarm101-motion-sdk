@@ -394,11 +394,13 @@ soarm101 pose go NAME --port PORT --robot-id ROBOT_ID --mode linear --yes
 ```
 
 Saved physical poses carry calibration provenance. Replay fails closed when provenance does not
-match the connected follower. Joint/angular saved-pose replay also supports leaving the built-in
-Sleep posture: while the measured start still matches Sleep, only the known coarse self-clearance
-false positive may be ignored until the path first clears that heuristic. Every other workspace
-guard remains active, and self-clearance becomes authoritative again immediately after the path
-clears it.
+match the connected follower. Joint/angular saved-pose replay can also leave a measured starting
+configuration that is already inside the coarse centerline self-clearance envelope. This is not
+a bypass: every floor/reach/base guard must pass for every sample, minimum self-clearance may not
+decrease while the path remains inside the envelope, the path must eventually reach the configured
+clearance threshold, and ordinary full workspace validation becomes authoritative from that point
+onward. This permits a real folded/parked pose to unfold without treating sample 0 as a newly
+commanded collision.
 
 A successful physical `pose go` intentionally leaves follower torque enabled after the CLI
 disconnects, so the robot remains holding the reached pose. It does not relax automatically.
