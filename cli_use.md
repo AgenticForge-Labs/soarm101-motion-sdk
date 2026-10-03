@@ -61,10 +61,12 @@ Agent motion authority is time-limited and bound to robot/calibration identity. 
 `agent_*` saved poses, logical `overhead`/`wrist` cameras, open/close gripper,
 Sleep, STOP/HOLD, and translation-only jogs are exposed.
 
-Agent jog uses the matching measured workspace transform to enforce a physical displacement
-limit of 50 mm when current physical height is above 100 mm and 10 mm when at or below
-100 mm. A target below the calibrated ground plane is rejected. The normal SDK guards still
-apply. Successful actions remain holding. Agents cannot relax torque.
+Agent jog uses the matching measured workspace transform to enforce requested physical
+displacement limits of 50 mm when current physical height is above 100 mm and 10 mm when at
+or below 100 mm. The planned target must remain at least 10 mm above the calibrated ground
+plane, preserving margin for ordinary hardware settle/model error. These are command-space
+bounds, not metrology guarantees. The normal SDK guards still apply. Successful actions
+remain holding. Agents cannot relax torque.
 
 ```bash
 # Human/operator only
