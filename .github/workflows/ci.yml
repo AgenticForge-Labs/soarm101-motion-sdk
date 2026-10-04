@@ -36,6 +36,7 @@ jobs:
               "soarm101_motion/agent_assets/codex-openai-provider.yaml",
               "soarm101_motion/agent_assets/robot-camera-hermes-skill.md",
               "soarm101_motion/agent_assets/robot-camera-codex-skill.md",
+              "soarm101_motion/agent_assets/robot-camera-generic-skill.md",
               "soarm101_motion/agent_assets/TASK.read-only.md",
           }
           missing = required - names
