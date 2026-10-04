@@ -178,6 +178,84 @@ def write_frame_extract(frames: list[dict[str, Any]], path: str | Path) -> Path:
     return output
 
 
+def preflight_stream_commands(
+    commands: list[dict[str, float]],
+    *,
+    start: dict[str, float],
+    frequency_hz: float,
+    max_command_step_radians: float,
+    max_joint_speed: float,
+    max_joint_acceleration: float,
+    limits: dict[str, tuple[float, float]],
+) -> dict[str, float]:
+    if not math.isfinite(frequency_hz) or frequency_hz <= 0:
+        raise ValueError("frequency_hz must be positive and finite")
+
+    dt = 1.0 / frequency_hz
+    previous = dict(start)
+    previous_velocity: dict[str, float] | None = None
+    max_step = 0.0
+    max_speed = 0.0
+    max_acceleration = 0.0
+
+    for index, command in enumerate(commands, start=1):
+        if set(command) != set(ARM_JOINTS):
+            raise ValueError(
+                f"replay sample {index} does not contain exactly the five arm joints"
+            )
+        for name in ARM_JOINTS:
+            value = float(command[name])
+            if not math.isfinite(value):
+                raise ValueError(f"replay sample {index} has non-finite {name}")
+            lower, upper = limits[name]
+            if value < lower or value > upper:
+                raise ValueError(
+                    f"replay sample {index} {name}={value:.6f} is outside "
+                    f"{lower:.6f}..{upper:.6f} rad"
+                )
+
+        step = {name: command[name] - previous[name] for name in ARM_JOINTS}
+        sample_step = max(abs(value) for value in step.values())
+        max_step = max(max_step, sample_step)
+        if sample_step > max_command_step_radians * 1.001:
+            raise ValueError(
+                f"replay sample {index} step {math.degrees(sample_step):.2f} deg exceeds "
+                f"{math.degrees(max_command_step_radians):.2f} deg"
+            )
+
+        velocity = {name: step[name] / dt for name in ARM_JOINTS}
+        sample_speed = max(abs(value) for value in velocity.values())
+        max_speed = max(max_speed, sample_speed)
+        if sample_speed > max_joint_speed * 1.001:
+            raise ValueError(
+                f"replay sample {index} speed {math.degrees(sample_speed):.2f} deg/s exceeds "
+                f"{math.degrees(max_joint_speed):.2f} deg/s"
+            )
+
+        if previous_velocity is not None:
+            acceleration = {
+                name: (velocity[name] - previous_velocity[name]) / dt
+                for name in ARM_JOINTS
+            }
+            sample_acceleration = max(abs(value) for value in acceleration.values())
+            max_acceleration = max(max_acceleration, sample_acceleration)
+            if sample_acceleration > max_joint_acceleration * 1.001:
+                raise ValueError(
+                    f"replay sample {index} acceleration "
+                    f"{math.degrees(sample_acceleration):.2f} deg/s^2 exceeds "
+                    f"{math.degrees(max_joint_acceleration):.2f} deg/s^2"
+                )
+
+        previous = dict(command)
+        previous_velocity = velocity
+
+    return {
+        "max_step_deg": math.degrees(max_step),
+        "max_speed_deg_s": math.degrees(max_speed),
+        "max_acceleration_deg_s2": math.degrees(max_acceleration),
+    }
+
+
 def command_sequence(frames: list[dict[str, Any]]) -> list[dict[str, float]]:
     sequence: list[dict[str, float]] = []
     for frame in frames:
