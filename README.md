@@ -295,6 +295,8 @@ step does not redo mechanical-stop calibration.
 
 Simulation and fake-transport tests cover the motion and hardware interfaces. Physical behavior depends on the specific arm, assembly, calibration, power supply, and payload; test cautiously before relying on a movement or saved trajectory. Leader parking and cross-arm pose matching enable torque and can move a physical arm; treat them as powered-motion operations even though the leader is normally back-drivable with torque off.
 
+Motion-quality debugging can use `examples/motion_quality_trace.py`. It runs the saved-pose Sleep/Overhead/Left/Right route without interactive pauses and passively records existing command writes, natural feedback reads, raw encoder targets, TCP positions, effective servo speed/acceleration parameters, hardware-state checks, and route markers to JSONL. The tracer intentionally adds no hardware polling during motion. Detailed GUI teleoperation logging is enabled by default and writes `teleop_frame` evidence under `~/.local/state/soarm101/gui/` for comparison.
+
 Cartesian `move_linear()` trajectories are parameterized in Cartesian space with
 half-cosine acceleration/deceleration and optional cruise, then solved by sequential IK
 at the host command rate. Position-only paths may then reproject from smoothed joint seeds
