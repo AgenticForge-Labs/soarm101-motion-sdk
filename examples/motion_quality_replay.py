@@ -20,6 +20,7 @@ from soarm101_motion.motion.quality import (
     command_sequence,
     load_jsonl,
     preflight_stream_commands,
+    recorded_teleop_settings,
     repair_single_missing_teleop_frames,
     teleop_frames,
 )
@@ -165,23 +166,7 @@ def main() -> int:
     if not session_path.exists():
         raise RuntimeError(f"missing copied GUI session log: {session_path}")
     session_rows = load_jsonl(session_path)
-    teleop_settings_rows = [
-        row for row in session_rows if row.get("event") == "teleop_settings"
-    ]
-    if not teleop_settings_rows:
-        raise RuntimeError("copied GUI session log contains no teleop_settings event")
-    recorded_settings = dict(teleop_settings_rows[-1])
-
-    required_setting_names = (
-        "max_joint_speed_rad_s",
-        "max_joint_acceleration_rad_s2",
-        "max_command_step_rad",
-        "following_error_limit_rad",
-    )
-    for name in required_setting_names:
-        value = recorded_settings.get(name)
-        if value is None or not math.isfinite(float(value)) or float(value) <= 0:
-            raise RuntimeError(f"recorded teleop setting {name} is missing or invalid")
+    recorded_settings = recorded_teleop_settings(session_rows)
     frequency, _, _ = _recorded_timing(frames)
     continuity_before = analyze_teleop_frame_continuity(
         frames,
