@@ -1249,7 +1249,7 @@ def run_agent(
             )
 
             downloads: list[tuple[str, Path]] = [
-                ("/sandbox/observations", output_dir),
+                ("/sandbox/observations", output_dir / "observations"),
             ]
             if not read_only:
                 downloads.append(
