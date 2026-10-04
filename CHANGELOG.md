@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added passive motion-quality tracing for the low-speed shake investigation. The reusable
+  backend tracer records existing joint commands, raw encoder goals, natural feedback reads,
+  TCP positions, effective servo parameters, hardware-state checks, and route markers without
+  adding motion-time bus polling. Added an automatic Sleep/Overhead/Left/Right comparison
+  program and enriched detailed GUI teleop frames with raw encoder targets and monotonic timing.
 - Planned calibrated motion now suppresses redundant intermediate servo writes when adjacent
   continuous joint samples resolve to the exact same five encoder targets. Host timing,
   monitoring, speed/acceleration validation, and the exact final sample are unchanged. This
