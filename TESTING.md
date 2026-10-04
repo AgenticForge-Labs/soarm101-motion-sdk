@@ -108,6 +108,27 @@ single-final-target joint move remains a later discriminator for saved-pose moti
 generalize that experiment to Cartesian `move_linear()`, where a single joint endpoint
 cannot guarantee the requested straight TCP path.
 
+### 20 Hz versus 50 Hz physical comparison — 2026-10-04
+
+On the physical follower, the same 8 deg/s saved-pose route did **not** show a large
+subjective smoothness difference between 50 Hz and 20 Hz host command cadence. The dominant
+visible failure remained strong shake/jitter while folding back into Sleep. This weakens
+host update frequency by itself as the primary cause.
+
+The configuration dependence is now the stronger clue: folded/Sleep motion is consistently
+worse than the more extended overhead/left/right portions. Prior tests also showed faster
+motion is better overall, but shake returns during deceleration. The remaining hypotheses
+should therefore emphasize joint-specific low-speed behavior under changing gravity/load,
+backlash/static friction near the folded configuration, and whether the host planner gives
+some joints very small/stop-start discrete motions while another joint sets the overall
+trajectory duration.
+
+The next discriminator is the post-study exact teleop-command replay. If the exact accepted
+teleop sequence remains smooth through the same return-to-Sleep fold, the hardware stream
+path is capable of that motion and the generated planned trajectory/coordination is implicated.
+If exact replay also becomes shaky in the fold, inspect load/configuration-dependent servo
+behavior and live-teleop-specific differences before changing the planner.
+
 ### Slow-speed motion diagnostic record — 2026-10-04
 
 A supervised saved-pose A/B/C comparison on current `main` used the same host-planned joint
