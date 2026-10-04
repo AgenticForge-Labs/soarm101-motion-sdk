@@ -950,10 +950,9 @@ def test_setup_is_idempotent(
 
     assert docker_calls
     assert docker_calls[0][:2] == ["docker", "build"]
-    assert any(
-        call[:2] == ("profile", "lint")
-        for call in fake.calls
-    )
+    lint_calls = [call for call in fake.calls if call[:2] == ("profile", "lint")]
+    assert len(lint_calls) == 1
+    assert "--global" not in lint_calls[0]
     assert any(
         call[:2] == ("profile", profile_action)
         for call in fake.calls
