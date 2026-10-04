@@ -154,6 +154,43 @@ def _preflight_stream(
     }
 
 
+
+def _persist_result(
+    study: Path,
+    *,
+    result: dict[str, Any],
+    summary_path: Path,
+) -> tuple[Path, Path]:
+    summary_path.write_text(
+        json.dumps(result, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+    experiment_summary_path = study / "experiment-summary.json"
+    experiment_summary: dict[str, Any] = {}
+    if experiment_summary_path.exists():
+        try:
+            loaded = json.loads(experiment_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                experiment_summary = loaded
+        except Exception:
+            pass
+    experiment_summary["post_study_teleop_replay"] = result
+    experiment_summary_path.write_text(
+        json.dumps(experiment_summary, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+    archive = Path(
+        shutil.make_archive(
+            str(study),
+            "gztar",
+            root_dir=study.parent,
+            base_dir=study.name,
+        )
+    )
+    return experiment_summary_path, archive
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -232,127 +269,130 @@ def main() -> int:
         "preposition_acceleration_deg_s2": args.preposition_acceleration_deg_s2,
     }
 
-    with SOARM101(cfg) as arm:
-        arm.enable()
-        arm.hold()
-        current = dict(arm.get_joint_positions().positions)
-        first = commands[0]
-        result["initial_to_recorded_start_deg"] = math.degrees(_max_delta(current, first))
-
-        with PassiveBackendTrace(
-            arm,
-            trace_path,
-            metadata={
-                "kind": "poststudy_exact_teleop_command_replay",
-                "git_sha": _git_sha(),
-                "study": str(study),
-                "source_frames": str(frames_path),
-                "frequency_hz": frequency,
-                "frame_count": len(commands),
-                "timing_source": timing_source,
-            },
-        ) as trace:
-            trace.mark(
-                "preposition_start",
-                initial_positions=current,
-                target_positions=first,
-                initial_delta_deg=result["initial_to_recorded_start_deg"],
-            )
-            print(
-                f"Pre-positioning to first recorded arm pose "
-                f"({result['initial_to_recorded_start_deg']:.2f} deg max joint delta)..."
-            )
-            preposition = arm.move_joints(
-                first,
-                speed=preposition_speed,
-                acceleration=preposition_acceleration,
-                workspace_check="full",
-            )
+    try:
+        with SOARM101(cfg) as arm:
+            arm.enable()
             arm.hold()
-            arrived = dict(preposition.final_positions)
-            arrival_delta = _max_delta(arrived, first)
-            result["preposition_arrival_delta_deg"] = math.degrees(arrival_delta)
-            trace.mark(
-                "preposition_end",
-                completed=preposition.completed,
-                final_positions=arrived,
-                arrival_delta_deg=result["preposition_arrival_delta_deg"],
-            )
+            current = dict(arm.get_joint_positions().positions)
+            first = commands[0]
+            result["initial_to_recorded_start_deg"] = math.degrees(_max_delta(current, first))
 
-            arrival_limit = min(
-                cfg.joint_position_tolerance_rad * 1.5,
-                cfg.stream_joint_speed_limit / frequency * 0.8,
-                cfg.max_command_step_radians * 0.8,
-            )
-            result["replay_start_tolerance_deg"] = math.degrees(arrival_limit)
-            if arrival_delta > arrival_limit:
-                result["status"] = "blocked_preposition_not_close_enough"
-                raise RuntimeError(
-                    "pre-positioning completed but the measured follower is still "
-                    f"{math.degrees(arrival_delta):.2f} deg from the first recorded target; "
-                    f"replay requires <= {math.degrees(arrival_limit):.2f} deg"
+            with PassiveBackendTrace(
+                arm,
+                trace_path,
+                metadata={
+                    "kind": "poststudy_exact_teleop_command_replay",
+                    "git_sha": _git_sha(),
+                    "study": str(study),
+                    "source_frames": str(frames_path),
+                    "frequency_hz": frequency,
+                    "frame_count": len(commands),
+                    "timing_source": timing_source,
+                },
+            ) as trace:
+                trace.mark(
+                    "preposition_start",
+                    initial_positions=current,
+                    target_positions=first,
+                    initial_delta_deg=result["initial_to_recorded_start_deg"],
+                )
+                print(
+                    f"Pre-positioning to first recorded arm pose "
+                    f"({result['initial_to_recorded_start_deg']:.2f} deg max joint delta)..."
+                )
+                preposition = arm.move_joints(
+                    first,
+                    speed=preposition_speed,
+                    acceleration=preposition_acceleration,
+                    workspace_check="full",
+                )
+                arm.hold()
+                arrived = dict(preposition.final_positions)
+                arrival_delta = _max_delta(arrived, first)
+                result["preposition_arrival_delta_deg"] = math.degrees(arrival_delta)
+                trace.mark(
+                    "preposition_end",
+                    completed=preposition.completed,
+                    final_positions=arrived,
+                    arrival_delta_deg=result["preposition_arrival_delta_deg"],
                 )
 
-            limits = arm.get_joint_limits()
-            preflight = _preflight_stream(
-                commands,
-                start=arrived,
-                frequency_hz=frequency,
-                config=cfg,
-                limits=limits,
-            )
-            result["preflight"] = preflight
-            trace.mark("replay_preflight_passed", **preflight)
+                arrival_limit = min(
+                    cfg.joint_position_tolerance_rad * 1.5,
+                    cfg.stream_joint_speed_limit / frequency * 0.8,
+                    cfg.max_command_step_radians * 0.8,
+                )
+                result["replay_start_tolerance_deg"] = math.degrees(arrival_limit)
+                if arrival_delta > arrival_limit:
+                    result["status"] = "blocked_preposition_not_close_enough"
+                    raise RuntimeError(
+                        "pre-positioning completed but the measured follower is still "
+                        f"{math.degrees(arrival_delta):.2f} deg from the first recorded target; "
+                        f"replay requires <= {math.degrees(arrival_limit):.2f} deg"
+                    )
 
-            print(
-                "Pre-position verified. Exact accepted teleop arm-command stream "
-                "will now replay automatically."
-            )
-            input("Press ENTER to start exact replay, or Ctrl-C to stop: ")
+                limits = arm.get_joint_limits()
+                preflight = _preflight_stream(
+                    commands,
+                    start=arrived,
+                    frequency_hz=frequency,
+                    config=cfg,
+                    limits=limits,
+                )
+                result["preflight"] = preflight
+                trace.mark("replay_preflight_passed", **preflight)
 
-            arm.start_joint_stream(frequency_hz=frequency)
-            started = time.perf_counter()
-            trace.mark("replay_start")
-            try:
-                for index, (command, offset_s) in enumerate(
-                    zip(commands, offsets, strict=True),
-                    start=1,
-                ):
-                    deadline = started + offset_s
-                    delay = deadline - time.perf_counter()
-                    if delay > 0:
-                        time.sleep(delay)
-                    trace.mark("replay_sample", sample=index)
-                    arm.stream_joint_target(command)
-            finally:
-                arm.stop_joint_stream(hold=True)
-            trace.mark("replay_end")
-            arm.hold()
-            result.update(trace.summary)
+                print(
+                    "Pre-position verified. Exact accepted teleop arm-command stream "
+                    "will now replay automatically."
+                )
+                input("Press ENTER to start exact replay, or Ctrl-C to stop: ")
 
-    result["status"] = "completed"
-    summary_path.write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
+                arm.start_joint_stream(frequency_hz=frequency)
+                started = time.perf_counter()
+                trace.mark("replay_start")
+                try:
+                    for index, (command, offset_s) in enumerate(
+                        zip(commands, offsets, strict=True),
+                        start=1,
+                    ):
+                        deadline = started + offset_s
+                        delay = deadline - time.perf_counter()
+                        if delay > 0:
+                            time.sleep(delay)
+                        trace.mark("replay_sample", sample=index)
+                        arm.stream_joint_target(command)
+                finally:
+                    arm.stop_joint_stream(hold=True)
+                trace.mark("replay_end")
+                arm.hold()
+                result.update(trace.summary)
 
-    experiment_summary_path = study / "experiment-summary.json"
-    experiment_summary: dict[str, Any] = {}
-    if experiment_summary_path.exists():
-        try:
-            loaded = json.loads(experiment_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                experiment_summary = loaded
-        except Exception:
-            pass
-    experiment_summary["post_study_teleop_replay"] = result
-    experiment_summary_path.write_text(
-        json.dumps(experiment_summary, indent=2, default=str) + "\n",
-        encoding="utf-8",
-    )
 
-    archive = shutil.make_archive(
-        str(study),
-        "gztar",
-        root_dir=study.parent,
-        base_dir=study.name,
+        result["status"] = "completed"
+    except BaseException as exc:
+        if result["status"] == "not_started":
+            result["status"] = "failed"
+        result["error"] = repr(exc)
+        experiment_summary_path, archive = _persist_result(
+            study,
+            result=result,
+            summary_path=summary_path,
+        )
+        print("\n" + "=" * 72)
+        print("POST-STUDY REPLAY STOPPED SAFELY")
+        print("=" * 72)
+        print(f"Reason: {exc}")
+        print(f"Replay summary: {summary_path}")
+        print(f"Updated study summary: {experiment_summary_path}")
+        print(f"Updated archive: {archive}")
+        print("Follower remains torque-held if connection/hold was available.")
+        return 2
+
+    experiment_summary_path, archive = _persist_result(
+        study,
+        result=result,
+        summary_path=summary_path,
     )
 
     print("\n" + "=" * 72)
