@@ -901,7 +901,10 @@ def setup(
             raise AgentSandboxError(
                 f"auth mode {selected_auth.name!r} has no provider configuration"
             )
-        client.run(["profile", "lint", "-f", str(profile), "--global"], timeout=60)
+        # Lint the candidate file itself. OpenShell 0.1.2 treats `--global` lint
+        # as a uniqueness check against the installed global profile and rejects an
+        # otherwise-valid update when the same custom profile ID already exists.
+        client.run(["profile", "lint", "-f", str(profile)], timeout=60)
         existing_profile = client.run(
             [
                 "profile",
