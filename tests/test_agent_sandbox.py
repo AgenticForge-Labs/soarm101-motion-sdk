@@ -1360,3 +1360,16 @@ def test_external_adapter_manifest_skill_file_cannot_escape_manifest_directory(
     )
     with pytest.raises(ValueError, match="may not escape"):
         load_agent_adapter_manifest(manifest)
+
+
+def test_openshell_sandbox_names_fit_server_limit_and_preserve_agent_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_sandbox.secrets, "token_hex", lambda n: "12345678")
+    codex_name = agent_sandbox._sandbox_name("codex")
+    long_name = agent_sandbox._sandbox_name("manifest-agent-name-that-is-much-too-long")
+
+    assert codex_name == "s101-codex-12345678"
+    assert len(codex_name) <= agent_sandbox.OPENSHELL_SANDBOX_NAME_MAX_LENGTH
+    assert len(long_name) <= agent_sandbox.OPENSHELL_SANDBOX_NAME_MAX_LENGTH
+    assert long_name.startswith("s101-manif-")
