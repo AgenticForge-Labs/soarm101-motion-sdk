@@ -120,11 +120,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
   unresolved issue; after planning is feasible, inspect planned
   joint derivatives, encoder quantization, following error, and cycle timing before changing
   motor tuning.
-- [ ] Validate quantized-target coalescing on the physical follower with the same saved-pose
-  path used for the 2026-10-04 A/B/C comparison. Compare visible slow-tail shake, following
-  error, and completion behavior against current `main`; keep the exact final setpoint and
-  all timing/fault/effort/following-error guards active. Do not move on to PID tuning unless
-  the encoder-target evidence shows this is insufficient.
+- [ ] Complete the guided teleop-versus-programmed motion-quality study on the physical
+  follower. Capture a marked slow teleop reference, guarded replay of its exact accepted
+  arm-joint commands, and the same 8 deg/s saved-pose route at both 50 Hz and 20 Hz. Compare
+  raw encoder-step distributions, command-versus-feedback lag, deceleration behavior, and
+  folded/Sleep geometry before selecting the next control change. Quantized-target coalescing
+  has looked at most marginally better so far and is not merge-ready on that evidence alone.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
