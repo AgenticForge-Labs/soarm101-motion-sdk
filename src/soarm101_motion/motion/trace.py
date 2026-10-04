@@ -148,6 +148,20 @@ class PassiveBackendTrace:
             duplicate_raw = raw is not None and raw == self._last_command_raw
             if duplicate_raw:
                 self._duplicate_raw_commands += 1
+            effective_speed_raw = (
+                speed_raw
+                if speed_raw is not None
+                else getattr(getattr(self.backend, "config", None), "hardware_speed_raw", None)
+            )
+            effective_acceleration_raw = (
+                acceleration_raw
+                if acceleration_raw is not None
+                else getattr(
+                    getattr(self.backend, "config", None),
+                    "hardware_acceleration_raw",
+                    None,
+                )
+            )
             started = time.perf_counter()
             try:
                 result = original(
@@ -161,8 +175,10 @@ class PassiveBackendTrace:
                     joints_rad=joints,
                     joints_raw=raw,
                     tcp_xyz_mm=self._tcp_xyz_mm(joints),
-                    speed_raw=self._json_speed(speed_raw),
-                    acceleration_raw=acceleration_raw,
+                    requested_speed_raw=self._json_speed(speed_raw),
+                    requested_acceleration_raw=acceleration_raw,
+                    speed_raw=self._json_speed(effective_speed_raw),
+                    acceleration_raw=effective_acceleration_raw,
                     duplicate_raw=duplicate_raw,
                     call_ms=(time.perf_counter() - started) * 1000.0,
                     error=repr(exc),
@@ -176,8 +192,10 @@ class PassiveBackendTrace:
                 joints_rad=joints,
                 joints_raw=raw,
                 tcp_xyz_mm=self._tcp_xyz_mm(joints),
-                speed_raw=self._json_speed(speed_raw),
-                acceleration_raw=acceleration_raw,
+                requested_speed_raw=self._json_speed(speed_raw),
+                requested_acceleration_raw=acceleration_raw,
+                speed_raw=self._json_speed(effective_speed_raw),
+                acceleration_raw=effective_acceleration_raw,
                 duplicate_raw=duplicate_raw,
                 call_ms=(time.perf_counter() - started) * 1000.0,
             )
