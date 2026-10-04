@@ -57,6 +57,22 @@ already green at that head.
   follower.
 - The real arm was deliberately not driven near the floor merely to exercise the floor guard.
   Automated policy tests cover rejection of targets entering the configured margin.
+### Slow-speed motion diagnostic record — 2026-10-04
+
+A supervised saved-pose A/B/C comparison on current `main` used the same host-planned joint
+path with three servo write strategies: the ordinary `250/20` profile, `0/254`, and
+`Goal_Position`-only writes. All three looked smoother through the main transit than the
+previously troublesome motion, but visible roughness concentrated as the arm slowed near
+the endpoint. The `Goal_Position`-only condition later tripped the existing wrist-flex
+following-error guard at 0.332 rad against the 0.300 rad limit during return, so it is not
+adopted as a production transport change.
+
+This points the next experiment at actuator-resolution behavior rather than another IK or
+PID change. On the quantized-target branch, repeat the same safe saved-pose motion and compare
+slow-tail smoothness against `main`. Confirm that intermediate writes with unchanged encoder
+targets are suppressed, the host cadence/deadlines continue unchanged, the exact final
+planned sample is still written, and following-error/fault/effort/settle behavior is unchanged.
+Record whether the visible roughness improves specifically during deceleration.
 
 ## Testing roadmap
 
