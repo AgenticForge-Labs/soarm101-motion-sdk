@@ -15,7 +15,12 @@ from typing import Any
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS, DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
 from soarm101_motion.motion import PassiveBackendTrace
-from soarm101_motion.motion.quality import command_sequence, load_jsonl, teleop_frames
+from soarm101_motion.motion.quality import (
+    command_sequence,
+    load_jsonl,
+    preflight_stream_commands,
+    teleop_frames,
+)
 from soarm101_motion.workstation import WorkstationProfileStore
 
 
@@ -82,114 +87,6 @@ def _recorded_timing(frames: list[dict[str, Any]]) -> tuple[float, list[float], 
 def _max_delta(first: dict[str, float], second: dict[str, float]) -> float:
     return max(abs(first[name] - second[name]) for name in ARM_JOINTS)
 
-
-def _preflight_stream(
-    commands: list[dict[str, float]],
-    *,
-    start: dict[str, float],
-    frequency_hz: float,
-    config: SOARM101Config,
-    limits: dict[str, tuple[float, float]],
-) -> dict[str, float]:
-    dt = 1.0 / frequency_hz
-    previous = dict(start)
-    previous_velocity: dict[str, float] | None = None
-    max_step = 0.0
-    max_speed = 0.0
-    max_acceleration = 0.0
-
-    for index, command in enumerate(commands, start=1):
-        if set(command) != set(ARM_JOINTS):
-            raise RuntimeError(f"replay sample {index} does not contain exactly the five arm joints")
-        for name in ARM_JOINTS:
-            value = float(command[name])
-            if not math.isfinite(value):
-                raise RuntimeError(f"replay sample {index} has non-finite {name}")
-            lower, upper = limits[name]
-            if value < lower or value > upper:
-                raise RuntimeError(
-                    f"replay sample {index} {name}={value:.6f} is outside "
-                    f"{lower:.6f}..{upper:.6f} rad"
-                )
-
-        step = {name: command[name] - previous[name] for name in ARM_JOINTS}
-        sample_step = max(abs(value) for value in step.values())
-        max_step = max(max_step, sample_step)
-        if sample_step > config.max_command_step_radians * 1.001:
-            raise RuntimeError(
-                f"replay sample {index} step {math.degrees(sample_step):.2f} deg exceeds "
-                f"{math.degrees(config.max_command_step_radians):.2f} deg"
-            )
-
-        velocity = {name: step[name] / dt for name in ARM_JOINTS}
-        sample_speed = max(abs(value) for value in velocity.values())
-        max_speed = max(max_speed, sample_speed)
-        if sample_speed > config.stream_joint_speed_limit * 1.001:
-            raise RuntimeError(
-                f"replay sample {index} speed {math.degrees(sample_speed):.2f} deg/s exceeds "
-                f"{math.degrees(config.stream_joint_speed_limit):.2f} deg/s"
-            )
-
-        if previous_velocity is not None:
-            acceleration = {
-                name: (velocity[name] - previous_velocity[name]) / dt
-                for name in ARM_JOINTS
-            }
-            sample_acceleration = max(abs(value) for value in acceleration.values())
-            max_acceleration = max(max_acceleration, sample_acceleration)
-            if sample_acceleration > config.stream_joint_acceleration_limit * 1.001:
-                raise RuntimeError(
-                    f"replay sample {index} acceleration "
-                    f"{math.degrees(sample_acceleration):.2f} deg/s^2 exceeds "
-                    f"{math.degrees(config.stream_joint_acceleration_limit):.2f} deg/s^2"
-                )
-
-        previous = dict(command)
-        previous_velocity = velocity
-
-    return {
-        "max_step_deg": math.degrees(max_step),
-        "max_speed_deg_s": math.degrees(max_speed),
-        "max_acceleration_deg_s2": math.degrees(max_acceleration),
-    }
-
-
-
-def _persist_result(
-    study: Path,
-    *,
-    result: dict[str, Any],
-    summary_path: Path,
-) -> tuple[Path, Path]:
-    summary_path.write_text(
-        json.dumps(result, indent=2, default=str) + "\n",
-        encoding="utf-8",
-    )
-
-    experiment_summary_path = study / "experiment-summary.json"
-    experiment_summary: dict[str, Any] = {}
-    if experiment_summary_path.exists():
-        try:
-            loaded = json.loads(experiment_summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                experiment_summary = loaded
-        except Exception:
-            pass
-    experiment_summary["post_study_teleop_replay"] = result
-    experiment_summary_path.write_text(
-        json.dumps(experiment_summary, indent=2, default=str) + "\n",
-        encoding="utf-8",
-    )
-
-    archive = Path(
-        shutil.make_archive(
-            str(study),
-            "gztar",
-            root_dir=study.parent,
-            base_dir=study.name,
-        )
-    )
-    return experiment_summary_path, archive
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
