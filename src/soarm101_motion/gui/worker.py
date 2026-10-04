@@ -1046,10 +1046,33 @@ class RobotWorker(QObject):
             processing_s = time.perf_counter() - started
             if self._detailed_logging:
                 actual = dict(result.final_positions)
+                calibration = getattr(arm.backend, "calibration", None)
+                motors = getattr(calibration, "motors", None)
+                command_raw = None
+                actual_raw = None
+                if motors is not None:
+                    try:
+                        command_raw = {
+                            name: int(motors[name].radians_to_raw(float(command[name])))
+                            for name in ARM_JOINTS
+                        }
+                        actual_raw = {
+                            name: int(motors[name].radians_to_raw(float(actual[name])))
+                            for name in ARM_JOINTS
+                        }
+                    except Exception:
+                        command_raw = None
+                        actual_raw = None
                 record_session(
                     "teleop_frame",
                     **frame,
+                    monotonic_s=time.perf_counter(),
                     actual_joints_rad=actual,
+                    command_joints_raw=command_raw,
+                    actual_joints_raw=actual_raw,
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                    frequency_hz=teleop["frequency_hz"],
                     following_error_rad={
                         name: actual[name] - command[name] for name in ARM_JOINTS
                     },
