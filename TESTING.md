@@ -75,6 +75,24 @@ unchanged.
 Regression tests cover: improving-but-still-inside motion, deeper-fold rejection, strict
 re-entry rejection after clearing the envelope, and preservation of the floor guard.
 
+### Exact-replay configuration mismatch — 2026-10-04
+
+The first post-study exact replay preflight rejected original teleop sample 117 as
+343.77 deg/s^2 against a 286.48 deg/s^2 ceiling even though the original live teleop had
+accepted that command. The captured sample numbers were contiguous, ruling out the suspected
+missing-frame explanation.
+
+Root cause: the GUI follower is intentionally constructed with a teleop acceleration ceiling
+of 6.0 rad/s^2 (343.77 deg/s^2), while the standalone replay had constructed a default SDK
+configuration whose stream acceleration ceiling was 5.0 rad/s^2 (286.48 deg/s^2). The replay
+was therefore not reproducing the original control contract.
+
+Exact post-study replay now loads the original copied GUI session's `teleop_settings` event
+and reuses its recorded joint-speed ceiling, joint-acceleration ceiling, maximum command step,
+and following-error limit. The replay does not raise or infer limits: it reproduces the safety
+settings under which the commands were originally accepted. Missing/invalid recorded settings
+fail closed. Regression tests cover settings recovery.
+
 ### Teleop versus programmed-motion trace protocol
 
 Before changing PID, command cadence, or trajectory shape again, run the guided comparison
