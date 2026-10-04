@@ -59,28 +59,53 @@ already green at that head.
   Automated policy tests cover rejection of targets entering the configured margin.
 ### Teleop versus programmed-motion trace protocol
 
-Before changing PID, command cadence, or trajectory shape again, compare the known-smoother
-leader/follower teleoperation path with the same approximate slow route under programmed
-saved-pose motion.
+Before changing PID, command cadence, or trajectory shape again, run the guided comparison
+from the exact diagnostic branch/commit:
 
-1. Run the GUI from the exact PR/commit being evaluated and teleoperate the follower slowly
-   through approximately Sleep -> Overhead -> Left -> Right -> Sleep. Detailed teleop logging
-   is enabled by default. Preserve the resulting `~/.local/state/soarm101/gui/session-*.jsonl`;
-   `teleop_frame` records leader joints, desired/limited command, command velocity, follower
-   actual joints, following error, sample interval/age, processing time, raw encoder
-   command/actual values, and the effective 0/254 teleop servo profile.
-2. Run `python examples/motion_quality_trace.py --speed-deg-s 8 --acceleration-deg-s2 25`.
-   It executes the same saved-pose route automatically with no ENTER prompts and writes a
-   passive program trace under `~/soarm-motion-tests/`. The tracer wraps only backend calls
-   the SDK already makes; it adds no motion-time hardware reads.
-3. Compare command intervals, raw encoder increments, command-versus-feedback lag, TCP motion,
-   and whether shake aligns with low raw-step rates or with repeated point-to-point writes.
-   Treat current/load as a second-pass diagnostic if kinematic/timing evidence is insufficient,
-   because extra motor-effort polling can itself perturb serial timing.
+```bash
+bash scripts/run_motion_quality_study.sh
+```
 
-After those two traces are captured, a single-final-target joint move is a useful third
-comparison for saved-pose motion. Do not generalize that experiment to Cartesian `move_linear()`:
-a single joint endpoint cannot guarantee the requested straight TCP path.
+The runner walks the operator through four conditions while preserving the normal hardware
+guards:
+
+1. **Live teleop reference.** The runner launches the GUI. Link the leader/follower, place
+   the follower at the folded Sleep-like start, then mark the interval in the terminal and
+   teleoperate slowly through Sleep -> Overhead -> Left -> Right -> Sleep. Stop teleoperation
+   before marking the end. The runner copies the GUI session log and extracts only the marked
+   `teleop_frame` interval.
+2. **Exact accepted teleop-command replay.** Unless explicitly skipped, the runner replays the
+   marked arm-joint command sequence through the existing guarded joint-stream primitive at
+   the recorded nominal cadence/timing. If the follower is too far from the first recorded
+   sample for a legal stream start, replay is skipped rather than bypassing the step guard.
+   The gripper is intentionally omitted so this condition isolates arm-joint behavior.
+3. **Programmed 50 Hz route.** The saved-pose route runs automatically at 8 deg/s and
+   25 deg/s^2 using the current planned-motion 50 Hz cadence. There are no per-leg prompts.
+4. **Programmed 20 Hz route.** The identical route, speed, and acceleration run automatically
+   at a teleop-like 20 Hz cadence.
+
+The passive program/replay tracer wraps only backend calls the SDK already makes; it does
+not add motion-time hardware reads. Detailed GUI teleop logging records leader joints,
+desired/limited command, command velocity, follower actual joints, following error, sample
+interval/age, processing time, raw encoder command/actual values, and the effective 0/254
+teleop servo profile. The program traces record outgoing joint commands, raw encoder goals,
+effective servo parameters, natural feedback reads, TCP positions, hardware-state checks,
+and route markers.
+
+Compare command intervals, raw encoder increments, command-versus-feedback lag, repeated
+raw targets, low-speed/deceleration regions, and folded versus extended geometry. The
+experiment distinguishes:
+
+- live teleop smoothness versus deterministic replay of the same accepted commands;
+- teleop-derived commands versus minimum-jerk generated commands; and
+- 20 Hz versus 50 Hz host cadence for the same generated route.
+
+Treat current/load as a second-pass diagnostic if the kinematic/timing evidence is
+insufficient, because extra effort polling can itself perturb serial timing. A
+single-final-target joint move remains a later discriminator for saved-pose motion; do not
+generalize that experiment to Cartesian `move_linear()`, where a single joint endpoint
+cannot guarantee the requested straight TCP path.
+
 ### Slow-speed motion diagnostic record — 2026-10-04
 
 A supervised saved-pose A/B/C comparison on current `main` used the same host-planned joint
