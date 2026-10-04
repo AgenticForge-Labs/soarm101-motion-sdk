@@ -262,7 +262,8 @@ def test_packaged_agent_assets_are_available_and_agent_specific() -> None:
 
     hermes_profile = agent_sandbox.provider_profile_text(agent="hermes")
     assert "id: soarm101-hermes-openrouter" in hermes_profile
-    assert "/usr/local/bin/python3*" in hermes_profile
+    assert "/usr/bin/python3*" in hermes_profile
+    assert "/usr/local/bin/python3*" not in hermes_profile
 
     codex_api_profile = agent_sandbox.provider_profile_text(
         agent="codex",
@@ -325,7 +326,8 @@ def test_broker_policy_is_narrow_and_schema_shaped() -> None:
     assert "/v1/relax" not in policy
     assert "/v1/exec" not in policy
     assert "/opt/hermes" in policy
-    assert "/usr/local/bin/python3*" in policy
+    assert "/usr/bin/python3*" in policy
+    assert "/usr/local/bin/python3*" not in policy
     assert "hard_requirement" in policy
 
     read_only = agent_sandbox.broker_policy_text(
