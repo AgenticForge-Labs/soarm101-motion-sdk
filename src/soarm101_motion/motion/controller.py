@@ -987,6 +987,33 @@ class MotionController:
             )
         return speeds
 
+    def _encoder_target_key(
+        self,
+        positions: Mapping[str, float],
+    ) -> tuple[int, ...] | None:
+        """Return the calibrated raw encoder target for one arm command.
+
+        Planned host trajectories are continuous in radians, but calibrated Feetech
+        execution ultimately resolves each joint to an integer encoder target. Near
+        zero velocity, many adjacent host samples can therefore address the exact
+        same hardware position. Returning None keeps non-calibrated/simulation
+        backends on the existing write-per-sample behavior.
+        """
+
+        calibration = getattr(self.backend, "calibration", None)
+        motors = getattr(calibration, "motors", None)
+        if motors is None:
+            return None
+
+        raw: list[int] = []
+        for name in ARM_JOINTS:
+            motor = motors.get(name)
+            converter = getattr(motor, "radians_to_raw", None)
+            if not callable(converter):
+                return None
+            raw.append(int(converter(float(positions[name]))))
+        return tuple(raw)
+
     def _workspace_kwargs(self) -> dict[str, float]:
         return {
             "minimum_z_m": self.config.minimum_workspace_z_m,
@@ -1181,6 +1208,7 @@ class MotionController:
             previous_command = samples[0]
             previous_actual = self.backend.read_joint_positions()
             last_command_sent = samples[0]
+            last_encoder_target = self._encoder_target_key(samples[0])
             for index, command in enumerate(samples[1:], start=1):
                 self._check_cancelled(cancel_event, cancellation_message)
                 lateness = self._sleep_until(started + index / frequency)
@@ -1189,29 +1217,40 @@ class MotionController:
                         f"motion command deadline missed by {lateness:.3f}s"
                     )
                 self._check_cancelled(cancel_event, cancellation_message)
-                command_speed_raw = servo_speed_raw
-                if synchronize_servo_arrival:
-                    command_speed_raw = self._synchronized_servo_speed_raw(
-                        last_command_sent,
-                        command,
-                        interval_s=interval_s,
-                    )
-                if command_speed_raw is None and servo_acceleration_raw is None:
-                    self.backend.write_joint_positions(command)
-                else:
-                    self.backend.write_joint_positions(
-                        command,
-                        speed_raw=command_speed_raw,
-                        acceleration_raw=servo_acceleration_raw,
-                    )
-                last_command_sent = command
-                if index % monitor_every == 0 or index == len(samples) - 1:
+
+                command_encoder_target = self._encoder_target_key(command)
+                is_final_sample = index == len(samples) - 1
+                duplicate_encoder_target = (
+                    not is_final_sample
+                    and command_encoder_target is not None
+                    and command_encoder_target == last_encoder_target
+                )
+                if not duplicate_encoder_target:
+                    command_speed_raw = servo_speed_raw
+                    if synchronize_servo_arrival:
+                        command_speed_raw = self._synchronized_servo_speed_raw(
+                            last_command_sent,
+                            command,
+                            interval_s=interval_s,
+                        )
+                    if command_speed_raw is None and servo_acceleration_raw is None:
+                        self.backend.write_joint_positions(command)
+                    else:
+                        self.backend.write_joint_positions(
+                            command,
+                            speed_raw=command_speed_raw,
+                            acceleration_raw=servo_acceleration_raw,
+                        )
+                    last_command_sent = command
+                    last_encoder_target = command_encoder_target
+
+                if index % monitor_every == 0 or is_final_sample:
                     previous_actual = self._monitor_motion(
-                        command,
+                        last_command_sent,
                         previous_command,
                         previous_actual,
                     )
-                    previous_command = command
+                    previous_command = last_command_sent
             return self._wait_for_settle(samples[-1], cancel_event)
         except BaseException:
             try:
