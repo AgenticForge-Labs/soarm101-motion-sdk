@@ -57,6 +57,24 @@ already green at that head.
   follower.
 - The real arm was deliberately not driven near the floor merely to exercise the floor guard.
   Automated policy tests cover rejection of targets entering the configured margin.
+### Measured folded-start workspace regression — 2026-10-04
+
+Post-study exact replay initially failed before motion while the follower was in its normal
+folded/resting state. The generic centerline model reported 0.021 m self-clearance versus the
+0.025 m heuristic at workspace path sample 0. This was a planning false positive at the already
+occupied measured start, not a newly commanded collision.
+
+The reusable joint-space validator now treats a measured start inside the coarse self-clearance
+envelope as admissible only while the path does not worsen that pre-existing modeled clearance
+(with 0.5 mm numerical tolerance). The motion does not have to fully leave the generic envelope
+to be an improving/neutral move. If the path reaches normal clearance, strict checking resumes
+immediately and re-entry is rejected. Floor, base keep-out, TCP reach, calibrated joint limits,
+rate/acceleration, following-error, effort, fault, communication, and settle protections remain
+unchanged.
+
+Regression tests cover: improving-but-still-inside motion, deeper-fold rejection, strict
+re-entry rejection after clearing the envelope, and preservation of the floor guard.
+
 ### Teleop versus programmed-motion trace protocol
 
 Before changing PID, command cadence, or trajectory shape again, run the guided comparison
