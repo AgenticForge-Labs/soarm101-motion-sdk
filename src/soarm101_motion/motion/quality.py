@@ -258,6 +258,72 @@ def analyze_teleop_frame_continuity(
     }
 
 
+def repair_single_missing_teleop_frames(
+    frames: list[dict[str, Any]],
+    *,
+    frequency_hz: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Reconstruct isolated missing accepted commands from logged next-frame velocity.
+
+    For a one-sample gap n -> n+2, frame n+2 records the exact limiter velocity
+    used from command n+1 to command n+2. Therefore command n+1 is recoverable as
+    command[n+2] - velocity[n+2] * dt. Larger gaps/restarts are not inferred.
+    """
+    if not frames:
+        return [], []
+    if not math.isfinite(frequency_hz) or frequency_hz <= 0:
+        raise ValueError("frequency_hz must be positive and finite")
+
+    dt = 1.0 / frequency_hz
+    repaired: list[dict[str, Any]] = [dict(frames[0])]
+    repairs: list[dict[str, Any]] = []
+
+    for frame in frames[1:]:
+        previous = repaired[-1]
+        previous_sample = previous.get("sample")
+        sample = frame.get("sample")
+        if (
+            isinstance(previous_sample, int)
+            and isinstance(sample, int)
+            and sample == previous_sample + 2
+        ):
+            command = frame.get("command_joints_rad")
+            velocity = frame.get("command_velocity_rad_s")
+            if (
+                isinstance(command, dict)
+                and isinstance(velocity, dict)
+                and all(name in command for name in ARM_JOINTS)
+                and all(name in velocity for name in ARM_JOINTS)
+            ):
+                reconstructed_command = {
+                    name: float(command[name]) - float(velocity[name]) * dt
+                    for name in ARM_JOINTS
+                }
+                reconstructed = dict(frame)
+                reconstructed["sample"] = previous_sample + 1
+                reconstructed["command_joints_rad"] = reconstructed_command
+                reconstructed["reconstructed_for_replay"] = True
+                reconstructed["reconstruction_source_sample"] = sample
+                reconstructed["command_velocity_rad_s"] = {
+                    name: (
+                        reconstructed_command[name]
+                        - float(previous["command_joints_rad"][name])
+                    )
+                    / dt
+                    for name in ARM_JOINTS
+                }
+                repaired.append(reconstructed)
+                repairs.append(
+                    {
+                        "missing_sample": previous_sample + 1,
+                        "source_sample": sample,
+                    }
+                )
+        repaired.append(dict(frame))
+
+    return repaired, repairs
+
+
 def contiguous_teleop_segments(
     frames: list[dict[str, Any]],
 ) -> list[list[dict[str, Any]]]:
