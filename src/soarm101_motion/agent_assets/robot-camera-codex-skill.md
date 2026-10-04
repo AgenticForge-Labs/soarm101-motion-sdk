@@ -10,8 +10,10 @@ on the trusted host. Use only the local `robotctl.py` client for robot and camer
 
 Do not search for, import, or invoke an unrestricted robot SDK. Do not attempt to arm,
 disarm, relax, calibrate, configure, write servo registers, mount host devices, or bypass
-the broker. Human authorization is established outside the sandbox. If the broker reports
-that authority is absent or expired, stop and report that the task cannot continue.
+the broker. Human authorization for motion is established outside the sandbox. Read-only
+capabilities, state, and named-camera capture remain available without motion authority. If
+authority is absent or expired, do not request motion; continue observation-only work that
+the task permits. If the task requires motion, report that motion cannot continue.
 
 ## Discover first
 
