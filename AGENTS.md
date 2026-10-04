@@ -106,11 +106,13 @@ changes require development discipline; robot use requires conservative hardware
     OpenShell -> robotctl -> authenticated broker -> bounded agent CLI -> SDK.
 14. Human `agent arm` authority remains outside the sandbox. Sandbox setup/run code may
     verify authority but must never create, extend, or bypass it.
-15. Keep agent-harness differences behind `agent_adapters.py`. Adding another agent may
-    add an image recipe, provider profile, skill, mutable-home setup, and command builder,
-    but must not add a second robot API, second broker, or agent-specific motion semantics.
-    Hermes and Codex must share the same `robotctl -> broker -> bounded agent CLI -> SDK`
-    physical path.
+15. Keep agent-harness differences behind `agent_adapters.py`. Hermes and Codex are
+    first-class packaged adapters. An OpenShell-compatible external harness may instead use
+    the validated JSON adapter-manifest contract for image/provider/direct-argv/runtime
+    details. Neither Python adapters nor manifests may add a second robot API, second broker,
+    override broker URL/token ownership, create authority, or introduce agent-specific motion
+    semantics. Every harness must share the same
+    `robotctl -> broker -> bounded agent CLI -> SDK` physical path.
 
 ## Repository boundary
 
