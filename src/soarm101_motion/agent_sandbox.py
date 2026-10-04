@@ -62,6 +62,121 @@ def _sha256_path(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _read_broker_events(path: Path) -> list[dict[str, object]]:
+    if not path.is_file():
+        return []
+    events: list[dict[str, object]] = []
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AgentSandboxError(
+                f"broker event log contains invalid JSON at line {line_number}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise AgentSandboxError(
+                f"broker event log line {line_number} is not a JSON object"
+            )
+        events.append(payload)
+    return events
+
+
+def _validate_read_only_evidence(
+    *,
+    capabilities: Mapping[str, object],
+    broker_events: Path,
+    event_offset: int,
+    output_dir: Path,
+    agent_exit_code: int,
+) -> dict[str, object]:
+    events = _read_broker_events(broker_events)[event_offset:]
+    successful = [event for event in events if event.get("ok") is True]
+    actions = [
+        str(event.get("action") or "")
+        for event in successful
+        if str(event.get("action") or "")
+    ]
+
+    forbidden_names = {"go_pose", "joint", "jog", "gripper", "sleep", "stop"}
+    forbidden_observed = sorted({action for action in actions if action in forbidden_names})
+    missing_actions = [
+        action for action in ("capabilities", "state") if action not in actions
+    ]
+
+    raw_cameras = capabilities.get("cameras", [])
+    required_cameras = (
+        [str(camera) for camera in raw_cameras if str(camera)]
+        if isinstance(raw_cameras, list)
+        else []
+    )
+
+    capture_sha256: dict[str, list[str]] = {camera: [] for camera in required_cameras}
+    for event in successful:
+        if event.get("action") != "capture":
+            continue
+        request = event.get("request")
+        result = event.get("result")
+        if not isinstance(request, dict) or not isinstance(result, dict):
+            continue
+        camera = str(request.get("camera") or "")
+        digest = str(result.get("sha256") or "")
+        if camera in capture_sha256 and digest:
+            capture_sha256[camera].append(digest)
+
+    missing_capture_cameras = sorted(
+        camera for camera, digests in capture_sha256.items() if not digests
+    )
+
+    observation_dir = output_dir / "observations"
+    observation_sha256: dict[str, str] = {}
+    if observation_dir.is_dir():
+        for path in sorted(observation_dir.rglob("*")):
+            if path.is_file():
+                observation_sha256[str(path.relative_to(output_dir))] = _sha256_path(path)
+    downloaded_hashes = set(observation_sha256.values())
+    unverified_capture_cameras = sorted(
+        camera
+        for camera, digests in capture_sha256.items()
+        if digests and not any(digest in downloaded_hashes for digest in digests)
+    )
+
+    passed = (
+        agent_exit_code == 0
+        and not missing_actions
+        and not missing_capture_cameras
+        and not unverified_capture_cameras
+        and not forbidden_observed
+    )
+    validation: dict[str, object] = {
+        "schema_version": 1,
+        "status": "passed" if passed else "failed",
+        "agent_exit_code": int(agent_exit_code),
+        "required_cameras": required_cameras,
+        "successful_actions": actions,
+        "missing_actions": missing_actions,
+        "missing_capture_cameras": missing_capture_cameras,
+        "unverified_capture_cameras": unverified_capture_cameras,
+        "forbidden_actions_observed": forbidden_observed,
+        "capture_sha256": capture_sha256,
+        "observation_sha256": observation_sha256,
+    }
+    validation_path = output_dir / "read-only-validation.json"
+    validation_path.write_text(json.dumps(validation, indent=2) + "\n", encoding="utf-8")
+
+    if not passed:
+        raise AgentSandboxError(
+            "read-only sandbox validation failed; see "
+            f"{validation_path}: "
+            f"exit={agent_exit_code}, missing_actions={missing_actions}, "
+            f"missing_capture_cameras={missing_capture_cameras}, "
+            f"unverified_capture_cameras={unverified_capture_cameras}, "
+            f"forbidden_actions_observed={forbidden_observed}"
+        )
+    return validation
+
+
 def dockerfile_text(*, agent: str = DEFAULT_AGENT) -> str:
     return get_agent_adapter(agent).dockerfile_text()
 
@@ -927,6 +1042,7 @@ def run_agent(
     broker = BrokerProcess(port=broker_port, token=token, event_path=broker_events)
     created = False
     capabilities: dict[str, object] = {}
+    broker_event_offset = 0
 
     with tempfile.TemporaryDirectory(
         prefix=f"soarm101-{adapter.name}-run-"
@@ -991,6 +1107,7 @@ def run_agent(
                         "broker capabilities response is missing result"
                     )
                 capabilities = result
+                broker_event_offset = len(_read_broker_events(broker_events))
             else:
                 capabilities = broker.require_authority()
 
@@ -1085,7 +1202,10 @@ def run_agent(
                 + (
                     "This is a hard read-only validation run: do not request any pose, joint, "
                     "Cartesian, gripper, Sleep, or STOP action. The OpenShell policy omits "
-                    "those routes. Inspect state/capabilities/cameras only and report results."
+                    "those routes. Motion authority is not expected or required for read-only "
+                    "observation. Inspect capabilities and state, capture every configured "
+                    "camera, inspect fresh images using the method in SKILL.md when available, "
+                    "and report results."
                     if read_only
                     else "Complete the task safely and report the result."
                 )
@@ -1128,10 +1248,14 @@ def run_agent(
                 encoding="utf-8",
             )
 
-            for source, destination in (
+            downloads: list[tuple[str, Path]] = [
                 ("/sandbox/observations", output_dir),
-                ("/sandbox/task-result.json", output_dir / "task-result.json"),
-            ):
+            ]
+            if not read_only:
+                downloads.append(
+                    ("/sandbox/task-result.json", output_dir / "task-result.json")
+                )
+            for source, destination in downloads:
                 try:
                     client.download(sandbox, source, destination)
                 except Exception as exc:
@@ -1140,6 +1264,15 @@ def run_agent(
                         encoding="utf-8",
                     ) as handle:
                         handle.write(f"{source}: {exc}\n")
+
+            if read_only:
+                _validate_read_only_evidence(
+                    capabilities=capabilities,
+                    broker_events=broker_events,
+                    event_offset=broker_event_offset,
+                    output_dir=output_dir,
+                    agent_exit_code=int(process.returncode),
+                )
 
             return RunResult(
                 sandbox=sandbox,
