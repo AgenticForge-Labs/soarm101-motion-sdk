@@ -14,10 +14,12 @@ from typing import Literal
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from soarm101_motion.calibration import CALIBRATED_ENDPOINT_TOLERANCE_TICKS
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    ENCODER_MAX,
     HOME_JOINTS,
 )
 from soarm101_motion.exceptions import (
@@ -459,6 +461,68 @@ class SOARM101:
     def get_position(self, *, tcp: Pose | None = None) -> Pose:
         return self.model.forward(self.backend.read_joint_positions(), tcp=tcp or self.active_tcp)
 
+    def _canonicalize_saved_pose_target(
+        self,
+        positions: Mapping[str, float] | Sequence[float],
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        """Project a measured saved pose onto the active executable calibration.
+
+        Saved poses are measured artifacts. A measured endpoint can legitimately sit
+        at a calibrated stop, or a few encoder counts beyond it because of backlash/
+        quantization already tolerated by torque latching. Replaying that measurement
+        must never command the stop itself: targets inside the measured endpoint band
+        are projected inward to the current executable stop margin. A target farther
+        outside the measured calibration than the endpoint tolerance remains invalid.
+        """
+
+        current = self.backend.read_joint_positions()
+        if isinstance(positions, Mapping):
+            provided = {}
+            for name, value in positions.items():
+                if name not in ARM_JOINTS:
+                    raise InvalidJointError(f"unknown arm joint: {name}")
+                numeric = float(value)
+                if not math.isfinite(numeric):
+                    raise InvalidCommandError(f"joint {name} target must be finite")
+                provided[name] = numeric
+        else:
+            values = tuple(float(value) for value in positions)
+            if len(values) != len(ARM_JOINTS):
+                raise InvalidCommandError(f"expected {len(ARM_JOINTS)} joint values")
+            if not all(math.isfinite(value) for value in values):
+                raise InvalidCommandError("all joint targets must be finite")
+            provided = dict(zip(ARM_JOINTS, values, strict=True))
+
+        effective_limits = self.get_joint_limits()
+        calibration = getattr(self.backend, "calibration", None)
+        endpoint_tolerance_rad = (
+            CALIBRATED_ENDPOINT_TOLERANCE_TICKS * 2.0 * pi / ENCODER_MAX
+        )
+        canonical = dict(provided)
+
+        for name, value in provided.items():
+            if calibration is not None and name in calibration.motors:
+                motor = calibration.motors[name]
+                mechanical_lower, mechanical_upper = motor.radians_limits
+                if (
+                    value < mechanical_lower - endpoint_tolerance_rad
+                    or value > mechanical_upper + endpoint_tolerance_rad
+                ):
+                    raise SafetyViolationError(
+                        f"saved pose joint {name} target {value:.6f} rad is outside "
+                        f"the calibrated mechanical range "
+                        f"[{mechanical_lower:.6f}, {mechanical_upper:.6f}] beyond the "
+                        f"{CALIBRATED_ENDPOINT_TOLERANCE_TICKS}-tick endpoint tolerance"
+                    )
+
+                lower, upper = effective_limits[name]
+                canonical[name] = min(upper, max(lower, value))
+
+        validate_joint_targets(canonical, limits=effective_limits)
+        target = dict(current)
+        target.update(canonical)
+        return current, target, canonical
+
     def move_joints_from_saved_pose(
         self,
         positions: Mapping[str, float] | Sequence[float],
@@ -467,12 +531,12 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to saved joint coordinates with a bounded exit from an existing fold."""
-        current, target = self._resolve_joint_target(positions, relative=False)
+        """Move a measured saved pose through the active executable calibration."""
+        current, target, canonical = self._canonicalize_saved_pose_target(positions)
         if self.config.enable_workspace_checks:
             self._validate_saved_pose_exit_workspace_path(current, target)
         return self.motion.move_joints(
-            positions,
+            canonical,
             speed=speed,
             acceleration=acceleration,
             relative=False,
