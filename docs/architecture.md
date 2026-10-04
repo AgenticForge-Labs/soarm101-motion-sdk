@@ -5,7 +5,7 @@ Dependency direction is strict:
 ```text
 applications -> SOARM101 -> motion/kinematics/tools -> backend -> Feetech transport
 applications -> CameraCapture -> OpenCV -> local USB/UVC camera
-sandboxed agent -> robotctl -> agent broker -> bounded agent CLI -> SOARM101/CameraCapture
+sandboxed agent -> OpenShell -> robotctl -> agent broker -> bounded agent CLI -> SOARM101/CameraCapture
 ```
 
 Rules:
@@ -17,11 +17,17 @@ Rules:
 - Hardware and simulation implement the same backend contract.
 - Cartesian paths are validated before execution.
 - GUI and CLI features call the same SDK operations and saved libraries; the GUI owns persistent hardware sessions rather than launching CLI subprocesses.
-- Sandboxed agents may use the optional host-side agent broker. The broker is transport-only:
-  it serializes an explicit HTTP/JSON allowlist and delegates to the bounded agent CLI rather
-  than reimplementing motion policy. It exposes no remote arm/disarm/relax, raw servo,
-  arbitrary-command, calibration, or configuration endpoint. The sandbox-side client contains
-  no robot SDK and does not receive serial or camera devices.
+- The SDK owns one canonical robot-specific OpenShell agent environment. OpenShell owns
+  filesystem/process/network isolation; the Motion SDK owns the shared robot policy/broker
+  lifecycle/standalone client plus a small agent-adapter contract. Hermes and Codex are the
+  first packaged adapters; each adapter owns only its image recipe, provider profile, skill,
+  mutable home/config, and command construction. This is product/runtime support, not
+  benchmark orchestration.
+- The host-side agent broker remains transport-only: it serializes an explicit HTTP/JSON
+  allowlist and delegates to the bounded agent CLI rather than reimplementing motion policy.
+  It exposes no remote arm/disarm/relax, raw servo, arbitrary-command, calibration, or
+  configuration endpoint. The sandbox receives no robot SDK, serial/camera devices,
+  calibration files, Docker socket, SSH material, or unrelated host files.
 - The GUI term **Program** is a presentation layer over the persisted `MotionSequence`
   model and `SequenceRunner`. Saved-position programs therefore do not introduce a
   second execution engine or bypass sequence provenance/safety checks.
