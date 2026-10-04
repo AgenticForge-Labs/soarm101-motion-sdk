@@ -865,6 +865,8 @@ def test_cartesian_execution_uses_teleop_servo_profile_even_with_calibration() -
 def test_calibrated_motion_skips_redundant_quantized_encoder_targets() -> None:
     from types import SimpleNamespace
 
+    from soarm101_motion.constants import ARM_JOINTS
+
     class FakeMotor:
         radians_limits = (-3.0, 3.0)
 
