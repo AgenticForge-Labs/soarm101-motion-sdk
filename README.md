@@ -300,6 +300,10 @@ half-cosine acceleration/deceleration and optional cruise, then solved by sequen
 at the host command rate. Position-only paths may then reproject from smoothed joint seeds
 at the same Cartesian tolerance, reducing redundant-joint jitter without altering the
 requested line.
+On calibrated hardware, planned motion also suppresses intermediate host writes whose five
+joint targets quantize to exactly the same encoder counts as the last command. The original
+host deadlines, safety monitoring, and exact final planned sample are preserved; this is
+command de-duplication at actuator resolution, not trajectory retiming or relaxed dynamics.
 
 The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, deterministic sequence programming, simulation, basic local USB-camera capture, and an optional PySide6 GUI. Higher-level perception/tracking, calibrated multi-camera stage systems, ROS integration, and show orchestration remain outside this project. The SDK is intended to provide constrained motion plus a deterministic local observation surface beneath those higher-level systems. See [Architecture](docs/architecture.md) and [Camera](docs/camera.md) for the boundaries.
 
