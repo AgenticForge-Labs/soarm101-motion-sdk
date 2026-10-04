@@ -25,5 +25,5 @@ endpoints:
     enforcement: enforce
 
 binaries:
-  - /usr/local/bin/python3*
+  - /usr/bin/python3*
   - /opt/hermes/tools/**/python*
