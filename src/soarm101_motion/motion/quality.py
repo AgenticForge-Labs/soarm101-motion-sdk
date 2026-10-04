@@ -24,6 +24,31 @@ def load_jsonl(path: str | Path) -> list[dict[str, Any]]:
     return rows
 
 
+def recorded_teleop_settings(rows: Iterable[dict[str, Any]]) -> dict[str, float]:
+    """Return the latest complete teleop safety settings from a GUI session log."""
+    settings_rows = [dict(row) for row in rows if row.get("event") == "teleop_settings"]
+    if not settings_rows:
+        raise ValueError("GUI session log contains no teleop_settings event")
+
+    latest = settings_rows[-1]
+    required = {
+        "max_joint_speed_rad_s": "max_joint_speed_rad_s",
+        "max_joint_acceleration_rad_s2": "max_joint_acceleration_rad_s2",
+        "max_command_step_rad": "max_command_step_rad",
+        "following_error_limit_rad": "following_error_limit_rad",
+    }
+    result: dict[str, float] = {}
+    for output_name, field_name in required.items():
+        value = latest.get(field_name)
+        if value is None:
+            raise ValueError(f"recorded teleop setting {field_name} is missing")
+        number = float(value)
+        if not math.isfinite(number) or number <= 0:
+            raise ValueError(f"recorded teleop setting {field_name} is invalid")
+        result[output_name] = number
+    return result
+
+
 def teleop_frames(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows if row.get("event") == "teleop_frame"]
 
