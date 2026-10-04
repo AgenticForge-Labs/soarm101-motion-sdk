@@ -53,7 +53,8 @@ error, duration, and timestamp. Camera acquisition, host-file read, hashing, and
 recording are one serialized broker operation, so concurrent requests cannot race a capture
 between acquisition and evidence hashing. Camera image bytes are not written into the JSONL
 log. Successful captures emit a trusted `capture_evidence` record with the image SHA-256;
-the host capture path remains in the trusted host log and is not returned to the sandbox.
+the host capture path and camera device path remain in the trusted host log and are not
+returned to the sandbox.
 
 ## Local transport validation
 
@@ -116,7 +117,7 @@ Requests are serialized before delegation so two agent calls cannot open the fol
 port concurrently.
 
 A capture response includes capture metadata plus SHA-256 and base64-encoded JPEG bytes, but
-not the host filesystem path. The sandbox client verifies the returned bytes against the
+not the host filesystem capture path or camera device path. The sandbox client verifies the returned bytes against the
 trusted SHA-256 before writing the image. Default filenames include the broker request ID, so
 multiple captures within the same second cannot overwrite one another. The client never needs
 direct access to the host camera path.
