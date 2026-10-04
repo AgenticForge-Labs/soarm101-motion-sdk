@@ -68,6 +68,13 @@ world/tool-frame jogs, gripper actions, and Sleep end holding. Single-joint agen
 are relative, affect exactly one named arm joint, and are limited to 30 degrees per command. STOP/HOLD remains available even without an active lease. Torque release remains a
 human action through `soarm101 relax`, which requires ENTER confirmation.
 
+The canonical `soarm101 agent sandbox` runtime preserves the same authority boundary.
+OpenShell isolates the reasoning process; the sandbox receives no unrestricted SDK,
+serial/camera device, calibration file, Docker socket, SSH material, or unrelated host files.
+Login-backed Codex runs receive only a per-run copy of the selected Codex `auth.json`.
+The only physical-action path is the authenticated bounded broker. Sandbox setup/run may
+verify existing authority but may never create, extend, relax, or bypass it.
+
 Agent Cartesian jogs are deliberately narrower than the general CLI: translation only,
 normal guarded SDK execution, and an additional physical-height policy derived from the
 matching measured workspace calibration. Above 100 mm physical height, requested physical
