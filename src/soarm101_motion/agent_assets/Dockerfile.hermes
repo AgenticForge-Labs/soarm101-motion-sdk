@@ -1,0 +1,11 @@
+FROM nousresearch/hermes-agent:latest
+
+# OpenShell owns sandbox process identity and lifecycle. Run the sealed Hermes
+# installation directly as its baked runtime UID and keep mutable state under
+# the OpenShell workdir.
+USER root
+RUN mkdir -p /sandbox && chown 10000:10000 /sandbox
+WORKDIR /sandbox
+ENTRYPOINT []
+CMD []
+USER 10000:10000
