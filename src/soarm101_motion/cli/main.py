@@ -1895,10 +1895,6 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
 
-    from soarm101_motion.agent_adapters import agent_names
-
-    sandbox_agent_choices = agent_names()
-
     agent_sandbox_agents = agent_sandbox_sub.add_parser(
         "agents",
         help="list packaged agent adapters and their default provider/model requirements",
