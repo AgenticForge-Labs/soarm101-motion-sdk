@@ -925,6 +925,7 @@ def test_calibrated_motion_skips_redundant_quantized_encoder_targets() -> None:
         for previous, current in zip(call_keys[:-1], call_keys[1:-1], strict=False)
     )
 
+
 def test_joint_move_can_use_per_joint_synchronized_servo_speeds() -> None:
     from types import SimpleNamespace
 
