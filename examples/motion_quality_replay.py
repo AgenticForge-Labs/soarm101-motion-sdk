@@ -160,6 +160,28 @@ def main() -> int:
     frames = teleop_frames(load_jsonl(frames_path))
     if len(frames) < 5:
         raise RuntimeError("teleop reference has fewer than five frames")
+
+    session_path = study / "teleop-gui-session.jsonl"
+    if not session_path.exists():
+        raise RuntimeError(f"missing copied GUI session log: {session_path}")
+    session_rows = load_jsonl(session_path)
+    teleop_settings_rows = [
+        row for row in session_rows if row.get("event") == "teleop_settings"
+    ]
+    if not teleop_settings_rows:
+        raise RuntimeError("copied GUI session log contains no teleop_settings event")
+    recorded_settings = dict(teleop_settings_rows[-1])
+
+    required_setting_names = (
+        "max_joint_speed_rad_s",
+        "max_joint_acceleration_rad_s2",
+        "max_command_step_rad",
+        "following_error_limit_rad",
+    )
+    for name in required_setting_names:
+        value = recorded_settings.get(name)
+        if value is None or not math.isfinite(float(value)) or float(value) <= 0:
+            raise RuntimeError(f"recorded teleop setting {name} is missing or invalid")
     frequency, _, _ = _recorded_timing(frames)
     continuity_before = analyze_teleop_frame_continuity(
         frames,
@@ -196,6 +218,14 @@ def main() -> int:
         robot_id=robot_id,
         configure_motors_on_connect=False,
         disable_torque_on_disconnect=False,
+        teleop_max_joint_speed=float(recorded_settings["max_joint_speed_rad_s"]),
+        teleop_max_joint_acceleration=float(
+            recorded_settings["max_joint_acceleration_rad_s2"]
+        ),
+        max_command_step_radians=float(recorded_settings["max_command_step_rad"]),
+        following_error_limit_rad=float(
+            recorded_settings["following_error_limit_rad"]
+        ),
     )
     preposition_speed = math.radians(args.preposition_speed_deg_s)
     preposition_acceleration = math.radians(args.preposition_acceleration_deg_s2)
@@ -211,6 +241,12 @@ def main() -> int:
     print(f"Study: {study}")
     print(f"Frames: {len(frames)}")
     print(f"Recorded cadence: {frequency:.2f} Hz")
+    print(
+        "Recorded teleop limits: "
+        f"{math.degrees(cfg.stream_joint_speed_limit):.2f} deg/s, "
+        f"{math.degrees(cfg.stream_joint_acceleration_limit):.2f} deg/s^2, "
+        f"step {math.degrees(cfg.max_command_step_radians):.2f} deg"
+    )
     if continuity_before["gap_count"]:
         print(
             f"Captured stream gaps before repair: {continuity_before['gap_count']} "
@@ -237,6 +273,12 @@ def main() -> int:
         "timing_source": timing_source,
         "preposition_speed_deg_s": args.preposition_speed_deg_s,
         "preposition_acceleration_deg_s2": args.preposition_acceleration_deg_s2,
+        "recorded_teleop_settings": {
+            "max_joint_speed_rad_s": cfg.stream_joint_speed_limit,
+            "max_joint_acceleration_rad_s2": cfg.stream_joint_acceleration_limit,
+            "max_command_step_rad": cfg.max_command_step_radians,
+            "following_error_limit_rad": cfg.following_error_limit_rad,
+        },
         "continuity_before": continuity_before,
         "continuity_after": continuity_after,
         "reconstructed_frames": repairs,
