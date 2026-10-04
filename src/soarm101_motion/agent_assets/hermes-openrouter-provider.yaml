@@ -1,0 +1,29 @@
+id: soarm101-hermes-openrouter
+display_name: SO-ARM101 Hermes OpenRouter
+description: OpenRouter access for Hermes Agent in the SO-ARM101 OpenShell sandbox
+category: inference
+inference_capable: true
+
+credentials:
+  - name: api_key
+    description: OpenRouter API key
+    env_vars:
+      - OPENROUTER_API_KEY
+    required: true
+    auth_style: bearer
+    header_name: authorization
+
+discovery:
+  credentials:
+    - api_key
+
+endpoints:
+  - host: openrouter.ai
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+
+binaries:
+  - /usr/local/bin/python3*
+  - /opt/hermes/tools/**/python*
