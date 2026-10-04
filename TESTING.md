@@ -1,5 +1,28 @@
 # Testing
 
+## Self-contained agent sandbox
+
+Automated tests remain hardware-free and cover packaged asset availability, OpenShell policy
+allowlists, CLI wiring, human-authority preflight, minimal task/skill/client uploads, auth
+selection, provenance, and sandbox/broker cleanup.
+
+Before any physical autonomous run, validate each selected adapter through its read-only path:
+
+```bash
+soarm101 agent sandbox doctor --agent hermes
+soarm101 agent sandbox run --agent hermes --read-only
+
+soarm101 agent sandbox doctor --agent codex --auth installed
+soarm101 agent sandbox run --agent codex --auth installed --read-only
+```
+
+The packaged read-only task uses only capabilities/state/camera capture. It must work without
+`soarm101 agent arm`; the effective broker policy must contain no pose/joint/jog/gripper/
+Sleep/STOP routes. Verify the sandbox has no Motion SDK checkout, serial/camera devices,
+calibration files, Docker socket, or unrelated host credentials. Captures must be SHA-checked
+by `robotctl`, and the sandbox must be deleted after the run. Only after that gate should a
+supervised motion run begin.
+
 ## Bounded agent CLI
 
 Automated tests cover authority expiry/identity matching, non-interactive arming rejection,
