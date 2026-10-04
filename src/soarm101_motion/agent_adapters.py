@@ -609,7 +609,7 @@ HERMES = HermesAgentAdapter(
     run_user="10000",
     run_group="10000",
     read_only_paths=("/opt/hermes",),
-    robot_client_binaries=("/usr/local/bin/python3*",),
+    robot_client_binaries=("/usr/bin/python3*",),
     mutable_directories=(
         "/sandbox/.hermes",
         "/sandbox/.home",
