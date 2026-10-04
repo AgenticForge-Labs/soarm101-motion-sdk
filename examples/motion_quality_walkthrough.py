@@ -456,6 +456,10 @@ def main() -> int:
                 f"{replay_result['status']} "
                 f"(start delta {replay_result.get('start_delta_deg'):.2f} deg)."
             )
+            print(
+                "Finish the study. Then run scripts/run_motion_quality_replay.sh; "
+                "the post-study replay safely pre-positions to the recorded start first."
+            )
 
     print("\n" + "-" * 72)
     print("STEP C — PROGRAMMED ROUTE AT CURRENT 50 Hz CADENCE")
