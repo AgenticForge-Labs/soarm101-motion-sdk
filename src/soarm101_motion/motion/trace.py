@@ -1,0 +1,277 @@
+"""Passive motion-quality tracing without adding hardware I/O."""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from soarm101_motion.constants import ARM_JOINTS
+
+
+class PassiveBackendTrace:
+    """Record existing backend commands/reads without issuing additional I/O.
+
+    The tracer wraps calls the SDK would already make. It does not poll the robot,
+    change controller cadence, or request extra diagnostics while motion is active.
+    This makes it suitable for comparing teleoperation and planned-motion behavior
+    without turning the logger into another timing/load variable.
+    """
+
+    def __init__(
+        self,
+        arm: Any,
+        path: str | Path,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.arm = arm
+        self.backend = arm.backend
+        self.path = Path(path).expanduser()
+        self.metadata = dict(metadata or {})
+        self._started = 0.0
+        self._handle: Any = None
+        self._lock = threading.Lock()
+        self._originals: dict[str, Any] = {}
+        self._last_command_raw: dict[str, int] | None = None
+        self._command_count = 0
+        self._feedback_count = 0
+        self._duplicate_raw_commands = 0
+
+    def __enter__(self) -> "PassiveBackendTrace":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = self.path.open("w", encoding="utf-8", buffering=1)
+        self._started = time.perf_counter()
+        self._record(
+            "trace_start",
+            robot_id=getattr(self.arm.config, "robot_id", None),
+            calibration_id=getattr(self.arm, "calibration_id", None),
+            **self.metadata,
+        )
+        self._wrap("write_joint_positions", self._wrap_write_joint_positions)
+        self._wrap("read_joint_positions", self._wrap_read_joint_positions)
+        self._wrap("get_hardware_state", self._wrap_get_hardware_state)
+        self._wrap("write_tool_position", self._wrap_write_tool_position)
+        self._wrap("read_tool_position", self._wrap_read_tool_position)
+        if callable(getattr(self.backend, "read_motor_effort", None)):
+            self._wrap("read_motor_effort", self._wrap_read_motor_effort)
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        try:
+            self._record(
+                "trace_end",
+                error=None if exc is None else repr(exc),
+                command_count=self._command_count,
+                feedback_count=self._feedback_count,
+                duplicate_raw_commands=self._duplicate_raw_commands,
+            )
+        finally:
+            for name, original in self._originals.items():
+                setattr(self.backend, name, original)
+            self._originals.clear()
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None
+
+    @property
+    def summary(self) -> dict[str, int]:
+        return {
+            "command_count": self._command_count,
+            "feedback_count": self._feedback_count,
+            "duplicate_raw_commands": self._duplicate_raw_commands,
+        }
+
+    def mark(self, event: str, **fields: Any) -> None:
+        self._record("marker", marker=event, **fields)
+
+    def _wrap(self, name: str, factory: Any) -> None:
+        original = getattr(self.backend, name, None)
+        if not callable(original):
+            return
+        self._originals[name] = original
+        setattr(self.backend, name, factory(original))
+
+    def _record(self, event: str, **fields: Any) -> None:
+        if self._handle is None:
+            return
+        payload = {
+            "time_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "monotonic_s": time.perf_counter() - self._started,
+            "event": event,
+            **fields,
+        }
+        line = json.dumps(payload, default=str, ensure_ascii=False)
+        with self._lock:
+            self._handle.write(line + "\n")
+
+    def _raw_positions(self, positions: Mapping[str, float]) -> dict[str, int] | None:
+        calibration = getattr(self.backend, "calibration", None)
+        motors = getattr(calibration, "motors", None)
+        if motors is None:
+            return None
+        raw: dict[str, int] = {}
+        for name in ARM_JOINTS:
+            motor = motors.get(name)
+            converter = getattr(motor, "radians_to_raw", None)
+            if motor is None or not callable(converter) or name not in positions:
+                return None
+            raw[name] = int(converter(float(positions[name])))
+        return raw
+
+    def _tcp_xyz_mm(self, positions: Mapping[str, float]) -> list[float] | None:
+        try:
+            pose = self.arm.model.forward(positions, tcp=self.arm.active_tcp)
+            return [float(value * 1000.0) for value in pose.position]
+        except Exception:
+            return None
+
+    @staticmethod
+    def _json_speed(speed_raw: Any) -> Any:
+        if isinstance(speed_raw, Mapping):
+            return {str(name): int(value) for name, value in speed_raw.items()}
+        return None if speed_raw is None else int(speed_raw)
+
+    def _wrap_write_joint_positions(self, original: Any) -> Any:
+        def traced(
+            positions: Mapping[str, float],
+            *,
+            speed_raw: Any = None,
+            acceleration_raw: Any = None,
+        ) -> Any:
+            joints = {name: float(positions[name]) for name in ARM_JOINTS}
+            raw = self._raw_positions(joints)
+            duplicate_raw = raw is not None and raw == self._last_command_raw
+            if duplicate_raw:
+                self._duplicate_raw_commands += 1
+            started = time.perf_counter()
+            try:
+                result = original(
+                    positions,
+                    speed_raw=speed_raw,
+                    acceleration_raw=acceleration_raw,
+                )
+            except BaseException as exc:
+                self._record(
+                    "command_error",
+                    joints_rad=joints,
+                    joints_raw=raw,
+                    tcp_xyz_mm=self._tcp_xyz_mm(joints),
+                    speed_raw=self._json_speed(speed_raw),
+                    acceleration_raw=acceleration_raw,
+                    duplicate_raw=duplicate_raw,
+                    call_ms=(time.perf_counter() - started) * 1000.0,
+                    error=repr(exc),
+                )
+                raise
+            self._command_count += 1
+            self._last_command_raw = raw
+            self._record(
+                "command",
+                sequence=self._command_count,
+                joints_rad=joints,
+                joints_raw=raw,
+                tcp_xyz_mm=self._tcp_xyz_mm(joints),
+                speed_raw=self._json_speed(speed_raw),
+                acceleration_raw=acceleration_raw,
+                duplicate_raw=duplicate_raw,
+                call_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            return result
+
+        return traced
+
+    def _wrap_read_joint_positions(self, original: Any) -> Any:
+        def traced() -> Any:
+            started = time.perf_counter()
+            result = original()
+            joints = {name: float(result[name]) for name in ARM_JOINTS}
+            self._feedback_count += 1
+            self._record(
+                "feedback",
+                sequence=self._feedback_count,
+                joints_rad=joints,
+                joints_raw=self._raw_positions(joints),
+                tcp_xyz_mm=self._tcp_xyz_mm(joints),
+                call_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            return result
+
+        return traced
+
+    def _wrap_get_hardware_state(self, original: Any) -> Any:
+        def traced() -> Any:
+            started = time.perf_counter()
+            result = original()
+            self._record(
+                "hardware_state",
+                connected=bool(result.connected),
+                torque_enabled=bool(result.torque_enabled),
+                moving=bool(result.moving),
+                faulted=bool(result.faulted),
+                fault_message=result.fault_message,
+                call_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            return result
+
+        return traced
+
+    def _wrap_write_tool_position(self, original: Any) -> Any:
+        def traced(
+            actuator: str,
+            position: float,
+            *,
+            speed_raw: int | None = None,
+            acceleration_raw: int | None = None,
+        ) -> Any:
+            started = time.perf_counter()
+            result = original(
+                actuator,
+                position,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+            self._record(
+                "tool_command",
+                actuator=actuator,
+                position=float(position),
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+                call_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            return result
+
+        return traced
+
+    def _wrap_read_tool_position(self, original: Any) -> Any:
+        def traced(actuator: str) -> Any:
+            started = time.perf_counter()
+            result = original(actuator)
+            self._record(
+                "tool_feedback",
+                actuator=actuator,
+                position=float(result),
+                call_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            return result
+
+        return traced
+
+    def _wrap_read_motor_effort(self, original: Any) -> Any:
+        def traced(name: str) -> Any:
+            started = time.perf_counter()
+            result = original(name)
+            self._record(
+                "motor_effort",
+                motor=name,
+                current_raw=result.get("current_raw"),
+                load_raw=result.get("load_raw"),
+                call_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            return result
+
+        return traced
