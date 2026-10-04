@@ -231,14 +231,23 @@ soarm101 agent sandbox run --agent codex --auth installed --read-only
 soarm101 agent sandbox run --agent codex --auth chatgpt --read-only
 ```
 
-When `--task` is omitted in read-only mode, the SDK uploads the same packaged validation
-task for either agent. It inspects capabilities/state/configured cameras and analyzes fresh
-images.
+When `--task` is omitted in read-only mode, the SDK uploads the same harness-neutral
+validation task for every agent. It requires the agent to inspect capabilities and state,
+capture every configured camera, and use the image-inspection method named by that agent's
+skill when available.
 
-Read-only mode does not require `soarm101 agent arm`. Its generated OpenShell policy omits
-every motion route: saved-pose motion, joint motion, Cartesian jog, gripper, Sleep, and
-STOP/HOLD are unreachable from the sandbox. Only health/capabilities/state and fresh camera
-capture remain available.
+Read-only mode does not require `soarm101 agent arm`. An absent authority lease blocks
+motion only; it must not stop capabilities/state/camera observation. The generated OpenShell
+policy omits every motion route: saved-pose motion, joint motion, Cartesian jog, gripper,
+Sleep, and STOP/HOLD are unreachable from the sandbox. Only health/capabilities/state and
+fresh camera capture remain available.
+
+The SDK validates this gate deterministically after the harness exits. Only broker events
+created after agent handoff count: successful capabilities and state reads are required,
+every configured camera must have a successful capture, no motion action may reach the
+broker, and every retained observation must match a trusted broker capture SHA-256. The
+result is written to `read-only-validation.json`; a zero harness exit without this evidence
+fails the run.
 
 The agent-specific image tool differs:
 
