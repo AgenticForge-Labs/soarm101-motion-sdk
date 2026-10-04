@@ -97,13 +97,27 @@ changes require development discipline; robot use requires conservative hardware
     Cartesian use remains unvalidated until the hardware evidence is reviewed.
 12. Keep `docs/agent-arm101-cli.md` and `cli_use.md` technical and policy-neutral. They
     document the CLI contract, common commands, units, coordinate semantics, outputs, and
-    enforced safety behavior. Agent task strategies, observe/action loops, model/provider
-    instructions, and benchmark policy belong outside the SDK-facing CLI documentation.
+    enforced safety behavior. Task-solving strategy and benchmark policy remain outside
+    those neutral references. Robot-specific agent runtime/security setup belongs in
+    `docs/agent-sandbox.md`; higher-level benchmark design and scoring remain outside the SDK.
+13. The canonical OpenShell path must never mount the Motion SDK checkout, serial devices,
+    camera devices, calibration files, Docker socket, SSH credentials, or unrelated host
+    files into the reasoning sandbox. The only physical action path is
+    OpenShell -> robotctl -> authenticated broker -> bounded agent CLI -> SDK.
+14. Human `agent arm` authority remains outside the sandbox. Sandbox setup/run code may
+    verify authority but must never create, extend, or bypass it.
+15. Keep agent-harness differences behind `agent_adapters.py`. Adding another agent may
+    add an image recipe, provider profile, skill, mutable-home setup, and command builder,
+    but must not add a second robot API, second broker, or agent-specific motion semantics.
+    Hermes and Codex must share the same `robotctl -> broker -> bounded agent CLI -> SDK`
+    physical path.
 
 ## Repository boundary
 
 This SDK owns SO-ARM101 motion, calibration, kinematics, tooling/TCP definitions,
-diagnostics, teaching/replay primitives, their safety/provenance rules, and basic local USB
-camera capture used to observe the arm workspace. Higher-level perception/tracking, calibrated
+diagnostics, teaching/replay primitives, their safety/provenance rules, basic local USB
+camera capture used to observe the arm workspace, and the canonical constrained agent
+execution boundary for this device (bounded CLI, broker/client, and robot-specific OpenShell
+environment). Higher-level perception/tracking, calibrated
 multi-camera stage systems, show control, and cross-robot orchestration belong in their
 respective AgenticForge repositories.
