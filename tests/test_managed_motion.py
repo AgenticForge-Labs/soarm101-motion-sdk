@@ -862,6 +862,69 @@ def test_cartesian_execution_uses_teleop_servo_profile_even_with_calibration() -
     )
 
 
+def test_calibrated_motion_skips_redundant_quantized_encoder_targets() -> None:
+    from types import SimpleNamespace
+
+    class FakeMotor:
+        radians_limits = (-3.0, 3.0)
+
+        @staticmethod
+        def radians_to_raw(value):
+            return int(round(2048 + float(value) * 100.0))
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: FakeMotor() for name in ARM_JOINTS}
+        )
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.08
+        plan = arm.motion._plan_joint_motion(
+            start,
+            target,
+            speed=0.05,
+            acceleration=0.20,
+            limits=arm.motion._effective_limits(),
+        )
+        planned_keys = [
+            arm.motion._encoder_target_key(sample)
+            for sample in plan.command_samples
+        ]
+        assert any(
+            previous == current
+            for previous, current in zip(planned_keys, planned_keys[1:], strict=False)
+        )
+
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append(dict(positions))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        result = arm.move_joints(
+            target,
+            speed=0.05,
+            acceleration=0.20,
+            workspace_check="off",
+        )
+
+        call_keys = [arm.motion._encoder_target_key(sample) for sample in calls]
+
+    assert result.completed is True
+    assert len(calls) < len(plan.command_samples) - 1
+    assert calls[-1] == pytest.approx(target)
+    assert all(
+        previous != current
+        for previous, current in zip(call_keys[:-1], call_keys[1:-1], strict=False)
+    )
+
 def test_joint_move_can_use_per_joint_synchronized_servo_speeds() -> None:
     from types import SimpleNamespace
 
