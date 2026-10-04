@@ -16,6 +16,9 @@ RUN curl -fsSL https://chatgpt.com/codex/install.sh | sh \
     && codex --version
 
 WORKDIR /sandbox
+# OpenShell's Docker identity resolver creates the image before the requested
+# sandbox command override is applied, so the image must have a valid default
+# command. Keep it inert and long-lived; OpenShell still overrides it at run time.
 ENTRYPOINT []
-CMD []
+CMD ["/bin/sh", "-lc", "while :; do sleep 3600; done"]
 USER 10000:10000
