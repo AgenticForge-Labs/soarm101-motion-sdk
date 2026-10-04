@@ -84,10 +84,13 @@ and the adapter contract. Codex can use either an OpenAI Platform API key or the
 file-backed login from the user's installed Codex CLI; `--auth installed` copies only
 `${CODEX_HOME:-~/.codex}/auth.json` into the disposable sandbox for that run and never
 mounts or modifies the host Codex home. An optional separate SDK-owned ChatGPT device-login
-mode is also available. The unrestricted SDK, serial/camera devices, calibration files,
-Docker socket, SSH material, and unrelated host files remain outside the reasoning sandbox.
-The narrow transport is documented separately in
-[docs/agent-broker.md](docs/agent-broker.md).
+mode is also available. Other OpenShell-compatible CLI harnesses can use the same runtime
+through a validated operator-authored JSON adapter manifest; the manifest selects harness
+image/provider/direct argv only and cannot broaden robot routes or authority. See
+[agent-as-code/openshell-adapter.example.json](agent-as-code/openshell-adapter.example.json).
+The unrestricted SDK, serial/camera devices, calibration files, Docker socket, SSH material,
+and unrelated host files remain outside the reasoning sandbox. The narrow transport is
+documented separately in [docs/agent-broker.md](docs/agent-broker.md).
 
 ## Get started
 
