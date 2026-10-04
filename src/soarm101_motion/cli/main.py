@@ -1465,6 +1465,102 @@ def _cmd_gui(args: argparse.Namespace) -> int:
     return run_gui(argv)
 
 
+def _cmd_agent_sandbox_agents(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_adapters import agent_catalog
+
+    payload = {"agents": agent_catalog()}
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for item in payload["agents"]:
+            model = item["default_model"] or "<agent default>"
+            auth_summary = "; ".join(
+                (
+                    f"{mode['name']} -> "
+                    f"{mode['provider'] or '<native-login>'} "
+                    f"({', '.join(mode['credential_env_vars']) or ('login state' if mode['uses_login_state'] else 'no credential')})"
+                )
+                for mode in item["auth_modes"]
+            )
+            print(
+                f"{item['name']}: model={model} default_auth={item['default_auth']} "
+                f"auth=[{auth_summary}]"
+            )
+    return 0
+
+
+def _cmd_agent_sandbox_doctor(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_sandbox import doctor
+
+    result = doctor(
+        agent=args.agent,
+        auth=args.auth,
+        image=args.image,
+        provider=args.provider,
+    )
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        state = "READY" if result.ready else "NOT READY"
+        print(f"SO-ARM101 {result.agent} agent sandbox: {state}")
+        for key in ("openshell", "gateway", "docker", "image", "provider"):
+            print(f"  {key:10s} {'ok' if payload[key] else 'missing'}")
+        if result.details:
+            print("Details:")
+            for key, value in result.details.items():
+                if value:
+                    print(f"  {key}: {value}")
+    return 0 if result.ready else 2
+
+
+def _cmd_agent_sandbox_setup(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_sandbox import setup
+
+    setup(
+        agent=args.agent,
+        auth=args.auth,
+        image=args.image,
+        provider=args.provider,
+        reauth=args.reauth,
+    )
+    auth_suffix = f" --auth {args.auth}" if args.auth else ""
+    print(
+        f"SO-ARM101 {args.agent} agent sandbox setup complete. "
+        f"Run 'soarm101 agent sandbox doctor --agent {args.agent}{auth_suffix}' "
+        "to verify readiness."
+    )
+    return 0
+
+
+def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_sandbox import run_agent
+
+    output_dir = (
+        Path(args.output)
+        if args.output
+        else Path("soarm101-agent-runs")
+        / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.agent}"
+    )
+    task = Path(args.task) if args.task else None
+    result = run_agent(
+        agent=args.agent,
+        auth=args.auth,
+        task=task,
+        output_dir=output_dir,
+        model=args.model,
+        image=args.image,
+        provider=args.provider,
+        broker_port=args.broker_port,
+        max_turns=args.max_turns,
+        timeout=args.timeout,
+        read_only=args.read_only,
+    )
+    payload = result.as_dict()
+    print(json.dumps(payload, indent=2))
+    return 0 if result.exit_code == 0 else result.exit_code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soarm101", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1776,6 +1872,148 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_session_options(agent_stop)
     agent_stop.set_defaults(func=_cmd_agent_stop)
+
+    agent_sandbox = agent_sub.add_parser(
+        "sandbox",
+        help="self-contained OpenShell environment for reasoning agents",
+    )
+    agent_sandbox_sub = agent_sandbox.add_subparsers(
+        dest="agent_sandbox_command",
+        required=True,
+    )
+
+    from soarm101_motion.agent_adapters import agent_names, get_agent_adapter
+
+    sandbox_agent_choices = agent_names()
+    sandbox_auth_choices = tuple(
+        sorted(
+            {
+                mode
+                for name in sandbox_agent_choices
+                for mode in get_agent_adapter(name).auth_names()
+            }
+        )
+    )
+
+    agent_sandbox_agents = agent_sandbox_sub.add_parser(
+        "agents",
+        help="list packaged agent adapters and their default provider/model requirements",
+    )
+    agent_sandbox_agents.add_argument("--json", action="store_true")
+    agent_sandbox_agents.set_defaults(func=_cmd_agent_sandbox_agents)
+
+    agent_sandbox_doctor = agent_sandbox_sub.add_parser(
+        "doctor",
+        help="check OpenShell, Docker, image, and provider readiness for one agent",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--agent",
+        choices=sandbox_agent_choices,
+        default="hermes",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--auth",
+        choices=sandbox_auth_choices,
+        help="agent authentication mode; defaults to the selected agent's default",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--image",
+        help="override the selected agent's canonical sandbox image",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--provider",
+        help="override the selected agent's canonical OpenShell provider",
+    )
+    agent_sandbox_doctor.add_argument("--json", action="store_true")
+    agent_sandbox_doctor.set_defaults(func=_cmd_agent_sandbox_doctor)
+
+    agent_sandbox_setup = agent_sandbox_sub.add_parser(
+        "setup",
+        help="build one agent image and install/update its provider",
+    )
+    agent_sandbox_setup.add_argument(
+        "--agent",
+        choices=sandbox_agent_choices,
+        default="hermes",
+    )
+    agent_sandbox_setup.add_argument(
+        "--auth",
+        choices=sandbox_auth_choices,
+        help=(
+            "agent authentication mode; normal Codex choices are api-key or installed; "
+            "chatgpt is an advanced separate device-login mode"
+        ),
+    )
+    agent_sandbox_setup.add_argument("--image")
+    agent_sandbox_setup.add_argument("--provider")
+    agent_sandbox_setup.add_argument(
+        "--reauth",
+        action="store_true",
+        help=(
+            "force a fresh dedicated Codex ChatGPT device login; not used by api-key "
+            "or installed modes"
+        ),
+    )
+    agent_sandbox_setup.set_defaults(func=_cmd_agent_sandbox_setup)
+
+    agent_sandbox_run = agent_sandbox_sub.add_parser(
+        "run",
+        help="run a supported agent in OpenShell through the bounded robot/camera broker",
+    )
+    agent_sandbox_run.add_argument(
+        "--agent",
+        choices=sandbox_agent_choices,
+        default="hermes",
+    )
+    agent_sandbox_run.add_argument(
+        "--auth",
+        choices=sandbox_auth_choices,
+        help=(
+            "agent authentication mode; normal Codex choices are api-key or installed; "
+            "chatgpt is an advanced separate device-login mode"
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--task",
+        help=(
+            "task markdown; required for full-control runs. "
+            "Read-only runs use the packaged validation task when omitted."
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--output",
+        help=(
+            "new or empty host directory for traces/captures/evidence; "
+            "default: soarm101-agent-runs/<timestamp>"
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--model",
+        help=(
+            "agent model override; Hermes defaults to its packaged OpenRouter model, "
+            "Codex uses its CLI default when omitted"
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--image",
+        help="override the selected agent's canonical sandbox image",
+    )
+    agent_sandbox_run.add_argument(
+        "--provider",
+        help="override the selected agent's canonical OpenShell provider",
+    )
+    agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
+    agent_sandbox_run.add_argument("--max-turns", type=int, default=100)
+    agent_sandbox_run.add_argument("--timeout", type=int, default=1800)
+    agent_sandbox_run.add_argument(
+        "--read-only",
+        action="store_true",
+        help=(
+            "omit all motion/gripper/STOP routes from the OpenShell broker policy "
+            "and do not require human motion authority"
+        ),
+    )
+    agent_sandbox_run.set_defaults(func=_cmd_agent_sandbox_run)
 
     camera = sub.add_parser("camera", help="discover, configure, and capture named USB cameras")
     camera_sub = camera.add_subparsers(dest="camera_command", required=True)
