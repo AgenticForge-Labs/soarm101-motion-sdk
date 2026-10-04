@@ -1046,7 +1046,8 @@ class RobotWorker(QObject):
             processing_s = time.perf_counter() - started
             if self._detailed_logging:
                 actual = dict(result.final_positions)
-                calibration = getattr(arm.backend, "calibration", None)
+                backend = getattr(arm, "backend", None)
+                calibration = getattr(backend, "calibration", None)
                 motors = getattr(calibration, "motors", None)
                 command_raw = None
                 actual_raw = None
