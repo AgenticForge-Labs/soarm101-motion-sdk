@@ -34,11 +34,11 @@ from soarm101_motion.motion import MotionController, MotionHandle
 from soarm101_motion.poses import sleep_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
-    minimum_workspace_self_clearance,
     resolve_effective_joint_limits,
     validate_joint_targets,
     validate_workspace_configuration,
     validate_workspace_path,
+    validate_workspace_path_from_measured_start,
 )
 from soarm101_motion.tools import RobotTool, SO101Gripper
 from soarm101_motion.trajectories import Trajectory
@@ -226,15 +226,12 @@ class SOARM101:
         current: Mapping[str, float],
         target: Mapping[str, float],
     ) -> None:
-        """Allow a saved-pose path to leave an already-present coarse self-clearance state.
-
-        If the measured starting configuration already violates only the generic
-        centerline self-clearance heuristic, the path may proceed only while minimum
-        self-clearance is nondecreasing and until it reaches the normal configured
-        clearance threshold. Other workspace guards remain authoritative throughout.
-        """
+        """Validate a saved-pose path from the physically measured start."""
         max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
-        steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
+        steps = max(
+            2,
+            int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1,
+        )
         samples = tuple(
             {
                 name: current[name] + (target[name] - current[name]) * fraction
@@ -242,67 +239,9 @@ class SOARM101:
             }
             for fraction in np.linspace(0.0, 1.0, steps)
         )
-
-        workspace_without_self = {
-            **self._workspace_kwargs(),
-            "minimum_self_clearance_m": 0.0,
-        }
-        for index, joints in enumerate(samples):
-            try:
-                validate_workspace_configuration(
-                    self.model,
-                    joints,
-                    tcp=self.active_tcp,
-                    **workspace_without_self,
-                )
-            except SafetyViolationError as exc:
-                raise SafetyViolationError(
-                    f"workspace path sample {index}: {exc}"
-                ) from exc
-
-        required_clearance = float(self.config.minimum_self_clearance_m)
-        clearances = tuple(
-            minimum_workspace_self_clearance(
-                self.model,
-                joints,
-                tcp=self.active_tcp,
-            )
-            for joints in samples
-        )
-        if clearances[0] >= required_clearance:
-            validate_workspace_path(
-                self.model,
-                samples,
-                tcp=self.active_tcp,
-                **self._workspace_kwargs(),
-            )
-            return
-
-        monotonic_tolerance_m = 0.0005
-        previous = clearances[0]
-        cleared_index = None
-        for index, clearance in enumerate(clearances[1:], start=1):
-            if clearance + monotonic_tolerance_m < previous:
-                raise SafetyViolationError(
-                    "saved-pose path starts inside coarse self-clearance but moves "
-                    f"deeper at sample {index}: {clearance:.3f} m after "
-                    f"{previous:.3f} m"
-                )
-            previous = max(previous, clearance)
-            if clearance >= required_clearance:
-                cleared_index = index
-                break
-
-        if cleared_index is None:
-            raise SafetyViolationError(
-                "saved-pose path starts inside coarse self-clearance and never exits "
-                f"the {required_clearance:.3f} m envelope; target clearance is "
-                f"{clearances[-1]:.3f} m"
-            )
-
-        validate_workspace_path(
+        validate_workspace_path_from_measured_start(
             self.model,
-            samples[cleared_index:],
+            samples,
             tcp=self.active_tcp,
             **self._workspace_kwargs(),
         )
@@ -338,7 +277,7 @@ class SOARM101:
             }
             for fraction in np.linspace(0.0, 1.0, steps)
         )
-        validate_workspace_path(
+        validate_workspace_path_from_measured_start(
             self.model,
             samples,
             tcp=self.active_tcp,
