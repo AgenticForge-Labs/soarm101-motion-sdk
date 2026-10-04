@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "my-agent",
+  "image": "my-openshell-agent-image:latest",
+  "provider": "my-existing-openshell-provider",
+  "command": [
+    "my-agent",
+    "--prompt",
+    "{prompt}"
+  ],
+  "version_command": [
+    "my-agent",
+    "--version"
+  ],
+  "default_model": null,
+  "run_user": "10000",
+  "run_group": "10000",
+  "read_only_paths": [
+    "/usr/local/bin/my-agent"
+  ],
+  "robot_client_binaries": [
+    "/usr/bin/python3*"
+  ],
+  "mutable_directories": [
+    "/sandbox/.home",
+    "/sandbox/.xdg-config",
+    "/sandbox/observations"
+  ],
+  "environment": {}
+}

@@ -67,16 +67,30 @@ displacement; at or below 100 mm the request limit is 10 mm; targets must remain
 than metrology guarantees; normal SDK motion guards remain authoritative.
 
 [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise technical
-contract. [`cli_use.md`](cli_use.md) is the compact operational reference. The optional
-task-facing robot/camera skill lives under
-[`agent-as-code/skills/robot-camera/SKILL.md`](agent-as-code/skills/robot-camera/SKILL.md);
-it is deliberately outside the neutral SDK CLI contract. Machine-local ports, calibration
-references, and named cameras still come from the shared workstation profile. Agent launchers,
-model selection, and sandbox lifecycle remain outside the Motion SDK. For isolated workers,
-the SDK provides the narrow host-side transport described in
-[docs/agent-broker.md](docs/agent-broker.md): `soarm101-broker` exposes only the bounded
-agent capability allowlist over HTTP/JSON, while the standard-library-only `robotctl` client
-can be copied into a sandbox without exposing the unrestricted SDK, serial device, or cameras.
+contract. [`cli_use.md`](cli_use.md) is the compact operational reference. The direct-host
+task-facing robot/camera skill remains under
+[`agent-as-code/skills/robot-camera/SKILL.md`](agent-as-code/skills/robot-camera/SKILL.md).
+The isolated OpenShell runtime uses packaged harness-specific skills for the built-in Hermes
+and Codex adapters while keeping the robot contract itself harness-neutral. Machine-local
+ports, calibration references, and named cameras still come from the shared workstation
+profile.
+
+The SDK includes one canonical self-contained OpenShell path for agent operation.
+[docs/agent-sandbox.md](docs/agent-sandbox.md) documents
+`soarm101 agent sandbox doctor/setup/run`, including a hard `run --read-only` mode whose
+broker policy exposes state/camera observation but no motion routes. OpenShell supplies
+process/filesystem/network isolation; the SDK owns broker lifecycle, standalone `robotctl`,
+and the adapter contract. Codex can use either an OpenAI Platform API key or the existing
+file-backed login from the user's installed Codex CLI; `--auth installed` copies only
+`${CODEX_HOME:-~/.codex}/auth.json` into the disposable sandbox for that run and never
+mounts or modifies the host Codex home. An optional separate SDK-owned ChatGPT device-login
+mode is also available. Other OpenShell-compatible CLI harnesses can use the same runtime
+through a validated operator-authored JSON adapter manifest; the manifest selects harness
+image/provider/direct argv only and cannot broaden robot routes or authority. See
+[agent-as-code/openshell-adapter.example.json](agent-as-code/openshell-adapter.example.json).
+The unrestricted SDK, serial/camera devices, calibration files, Docker socket, SSH material,
+and unrelated host files remain outside the reasoning sandbox. The narrow transport is
+documented separately in [docs/agent-broker.md](docs/agent-broker.md).
 
 ## Get started
 

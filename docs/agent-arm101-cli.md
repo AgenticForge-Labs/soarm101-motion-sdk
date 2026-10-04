@@ -120,6 +120,65 @@ soarm101 agent disarm
 The optional task-specific robot/camera skill under `agent-as-code/` is outside this
 technical contract.
 
+The direct-host skill remains under `agent-as-code/skills/robot-camera/`. The built-in
+OpenShell adapters package harness-specific `robotctl.py` skills for Hermes and Codex so
+sandbox instructions never refer to the unavailable host `soarm101` executable.
+
+## Self-contained agent sandbox commands
+
+The SDK includes robot-specific OpenShell orchestration without making OpenShell a Python
+runtime dependency:
+
+```bash
+soarm101 agent sandbox doctor --agent hermes
+soarm101 agent sandbox setup --agent hermes
+soarm101 agent sandbox run --agent hermes --task TASK.md
+
+# Reuse the already-installed/login-authenticated Codex CLI state.
+soarm101 agent sandbox doctor --agent codex --auth installed
+soarm101 agent sandbox run --agent codex --auth installed --task TASK.md
+
+# Or use OpenAI Platform billing/API credentials.
+soarm101 agent sandbox setup --agent codex --auth api-key
+soarm101 agent sandbox run --agent codex --auth api-key --task TASK.md
+
+# Optional separate SDK-owned ChatGPT device login.
+soarm101 agent sandbox setup --agent codex --auth chatgpt
+soarm101 agent sandbox run --agent codex --auth chatgpt --task TASK.md
+```
+
+`doctor` is read-only with respect to the robot. `setup` builds/updates the selected
+built-in adapter image and provider/login requirements. Codex `--auth installed` reads the
+host Codex auth state only long enough to make a per-run copy inside the disposable sandbox;
+it does not execute the host Codex binary as the reasoning process and does not mount or
+modify the host Codex home.
+
+`run --read-only` does not require or create robot authority. Its generated broker policy
+exposes only health/capabilities/state and camera capture; pose, joint, Cartesian, gripper,
+Sleep, and STOP routes are absent. Full `run` also cannot create authority: a human must
+already have run `soarm101 agent arm`. The runtime starts the authenticated broker, verifies
+authority when motion is requested, creates a fresh OpenShell sandbox, uploads only the
+task/skill/standalone client plus minimal adapter-specific state, runs the selected harness,
+collects evidence, confirms sandbox deletion, and stops the broker.
+
+For another CLI harness already usable by OpenShell, provide an explicit adapter manifest:
+
+```bash
+soarm101 agent sandbox doctor \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json
+
+soarm101 agent sandbox run \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json \
+  --read-only
+```
+
+The manifest controls only harness image/provider/direct argv/runtime paths. It cannot alter
+the broker route allowlist, broker token/URL, human authority, or Motion SDK safety checks.
+
+See `docs/agent-sandbox.md` for the complete runtime/security contract.
+
 ## Session selection
 
 Commands that support either hardware or simulation accept:
