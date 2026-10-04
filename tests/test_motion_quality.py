@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 
@@ -8,6 +9,7 @@ from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion.quality import (
     command_sequence,
     load_jsonl,
+    preflight_stream_commands,
     summarize_teleop_frames,
     teleop_frames,
     write_frame_extract,
@@ -66,3 +68,40 @@ def test_load_jsonl_rejects_non_object(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="not a JSON object"):
         load_jsonl(path)
+
+
+def test_preflight_stream_commands_accepts_bounded_sequence() -> None:
+    start = {name: 0.0 for name in ARM_JOINTS}
+    commands = [
+        {name: 0.0 for name in ARM_JOINTS},
+        {name: 0.01 for name in ARM_JOINTS},
+        {name: 0.02 for name in ARM_JOINTS},
+    ]
+    metrics = preflight_stream_commands(
+        commands,
+        start=start,
+        frequency_hz=20.0,
+        max_command_step_radians=0.2,
+        max_joint_speed=1.0,
+        max_joint_acceleration=10.0,
+        limits={name: (-1.0, 1.0) for name in ARM_JOINTS},
+    )
+    assert metrics["max_step_deg"] == pytest.approx(math.degrees(0.01))
+    assert metrics["max_speed_deg_s"] == pytest.approx(math.degrees(0.2))
+
+
+def test_preflight_stream_commands_rejects_unsafe_start_step() -> None:
+    start = {name: 0.0 for name in ARM_JOINTS}
+    command = {name: 0.0 for name in ARM_JOINTS}
+    command["shoulder_pan"] = 0.3
+
+    with pytest.raises(ValueError, match="step"):
+        preflight_stream_commands(
+            [command],
+            start=start,
+            frequency_hz=20.0,
+            max_command_step_radians=0.1,
+            max_joint_speed=10.0,
+            max_joint_acceleration=100.0,
+            limits={name: (-1.0, 1.0) for name in ARM_JOINTS},
+        )
