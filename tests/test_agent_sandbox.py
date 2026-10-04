@@ -1222,7 +1222,7 @@ def test_external_adapter_manifest_rejects_shell_style_placeholder_interpolation
         tmp_path,
         command=["claude", "--prompt={prompt}"],
     )
-    with pytest.raises(ValueError, match="unsupported adapter manifest command placeholder"):
+    with pytest.raises(ValueError, match="standalone .*prompt.* token"):
         load_agent_adapter_manifest(manifest)
 
 
