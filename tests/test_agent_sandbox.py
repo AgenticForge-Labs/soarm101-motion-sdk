@@ -20,6 +20,7 @@ class FakeOpenShell:
         self.uploads: list[tuple[str, Path, str | None]] = []
         self.uploaded_bytes: dict[str, bytes] = {}
         self.exec_calls: list[dict[str, object]] = []
+        self.downloads: list[tuple[str, Path]] = []
         self.deleted: list[str] = []
 
     def available(self) -> bool:
@@ -82,6 +83,7 @@ class FakeOpenShell:
 
     def download(self, name, sandbox_path, destination):
         destination = Path(destination)
+        self.downloads.append((sandbox_path, destination))
         if sandbox_path.endswith("task-result.json"):
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(
@@ -94,7 +96,9 @@ class FakeOpenShell:
                 encoding="utf-8",
             )
         elif sandbox_path.endswith("observations"):
-            (destination / "observations").mkdir(parents=True, exist_ok=True)
+            # OpenShell copies the directory contents into the explicit destination;
+            # it does not recreate the source basename automatically.
+            destination.mkdir(parents=True, exist_ok=True)
 
     def delete(self, name, *, timeout=120):
         self.deleted.append(name)
@@ -502,6 +506,10 @@ def test_run_hermes_uses_only_packaged_client_skill_and_task(
     assert env["HERMES_HOME"] == "/sandbox/.hermes"
 
     assert fake.deleted == [result.sandbox]
+    assert (
+        "/sandbox/observations",
+        output / "observations",
+    ) in fake.downloads
     assert FakeBroker.instances[0].started is True
     assert FakeBroker.instances[0].stopped is True
     assert (output / "hermes-stdout.jsonl").is_file()
