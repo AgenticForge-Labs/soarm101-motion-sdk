@@ -45,6 +45,8 @@ dev = [
 soarm101 = "soarm101_motion.cli.main:main"
 soarm101-setup = "soarm101_motion.setup_wizard:main"
 soarm101-gui = "soarm101_motion.gui.app:main"
+soarm101-broker = "soarm101_motion.broker:main"
+robotctl = "soarm101_motion.robotctl:main"
 
 [project.urls]
 Repository = "https://github.com/AgenticForge-Labs/soarm101-motion-sdk"

@@ -24,6 +24,8 @@ jobs:
       - run: uv build
       - run: uv run soarm101 info
       - run: uv run soarm101-setup --help
+      - run: uv run soarm101-broker --help
+      - run: uv run robotctl --help
       - run: uv run soarm101 gui --help
       - run: QT_QPA_PLATFORM=offscreen uv run soarm101-gui --simulation --smoke-test
       - run: uv run soarm101 sim-demo

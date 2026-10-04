@@ -72,7 +72,11 @@ task-facing robot/camera skill lives under
 [`agent-as-code/skills/robot-camera/SKILL.md`](agent-as-code/skills/robot-camera/SKILL.md);
 it is deliberately outside the neutral SDK CLI contract. Machine-local ports, calibration
 references, and named cameras still come from the shared workstation profile. Agent launchers,
-model selection, and sandboxing remain outside the Motion SDK.
+model selection, and sandbox lifecycle remain outside the Motion SDK. For isolated workers,
+the SDK provides the narrow host-side transport described in
+[docs/agent-broker.md](docs/agent-broker.md): `soarm101-broker` exposes only the bounded
+agent capability allowlist over HTTP/JSON, while the standard-library-only `robotctl` client
+can be copied into a sandbox without exposing the unrestricted SDK, serial device, or cameras.
 
 ## Get started
 
