@@ -34,8 +34,24 @@ DEFAULT_MODEL = HERMES.default_model or ""
 DEFAULT_BROKER_HOST = "0.0.0.0"
 DEFAULT_BROKER_CLIENT_HOST = "host.openshell.internal"
 DEFAULT_BROKER_PORT = 8765
+OPENSHELL_SANDBOX_NAME_MAX_LENGTH = 19
+
+
 class AgentSandboxError(RuntimeError):
     """OpenShell/Hermes sandbox setup or execution failed."""
+
+
+def _sandbox_name(agent_name: str) -> str:
+    """Return a collision-resistant OpenShell name within the server's 19-char limit."""
+
+    short_agent = str(agent_name).strip().lower()[:5] or "agent"
+    name = f"s101-{short_agent}-{secrets.token_hex(4)}"
+    if len(name) > OPENSHELL_SANDBOX_NAME_MAX_LENGTH:  # defensive invariant
+        raise AgentSandboxError(
+            f"generated OpenShell sandbox name exceeds "
+            f"{OPENSHELL_SANDBOX_NAME_MAX_LENGTH} characters"
+        )
+    return name
 
 
 def _sha256_path(path: Path) -> str:
@@ -906,7 +922,7 @@ def run_agent(
         )
 
     token = secrets.token_urlsafe(32)
-    sandbox = f"soarm101-{adapter.name}-{secrets.token_hex(4)}"
+    sandbox = _sandbox_name(adapter.name)
     broker_events = output_dir / "broker-events.jsonl"
     broker = BrokerProcess(port=broker_port, token=token, event_path=broker_events)
     created = False
