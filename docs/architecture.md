@@ -19,10 +19,12 @@ Rules:
 - GUI and CLI features call the same SDK operations and saved libraries; the GUI owns persistent hardware sessions rather than launching CLI subprocesses.
 - The SDK owns one canonical robot-specific OpenShell agent environment. OpenShell owns
   filesystem/process/network isolation; the Motion SDK owns the shared robot policy/broker
-  lifecycle/standalone client plus a small agent-adapter contract. Hermes and Codex are the
-  first packaged adapters; each adapter owns only its image recipe, provider profile, skill,
-  mutable home/config, and command construction. This is product/runtime support, not
-  benchmark orchestration.
+  lifecycle/standalone client plus a small agent-adapter contract. Hermes and Codex are
+  first-class packaged adapters. Other OpenShell-compatible CLI harnesses may use a validated
+  operator-authored manifest that selects an existing image/provider and direct argv without
+  adding robot code. Adapter configuration may change harness launch/runtime state but cannot
+  change broker routes, authority, broker credentials, or deterministic motion safety. This
+  is product/runtime support, not benchmark orchestration.
 - The host-side agent broker remains transport-only: it serializes an explicit HTTP/JSON
   allowlist and delegates to the bounded agent CLI rather than reimplementing motion policy.
   It exposes no remote arm/disarm/relax, raw servo, arbitrary-command, calibration, or
