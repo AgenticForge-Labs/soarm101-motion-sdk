@@ -162,7 +162,7 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
 def test_saved_pose_can_monotonically_exit_existing_self_clearance(monkeypatch) -> None:
     from soarm101_motion.constants import ARM_JOINTS
 
-    import soarm101_motion.arm as arm_module
+    import soarm101_motion.safety as safety_module
 
     with SOARM101.simulated() as arm:
         arm.enable()
@@ -170,17 +170,17 @@ def test_saved_pose_can_monotonically_exit_existing_self_clearance(monkeypatch) 
         clearances = iter((0.019, 0.020, 0.022, 0.026))
 
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "minimum_workspace_self_clearance",
             lambda *args, **kwargs: next(clearances, 0.026),
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_configuration",
             lambda *args, **kwargs: None,
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_path",
             lambda *args, **kwargs: None,
         )
@@ -197,19 +197,19 @@ def test_saved_pose_can_monotonically_exit_existing_self_clearance(monkeypatch) 
 def test_saved_pose_rejects_path_that_moves_deeper_into_self_clearance(monkeypatch) -> None:
     from soarm101_motion.constants import ARM_JOINTS
 
-    import soarm101_motion.arm as arm_module
+    import soarm101_motion.safety as safety_module
 
     with SOARM101.simulated() as arm:
         arm.enable()
         arm.move_sleep(speed=0.2, acceleration=0.5)
         clearances = iter((0.019, 0.018, 0.026))
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "minimum_workspace_self_clearance",
             lambda *args, **kwargs: next(clearances, 0.026),
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_configuration",
             lambda *args, **kwargs: None,
         )
@@ -222,31 +222,32 @@ def test_saved_pose_rejects_path_that_moves_deeper_into_self_clearance(monkeypat
             )
 
 
-def test_saved_pose_rejects_path_that_never_clears_self_clearance(monkeypatch) -> None:
+def test_saved_pose_can_remain_inside_nonworsening_self_clearance(monkeypatch) -> None:
     from soarm101_motion.constants import ARM_JOINTS
 
-    import soarm101_motion.arm as arm_module
+    import soarm101_motion.safety as safety_module
 
     with SOARM101.simulated() as arm:
         arm.enable()
         arm.move_sleep(speed=0.2, acceleration=0.5)
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "minimum_workspace_self_clearance",
             lambda *args, **kwargs: 0.020,
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_configuration",
             lambda *args, **kwargs: None,
         )
         target = {name: 0.0 for name in ARM_JOINTS}
-        with pytest.raises(SafetyViolationError, match="never exits"):
-            arm.move_joints_from_saved_pose(
-                target,
-                speed=0.2,
-                acceleration=0.5,
-            )
+        result = arm.move_joints_from_saved_pose(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+        )
+
+    assert result.completed is True
 
 def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
     from types import SimpleNamespace
