@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added a pluggable self-contained `soarm101 agent sandbox` workflow for constrained
+  autonomous robot operation without Forge-Bench or another harness. Hermes/OpenRouter and
+  Codex are first-class adapters behind the same OpenShell, `robotctl`, broker, authority,
+  and Motion SDK safety boundary. Codex supports OpenAI Platform API-key mode
+  (`OPENAI_API_KEY`), `--auth installed` to reuse a one-run copy of the host's existing
+  file-backed ChatGPT Codex login without mounting or modifying the host Codex home, and an
+  optional separate SDK-owned `--auth chatgpt` device-login mode. `sandbox doctor` checks
+  readiness, `sandbox setup` builds/updates adapter assets, and `sandbox run --read-only`
+  provides a hard no-motion validation path. Full runs require pre-existing human authority;
+  the unrestricted SDK, serial/camera devices, calibration files, Docker socket, SSH material,
+  and unrelated host files are not exposed to the reasoning sandbox.
+
 - Added a narrow host-side HTTP/JSON broker for isolated reasoning agents. The broker
   serializes an explicit allowlist of bounded agent actions, delegates to the existing
   `soarm101 agent` CLI, requires a bearer token, records JSONL request evidence, and
