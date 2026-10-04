@@ -508,7 +508,13 @@ def load_agent_adapter_manifest(path: str | Path) -> ManifestAgentAdapter:
     skill_body: str | None = None
     skill_file_raw = payload.get("skill_file")
     if skill_file_raw is not None:
-        skill_path = (manifest_path.parent / str(skill_file_raw)).resolve()
+        skill_relative = Path(str(skill_file_raw))
+        if skill_relative.is_absolute():
+            raise ValueError("adapter manifest skill_file must be relative to the manifest")
+        skill_root = manifest_path.parent.resolve()
+        skill_path = (skill_root / skill_relative).resolve()
+        if not skill_path.is_relative_to(skill_root):
+            raise ValueError("adapter manifest skill_file may not escape the manifest directory")
         try:
             skill_body = skill_path.read_text(encoding="utf-8")
         except OSError as exc:
