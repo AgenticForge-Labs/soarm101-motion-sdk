@@ -261,19 +261,24 @@ class RobotBrokerService:
                     )
 
                 duration = time.monotonic() - started
-                capture_metadata = {
+                trusted_capture_metadata = {
                     key: value
                     for key, value in result.items()
                     if key != "path"
                 }
-                capture_metadata["sha256"] = image_sha256
+                trusted_capture_metadata["sha256"] = image_sha256
+                sandbox_capture_metadata = {
+                    key: value
+                    for key, value in trusted_capture_metadata.items()
+                    if key != "device"
+                }
                 self._record(
                     request_id=request_id,
                     action="capture",
                     request=request,
                     ok=True,
                     duration_s=duration,
-                    result=capture_metadata,
+                    result=trusted_capture_metadata,
                 )
                 self._record(
                     request_id=request_id,
@@ -282,7 +287,7 @@ class RobotBrokerService:
                     ok=True,
                     duration_s=0.0,
                     result={
-                        **capture_metadata,
+                        **trusted_capture_metadata,
                         "host_path": str(capture_path),
                     },
                 )
@@ -292,7 +297,7 @@ class RobotBrokerService:
                         "ok": True,
                         "request_id": request_id,
                         "result": {
-                            **capture_metadata,
+                            **sandbox_capture_metadata,
                             "image_base64": base64.b64encode(image_bytes).decode("ascii"),
                         },
                     },
