@@ -4,20 +4,23 @@ The Motion SDK ships a canonical OpenShell environment for operating an SO-ARM10
 reasoning agent without exposing the unrestricted SDK, serial bus, or camera devices to that
 agent.
 
-Two agent harnesses are first-class:
+Hermes and Codex are first-class packaged adapters:
 
 - **Hermes** — OpenRouter-backed, with Hermes `vision_analyze`.
-- **Codex CLI** — either OpenAI Platform API-key-backed or ChatGPT-plan-backed, with Codex `view_image`.
+- **Codex CLI** — OpenAI Platform API-key mode, reuse of the existing installed Codex
+  ChatGPT login, or an optional separate SDK-owned ChatGPT login; Codex uses `view_image`.
 
-Both use the same robot boundary:
+OpenShell itself can host other CLI agents. The SDK therefore also accepts an explicit,
+operator-authored JSON adapter manifest for a harness/image already usable by OpenShell.
+Packaged and manifest-defined adapters use exactly the same robot boundary:
 
 ```text
 human
   -> soarm101 agent arm
-  -> soarm101 agent sandbox run --agent hermes|codex
+  -> soarm101 agent sandbox run --agent AGENT [--adapter-manifest FILE]
        -> OpenShell
        -> selected agent harness
-       -> packaged agent-specific SKILL.md + robotctl.py
+       -> SKILL.md + robotctl.py
        -> host-side soarm101 broker
        -> bounded soarm101 agent capabilities
        -> Motion SDK
@@ -25,8 +28,9 @@ human
 ```
 
 OpenShell is external infrastructure, not vendored into the Python package. The SDK owns the
-robot-specific sandbox policy, agent adapter contract, canonical image recipes, provider
-profiles, agent-specific skills, broker lifecycle, and launch commands.
+robot-specific sandbox policy, adapter contract, broker lifecycle, standalone `robotctl`,
+and the packaged Hermes/Codex recipes. An external manifest selects an existing OpenShell
+image/provider and direct harness argv; it does not define robot behavior.
 
 ## Agent adapter boundary
 
@@ -44,8 +48,9 @@ An adapter owns only:
 - command construction; and
 - environment variables.
 
-The robot contract is not duplicated per agent. Hermes, Codex, and future adapters all use the
-same task upload, `robotctl.py`, broker routes, authority checks, evidence, and cleanup.
+The robot contract is not duplicated per agent. Hermes, Codex, and manifest-defined external
+adapters all use the same task upload, `robotctl.py`, broker routes, authority checks,
+evidence, and cleanup.
 
 ## Security boundary
 
@@ -325,7 +330,7 @@ authenticated broker allowlist and deterministic Motion SDK safety checks.
 
 ## Agent capability
 
-Inside the sandbox either agent can use its normal reasoning/shell/filesystem capabilities.
+Inside the sandbox the selected harness can use its normal reasoning/shell/filesystem capabilities.
 Physical observation and action remain limited to:
 
 ```bash
@@ -382,19 +387,41 @@ TASK/SKILL/client/config inputs.
 
 ## Adding another agent
 
-A future CLI agent should normally require a new adapter plus packaged image/provider/skill,
-not a new robot execution pipeline.
+Use a packaged Python adapter when the SDK needs harness-specific setup, credential handling,
+or optimized image/tool instructions. Hermes and Codex use this path.
 
-The new adapter should define:
+For a CLI agent that OpenShell can already run, prefer an external JSON adapter manifest
+instead of changing Motion SDK robot code. See
+`agent-as-code/openshell-adapter.example.json`. The schema is version 1 and defines only
+harness/runtime concerns:
 
-1. how the agent is installed into an immutable image;
-2. how OpenShell provides its model credential;
-3. which real executable paths may reach the model/provider;
-4. which Python/runtime path may reach the robot broker through `robotctl.py`;
-5. how its mutable home/config stays under `/sandbox`;
-6. how it is run non-interactively;
-7. how it views fresh local camera images; and
-8. how its stdout/stderr is collected.
+- `name` and the OpenShell `image`;
+- optional existing OpenShell `provider`;
+- direct `command` argv containing a standalone `{prompt}` token;
+- direct `version_command` argv;
+- optional `{model}`, `{max_turns}`, `{task_path}`, and `{skill_path}` argv tokens;
+- runtime user/group, immutable paths, mutable sandbox directories, and minimal environment;
+- the Python/runtime executable path allowed to reach the robot broker; and
+- optionally a harness-specific skill file next to the manifest.
+
+Example:
+
+```bash
+soarm101 agent sandbox doctor \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json
+
+soarm101 agent sandbox run \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json \
+  --read-only
+```
+
+Manifest commands are argv arrays, not shell command strings. Shell executables are rejected,
+broker URL/token environment variables are runtime-owned, and the manifest cannot add robot
+routes or create motion authority. If an external adapter names a provider, that provider must
+already exist in OpenShell; the SDK does not invent provider credentials for arbitrary
+harnesses.
 
 Do not add agent-specific robot endpoints or bypass the broker merely because another harness
 has different tool conventions.
@@ -406,7 +433,7 @@ authority preflight, upload boundaries, broker lifecycle, evidence, and cleanup 
 hardware.
 
 Real OpenShell and physical robot validation remain separate gates. Validate in this order for
-**each** agent:
+each packaged or manifest-defined adapter you intend to operate:
 
 1. `sandbox doctor --agent AGENT`;
 2. `sandbox setup --agent AGENT`;
