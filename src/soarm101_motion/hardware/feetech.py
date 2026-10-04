@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from soarm101_motion.calibration import (
+    CALIBRATED_ENDPOINT_TOLERANCE_TICKS,
     MotorCalibration,
     SO101Calibration,
     archive_calibration,
@@ -47,9 +48,8 @@ from soarm101_motion.types import HardwareState, MotorDiagnostic
 
 logger = logging.getLogger(__name__)
 
-# A small encoder-count tolerance handles quantization/backlash at a calibrated
-# endpoint. Any correction is always inward, toward the active EEPROM limit.
-TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS = 8
+# Backward-compatible local name; calibration owns the single tolerance value.
+TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS = CALIBRATED_ENDPOINT_TOLERANCE_TICKS
 CONTROL_WRITE_RETRIES = 1
 CONTROL_WRITE_RETRY_DELAY_S = 0.01
 
@@ -487,6 +487,64 @@ class FeetechBackend(SO101HardwareBackend):
             finally:
                 self._packet_handler.groupSyncWrite.clearParam()
 
+    def _raw_joint_command_with_endpoint_recovery(
+        self,
+        name: str,
+        position: float,
+        calibration: SO101Calibration,
+    ) -> int:
+        """Resolve one safe raw command when the live encoder is just past an endpoint.
+
+        Torque enable already permits a small measured endpoint overshoot and latches
+        the commanded position inward. A trajectory that starts from that measured
+        sample can otherwise produce one or more interpolated samples that still
+        quantize just outside the calibrated range. Such a sample may be clamped to
+        the endpoint only when the live encoder is already outside on the same side,
+        remains within the calibrated endpoint tolerance, and the requested command
+        is equal or inward relative to that live reading. Outward requests still fail.
+        """
+
+        motor = calibration.motors[name]
+        requested_raw = motor.radians_to_raw_unchecked(position)
+        if motor.range_min <= requested_raw <= motor.range_max:
+            return requested_raw
+
+        current_raw = self.read_raw_position(name)
+        tolerance = TORQUE_LATCH_ENDPOINT_TOLERANCE_TICKS
+        if requested_raw > motor.range_max:
+            recoverable = (
+                motor.range_max < current_raw <= motor.range_max + tolerance
+                and motor.range_max < requested_raw <= current_raw
+            )
+            if recoverable:
+                logger.warning(
+                    "clamped %s inward from raw command %d to calibrated endpoint %d "
+                    "while live encoder is %d",
+                    name,
+                    requested_raw,
+                    motor.range_max,
+                    current_raw,
+                )
+                return motor.range_max
+        elif requested_raw < motor.range_min:
+            recoverable = (
+                motor.range_min - tolerance <= current_raw < motor.range_min
+                and current_raw <= requested_raw < motor.range_min
+            )
+            if recoverable:
+                logger.warning(
+                    "clamped %s inward from raw command %d to calibrated endpoint %d "
+                    "while live encoder is %d",
+                    name,
+                    requested_raw,
+                    motor.range_min,
+                    current_raw,
+                )
+                return motor.range_min
+
+        # Preserve the canonical calibrated-range rejection and error text.
+        return motor.radians_to_raw(position)
+
     def write_joint_positions(
         self,
         positions: Mapping[str, float],
@@ -503,7 +561,11 @@ class FeetechBackend(SO101HardwareBackend):
             for name, position in positions.items():
                 if name not in ARM_JOINTS:
                     raise KeyError(name)
-                raw_positions[name] = calibration.motors[name].radians_to_raw(position)
+                raw_positions[name] = self._raw_joint_command_with_endpoint_recovery(
+                    name,
+                    position,
+                    calibration,
+                )
             self._write_raw_positions(
                 raw_positions,
                 speed_raw=speed_raw if speed_raw is not None else self.config.hardware_speed_raw,
