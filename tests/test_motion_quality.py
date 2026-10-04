@@ -9,7 +9,9 @@ from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion.quality import (
     command_sequence,
     load_jsonl,
+    analyze_teleop_frame_continuity,
     preflight_stream_commands,
+    repair_single_missing_teleop_frames,
     summarize_teleop_frames,
     teleop_frames,
     write_frame_extract,
@@ -105,3 +107,49 @@ def test_preflight_stream_commands_rejects_unsafe_start_step() -> None:
             max_joint_acceleration=100.0,
             limits={name: (-1.0, 1.0) for name in ARM_JOINTS},
         )
+
+
+def test_repair_single_missing_teleop_frame() -> None:
+    period = 0.05
+    first = _frame(10, 0)
+    first["sample"] = 10
+    first["leader_timestamp"] = 100.0
+    first["command_joints_rad"] = {name: 0.0 for name in ARM_JOINTS}
+    first["command_velocity_rad_s"] = {name: 0.0 for name in ARM_JOINTS}
+
+    third = _frame(12, 2)
+    third["sample"] = 12
+    third["leader_timestamp"] = 100.1
+    third["command_joints_rad"] = {name: 0.02 for name in ARM_JOINTS}
+    third["command_velocity_rad_s"] = {name: 0.2 for name in ARM_JOINTS}
+
+    before = analyze_teleop_frame_continuity([first, third], frequency_hz=20.0)
+    repaired, repairs = repair_single_missing_teleop_frames(
+        [first, third],
+        frequency_hz=20.0,
+    )
+    after = analyze_teleop_frame_continuity(repaired, frequency_hz=20.0)
+
+    assert before["gap_count"] == 1
+    assert repairs == [{"missing_sample": 11, "source_sample": 12}]
+    assert [frame["sample"] for frame in repaired] == [10, 11, 12]
+    assert repaired[1]["leader_timestamp"] == pytest.approx(100.1 - period)
+    assert repaired[1]["command_joints_rad"]["shoulder_pan"] == pytest.approx(0.01)
+    assert after["gap_count"] == 0
+    assert after["velocity_mismatch_count"] == 0
+
+
+def test_larger_teleop_gap_is_not_inferred() -> None:
+    first = _frame(20, 0)
+    first["sample"] = 20
+    second = _frame(23, 3)
+    second["sample"] = 23
+
+    repaired, repairs = repair_single_missing_teleop_frames(
+        [first, second],
+        frequency_hz=20.0,
+    )
+    continuity = analyze_teleop_frame_continuity(repaired, frequency_hz=20.0)
+
+    assert repairs == []
+    assert continuity["gap_count"] == 1
