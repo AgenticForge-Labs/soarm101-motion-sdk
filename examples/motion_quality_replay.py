@@ -16,9 +16,11 @@ from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS, DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
 from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.motion.quality import (
+    analyze_teleop_frame_continuity,
     command_sequence,
     load_jsonl,
     preflight_stream_commands,
+    repair_single_missing_teleop_frames,
     teleop_frames,
 )
 from soarm101_motion.workstation import WorkstationProfileStore
@@ -158,6 +160,28 @@ def main() -> int:
     frames = teleop_frames(load_jsonl(frames_path))
     if len(frames) < 5:
         raise RuntimeError("teleop reference has fewer than five frames")
+    frequency, _, _ = _recorded_timing(frames)
+    continuity_before = analyze_teleop_frame_continuity(
+        frames,
+        frequency_hz=frequency,
+    )
+    repaired_frames, repairs = repair_single_missing_teleop_frames(
+        frames,
+        frequency_hz=frequency,
+    )
+    continuity_after = analyze_teleop_frame_continuity(
+        repaired_frames,
+        frequency_hz=frequency,
+    )
+    if continuity_after["gap_count"]:
+        first_gap = continuity_after["gaps"][0]
+        raise RuntimeError(
+            "teleop capture is not one contiguous accepted-command stream after "
+            "isolated-gap repair: replay index "
+            f"{first_gap['replay_index']} jumps from original sample "
+            f"{first_gap['previous_sample']} to {first_gap['sample']}"
+        )
+    frames = repaired_frames
     commands = command_sequence(frames)
     frequency, offsets, timing_source = _recorded_timing(frames)
 
@@ -187,6 +211,13 @@ def main() -> int:
     print(f"Study: {study}")
     print(f"Frames: {len(frames)}")
     print(f"Recorded cadence: {frequency:.2f} Hz")
+    if continuity_before["gap_count"]:
+        print(
+            f"Captured stream gaps before repair: {continuity_before['gap_count']} "
+            f"(isolated frames reconstructed: {len(repairs)})"
+        )
+    else:
+        print("Captured teleop sample numbers are contiguous.")
     print("\nThe follower will first move under the normal guarded joint-motion primitive")
     print("to the FIRST recorded teleop arm pose. That pre-positioning move keeps the")
     print("normal joint/workspace/fault/effort/following-error checks active.")
@@ -206,6 +237,9 @@ def main() -> int:
         "timing_source": timing_source,
         "preposition_speed_deg_s": args.preposition_speed_deg_s,
         "preposition_acceleration_deg_s2": args.preposition_acceleration_deg_s2,
+        "continuity_before": continuity_before,
+        "continuity_after": continuity_after,
+        "reconstructed_frames": repairs,
     }
 
     try:
