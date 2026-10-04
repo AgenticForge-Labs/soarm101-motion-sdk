@@ -1,0 +1,21 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl git python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 10000 agent \
+    && useradd -m -u 10000 -g 10000 agent \
+    && mkdir -p /sandbox /opt/codex-install \
+    && chown -R 10000:10000 /sandbox /opt/codex-install
+
+ENV CODEX_INSTALL_DIR=/usr/local/bin
+ENV CODEX_HOME=/opt/codex-install
+ENV CODEX_NON_INTERACTIVE=1
+
+RUN curl -fsSL https://chatgpt.com/codex/install.sh | sh \
+    && codex --version
+
+WORKDIR /sandbox
+ENTRYPOINT []
+CMD []
+USER 10000:10000
