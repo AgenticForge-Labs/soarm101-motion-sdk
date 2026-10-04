@@ -34,7 +34,7 @@ class PassiveBackendTrace:
         self.path = Path(path).expanduser()
         self.metadata = dict(metadata or {})
         self._started = 0.0
-        self._handle: Any = None
+        self._events: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._originals: dict[str, Any] = {}
         self._last_command_raw: dict[str, int] | None = None
@@ -44,7 +44,7 @@ class PassiveBackendTrace:
 
     def __enter__(self) -> "PassiveBackendTrace":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._handle = self.path.open("w", encoding="utf-8", buffering=1)
+        self._events = []
         self._started = time.perf_counter()
         self._record(
             "trace_start",
@@ -74,9 +74,7 @@ class PassiveBackendTrace:
             for name, original in self._originals.items():
                 setattr(self.backend, name, original)
             self._originals.clear()
-            if self._handle is not None:
-                self._handle.close()
-                self._handle = None
+            self._flush()
 
     @property
     def summary(self) -> dict[str, int]:
@@ -97,17 +95,24 @@ class PassiveBackendTrace:
         setattr(self.backend, name, factory(original))
 
     def _record(self, event: str, **fields: Any) -> None:
-        if self._handle is None:
-            return
         payload = {
             "time_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "monotonic_s": time.perf_counter() - self._started,
             "event": event,
             **fields,
         }
-        line = json.dumps(payload, default=str, ensure_ascii=False)
         with self._lock:
-            self._handle.write(line + "\n")
+            self._events.append(payload)
+
+    def _flush(self) -> None:
+        events = list(self._events)
+        for payload in events:
+            joints = payload.get("joints_rad")
+            if isinstance(joints, Mapping):
+                payload["tcp_xyz_mm"] = self._tcp_xyz_mm(joints)
+        with self.path.open("w", encoding="utf-8") as handle:
+            for payload in events:
+                handle.write(json.dumps(payload, default=str, ensure_ascii=False) + "\n")
 
     def _raw_positions(self, positions: Mapping[str, float]) -> dict[str, int] | None:
         calibration = getattr(self.backend, "calibration", None)
@@ -174,7 +179,6 @@ class PassiveBackendTrace:
                     "command_error",
                     joints_rad=joints,
                     joints_raw=raw,
-                    tcp_xyz_mm=self._tcp_xyz_mm(joints),
                     requested_speed_raw=self._json_speed(speed_raw),
                     requested_acceleration_raw=acceleration_raw,
                     speed_raw=self._json_speed(effective_speed_raw),
@@ -191,7 +195,6 @@ class PassiveBackendTrace:
                 sequence=self._command_count,
                 joints_rad=joints,
                 joints_raw=raw,
-                tcp_xyz_mm=self._tcp_xyz_mm(joints),
                 requested_speed_raw=self._json_speed(speed_raw),
                 requested_acceleration_raw=acceleration_raw,
                 speed_raw=self._json_speed(effective_speed_raw),
@@ -214,7 +217,6 @@ class PassiveBackendTrace:
                 sequence=self._feedback_count,
                 joints_rad=joints,
                 joints_raw=self._raw_positions(joints),
-                tcp_xyz_mm=self._tcp_xyz_mm(joints),
                 call_ms=(time.perf_counter() - started) * 1000.0,
             )
             return result
