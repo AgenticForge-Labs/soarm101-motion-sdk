@@ -1492,11 +1492,13 @@ def _cmd_agent_sandbox_agents(args: argparse.Namespace) -> int:
 def _cmd_agent_sandbox_doctor(args: argparse.Namespace) -> int:
     from soarm101_motion.agent_sandbox import doctor
 
+    manifest = Path(args.adapter_manifest) if args.adapter_manifest else None
     result = doctor(
         agent=args.agent,
         auth=args.auth,
         image=args.image,
         provider=args.provider,
+        adapter_manifest=manifest,
     )
     payload = result.as_dict()
     if args.json:
@@ -1515,36 +1517,46 @@ def _cmd_agent_sandbox_doctor(args: argparse.Namespace) -> int:
 
 
 def _cmd_agent_sandbox_setup(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_adapters import resolve_agent_adapter
     from soarm101_motion.agent_sandbox import setup
 
+    manifest = Path(args.adapter_manifest) if args.adapter_manifest else None
+    adapter = resolve_agent_adapter(args.agent, manifest)
     setup(
-        agent=args.agent,
+        agent=adapter.name,
         auth=args.auth,
         image=args.image,
         provider=args.provider,
         reauth=args.reauth,
+        adapter_manifest=manifest,
     )
     auth_suffix = f" --auth {args.auth}" if args.auth else ""
+    manifest_suffix = (
+        f" --adapter-manifest {args.adapter_manifest}" if args.adapter_manifest else ""
+    )
     print(
-        f"SO-ARM101 {args.agent} agent sandbox setup complete. "
-        f"Run 'soarm101 agent sandbox doctor --agent {args.agent}{auth_suffix}' "
-        "to verify readiness."
+        f"SO-ARM101 {adapter.name} agent sandbox setup complete. "
+        f"Run 'soarm101 agent sandbox doctor --agent {adapter.name}{auth_suffix}"
+        f"{manifest_suffix}' to verify readiness."
     )
     return 0
 
 
 def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_adapters import resolve_agent_adapter
     from soarm101_motion.agent_sandbox import run_agent
 
+    manifest = Path(args.adapter_manifest) if args.adapter_manifest else None
+    adapter = resolve_agent_adapter(args.agent, manifest)
     output_dir = (
         Path(args.output)
         if args.output
         else Path("soarm101-agent-runs")
-        / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.agent}"
+        / f"{time.strftime('%Y%m%d-%H%M%S')}-{adapter.name}"
     )
     task = Path(args.task) if args.task else None
     result = run_agent(
-        agent=args.agent,
+        agent=adapter.name,
         auth=args.auth,
         task=task,
         output_dir=output_dir,
@@ -1555,6 +1567,7 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         max_turns=args.max_turns,
         timeout=args.timeout,
         read_only=args.read_only,
+        adapter_manifest=manifest,
     )
     payload = result.as_dict()
     print(json.dumps(payload, indent=2))
@@ -1882,18 +1895,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
 
-    from soarm101_motion.agent_adapters import agent_names, get_agent_adapter
+    from soarm101_motion.agent_adapters import agent_names
 
     sandbox_agent_choices = agent_names()
-    sandbox_auth_choices = tuple(
-        sorted(
-            {
-                mode
-                for name in sandbox_agent_choices
-                for mode in get_agent_adapter(name).auth_names()
-            }
-        )
-    )
 
     agent_sandbox_agents = agent_sandbox_sub.add_parser(
         "agents",
@@ -1908,13 +1912,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_sandbox_doctor.add_argument(
         "--agent",
-        choices=sandbox_agent_choices,
         default="hermes",
+        help="built-in agent name or the name declared by --adapter-manifest",
     )
     agent_sandbox_doctor.add_argument(
         "--auth",
-        choices=sandbox_auth_choices,
-        help="agent authentication mode; defaults to the selected agent's default",
+        help="agent authentication mode; defaults to the selected adapter's default",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--adapter-manifest",
+        help="JSON manifest for an external OpenShell-compatible CLI agent",
     )
     agent_sandbox_doctor.add_argument(
         "--image",
@@ -1933,16 +1940,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_sandbox_setup.add_argument(
         "--agent",
-        choices=sandbox_agent_choices,
         default="hermes",
+        help="built-in agent name or the name declared by --adapter-manifest",
     )
     agent_sandbox_setup.add_argument(
         "--auth",
-        choices=sandbox_auth_choices,
         help=(
             "agent authentication mode; normal Codex choices are api-key or installed; "
-            "chatgpt is an advanced separate device-login mode"
+            "chatgpt is an advanced separate device-login mode; external manifests default "
+            "to external"
         ),
+    )
+    agent_sandbox_setup.add_argument(
+        "--adapter-manifest",
+        help="JSON manifest for an external OpenShell-compatible CLI agent",
     )
     agent_sandbox_setup.add_argument("--image")
     agent_sandbox_setup.add_argument("--provider")
@@ -1962,16 +1973,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_sandbox_run.add_argument(
         "--agent",
-        choices=sandbox_agent_choices,
         default="hermes",
+        help="built-in agent name or the name declared by --adapter-manifest",
     )
     agent_sandbox_run.add_argument(
         "--auth",
-        choices=sandbox_auth_choices,
         help=(
             "agent authentication mode; normal Codex choices are api-key or installed; "
-            "chatgpt is an advanced separate device-login mode"
+            "chatgpt is an advanced separate device-login mode; external manifests default "
+            "to external"
         ),
+    )
+    agent_sandbox_run.add_argument(
+        "--adapter-manifest",
+        help="JSON manifest for an external OpenShell-compatible CLI agent",
     )
     agent_sandbox_run.add_argument(
         "--task",
