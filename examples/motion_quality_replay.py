@@ -51,7 +51,8 @@ def _latest_study() -> Path:
     )
     if not candidates:
         raise RuntimeError(
-            "no completed motion-quality-study-* folder with teleop-reference-frames.jsonl was found"
+            "no completed motion-quality-study-* folder with "
+            "teleop-reference-frames.jsonl was found"
         )
     return candidates[0]
 
@@ -81,11 +82,52 @@ def _recorded_timing(frames: list[dict[str, Any]]) -> tuple[float, list[float], 
         return frequency, offsets, "recorded_leader_timestamps"
 
     period = 1.0 / frequency
-    return frequency, [index * period for index in range(len(frames))], "fixed_nominal_frequency"
+    return (
+        frequency,
+        [index * period for index in range(len(frames))],
+        "fixed_nominal_frequency",
+    )
 
 
 def _max_delta(first: dict[str, float], second: dict[str, float]) -> float:
     return max(abs(first[name] - second[name]) for name in ARM_JOINTS)
+
+
+def _persist_result(
+    study: Path,
+    *,
+    result: dict[str, Any],
+    summary_path: Path,
+) -> tuple[Path, Path]:
+    summary_path.write_text(
+        json.dumps(result, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+    experiment_summary_path = study / "experiment-summary.json"
+    experiment_summary: dict[str, Any] = {}
+    if experiment_summary_path.exists():
+        try:
+            loaded = json.loads(experiment_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                experiment_summary = loaded
+        except Exception:
+            pass
+    experiment_summary["post_study_teleop_replay"] = result
+    experiment_summary_path.write_text(
+        json.dumps(experiment_summary, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+    archive = Path(
+        shutil.make_archive(
+            str(study),
+            "gztar",
+            root_dir=study.parent,
+            base_dir=study.name,
+        )
+    )
+    return experiment_summary_path, archive
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -172,7 +214,9 @@ def main() -> int:
             arm.hold()
             current = dict(arm.get_joint_positions().positions)
             first = commands[0]
-            result["initial_to_recorded_start_deg"] = math.degrees(_max_delta(current, first))
+            result["initial_to_recorded_start_deg"] = math.degrees(
+                _max_delta(current, first)
+            )
 
             with PassiveBackendTrace(
                 arm,
@@ -194,8 +238,9 @@ def main() -> int:
                     initial_delta_deg=result["initial_to_recorded_start_deg"],
                 )
                 print(
-                    f"Pre-positioning to first recorded arm pose "
-                    f"({result['initial_to_recorded_start_deg']:.2f} deg max joint delta)..."
+                    "Pre-positioning to first recorded arm pose "
+                    f"({result['initial_to_recorded_start_deg']:.2f} deg "
+                    "max joint delta)..."
                 )
                 preposition = arm.move_joints(
                     first,
@@ -224,16 +269,18 @@ def main() -> int:
                     result["status"] = "blocked_preposition_not_close_enough"
                     raise RuntimeError(
                         "pre-positioning completed but the measured follower is still "
-                        f"{math.degrees(arrival_delta):.2f} deg from the first recorded target; "
-                        f"replay requires <= {math.degrees(arrival_limit):.2f} deg"
+                        f"{math.degrees(arrival_delta):.2f} deg from the first recorded "
+                        f"target; replay requires <= {math.degrees(arrival_limit):.2f} deg"
                     )
 
                 limits = arm.get_joint_limits()
-                preflight = _preflight_stream(
+                preflight = preflight_stream_commands(
                     commands,
                     start=arrived,
                     frequency_hz=frequency,
-                    config=cfg,
+                    max_command_step_radians=cfg.max_command_step_radians,
+                    max_joint_speed=cfg.stream_joint_speed_limit,
+                    max_joint_acceleration=cfg.stream_joint_acceleration_limit,
                     limits=limits,
                 )
                 result["preflight"] = preflight
@@ -264,7 +311,6 @@ def main() -> int:
                 trace.mark("replay_end")
                 arm.hold()
                 result.update(trace.summary)
-
 
         result["status"] = "completed"
     except BaseException as exc:
