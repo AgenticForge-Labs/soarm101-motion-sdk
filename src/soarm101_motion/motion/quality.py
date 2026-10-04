@@ -301,6 +301,13 @@ def repair_single_missing_teleop_frames(
                 }
                 reconstructed = dict(frame)
                 reconstructed["sample"] = previous_sample + 1
+                if frame.get("leader_timestamp") is not None:
+                    reconstructed["leader_timestamp"] = (
+                        float(frame["leader_timestamp"]) - dt
+                    )
+                if frame.get("monotonic_s") is not None:
+                    reconstructed["monotonic_s"] = float(frame["monotonic_s"]) - dt
+                reconstructed["interval_ms"] = dt * 1000.0
                 reconstructed["command_joints_rad"] = reconstructed_command
                 reconstructed["reconstructed_for_replay"] = True
                 reconstructed["reconstruction_source_sample"] = sample
