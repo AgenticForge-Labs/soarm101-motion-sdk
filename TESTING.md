@@ -17,11 +17,15 @@ soarm101 agent sandbox run --agent codex --auth installed --read-only
 ```
 
 The packaged read-only task uses only capabilities/state/camera capture. It must work without
-`soarm101 agent arm`; the effective broker policy must contain no pose/joint/jog/gripper/
-Sleep/STOP routes. Verify the sandbox has no Motion SDK checkout, serial/camera devices,
-calibration files, Docker socket, or unrelated host credentials. Captures must be SHA-checked
-by `robotctl`, and the sandbox must be deleted after the run. Only after that gate should a
-supervised motion run begin.
+`soarm101 agent arm`; an absent authority lease blocks motion but must not stop read-only
+observation. The effective broker policy must contain no pose/joint/jog/gripper/Sleep/STOP
+routes. The SDK then requires post-handoff broker evidence for capabilities, state, and one
+successful capture of every configured camera, verifies downloaded image SHA-256 values
+against trusted capture events, rejects any broker-observed motion action, and writes
+`read-only-validation.json`. A zero harness exit without that evidence is a failed gate.
+Also verify the sandbox has no Motion SDK checkout, serial/camera devices, calibration files,
+Docker socket, or unrelated host credentials, and that the sandbox is deleted after the run.
+Only after that gate should a supervised motion run begin.
 
 ## Bounded agent CLI
 
