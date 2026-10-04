@@ -101,7 +101,9 @@ experiment distinguishes:
 - 20 Hz versus 50 Hz host cadence for the same generated route.
 
 Treat current/load as a second-pass diagnostic if the kinematic/timing evidence is
-insufficient, because extra effort polling can itself perturb serial timing. A
+insufficient, because extra effort polling can itself perturb serial timing. If the guided run's exact replay is skipped because the current follower pose is too far from the first captured command, finish conditions C/D and then run `bash scripts/run_motion_quality_replay.sh`. The post-study replay pre-positions to the first captured arm pose using ordinary guarded joint motion with full workspace checks, verifies measured arrival, preflights every captured command against active joint/step/speed/acceleration limits, and only then starts guarded exact streaming. Its trace, summary, and safety-refusal outcome are appended to the same study folder/archive.
+
+A
 single-final-target joint move remains a later discriminator for saved-pose motion; do not
 generalize that experiment to Cartesian `move_linear()`, where a single joint endpoint
 cannot guarantee the requested straight TCP path.
