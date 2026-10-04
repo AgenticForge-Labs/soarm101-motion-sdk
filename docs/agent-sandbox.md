@@ -387,9 +387,11 @@ sandbox-cleanup-error.txt
 ```
 
 Broker capture evidence contains trusted image SHA-256 values. `robotctl.py` verifies those
-hashes before writing image bytes into the sandbox. The requested/effective OpenShell policy
-and redacted OpenShell logs remain inspectable after the run. The per-run broker token is
-redacted from retained logs.
+hashes before writing image bytes into the sandbox. OpenShell directory downloads place the
+sandbox observation-directory contents into the explicit host destination, so the runner
+always downloads `/sandbox/observations` to the retained run's `observations/` directory
+before SHA verification. The requested/effective OpenShell policy and redacted OpenShell logs
+remain inspectable after the run. The per-run broker token is redacted from retained logs.
 
 SDK-selected uploads use `--no-git-ignore`, so repository ignore rules cannot silently drop
 TASK/SKILL/client/config inputs.
