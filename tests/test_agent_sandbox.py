@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -249,9 +250,11 @@ def test_packaged_agent_assets_are_available_and_agent_specific() -> None:
     assert inert_cmd in agent_sandbox.dockerfile_text(agent="codex")
     assert "CMD []" not in agent_sandbox.dockerfile_text(agent="hermes")
     assert "CMD []" not in agent_sandbox.dockerfile_text(agent="codex")
-    assert "Validate the isolated SO-ARM101 agent environment" in (
-        agent_sandbox.read_only_validation_task_text()
-    )
+    read_only_task = agent_sandbox.read_only_validation_task_text()
+    assert "Validate the isolated SO-ARM101 agent environment" in read_only_task
+    assert "capture every configured camera" in read_only_task
+    assert "authority.armed" in read_only_task
+    assert "vision_analyze" not in read_only_task
 
     hermes_profile = agent_sandbox.provider_profile_text(agent="hermes")
     assert "id: soarm101-hermes-openrouter" in hermes_profile
@@ -298,6 +301,8 @@ def test_packaged_agent_assets_are_available_and_agent_specific() -> None:
 
     for skill in (hermes_skill, codex_skill):
         assert "python3 robotctl.py capabilities" in skill
+        assert "continue observation-only work" in skill
+        assert "motion cannot continue" in skill
         assert "soarm101 agent arm" not in skill
         assert "soarm101 agent go-pose" not in skill
 
@@ -704,6 +709,17 @@ def test_read_only_run_skips_human_authority_and_omits_motion_routes(
             }
 
     monkeypatch.setattr(agent_sandbox, "BrokerProcess", ReadOnlyBroker)
+    validation_calls: list[dict[str, object]] = []
+
+    def fake_validate_read_only_evidence(**kwargs):
+        validation_calls.append(dict(kwargs))
+        return {"status": "passed"}
+
+    monkeypatch.setattr(
+        agent_sandbox,
+        "_validate_read_only_evidence",
+        fake_validate_read_only_evidence,
+    )
     monkeypatch.setattr(
         agent_sandbox,
         "doctor",
@@ -741,6 +757,90 @@ def test_read_only_run_skips_human_authority_and_omits_motion_routes(
     hermes_call = fake.exec_calls[-1]
     prompt = hermes_call["command"][hermes_call["command"].index("-q") + 1]
     assert "hard read-only validation run" in prompt
+    assert "Motion authority is not expected or required" in prompt
+    assert len(validation_calls) == 1
+    assert validation_calls[0]["capabilities"] == {
+        "authority": {"armed": False},
+        "cameras": ["overhead"],
+    }
+
+
+def test_read_only_evidence_requires_broker_primitives_and_verified_capture(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "run"
+    observations = output / "observations"
+    observations.mkdir(parents=True)
+    image = b"synthetic-jpeg-bytes"
+    image_path = observations / "overhead.jpg"
+    image_path.write_bytes(image)
+    digest = hashlib.sha256(image).hexdigest()
+
+    events = tmp_path / "broker-events.jsonl"
+    payloads = [
+        {"action": "capabilities", "ok": True, "request": {}, "result": {}},
+        {"action": "state", "ok": True, "request": {}, "result": {}},
+        {
+            "action": "capture",
+            "ok": True,
+            "request": {"camera": "overhead"},
+            "result": {"sha256": digest},
+        },
+    ]
+    events.write_text(
+        "".join(json.dumps(payload) + "\n" for payload in payloads),
+        encoding="utf-8",
+    )
+
+    validation = agent_sandbox._validate_read_only_evidence(
+        capabilities={"cameras": ["overhead"]},
+        broker_events=events,
+        event_offset=0,
+        output_dir=output,
+        agent_exit_code=0,
+    )
+
+    assert validation["status"] == "passed"
+    assert validation["missing_actions"] == []
+    assert validation["missing_capture_cameras"] == []
+    assert validation["unverified_capture_cameras"] == []
+    saved = json.loads(
+        (output / "read-only-validation.json").read_text(encoding="utf-8")
+    )
+    assert saved["observation_sha256"]["observations/overhead.jpg"] == digest
+
+
+def test_read_only_evidence_fails_when_required_capture_is_missing(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "run"
+    output.mkdir()
+    events = tmp_path / "broker-events.jsonl"
+    payloads = [
+        {"action": "capabilities", "ok": True, "request": {}, "result": {}},
+        {"action": "state", "ok": True, "request": {}, "result": {}},
+    ]
+    events.write_text(
+        "".join(json.dumps(payload) + "\n" for payload in payloads),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        agent_sandbox.AgentSandboxError,
+        match="missing_capture_cameras=\\['overhead'\\]",
+    ):
+        agent_sandbox._validate_read_only_evidence(
+            capabilities={"cameras": ["overhead"]},
+            broker_events=events,
+            event_offset=0,
+            output_dir=output,
+            agent_exit_code=0,
+        )
+    saved = json.loads(
+        (output / "read-only-validation.json").read_text(encoding="utf-8")
+    )
+    assert saved["status"] == "failed"
+
 
 def test_run_requires_human_authority_before_agent_execution(
     tmp_path: Path,
