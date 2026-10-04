@@ -28,6 +28,8 @@ For visual claims, acquire a fresh named-camera capture and inspect the saved sa
 with whatever local image-inspection capability your harness provides. If the harness cannot
 inspect local images, say so rather than guessing from filenames or task text.
 
-Human arming and torque release remain outside the sandbox. Do not claim success from a
+Human arming and torque release remain outside the sandbox. Read-only capabilities,
+state, and named-camera capture do not require motion authority; if authority is absent,
+continue observation-only work but do not request motion. Do not claim success from a
 command request alone; use returned completion/state and fresh observations when the task
 requires physical confirmation.
