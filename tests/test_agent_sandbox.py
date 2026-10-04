@@ -8,6 +8,7 @@ import pytest
 
 from soarm101_motion import agent_sandbox
 from soarm101_motion.agent_adapters import get_agent_adapter
+from soarm101_motion.agent_adapters import load_agent_adapter_manifest
 from soarm101_motion.cli.main import build_parser
 
 
@@ -1154,3 +1155,164 @@ def test_cleanup_failure_invalidates_otherwise_successful_run(
             openshell=fake,
         )
     assert (tmp_path / "run" / "sandbox-cleanup-error.txt").is_file()
+
+
+def _write_external_adapter_manifest(
+    tmp_path: Path,
+    *,
+    provider: str | None = None,
+    command: list[str] | None = None,
+) -> Path:
+    manifest = tmp_path / "external-agent.json"
+    payload = {
+        "schema_version": 1,
+        "name": "claude",
+        "image": "openshell/base",
+        "command": command or ["claude", "-p", "{prompt}"],
+        "version_command": ["claude", "--version"],
+        "robot_client_binaries": ["/usr/bin/python3*"],
+        "read_only_paths": ["/usr/local/bin/claude"],
+        "mutable_directories": [
+            "/sandbox/.home",
+            "/sandbox/.xdg-config",
+            "/sandbox/observations",
+        ],
+        "environment": {"CLAUDE_CONFIG_DIR": "/sandbox/.home/.claude"},
+    }
+    if provider is not None:
+        payload["provider"] = provider
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    return manifest
+
+
+def test_external_adapter_manifest_uses_direct_argv_and_generic_skill(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_external_adapter_manifest(
+        tmp_path,
+        command=["claude", "-p", "{prompt}", "--model", "{model}", "--turns", "{max_turns}"],
+    )
+    adapter = load_agent_adapter_manifest(manifest)
+
+    assert adapter.name == "claude"
+    assert adapter.managed_setup is False
+    assert adapter.auth_names() == ("external",)
+    assert adapter.command(
+        prompt="Inspect safely.",
+        model="example-model",
+        max_turns=7,
+    ) == [
+        "claude",
+        "-p",
+        "Inspect safely.",
+        "--model",
+        "example-model",
+        "--turns",
+        "7",
+    ]
+    assert adapter.version_command() == ["claude", "--version"]
+    assert "robotctl.py" in adapter.skill_text()
+    assert adapter.environment()["CLAUDE_CONFIG_DIR"] == "/sandbox/.home/.claude"
+
+
+def test_external_adapter_manifest_rejects_shell_style_placeholder_interpolation(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_external_adapter_manifest(
+        tmp_path,
+        command=["claude", "--prompt={prompt}"],
+    )
+    with pytest.raises(ValueError, match="standalone .*prompt.* token"):
+        load_agent_adapter_manifest(manifest)
+
+
+def test_external_adapter_policy_and_setup_use_existing_openshell_resources(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_external_adapter_manifest(tmp_path, provider="work-claude")
+    fake = FakeOpenShell()
+
+    policy = agent_sandbox.broker_policy_text(
+        agent="claude",
+        adapter_manifest=manifest,
+        read_only=True,
+    )
+    assert "/usr/bin/python3*" in policy
+    assert "/v1/capture" in policy
+    assert "/v1/go-pose" not in policy
+
+    result = agent_sandbox.doctor(
+        agent="claude",
+        adapter_manifest=manifest,
+        openshell=fake,
+    )
+    assert result.ready is True
+    assert result.details["docker"] == "not required for external OpenShell adapter"
+    assert ("provider", "get", "work-claude") in fake.calls
+
+    fake.calls.clear()
+    agent_sandbox.setup(
+        agent="claude",
+        adapter_manifest=manifest,
+        openshell=fake,
+    )
+    assert fake.calls == [
+        ("status",),
+        ("provider", "get", "work-claude"),
+    ]
+
+
+def test_external_adapter_runs_through_shared_broker_and_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _write_external_adapter_manifest(tmp_path)
+    task = tmp_path / "TASK.md"
+    task.write_text("Inspect safely.\n", encoding="utf-8")
+    fake = FakeOpenShell()
+    FakeBroker.instances.clear()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+
+    result = agent_sandbox.run_agent(
+        agent="claude",
+        adapter_manifest=manifest,
+        task=task,
+        output_dir=tmp_path / "run-external",
+        openshell=fake,
+    )
+
+    assert result.exit_code == 0
+    assert result.agent == "claude"
+    assert result.auth == "external"
+    assert fake.created is not None
+    assert fake.created["image"] == "openshell/base"
+    assert fake.created["provider"] is None
+    harness_calls = [
+        call for call in fake.exec_calls
+        if call["command"] and call["command"][0] == "claude"
+    ]
+    assert len(harness_calls) >= 2
+    run_call = harness_calls[-1]
+    assert run_call["command"][0:2] == ("claude", "-p")
+    assert "Read TASK.md and SKILL.md completely before acting." in run_call["command"][-1]
+    assert run_call["env"]["SOARM101_BROKER_TOKEN"]
+    assert fake.deleted == [result.sandbox]
+    assert FakeBroker.instances[-1].stopped is True
+
+
+def test_sandbox_cli_accepts_manifest_defined_agent_name(tmp_path: Path) -> None:
+    manifest = _write_external_adapter_manifest(tmp_path)
+    args = build_parser().parse_args(
+        [
+            "agent",
+            "sandbox",
+            "run",
+            "--agent",
+            "claude",
+            "--adapter-manifest",
+            str(manifest),
+            "--read-only",
+        ]
+    )
+    assert args.agent == "claude"
+    assert args.adapter_manifest == str(manifest)
