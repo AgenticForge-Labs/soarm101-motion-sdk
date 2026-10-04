@@ -59,6 +59,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--speed-deg-s", type=float, default=8.0)
     parser.add_argument("--acceleration-deg-s2", type=float, default=25.0)
     parser.add_argument(
+        "--command-frequency-hz",
+        type=float,
+        default=50.0,
+        help="host planned-motion command cadence",
+    )
+    parser.add_argument(
         "--pause-s",
         type=float,
         default=0.5,
@@ -74,6 +80,8 @@ def main() -> int:
         raise ValueError("--speed-deg-s must be positive and finite")
     if not math.isfinite(args.acceleration_deg_s2) or args.acceleration_deg_s2 <= 0:
         raise ValueError("--acceleration-deg-s2 must be positive and finite")
+    if not math.isfinite(args.command_frequency_hz) or args.command_frequency_hz <= 0:
+        raise ValueError("--command-frequency-hz must be positive and finite")
     if not math.isfinite(args.pause_s) or args.pause_s < 0:
         raise ValueError("--pause-s must be finite and non-negative")
 
@@ -95,6 +103,7 @@ def main() -> int:
         robot_id=robot_id,
         configure_motors_on_connect=False,
         disable_torque_on_disconnect=False,
+        command_frequency_hz=args.command_frequency_hz,
     )
     library = PoseLibrary(robot_id)
     pose_names = {
@@ -108,7 +117,8 @@ def main() -> int:
     print(f"Robot ID: {robot_id}")
     print(
         f"Program: Sleep -> Overhead -> Left -> Right -> Sleep "
-        f"at {args.speed_deg_s:g} deg/s, {args.acceleration_deg_s2:g} deg/s^2"
+        f"at {args.speed_deg_s:g} deg/s, {args.acceleration_deg_s2:g} deg/s^2, "
+        f"{args.command_frequency_hz:g} Hz"
     )
     print(f"Trace: {output}")
 
