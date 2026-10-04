@@ -6,6 +6,8 @@ container, provider/auth, mutable-home, prompt/tool conventions, and command con
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -50,6 +52,7 @@ class AgentAdapter:
     auth_modes: tuple[AgentAuthMode, ...]
     default_auth: str
     sensitive_destinations: tuple[str, ...] = ()
+    managed_setup: bool = True
 
     def dockerfile_text(self) -> str:
         return _asset_text(self.dockerfile_asset)
@@ -304,6 +307,224 @@ class CodexAgentAdapter(AgentAdapter):
             command.extend(("--model", chosen_model))
         command.append(prompt)
         return command
+
+
+
+_MANIFEST_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_MANIFEST_PLACEHOLDERS = {
+    "{prompt}",
+    "{model}",
+    "{max_turns}",
+    "{task_path}",
+    "{skill_path}",
+}
+
+
+def _manifest_string_list(
+    payload: Mapping[str, object],
+    key: str,
+    *,
+    required: bool = False,
+) -> tuple[str, ...]:
+    raw = payload.get(key)
+    if raw is None:
+        if required:
+            raise ValueError(f"adapter manifest field {key!r} is required")
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item for item in raw):
+        raise ValueError(f"adapter manifest field {key!r} must be a list of non-empty strings")
+    return tuple(raw)
+
+
+def _validate_sandbox_path(path: str, *, field: str) -> str:
+    candidate = str(path).strip()
+    if not candidate.startswith("/") or "/../" in candidate or candidate.endswith("/.."):
+        raise ValueError(f"adapter manifest {field} entries must be absolute sandbox paths")
+    return candidate
+
+
+@dataclass(frozen=True)
+class ManifestAgentAdapter(AgentAdapter):
+    """Declarative adapter for an arbitrary CLI harness already supported by OpenShell."""
+
+    command_argv: tuple[str, ...] = ()
+    version_argv: tuple[str, ...] = ()
+    static_environment: tuple[tuple[str, str], ...] = ()
+    skill_body: str | None = None
+
+    def dockerfile_text(self) -> str:
+        raise ValueError(
+            f"external adapter {self.name!r} uses an OpenShell image directly and has no "
+            "SDK-managed Dockerfile"
+        )
+
+    def skill_text(self) -> str:
+        return self.skill_body or _asset_text("robot-camera-generic-skill.md")
+
+    def environment(self, *, auth: str | None = None) -> dict[str, str]:
+        self.auth_mode(auth)
+        return {
+            **super().environment(),
+            **dict(self.static_environment),
+        }
+
+    def version_command(self) -> list[str]:
+        return list(self.version_argv)
+
+    def command(
+        self,
+        *,
+        prompt: str,
+        model: str | None,
+        max_turns: int,
+        auth: str | None = None,
+    ) -> list[str]:
+        self.auth_mode(auth)
+        values: dict[str, str | None] = {
+            "{prompt}": prompt,
+            "{model}": model or self.default_model,
+            "{max_turns}": str(int(max_turns)),
+            "{task_path}": "/sandbox/TASK.md",
+            "{skill_path}": "/sandbox/SKILL.md",
+        }
+        command: list[str] = []
+        for token in self.command_argv:
+            if token in _MANIFEST_PLACEHOLDERS:
+                value = values[token]
+                if value is None:
+                    raise ValueError(
+                        f"external adapter {self.name!r} command requires {token} "
+                        "but no value was supplied"
+                    )
+                command.append(value)
+            elif "{" in token or "}" in token:
+                raise ValueError(
+                    "adapter manifest command placeholders must occupy a complete argv token"
+                )
+            else:
+                command.append(token)
+        return command
+
+
+def load_agent_adapter_manifest(path: str | Path) -> ManifestAgentAdapter:
+    """Load one external OpenShell harness adapter from a deterministic JSON manifest."""
+
+    manifest_path = Path(path).expanduser().resolve()
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"cannot read adapter manifest {manifest_path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"adapter manifest is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("adapter manifest JSON root must be an object")
+    if payload.get("schema_version") != 1:
+        raise ValueError("adapter manifest schema_version must be 1")
+
+    name = str(payload.get("name", "")).strip().lower()
+    if not _MANIFEST_NAME_RE.fullmatch(name):
+        raise ValueError(
+            "adapter manifest name must match [a-z0-9][a-z0-9._-]{0,63}"
+        )
+    image = str(payload.get("image", "")).strip()
+    if not image:
+        raise ValueError("adapter manifest field 'image' is required")
+
+    command_argv = _manifest_string_list(payload, "command", required=True)
+    if "{prompt}" not in command_argv:
+        raise ValueError("adapter manifest command must include a standalone {prompt} token")
+    for token in command_argv:
+        if ("{" in token or "}" in token) and token not in _MANIFEST_PLACEHOLDERS:
+            raise ValueError(f"unsupported adapter manifest command placeholder {token!r}")
+
+    version_argv = _manifest_string_list(payload, "version_command", required=True)
+    robot_binaries = tuple(
+        _validate_sandbox_path(value, field="robot_client_binaries")
+        for value in _manifest_string_list(payload, "robot_client_binaries", required=True)
+    )
+    read_only_paths = tuple(
+        _validate_sandbox_path(value, field="read_only_paths")
+        for value in _manifest_string_list(payload, "read_only_paths")
+    )
+    mutable_directories_raw = _manifest_string_list(payload, "mutable_directories")
+    mutable_directories = tuple(
+        _validate_sandbox_path(value, field="mutable_directories")
+        for value in (
+            mutable_directories_raw
+            or (
+                "/sandbox/.home",
+                "/sandbox/.xdg-config",
+                "/sandbox/observations",
+            )
+        )
+    )
+
+    raw_environment = payload.get("environment", {})
+    if not isinstance(raw_environment, dict) or not all(
+        isinstance(key, str) and key and isinstance(value, str)
+        for key, value in raw_environment.items()
+    ):
+        raise ValueError("adapter manifest environment must map non-empty strings to strings")
+
+    provider_raw = payload.get("provider")
+    provider = None if provider_raw is None else str(provider_raw).strip() or None
+    default_model_raw = payload.get("default_model")
+    default_model = (
+        None if default_model_raw is None else str(default_model_raw).strip() or None
+    )
+
+    skill_body: str | None = None
+    skill_file_raw = payload.get("skill_file")
+    if skill_file_raw is not None:
+        skill_path = (manifest_path.parent / str(skill_file_raw)).resolve()
+        try:
+            skill_body = skill_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"cannot read adapter skill file {skill_path}: {exc}") from exc
+
+    auth_mode = AgentAuthMode(
+        name="external",
+        provider=provider,
+        provider_profile_id=None,
+        provider_profile_asset=None,
+        credential_env_vars=(),
+    )
+    return ManifestAgentAdapter(
+        name=name,
+        image=image,
+        dockerfile_asset="",
+        skill_asset="robot-camera-generic-skill.md",
+        default_model=default_model,
+        run_user=str(payload.get("run_user", "10000")),
+        run_group=str(payload.get("run_group", "10000")),
+        read_only_paths=read_only_paths,
+        robot_client_binaries=robot_binaries,
+        mutable_directories=mutable_directories,
+        auth_modes=(auth_mode,),
+        default_auth="external",
+        managed_setup=False,
+        command_argv=command_argv,
+        version_argv=version_argv,
+        static_environment=tuple(sorted(raw_environment.items())),
+        skill_body=skill_body,
+    )
+
+
+def resolve_agent_adapter(
+    name: str,
+    manifest_path: str | Path | None = None,
+) -> AgentAdapter:
+    """Resolve a built-in adapter or an explicit external OpenShell adapter manifest."""
+
+    if manifest_path is None:
+        return get_agent_adapter(name)
+    adapter = load_agent_adapter_manifest(manifest_path)
+    requested = str(name).strip().lower()
+    if requested != adapter.name:
+        raise ValueError(
+            f"--agent {requested!r} does not match adapter manifest name {adapter.name!r}"
+        )
+    return adapter
 
 
 HERMES_OPENROUTER = AgentAuthMode(
