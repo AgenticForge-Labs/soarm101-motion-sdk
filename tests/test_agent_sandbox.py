@@ -1222,7 +1222,7 @@ def test_external_adapter_manifest_rejects_shell_style_placeholder_interpolation
         tmp_path,
         command=["claude", "--prompt={prompt}"],
     )
-    with pytest.raises(ValueError, match="standalone .*prompt.* token"):
+    with pytest.raises(ValueError, match="unsupported adapter manifest command placeholder"):
         load_agent_adapter_manifest(manifest)
 
 
@@ -1316,3 +1316,21 @@ def test_sandbox_cli_accepts_manifest_defined_agent_name(tmp_path: Path) -> None
     )
     assert args.agent == "claude"
     assert args.adapter_manifest == str(manifest)
+
+
+def test_external_adapter_manifest_rejects_shell_and_broker_env_override(
+    tmp_path: Path,
+) -> None:
+    shell_manifest = _write_external_adapter_manifest(
+        tmp_path,
+        command=["/bin/sh", "-c", "{prompt}"],
+    )
+    with pytest.raises(ValueError, match="directly, not a shell"):
+        load_agent_adapter_manifest(shell_manifest)
+
+    payload = json.loads(shell_manifest.read_text(encoding="utf-8"))
+    payload["command"] = ["claude", "-p", "{prompt}"]
+    payload["environment"] = {"SOARM101_BROKER_TOKEN": "override"}
+    shell_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="broker-controlled variables"):
+        load_agent_adapter_manifest(shell_manifest)
