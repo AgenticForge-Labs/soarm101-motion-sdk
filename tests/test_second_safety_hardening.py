@@ -8,6 +8,8 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from soarm101_motion import Pose, SOARM101, SOARM101Config
+from soarm101_motion.calibration import MotorCalibration, SO101Calibration
+from soarm101_motion.constants import ARM_JOINTS, MOTOR_IDS
 from soarm101_motion.exceptions import (
     CommunicationError,
     InvalidCommandError,
@@ -68,6 +70,53 @@ def test_calibrated_joint_resolver_rejects_range_smaller_than_stop_margin() -> N
             calibrated_joint_stop_margin_rad=np.deg2rad(1.0),
         )
 
+
+
+def _calibrated_simulation_arm() -> SOARM101:
+    backend = SimulationBackend(realtime=False)
+    backend.calibration = SO101Calibration(
+        motors={
+            name: MotorCalibration(
+                MOTOR_IDS[name],
+                0,
+                0,
+                942,
+                3150,
+            )
+            for name in ARM_JOINTS
+        }
+    )
+    return SOARM101(
+        SOARM101Config(enable_workspace_checks=False),
+        backend=backend,
+    )
+
+
+def test_saved_pose_endpoint_measurement_is_projected_to_executable_margin() -> None:
+    arm = _calibrated_simulation_arm()
+    with arm:
+        motor = arm.backend.calibration.motors["elbow_flex"]
+        measured = {name: 0.0 for name in ARM_JOINTS}
+        measured["elbow_flex"] = motor.raw_to_radians(motor.range_max + 1)
+
+        _current, target, canonical = arm._canonicalize_saved_pose_target(measured)
+
+        expected_upper = (
+            motor.radians_limits[1] - arm.config.calibrated_joint_stop_margin_rad
+        )
+        assert canonical["elbow_flex"] == pytest.approx(expected_upper)
+        assert target["elbow_flex"] == pytest.approx(expected_upper)
+
+
+def test_saved_pose_far_beyond_measured_calibration_still_fails_closed() -> None:
+    arm = _calibrated_simulation_arm()
+    with arm:
+        motor = arm.backend.calibration.motors["elbow_flex"]
+        measured = {name: 0.0 for name in ARM_JOINTS}
+        measured["elbow_flex"] = motor.raw_to_radians(motor.range_max + 9)
+
+        with pytest.raises(SafetyViolationError, match="beyond the 8-tick endpoint tolerance"):
+            arm._canonicalize_saved_pose_target(measured)
 
 
 class FailingWriteBackend(SimulationBackend):
