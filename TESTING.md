@@ -57,6 +57,30 @@ already green at that head.
   follower.
 - The real arm was deliberately not driven near the floor merely to exercise the floor guard.
   Automated policy tests cover rejection of targets entering the configured margin.
+### Teleop versus programmed-motion trace protocol
+
+Before changing PID, command cadence, or trajectory shape again, compare the known-smoother
+leader/follower teleoperation path with the same approximate slow route under programmed
+saved-pose motion.
+
+1. Run the GUI from the exact PR/commit being evaluated and teleoperate the follower slowly
+   through approximately Sleep -> Overhead -> Left -> Right -> Sleep. Detailed teleop logging
+   is enabled by default. Preserve the resulting `~/.local/state/soarm101/gui/session-*.jsonl`;
+   `teleop_frame` records leader joints, desired/limited command, command velocity, follower
+   actual joints, following error, sample interval/age, processing time, raw encoder
+   command/actual values, and the effective 0/254 teleop servo profile.
+2. Run `python examples/motion_quality_trace.py --speed-deg-s 8 --acceleration-deg-s2 25`.
+   It executes the same saved-pose route automatically with no ENTER prompts and writes a
+   passive program trace under `~/soarm-motion-tests/`. The tracer wraps only backend calls
+   the SDK already makes; it adds no motion-time hardware reads.
+3. Compare command intervals, raw encoder increments, command-versus-feedback lag, TCP motion,
+   and whether shake aligns with low raw-step rates or with repeated point-to-point writes.
+   Treat current/load as a second-pass diagnostic if kinematic/timing evidence is insufficient,
+   because extra motor-effort polling can itself perturb serial timing.
+
+After those two traces are captured, a single-final-target joint move is a useful third
+comparison for saved-pose motion. Do not generalize that experiment to Cartesian `move_linear()`:
+a single joint endpoint cannot guarantee the requested straight TCP path.
 ### Slow-speed motion diagnostic record — 2026-10-04
 
 A supervised saved-pose A/B/C comparison on current `main` used the same host-planned joint
