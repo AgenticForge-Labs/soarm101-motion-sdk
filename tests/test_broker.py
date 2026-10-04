@@ -92,6 +92,7 @@ def test_broker_capture_returns_image_bytes_and_sha(tmp_path: Path) -> None:
                 "timestamp": 1.0,
                 "width": 10,
                 "height": 10,
+                "device": "/dev/v4l/by-id/test-camera-video-index0",
             }
         }
     )
@@ -108,6 +109,7 @@ def test_broker_capture_returns_image_bytes_and_sha(tmp_path: Path) -> None:
     assert base64.b64decode(result["image_base64"]) == image_bytes
     assert result["sha256"] == hashlib.sha256(image_bytes).hexdigest()
     assert "path" not in result
+    assert "device" not in result
 
     events = [
         json.loads(line)
@@ -115,11 +117,13 @@ def test_broker_capture_returns_image_bytes_and_sha(tmp_path: Path) -> None:
     ]
     assert events[0]["action"] == "capture"
     assert events[0]["ok"] is True
+    assert events[0]["result"]["device"] == "/dev/v4l/by-id/test-camera-video-index0"
     assert "image_base64" not in events[0]["result"]
     assert events[1]["action"] == "capture_evidence"
     assert events[1]["request_id"] == events[0]["request_id"]
     assert events[1]["result"]["sha256"] == hashlib.sha256(image_bytes).hexdigest()
     assert events[1]["result"]["host_path"] == str(image_path)
+    assert events[1]["result"]["device"] == "/dev/v4l/by-id/test-camera-video-index0"
     assert "image_base64" not in events[1]["result"]
 
 
