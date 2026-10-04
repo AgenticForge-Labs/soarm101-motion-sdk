@@ -178,6 +178,108 @@ def write_frame_extract(frames: list[dict[str, Any]], path: str | Path) -> Path:
     return output
 
 
+def analyze_teleop_frame_continuity(
+    frames: list[dict[str, Any]],
+    *,
+    frequency_hz: float,
+) -> dict[str, Any]:
+    """Check that captured teleop frames form one complete accepted stream.
+
+    Live teleop assigns a monotonically increasing sample number for every accepted
+    command and records the limiter's command velocity. Exact replay is only valid
+    across adjacent recorded samples; a missing/restarted sample must never be
+    silently interpreted as one larger 20 Hz command step.
+    """
+    if not frames:
+        raise ValueError("teleop trace contains no frames")
+    if not math.isfinite(frequency_hz) or frequency_hz <= 0:
+        raise ValueError("frequency_hz must be positive and finite")
+
+    gaps: list[dict[str, int]] = []
+    velocity_mismatches: list[dict[str, Any]] = []
+    dt = 1.0 / frequency_hz
+
+    previous_frame: dict[str, Any] | None = None
+    for replay_index, frame in enumerate(frames, start=1):
+        sample_value = frame.get("sample")
+        if not isinstance(sample_value, int):
+            raise ValueError(f"teleop replay frame {replay_index} has no integer sample number")
+
+        if previous_frame is not None:
+            previous_sample = int(previous_frame["sample"])
+            if sample_value != previous_sample + 1:
+                gaps.append(
+                    {
+                        "replay_index": replay_index,
+                        "previous_sample": previous_sample,
+                        "sample": sample_value,
+                    }
+                )
+            previous_command = previous_frame.get("command_joints_rad")
+            command = frame.get("command_joints_rad")
+            recorded_velocity = frame.get("command_velocity_rad_s")
+            if (
+                isinstance(previous_command, dict)
+                and isinstance(command, dict)
+                and isinstance(recorded_velocity, dict)
+                and all(name in previous_command for name in ARM_JOINTS)
+                and all(name in command for name in ARM_JOINTS)
+                and all(name in recorded_velocity for name in ARM_JOINTS)
+            ):
+                worst_joint = None
+                worst_error = 0.0
+                for name in ARM_JOINTS:
+                    derived = (
+                        float(command[name]) - float(previous_command[name])
+                    ) / dt
+                    error = abs(derived - float(recorded_velocity[name]))
+                    if error > worst_error:
+                        worst_error = error
+                        worst_joint = name
+                if worst_error > 1e-6:
+                    velocity_mismatches.append(
+                        {
+                            "replay_index": replay_index,
+                            "sample": sample_value,
+                            "joint": worst_joint,
+                            "error_rad_s": worst_error,
+                        }
+                    )
+        previous_frame = frame
+
+    return {
+        "frame_count": len(frames),
+        "first_sample": int(frames[0]["sample"]),
+        "last_sample": int(frames[-1]["sample"]),
+        "gap_count": len(gaps),
+        "gaps": gaps,
+        "velocity_mismatch_count": len(velocity_mismatches),
+        "velocity_mismatches": velocity_mismatches[:20],
+    }
+
+
+def contiguous_teleop_segments(
+    frames: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Split captured frames at teleop sample gaps/restarts."""
+    if not frames:
+        return []
+    segments: list[list[dict[str, Any]]] = [[frames[0]]]
+    for frame in frames[1:]:
+        previous = segments[-1][-1]
+        previous_sample = previous.get("sample")
+        sample = frame.get("sample")
+        if (
+            isinstance(previous_sample, int)
+            and isinstance(sample, int)
+            and sample == previous_sample + 1
+        ):
+            segments[-1].append(frame)
+        else:
+            segments.append([frame])
+    return segments
+
+
 def preflight_stream_commands(
     commands: list[dict[str, float]],
     *,
