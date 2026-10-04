@@ -11,6 +11,7 @@ from soarm101_motion.motion.quality import (
     load_jsonl,
     analyze_teleop_frame_continuity,
     preflight_stream_commands,
+    recorded_teleop_settings,
     repair_single_missing_teleop_frames,
     summarize_teleop_frames,
     teleop_frames,
@@ -153,3 +154,33 @@ def test_larger_teleop_gap_is_not_inferred() -> None:
 
     assert repairs == []
     assert continuity["gap_count"] == 1
+
+
+def test_recorded_teleop_settings_uses_latest_session_values() -> None:
+    rows = [
+        {"event": "session_start"},
+        {
+            "event": "teleop_settings",
+            "max_joint_speed_rad_s": 1.0,
+            "max_joint_acceleration_rad_s2": 5.0,
+            "max_command_step_rad": 0.10,
+            "following_error_limit_rad": 0.20,
+        },
+        {
+            "event": "teleop_settings",
+            "max_joint_speed_rad_s": 1.2,
+            "max_joint_acceleration_rad_s2": 6.0,
+            "max_command_step_rad": 0.12,
+            "following_error_limit_rad": 0.30,
+        },
+    ]
+    settings = recorded_teleop_settings(rows)
+    assert settings["max_joint_speed_rad_s"] == pytest.approx(1.2)
+    assert settings["max_joint_acceleration_rad_s2"] == pytest.approx(6.0)
+    assert settings["max_command_step_rad"] == pytest.approx(0.12)
+    assert settings["following_error_limit_rad"] == pytest.approx(0.30)
+
+
+def test_recorded_teleop_settings_rejects_missing_log_event() -> None:
+    with pytest.raises(ValueError, match="no teleop_settings"):
+        recorded_teleop_settings([{"event": "session_start"}])
