@@ -161,6 +161,22 @@ authority when motion is requested, creates a fresh OpenShell sandbox, uploads o
 task/skill/standalone client plus minimal adapter-specific state, runs the selected harness,
 collects evidence, confirms sandbox deletion, and stops the broker.
 
+For another CLI harness already usable by OpenShell, provide an explicit adapter manifest:
+
+```bash
+soarm101 agent sandbox doctor \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json
+
+soarm101 agent sandbox run \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json \
+  --read-only
+```
+
+The manifest controls only harness image/provider/direct argv/runtime paths. It cannot alter
+the broker route allowlist, broker token/URL, human authority, or Motion SDK safety checks.
+
 See `docs/agent-sandbox.md` for the complete runtime/security contract.
 
 ## Session selection
