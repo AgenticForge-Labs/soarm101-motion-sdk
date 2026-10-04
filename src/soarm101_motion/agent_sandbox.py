@@ -24,6 +24,7 @@ from typing import Mapping, Sequence
 
 from .agent_adapters import HERMES
 from .agent_adapters import get_agent_adapter
+from .agent_adapters import resolve_agent_adapter
 
 
 DEFAULT_AGENT = "hermes"
@@ -115,8 +116,9 @@ def broker_policy_text(
     read_only: bool = False,
     agent: str = DEFAULT_AGENT,
     auth: str | None = None,
+    adapter_manifest: Path | None = None,
 ) -> str:
-    adapter = get_agent_adapter(agent)
+    adapter = resolve_agent_adapter(agent, adapter_manifest)
     read_only_rules = (
         ("GET", "/v1/health"),
         ("GET", "/v1/capabilities"),
@@ -469,9 +471,10 @@ def doctor(
     auth: str | None = None,
     image: str | None = None,
     provider: str | None = None,
+    adapter_manifest: Path | None = None,
     openshell: OpenShellClient | None = None,
 ) -> DoctorResult:
-    adapter = get_agent_adapter(agent)
+    adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
     selected_image = image or adapter.image
     if selected_auth.uses_login_state and provider:
@@ -482,7 +485,8 @@ def doctor(
     client = openshell or OpenShellClient()
     details: dict[str, str] = {
         "image_name": selected_image,
-        "provider_name": selected_provider or "<native-codex-login>",
+        "provider_name": selected_provider
+        or ("<native-codex-login>" if selected_auth.uses_login_state else "<none>"),
         "auth_mode": selected_auth.name,
         "credential_env_vars": ", ".join(selected_auth.credential_env_vars),
     }
@@ -497,31 +501,37 @@ def doctor(
         gateway = result.returncode == 0
         details["openshell_status"] = (result.stdout + result.stderr).strip()
 
-    docker_path = shutil.which("docker")
-    has_docker = bool(docker_path)
-    if has_docker:
-        result = subprocess.run(
-            ["docker", "version", "--format", "{{.Server.Version}}"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-        has_docker = result.returncode == 0
-        details["docker"] = (result.stdout + result.stderr).strip()
+    if adapter.managed_setup:
+        docker_path = shutil.which("docker")
+        has_docker = bool(docker_path)
+        if has_docker:
+            result = subprocess.run(
+                ["docker", "version", "--format", "{{.Server.Version}}"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=30,
+            )
+            has_docker = result.returncode == 0
+            details["docker"] = (result.stdout + result.stderr).strip()
 
-    has_image = False
-    if has_docker:
-        result = subprocess.run(
-            ["docker", "image", "inspect", selected_image],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-        has_image = result.returncode == 0
+        has_image = False
+        if has_docker:
+            result = subprocess.run(
+                ["docker", "image", "inspect", selected_image],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=30,
+            )
+            has_image = result.returncode == 0
+    else:
+        has_docker = True
+        has_image = True
+        details["docker"] = "not required for external OpenShell adapter"
+        details["image"] = "resolved by OpenShell at sandbox creation"
 
     if selected_auth.uses_login_state:
         login_path = _codex_login_auth_path(selected_auth.name)
@@ -546,7 +556,7 @@ def doctor(
                 "'soarm101 agent sandbox setup --agent codex --auth chatgpt'"
             )
     else:
-        has_provider = False
+        has_provider = selected_provider is None
         if gateway and selected_provider:
             result = client.run(
                 ["provider", "get", selected_provider],
@@ -658,9 +668,10 @@ def setup(
     image: str | None = None,
     provider: str | None = None,
     reauth: bool = False,
+    adapter_manifest: Path | None = None,
     openshell: OpenShellClient | None = None,
 ) -> None:
-    adapter = get_agent_adapter(agent)
+    adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
     selected_image = image or adapter.image
     if selected_auth.uses_login_state and provider:
@@ -678,6 +689,23 @@ def setup(
         raise AgentSandboxError(
             "OpenShell gateway is not ready:\n" + status.stdout + status.stderr
         )
+
+    if not adapter.managed_setup:
+        if reauth:
+            raise AgentSandboxError("--reauth is only available for SDK-managed auth modes")
+        if selected_provider:
+            existing = client.run(
+                ["provider", "get", selected_provider],
+                check=False,
+                timeout=30,
+            )
+            if existing.returncode != 0:
+                raise AgentSandboxError(
+                    f"OpenShell provider {selected_provider!r} is not configured; "
+                    "create/attach it with OpenShell before using this external adapter"
+                )
+        return
+
     if shutil.which("docker") is None:
         raise AgentSandboxError(
             f"docker is required to build the {adapter.name} sandbox image"
@@ -832,9 +860,10 @@ def run_agent(
     max_turns: int = 100,
     timeout: int = 1800,
     read_only: bool = False,
+    adapter_manifest: Path | None = None,
     openshell: OpenShellClient | None = None,
 ) -> RunResult:
-    adapter = get_agent_adapter(agent)
+    adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
     selected_image = image or adapter.image
     if selected_auth.uses_login_state and provider:
@@ -863,6 +892,7 @@ def run_agent(
         auth=selected_auth.name,
         image=selected_image,
         provider=selected_provider,
+        adapter_manifest=adapter_manifest,
         openshell=client,
     )
     if not readiness.ready:
@@ -902,6 +932,7 @@ def run_agent(
                 read_only=read_only,
                 agent=adapter.name,
                 auth=selected_auth.name,
+                adapter_manifest=adapter_manifest,
             ),
             encoding="utf-8",
         )
