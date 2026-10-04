@@ -11,10 +11,12 @@
   adding motion-time bus polling; detailed teleop frames now include raw encoder targets and
   monotonic timing.
 - Added a safe post-study exact-teleop replay runner. When the guided run ends too far from
-  the first recorded teleop command for immediate streaming, the new runner performs a normal
-  guarded pre-positioning move with full workspace checks, verifies measured arrival, preflights
-  every recorded arm command against the active stream limits, replays the exact captured
-  sequence, and appends success or safety-refusal evidence to the same study archive.
+  the first recorded teleop command for immediate streaming, the runner performs a normal
+  guarded pre-positioning move with full workspace checks, verifies measured arrival, then
+  reuses the original GUI session's recorded teleop speed, acceleration, command-step, and
+  following-error limits to preflight and replay the exact captured sequence. Missing or
+  invalid recorded settings fail closed. Success or safety-refusal evidence is appended to
+  the same study archive.
 - Planned calibrated motion now suppresses redundant intermediate servo writes when adjacent
   continuous joint samples resolve to the exact same five encoder targets. Host timing,
   monitoring, speed/acceleration validation, and the exact final sample are unchanged. This
