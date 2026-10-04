@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Planned calibrated motion now suppresses redundant intermediate servo writes when adjacent
+  continuous joint samples resolve to the exact same five encoder targets. Host timing,
+  monitoring, speed/acceleration validation, and the exact final sample are unchanged. This
+  targets low-speed quantization chatter without introducing a new PID or servo-profile
+  heuristic; physical smoothness validation remains pending.
 - Added a narrow host-side HTTP/JSON broker for isolated reasoning agents. The broker
   serializes an explicit allowlist of bounded agent actions, delegates to the existing
   `soarm101 agent` CLI, requires a bearer token, records JSONL request evidence, and
