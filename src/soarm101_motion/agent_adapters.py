@@ -318,6 +318,21 @@ _MANIFEST_PLACEHOLDERS = {
     "{task_path}",
     "{skill_path}",
 }
+_MANIFEST_SHELL_EXECUTABLES = {
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "fish",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "cmd.exe",
+}
+_MANIFEST_RESERVED_ENVIRONMENT = {
+    "SOARM101_BROKER_URL",
+    "SOARM101_BROKER_TOKEN",
+}
 
 
 def _manifest_string_list(
@@ -436,8 +451,17 @@ def load_agent_adapter_manifest(path: str | Path) -> ManifestAgentAdapter:
     for token in command_argv:
         if ("{" in token or "}" in token) and token not in _MANIFEST_PLACEHOLDERS:
             raise ValueError(f"unsupported adapter manifest command placeholder {token!r}")
+    if Path(command_argv[0]).name.lower() in _MANIFEST_SHELL_EXECUTABLES:
+        raise ValueError(
+            "adapter manifest command must invoke the agent executable directly, not a shell"
+        )
 
     version_argv = _manifest_string_list(payload, "version_command", required=True)
+    if Path(version_argv[0]).name.lower() in _MANIFEST_SHELL_EXECUTABLES:
+        raise ValueError(
+            "adapter manifest version_command must invoke the agent executable directly, "
+            "not a shell"
+        )
     robot_binaries = tuple(
         _validate_sandbox_path(value, field="robot_client_binaries")
         for value in _manifest_string_list(payload, "robot_client_binaries", required=True)
@@ -465,6 +489,14 @@ def load_agent_adapter_manifest(path: str | Path) -> ManifestAgentAdapter:
         for key, value in raw_environment.items()
     ):
         raise ValueError("adapter manifest environment must map non-empty strings to strings")
+    reserved_environment = sorted(
+        key for key in raw_environment if key in _MANIFEST_RESERVED_ENVIRONMENT
+    )
+    if reserved_environment:
+        raise ValueError(
+            "adapter manifest environment may not override broker-controlled variables: "
+            + ", ".join(reserved_environment)
+        )
 
     provider_raw = payload.get("provider")
     provider = None if provider_raw is None else str(provider_raw).strip() or None
