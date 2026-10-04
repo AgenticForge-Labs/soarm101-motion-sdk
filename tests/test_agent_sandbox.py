@@ -244,6 +244,11 @@ def test_packaged_agent_assets_are_available_and_agent_specific() -> None:
     assert "FROM debian:bookworm-slim" in agent_sandbox.dockerfile_text(
         agent="codex"
     )
+    inert_cmd = 'CMD ["/bin/sh", "-lc", "while :; do sleep 3600; done"]'
+    assert inert_cmd in agent_sandbox.dockerfile_text(agent="hermes")
+    assert inert_cmd in agent_sandbox.dockerfile_text(agent="codex")
+    assert "CMD []" not in agent_sandbox.dockerfile_text(agent="hermes")
+    assert "CMD []" not in agent_sandbox.dockerfile_text(agent="codex")
     assert "Validate the isolated SO-ARM101 agent environment" in (
         agent_sandbox.read_only_validation_task_text()
     )
