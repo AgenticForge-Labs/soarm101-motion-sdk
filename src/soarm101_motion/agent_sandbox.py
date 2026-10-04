@@ -1081,11 +1081,11 @@ def run_agent(
                 auth=selected_auth.name,
             )
             environment = {
+                **adapter.environment(auth=selected_auth.name),
                 "SOARM101_BROKER_URL": (
                     f"http://{DEFAULT_BROKER_CLIENT_HOST}:{int(broker_port)}"
                 ),
                 "SOARM101_BROKER_TOKEN": token,
-                **adapter.environment(auth=selected_auth.name),
             }
             process = client.exec(
                 sandbox,
