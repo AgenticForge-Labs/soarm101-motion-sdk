@@ -1334,3 +1334,29 @@ def test_external_adapter_manifest_rejects_shell_and_broker_env_override(
     shell_manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="broker-controlled variables"):
         load_agent_adapter_manifest(shell_manifest)
+
+
+def test_external_adapter_manifest_skill_file_cannot_escape_manifest_directory(
+    tmp_path: Path,
+) -> None:
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+    outside = tmp_path / "outside-skill.md"
+    outside.write_text("secret host text\n", encoding="utf-8")
+    manifest = adapter_dir / "external-agent.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "name": "claude",
+                "image": "openshell/base",
+                "command": ["claude", "-p", "{prompt}"],
+                "version_command": ["claude", "--version"],
+                "robot_client_binaries": ["/usr/bin/python3*"],
+                "skill_file": "../outside-skill.md",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="may not escape"):
+        load_agent_adapter_manifest(manifest)
