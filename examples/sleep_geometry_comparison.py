@@ -42,8 +42,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--acceleration-deg-s2", type=float, default=150.0)
     parser.add_argument(
         "--execution-mode",
-        choices=("streamed", "final_target"),
+        choices=("streamed",),
         default="streamed",
+        help="manual Sleep-family geometry test currently uses guarded streamed execution",
     )
     parser.add_argument("--output", type=Path)
     return parser
