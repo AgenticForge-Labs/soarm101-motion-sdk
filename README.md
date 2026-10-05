@@ -307,6 +307,19 @@ joint targets quantize to exactly the same encoder counts as the last command. T
 host deadlines, safety monitoring, and exact final planned sample are preserved; this is
 command de-duplication at actuator resolution, not trajectory retiming or relaxed dynamics.
 
+Joint-space motion now also has an **experimental** execution selector while the low-speed
+shake investigation is active. `execution_mode="streamed"` remains the default and sends
+the validated host trajectory as intermediate targets. `execution_mode="final_target"`
+builds and validates the same joint plan but writes only the endpoint once, using per-joint
+servo speed limits derived from the validated planned duration so the joints are asked to
+arrive together. The controller then observes guarded progress until settle. The one-shot
+mode retains calibrated limits, validated path/workspace policy, fault handling, cancellation,
+unexpected-direction checks, a joint-space corridor/coordination bound, timeout, and final
+settle; it does not apply endpoint following error during the expected transit because the
+servo is intentionally traveling toward that endpoint. Cartesian `move_linear()` remains
+host-streamed because a single joint endpoint cannot guarantee the requested straight TCP
+path. Use `scripts/run_joint_execution_comparison.sh` for the supervised A/B route.
+
 The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, deterministic sequence programming, simulation, basic local USB-camera capture, and an optional PySide6 GUI. Higher-level perception/tracking, calibrated multi-camera stage systems, ROS integration, and show orchestration remain outside this project. The SDK is intended to provide constrained motion plus a deterministic local observation surface beneath those higher-level systems. See [Architecture](docs/architecture.md) and [Camera](docs/camera.md) for the boundaries.
 
 ### Where we want to go
