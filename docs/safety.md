@@ -158,6 +158,26 @@ The current default thresholds are starting guardrails rather than validated phy
 limits. Characterize the exact arm at low speed/no payload before interpreting them as
 appropriate operating values. See `TESTING.md`.
 
+## Experimental final-target joint execution
+
+Ordinary joint motion defaults to the host-streamed validated trajectory. During the current
+motion-quality investigation, the SDK also exposes `execution_mode="final_target"` for
+supervised joint-space testing. The same endpoint and host joint path are planned and validated
+first, but the hardware receives one synchronized endpoint command rather than a series of
+intermediate goals.
+
+This changes what "following error" can mean during transit: the measured arm is expected to
+be far from the final endpoint immediately after that endpoint is issued. The one-shot mode
+therefore does **not** weaken the endpoint or calibrated path authority; instead it monitors
+fault state, unexpected/reverse motion, departure outside the start-to-target joint corridor,
+cross-joint coordination divergence using the configured error bound, cancellation, timeout,
+and final settling. Any failure requests STOP/HOLD. Physical power must remain immediately
+accessible during testing.
+
+The final-target mode is joint-space only. Do not use it as a shortcut for Cartesian
+`move_linear()`; a single final joint command cannot prove or preserve the requested TCP
+line between endpoints.
+
 ## Coarse geometry envelope
 
 The SDK checks every requested joint path against a conservative centerline model:
