@@ -65,6 +65,12 @@ def _parser() -> argparse.ArgumentParser:
         help="host planned-motion command cadence",
     )
     parser.add_argument(
+        "--execution-mode",
+        choices=("streamed", "final_target"),
+        default="streamed",
+        help="joint execution strategy: host-streamed trajectory or one synchronized final target",
+    )
+    parser.add_argument(
         "--pause-s",
         type=float,
         default=0.5,
@@ -118,7 +124,7 @@ def main() -> int:
     print(
         f"Program: Sleep -> Overhead -> Left -> Right -> Sleep "
         f"at {args.speed_deg_s:g} deg/s, {args.acceleration_deg_s2:g} deg/s^2, "
-        f"{args.command_frequency_hz:g} Hz"
+        f"{args.command_frequency_hz:g} Hz, mode={args.execution_mode}"
     )
     print(f"Trace: {output}")
 
@@ -146,6 +152,8 @@ def main() -> int:
                 "speed_deg_s": args.speed_deg_s,
                 "acceleration_deg_s2": args.acceleration_deg_s2,
                 "command_frequency_hz": cfg.command_frequency_hz,
+            "execution_mode": args.execution_mode,
+                "execution_mode": args.execution_mode,
                 "hardware_speed_raw": cfg.hardware_speed_raw,
                 "hardware_acceleration_raw": cfg.hardware_acceleration_raw,
                 "route": ["SLEEP", "OVERHEAD", "LEFT", "RIGHT", "SLEEP"],
@@ -154,7 +162,11 @@ def main() -> int:
         ) as trace:
             def run_sleep() -> None:
                 trace.mark("leg_start", destination="SLEEP")
-                result = arm.move_sleep(speed=speed, acceleration=acceleration)
+                result = arm.move_sleep(
+                    speed=speed,
+                    acceleration=acceleration,
+                    execution_mode=args.execution_mode,
+                )
                 arm.hold()
                 trace.mark(
                     "leg_end",
@@ -170,6 +182,7 @@ def main() -> int:
                     pose.joints,
                     speed=speed,
                     acceleration=acceleration,
+                    execution_mode=args.execution_mode,
                 )
                 arm.hold()
                 trace.mark(
