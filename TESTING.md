@@ -155,7 +155,11 @@ against the reused 0.300 rad following-error threshold. That rule was judged inv
 one-shot contract: independent servos can legitimately advance at different rates while still
 moving in the commanded direction and remaining inside their validated start-to-target joint
 corridors. The phase guard was removed; per-joint corridor/overshoot, reverse-motion,
-hardware/effort fault, cancellation, timeout, and final-settle checks remain. Use
+hardware/effort fault, cancellation, timeout, and final-settle checks remain. Because
+independent servo progress can produce intermediate configurations that differ from the
+synchronized host plan, full-workspace/saved-pose final-target execution now also validates
+the accumulated measured physical path on every monitor cycle using the existing
+measured-start workspace policy. Use
 `bash scripts/run_joint_execution_comparison.sh final_target` to continue the physical test
 without repeating the streamed baseline.
 
