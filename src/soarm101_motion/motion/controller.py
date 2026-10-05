@@ -37,6 +37,7 @@ from soarm101_motion.safety import (
     validate_command_step,
     validate_joint_targets,
     validate_workspace_path,
+    validate_workspace_path_from_measured_start,
 )
 from soarm101_motion.trajectories import Trajectory
 from soarm101_motion.types import MotionResult, Pose
@@ -1174,6 +1175,8 @@ class MotionController:
         cancellation_message: str,
         servo_speed_raw: int | Mapping[str, int] | None = None,
         servo_acceleration_raw: int | None = None,
+        monitor_workspace: bool = False,
+        tcp: Pose | None = None,
     ) -> MotionResult:
         """Execute a validated joint plan with exactly one endpoint command.
 
@@ -1211,6 +1214,7 @@ class MotionController:
                 + plan.duration_s
                 + self.config.motion_completion_timeout_s
             )
+            observed_path: list[Mapping[str, float]] = [dict(start)]
             while True:
                 self._check_cancelled(cancel_event, cancellation_message)
                 actual = self._monitor_final_target_motion(
@@ -1218,6 +1222,14 @@ class MotionController:
                     target,
                     previous_actual,
                 )
+                if monitor_workspace:
+                    observed_path.append(dict(actual))
+                    validate_workspace_path_from_measured_start(
+                        self.model,
+                        observed_path,
+                        tcp=tcp,
+                        **self._workspace_kwargs(),
+                    )
                 error = max(abs(float(actual[name]) - float(target[name])) for name in ARM_JOINTS)
                 if error <= self.config.joint_position_tolerance_rad:
                     return self._wait_for_settle(target, cancel_event)
@@ -1472,6 +1484,8 @@ class MotionController:
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
         execution_mode: JointExecutionMode = "streamed",
+        monitor_workspace: bool = False,
+        tcp: Pose | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         if execution_mode not in {"streamed", "final_target"}:
             raise InvalidCommandError(
@@ -1536,6 +1550,8 @@ class MotionController:
                         cancellation_message="joint motion cancelled",
                         servo_speed_raw=servo_speed_raw,
                         servo_acceleration_raw=servo_acceleration_raw,
+                        monitor_workspace=monitor_workspace,
+                        tcp=tcp,
                     )
                 )
             else:
