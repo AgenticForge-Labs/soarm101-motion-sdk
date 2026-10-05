@@ -133,7 +133,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
   Keep both joint execution strategies available while testing: the existing `streamed`
   host trajectory and the experimental `final_target` one-write endpoint mode. Run the
   supervised same-route comparison, with special attention to Right -> Sleep, before choosing
-  a production default or removing either implementation.
+  a production default or removing either implementation. The first final-target physical
+  attempt completed Sleep but was stopped on Sleep -> Overhead by an invalid cross-joint
+  phase-coupling guard (0.308 rad vs 0.300 rad). That guard has been removed while preserving
+  per-joint corridor/overshoot, reverse-motion, effort/fault, cancellation, timeout, and
+  settle checks; repeat final-target only before drawing a motion-quality conclusion.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
