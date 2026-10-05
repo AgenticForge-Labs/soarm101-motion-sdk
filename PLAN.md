@@ -130,6 +130,10 @@ its own persistent connection for live controls; it must not launch CLI subproce
   mechanical/smoother character of teleop. This makes generated joint-command structure the
   leading hypothesis, especially during the folded return to Sleep. Quantized-target
   coalescing has looked at most marginally better and is not merge-ready on that evidence alone.
+  Keep both joint execution strategies available while testing: the existing `streamed`
+  host trajectory and the experimental `final_target` one-write endpoint mode. Run the
+  supervised same-route comparison, with special attention to Right -> Sleep, before choosing
+  a production default or removing either implementation.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
