@@ -11,8 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from soarm101_motion import SOARM101, SOARM101Config
+from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.poses import PoseLibrary
+from soarm101_motion.safety import (
+    minimum_workspace_self_clearance,
+    validate_workspace_path,
+)
 from soarm101_motion.workstation import WorkstationProfileStore
 
 
@@ -27,6 +32,77 @@ def _git_sha() -> str | None:
     except Exception:
         return None
     return completed.stdout.strip() or None
+
+
+def _interpolate_joints(
+    start: dict[str, float],
+    target: dict[str, float],
+    fraction: float,
+) -> dict[str, float]:
+    return {
+        name: float(start[name]) + (float(target[name]) - float(start[name])) * fraction
+        for name in ARM_JOINTS
+    }
+
+
+def _joint_path(
+    start: dict[str, float],
+    target: dict[str, float],
+    *,
+    step_rad: float,
+) -> tuple[dict[str, float], ...]:
+    max_delta = max(abs(float(target[name]) - float(start[name])) for name in ARM_JOINTS)
+    steps = max(2, int(math.ceil(max_delta / step_rad)) + 1)
+    return tuple(
+        _interpolate_joints(start, target, index / (steps - 1))
+        for index in range(steps)
+    )
+
+
+def _deepest_safe_open_target(
+    arm: SOARM101,
+    start: dict[str, float],
+    desired: dict[str, float],
+    *,
+    clearance_reserve_m: float = 0.002,
+) -> tuple[dict[str, float], float, float]:
+    """Find the deepest strict-workspace fold toward desired with a clearance reserve."""
+    required = arm.config.minimum_self_clearance_m + clearance_reserve_m
+    workspace = {
+        **arm._workspace_kwargs(),  # diagnostic uses the same SDK workspace contract
+        "minimum_self_clearance_m": required,
+    }
+
+    # Search from deepest to most open in 1% increments. This is diagnostic target
+    # selection only; every powered move is independently validated again by the SDK.
+    for step in range(100, 0, -1):
+        fraction = step / 100.0
+        candidate = _interpolate_joints(start, desired, fraction)
+        path = _joint_path(
+            start,
+            candidate,
+            step_rad=arm.config.workspace_check_step_rad,
+        )
+        try:
+            validate_workspace_path(
+                arm.model,
+                path,
+                tcp=arm.active_tcp,
+                **workspace,
+            )
+        except Exception:
+            continue
+        clearance = minimum_workspace_self_clearance(
+            arm.model,
+            candidate,
+            tcp=arm.active_tcp,
+        )
+        return candidate, fraction, clearance
+
+    raise RuntimeError(
+        "could not find a nontrivial open pre-Sleep target that passes the strict "
+        "workspace envelope with the requested self-clearance reserve"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -91,8 +167,8 @@ def main() -> int:
     print()
     print("Conditions:")
     print("  A direct: RIGHT -> canonical Sleep")
-    print("  B open_wrist: RIGHT -> Sleep shoulder/elbow geometry with wrist_flex neutral")
-    print("  C staged_wrist: RIGHT -> open_wrist pre-Sleep -> canonical Sleep")
+    print("  B open_pre_sleep: RIGHT -> deepest strict-workspace-valid neutral-wrist fold")
+    print("  C staged_sleep: RIGHT -> open pre-Sleep -> canonical Sleep")
     print()
 
     with SOARM101(cfg) as arm:
@@ -110,9 +186,8 @@ def main() -> int:
 
         sleep_target = arm.get_sleep_joint_positions()
         limits = arm.get_joint_limits()
-        open_wrist_target = dict(sleep_target)
         wrist_lower, wrist_upper = limits["wrist_flex"]
-        open_wrist_target["wrist_flex"] = (wrist_lower + wrist_upper) / 2.0
+        neutral_wrist = (wrist_lower + wrist_upper) / 2.0
 
         metadata = {
             "kind": "sleep_geometry_comparison",
@@ -121,13 +196,13 @@ def main() -> int:
             "acceleration_deg_s2": args.acceleration_deg_s2,
             "execution_mode": args.execution_mode,
             "canonical_sleep": sleep_target,
-            "open_wrist_target": open_wrist_target,
+            "neutral_wrist_flex": neutral_wrist,
             "right_pose_name": "agent_start_overhead_right",
         }
 
         with PassiveBackendTrace(arm, output, metadata=metadata) as trace:
 
-            def reset_right() -> None:
+            def reset_right() -> dict[str, float]:
                 trace.mark("reset_start", destination="RIGHT")
                 result = arm.move_joints_from_saved_pose(
                     right.joints,
@@ -136,12 +211,38 @@ def main() -> int:
                     execution_mode=args.execution_mode,
                 )
                 arm.hold()
+                measured = dict(arm.get_joint_positions().positions)
                 trace.mark(
                     "reset_end",
                     destination="RIGHT",
                     completed=result.completed,
                     final_positions=dict(result.final_positions),
+                    measured_positions=measured,
                 )
+                return measured
+
+            def open_target_from_right(
+                measured_right: dict[str, float],
+            ) -> tuple[dict[str, float], float, float]:
+                desired = dict(sleep_target)
+                desired["wrist_flex"] = neutral_wrist
+                target, fraction, clearance = _deepest_safe_open_target(
+                    arm,
+                    measured_right,
+                    desired,
+                )
+                trace.mark(
+                    "open_target_selected",
+                    fraction_toward_sleep=fraction,
+                    target=target,
+                    self_clearance_m=clearance,
+                )
+                print(
+                    "Selected open pre-Sleep at "
+                    f"{fraction * 100.0:.0f}% of the RIGHT->neutral-wrist Sleep fold "
+                    f"(coarse clearance {clearance * 1000.0:.1f} mm)."
+                )
+                return target, fraction, clearance
 
             def run_direct() -> None:
                 reset_right()
@@ -164,14 +265,20 @@ def main() -> int:
                 )
 
             def run_open_wrist() -> None:
-                reset_right()
+                measured_right = reset_right()
+                open_target, fraction, clearance = open_target_from_right(measured_right)
                 input(
-                    "\nB OPEN_WRIST: arm is at RIGHT. Press ENTER for shoulder/elbow "
-                    "Sleep geometry with wrist flex held neutral, or Ctrl-C to stop: "
+                    "\nB OPEN_PRE_SLEEP: arm is at RIGHT. Press ENTER for the deepest "
+                    "strict-workspace-valid neutral-wrist fold, or Ctrl-C to stop: "
                 )
-                trace.mark("condition_start", condition="open_wrist")
+                trace.mark(
+                    "condition_start",
+                    condition="open_pre_sleep",
+                    fraction_toward_sleep=fraction,
+                    self_clearance_m=clearance,
+                )
                 result = arm.move_joints(
-                    open_wrist_target,
+                    open_target,
                     speed=speed,
                     acceleration=acceleration,
                     execution_mode=args.execution_mode,
@@ -180,20 +287,26 @@ def main() -> int:
                 arm.hold()
                 trace.mark(
                     "condition_end",
-                    condition="open_wrist",
+                    condition="open_pre_sleep",
                     completed=result.completed,
                     final_positions=dict(result.final_positions),
                 )
 
             def run_staged_wrist() -> None:
-                reset_right()
+                measured_right = reset_right()
+                open_target, fraction, clearance = open_target_from_right(measured_right)
                 input(
-                    "\nC STAGED_WRIST: arm is at RIGHT. Press ENTER to lower/fold "
-                    "the main arm while keeping wrist flex neutral: "
+                    "\nC STAGED_SLEEP: arm is at RIGHT. Press ENTER for the deepest "
+                    "strict-workspace-valid neutral-wrist pre-Sleep: "
                 )
-                trace.mark("condition_start", condition="staged_wrist_main_arm")
+                trace.mark(
+                    "condition_start",
+                    condition="staged_sleep_open",
+                    fraction_toward_sleep=fraction,
+                    self_clearance_m=clearance,
+                )
                 first = arm.move_joints(
-                    open_wrist_target,
+                    open_target,
                     speed=speed,
                     acceleration=acceleration,
                     execution_mode=args.execution_mode,
@@ -202,15 +315,15 @@ def main() -> int:
                 arm.hold()
                 trace.mark(
                     "condition_end",
-                    condition="staged_wrist_main_arm",
+                    condition="staged_sleep_open",
                     completed=first.completed,
                     final_positions=dict(first.final_positions),
                 )
                 input(
-                    "Main arm is down with wrist flex neutral. Press ENTER to fold "
-                    "only the remaining wrist into canonical Sleep: "
+                    "Open pre-Sleep reached. Press ENTER to continue from that valid "
+                    "configuration into canonical Sleep: "
                 )
-                trace.mark("condition_start", condition="staged_wrist_final_fold")
+                trace.mark("condition_start", condition="staged_sleep_final_fold")
                 second = arm.move_sleep(
                     speed=speed,
                     acceleration=acceleration,
@@ -219,7 +332,7 @@ def main() -> int:
                 arm.hold()
                 trace.mark(
                     "condition_end",
-                    condition="staged_wrist_final_fold",
+                    condition="staged_sleep_final_fold",
                     completed=second.completed,
                     final_positions=dict(second.final_positions),
                 )
