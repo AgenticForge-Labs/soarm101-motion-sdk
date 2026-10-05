@@ -47,30 +47,52 @@ echo "        with guarded monitoring until settle."
 echo
 echo "Keep physical power accessible and the workspace clear."
 
+STREAMED_STATUS="not-run"
+FINAL_TARGET_STATUS="not-run"
+OVERALL_STATUS=0
+
 if [[ "$MODE" == "both" || "$MODE" == "streamed" ]]; then
   read -r -p "Press ENTER to start streamed motion, or Ctrl-C to stop: "
+  streamed_status=0
   python examples/motion_quality_trace.py \
     --execution-mode streamed \
     --speed-deg-s 8 \
     --acceleration-deg-s2 25 \
     --command-frequency-hz 50 \
     --pause-s 0.5 \
-    --output "$OUT_DIR/streamed.jsonl"
-  echo
-  echo "Streamed run complete. The arm should be holding in Sleep."
+    --output "$OUT_DIR/streamed.jsonl" || streamed_status=$?
+  STREAMED_STATUS="$streamed_status"
+  if (( streamed_status == 0 )); then
+    echo
+    echo "Streamed run complete. The arm should be holding in Sleep."
+  else
+    echo
+    echo "Streamed run stopped with status $streamed_status; preserving evidence."
+    OVERALL_STATUS="$streamed_status"
+  fi
 fi
 
-if [[ "$MODE" == "both" || "$MODE" == "final_target" ]]; then
+if [[ "$MODE" == "both" && "$STREAMED_STATUS" != "0" ]]; then
+  echo "Skipping final_target because the streamed baseline did not complete cleanly."
+elif [[ "$MODE" == "both" || "$MODE" == "final_target" ]]; then
   read -r -p "Press ENTER to start final_target motion, or Ctrl-C to stop: "
+  final_status=0
   python examples/motion_quality_trace.py \
     --execution-mode final_target \
     --speed-deg-s 8 \
     --acceleration-deg-s2 25 \
     --command-frequency-hz 50 \
     --pause-s 0.5 \
-    --output "$OUT_DIR/final-target.jsonl"
-  echo
-  echo "Final-target run complete. The arm should be holding in Sleep."
+    --output "$OUT_DIR/final-target.jsonl" || final_status=$?
+  FINAL_TARGET_STATUS="$final_status"
+  if (( final_status == 0 )); then
+    echo
+    echo "Final-target run complete. The arm should be holding in Sleep."
+  else
+    echo
+    echo "Final-target run stopped with status $final_status; preserving evidence."
+    OVERALL_STATUS="$final_status"
+  fi
 fi
 
 cat > "$OUT_DIR/README.txt" <<EOF
@@ -79,6 +101,8 @@ SO-ARM101 joint execution comparison
 Git SHA: $(git rev-parse HEAD)
 
 Requested mode: $MODE
+Streamed exit status: $STREAMED_STATUS
+Final-target exit status: $FINAL_TARGET_STATUS
 
 Route: Sleep -> Overhead -> Left -> Right -> Sleep
 Requested joint speed: 8 deg/s
@@ -110,3 +134,7 @@ echo "Folder: $OUT_DIR"
 echo "Archive: $ARCHIVE"
 echo
 echo "Follower remains torque-held."
+if (( OVERALL_STATUS != 0 )); then
+  echo "One or more requested runs stopped early; upload the archive for analysis."
+fi
+exit "$OVERALL_STATUS"
