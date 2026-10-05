@@ -57,6 +57,80 @@ def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() ->
     )
 
 
+def test_final_target_joint_execution_writes_endpoint_once() -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.20
+        target["elbow_flex"] -= 0.10
+
+        result = arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+            workspace_check="off",
+        )
+
+        history = list(arm.backend.command_history)  # type: ignore[attr-defined]
+
+    assert result.completed is True
+    assert len(history) == 1
+    assert history[0] == pytest.approx({name: target[name] for name in ARM_JOINTS})
+
+
+def test_streamed_joint_execution_remains_default() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+
+        arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            workspace_check="off",
+        )
+        history = list(arm.backend.command_history)  # type: ignore[attr-defined]
+
+    assert len(history) > 1
+    assert history[-1]["shoulder_pan"] == pytest.approx(target["shoulder_pan"])
+
+
+def test_invalid_joint_execution_mode_is_rejected() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.05
+        with pytest.raises(InvalidCommandError, match="execution_mode"):
+            arm.move_joints(
+                target,
+                execution_mode="burst",  # type: ignore[arg-type]
+                workspace_check="off",
+            )
+
+
+def test_saved_pose_can_use_final_target_execution() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["wrist_roll"] += 0.10
+        result = arm.move_joints_from_saved_pose(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+        )
+        history = list(arm.backend.command_history)  # type: ignore[attr-defined]
+
+    assert result.completed is True
+    assert len(history) == 1
+    assert history[-1]["wrist_roll"] == pytest.approx(target["wrist_roll"])
+
+
 def test_joint_planner_preserves_exact_validated_endpoint_at_effective_limit() -> None:
     from types import SimpleNamespace
 
