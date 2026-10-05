@@ -46,12 +46,13 @@ class PassiveBackendTrace:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._events = []
         self._started = time.perf_counter()
-        self._record(
-            "trace_start",
-            robot_id=getattr(self.arm.config, "robot_id", None),
-            calibration_id=getattr(self.arm, "calibration_id", None),
-            **self.metadata,
-        )
+        trace_metadata = dict(self.metadata)
+        # Runtime provenance is authoritative. Diagnostic callers may use
+        # arbitrary metadata without being able to duplicate or override the
+        # active robot/calibration identity.
+        trace_metadata["robot_id"] = getattr(self.arm.config, "robot_id", None)
+        trace_metadata["calibration_id"] = getattr(self.arm, "calibration_id", None)
+        self._record("trace_start", **trace_metadata)
         self._wrap("write_joint_positions", self._wrap_write_joint_positions)
         self._wrap("read_joint_positions", self._wrap_read_joint_positions)
         self._wrap("get_hardware_state", self._wrap_get_hardware_state)
