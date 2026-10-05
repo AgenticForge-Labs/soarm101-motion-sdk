@@ -130,6 +130,30 @@ def test_final_target_uses_synchronized_per_joint_servo_speeds() -> None:
     assert int(speeds["shoulder_pan"]) > int(speeds["elbow_flex"])
 
 
+def test_final_target_monitor_allows_asynchronous_joint_progress() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.80
+        target["wrist_flex"] -= 0.80
+
+        previous = dict(start)
+        previous["shoulder_pan"] += 0.65
+        previous["wrist_flex"] -= 0.02
+        arm.backend._positions["shoulder_pan"] = start["shoulder_pan"] + 0.75  # type: ignore[attr-defined]
+        arm.backend._positions["wrist_flex"] = start["wrist_flex"] - 0.05  # type: ignore[attr-defined]
+
+        actual = arm.motion._monitor_final_target_motion(  # type: ignore[attr-defined]
+            start,
+            target,
+            previous,
+        )
+
+    assert actual["shoulder_pan"] == pytest.approx(start["shoulder_pan"] + 0.75)
+    assert actual["wrist_flex"] == pytest.approx(start["wrist_flex"] - 0.05)
+
+
 def test_final_target_monitor_rejects_reverse_motion() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
