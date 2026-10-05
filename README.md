@@ -317,7 +317,11 @@ mode retains calibrated limits, validated path/workspace policy, fault handling,
 unexpected-direction checks, a per-joint start-to-target corridor/overshoot bound, timeout,
 and final settle; it does not apply endpoint following error or cross-joint phase matching
 during the expected transit because the servos are intentionally executing the endpoint
-internally and may progress at different rates under load. Cartesian `move_linear()` remains
+internally and may progress at different rates under load. For ordinary full-workspace and
+saved-pose moves, each measured intermediate configuration is rechecked with the same
+measured-start workspace validator, so asynchronous servo progress is not assumed to follow
+the synchronized host plan. Explicit target-only/off workspace modes retain their existing
+semantics, and Sleep retains its existing coarse-workspace exception. Cartesian `move_linear()` remains
 host-streamed because a single joint endpoint cannot guarantee the requested straight TCP
 path. Use `scripts/run_joint_execution_comparison.sh` for the supervised A/B route.
 
