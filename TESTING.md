@@ -148,6 +148,15 @@ its existing deliberate coarse-workspace exception. Keep all other motion guards
 The clean discriminator is whether the rocking appears before the wrist fold, only during the
 final wrist fold, or equally in both geometries.
 
+
+First attempted run on 2026-10-05 stopped before motion because the geometry diagnostic passed
+`robot_id` inside passive-trace metadata while `PassiveBackendTrace` also supplied its own
+authoritative `robot_id` field, producing a duplicate-keyword `TypeError`. No arm motion
+occurred. The tracer now owns `robot_id` and `calibration_id` as reserved runtime provenance
+fields: caller metadata cannot duplicate or override them. The geometry script also omits the
+redundant robot ID. Regression coverage verifies the active runtime identity wins over
+conflicting diagnostic metadata.
+
 ### Three-times-speed streamed versus final-target comparison
 
 After the 8 deg/s, 25 deg/s^2 comparison showed substantial rocking in both execution
