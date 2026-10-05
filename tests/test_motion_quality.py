@@ -9,6 +9,7 @@ from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion.quality import (
     command_sequence,
     load_jsonl,
+    maximum_joint_drift,
     analyze_teleop_frame_continuity,
     preflight_stream_commands,
     recorded_teleop_settings,
@@ -37,6 +38,21 @@ def _frame(index: int, raw_offset: int) -> dict[str, object]:
             name: actual[name] - command[name] for name in ARM_JOINTS
         },
     }
+
+
+def test_maximum_joint_drift_uses_values_and_can_exclude_taught_joint() -> None:
+    reference = {name: 0.0 for name in ARM_JOINTS}
+    measured = dict(reference)
+    measured["shoulder_lift"] = 0.012
+    measured["wrist_flex"] = 1.25
+
+    drift = maximum_joint_drift(
+        reference,
+        measured,
+        exclude=("wrist_flex",),
+    )
+
+    assert drift == pytest.approx(0.012)
 
 
 def test_motion_quality_summary_and_command_extract(tmp_path) -> None:
