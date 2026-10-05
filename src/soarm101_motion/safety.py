@@ -321,6 +321,36 @@ def validate_workspace_path_from_measured_start(
         best_clearance = max(best_clearance, clearance)
 
 
+def validate_sleep_family_workspace_path(
+    model: "SO101KinematicModel",
+    samples: Sequence[Mapping[str, float]],
+    *,
+    tcp: "Pose | None" = None,
+    minimum_z_m: float = 0.0,
+    maximum_tcp_reach_m: float = 0.50,
+    minimum_self_clearance_m: float = 0.025,
+    base_keepout_radius_m: float = 0.055,
+    base_keepout_height_m: float = 0.11,
+) -> None:
+    """Validate a Sleep-family path while omitting only coarse self-clearance.
+
+    Canonical Sleep deliberately folds closer than the generic centerline
+    self-clearance heuristic. Sleep-family diagnostics may share that narrow
+    exception, but floor, TCP reach, and base keepout remain authoritative.
+    """
+    del minimum_self_clearance_m
+    validate_workspace_path(
+        model,
+        samples,
+        tcp=tcp,
+        minimum_z_m=minimum_z_m,
+        maximum_tcp_reach_m=maximum_tcp_reach_m,
+        minimum_self_clearance_m=0.0,
+        base_keepout_radius_m=base_keepout_radius_m,
+        base_keepout_height_m=base_keepout_height_m,
+    )
+
+
 def validate_workspace_path(
     model: "SO101KinematicModel",
     samples: Sequence[Mapping[str, float]],
