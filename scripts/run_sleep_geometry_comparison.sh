@@ -39,8 +39,8 @@ echo "Speed: $SPEED_DEG_S deg/s"
 echo "Acceleration: $ACCEL_DEG_S2 deg/s^2"
 echo
 echo "A: RIGHT -> canonical Sleep"
-echo "B: RIGHT -> Sleep shoulder/elbow geometry with wrist_flex neutral"
-echo "C: RIGHT -> neutral-wrist pre-Sleep -> canonical Sleep wrist fold"
+echo "B: RIGHT -> deepest strict-workspace-valid neutral-wrist pre-Sleep"
+echo "C: RIGHT -> validated open pre-Sleep -> canonical Sleep"
 echo
 echo "Keep physical power accessible and the workspace clear."
 
@@ -59,18 +59,18 @@ Exit status: $status
 A direct:
   RIGHT -> canonical Sleep.
 
-B open_wrist:
-  RIGHT -> canonical Sleep shoulder/lift/elbow/roll geometry while wrist_flex
-  remains at the midpoint of its calibrated executable range.
+B open_pre_sleep:
+  RIGHT -> the deepest target found along the neutral-wrist fold toward Sleep
+  whose entire joint path passes the strict workspace envelope with an extra
+  2 mm coarse self-clearance reserve.
 
-C staged_wrist:
-  RIGHT -> open_wrist pre-Sleep, then canonical Sleep. The second stage should
-  primarily fold wrist_flex because the other pose joints are already at their
-  Sleep targets.
+C staged_sleep:
+  RIGHT -> that validated open pre-Sleep -> canonical Sleep. This tests whether
+  the severe rocking appears only when entering the final deep fold.
 
-The open-wrist pre-Sleep uses the ordinary full workspace validator. Canonical
-Sleep retains its existing deliberate coarse-workspace exception and all other
-motion guards.
+The open pre-Sleep uses the ordinary full workspace validator. Canonical Sleep
+retains its existing deliberate coarse-workspace exception and all other motion
+guards.
 EOF
 
 ARCHIVE="$OUT_DIR.tar.gz"
