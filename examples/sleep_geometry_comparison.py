@@ -1,4 +1,4 @@
-"""Supervised comparison of canonical versus open/staged Sleep geometry."""
+"""Teach a wrist-relaxed Sleep variant, then compare direct versus staged Sleep."""
 
 from __future__ import annotations
 
@@ -6,20 +6,17 @@ import argparse
 import json
 import math
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
-from soarm101_motion.exceptions import SafetyViolationError
 from soarm101_motion.motion import PassiveBackendTrace
-from soarm101_motion.poses import PoseLibrary
-from soarm101_motion.safety import (
-    minimum_workspace_self_clearance,
-    validate_workspace_path,
-)
+from soarm101_motion.poses import PoseLibrary, SavedPose
+from soarm101_motion.safety import validate_joint_targets, validate_workspace_path
 from soarm101_motion.workstation import WorkstationProfileStore
+
+TAUGHT_POSE_NAME = "motion_test_sleep_wrist"
 
 
 def _git_sha() -> str | None:
@@ -35,80 +32,9 @@ def _git_sha() -> str | None:
     return completed.stdout.strip() or None
 
 
-def _interpolate_joints(
-    start: dict[str, float],
-    target: dict[str, float],
-    fraction: float,
-) -> dict[str, float]:
-    return {
-        name: float(start[name]) + (float(target[name]) - float(start[name])) * fraction
-        for name in ARM_JOINTS
-    }
-
-
-def _joint_path(
-    start: dict[str, float],
-    target: dict[str, float],
-    *,
-    step_rad: float,
-) -> tuple[dict[str, float], ...]:
-    max_delta = max(abs(float(target[name]) - float(start[name])) for name in ARM_JOINTS)
-    steps = max(2, int(math.ceil(max_delta / step_rad)) + 1)
-    return tuple(
-        _interpolate_joints(start, target, index / (steps - 1))
-        for index in range(steps)
-    )
-
-
-def _deepest_safe_open_target(
-    arm: SOARM101,
-    start: dict[str, float],
-    desired: dict[str, float],
-    *,
-    clearance_reserve_m: float = 0.002,
-) -> tuple[dict[str, float], float, float]:
-    """Find the deepest strict-workspace fold toward desired with a clearance reserve."""
-    required = arm.config.minimum_self_clearance_m + clearance_reserve_m
-    workspace = {
-        **arm._workspace_kwargs(),  # diagnostic uses the same SDK workspace contract
-        "minimum_self_clearance_m": required,
-    }
-
-    # Search from deepest to most open in 1% increments. This is diagnostic target
-    # selection only; every powered move is independently validated again by the SDK.
-    for step in range(100, 0, -1):
-        fraction = step / 100.0
-        candidate = _interpolate_joints(start, desired, fraction)
-        path = _joint_path(
-            start,
-            candidate,
-            step_rad=arm.config.workspace_check_step_rad,
-        )
-        try:
-            validate_workspace_path(
-                arm.model,
-                path,
-                tcp=arm.active_tcp,
-                **workspace,
-            )
-        except SafetyViolationError:
-            continue
-        clearance = minimum_workspace_self_clearance(
-            arm.model,
-            candidate,
-            tcp=arm.active_tcp,
-        )
-        return candidate, fraction, clearance
-
-    raise RuntimeError(
-        "could not find a nontrivial open pre-Sleep target that passes the strict "
-        "workspace envelope with the requested self-clearance reserve"
-    )
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compare direct Sleep with a validated open pre-Sleep and staged fold."
+        description="Teach a manual wrist Sleep variant and compare direct/staged folds."
     )
     parser.add_argument("--port")
     parser.add_argument("--robot-id")
@@ -121,6 +47,156 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", type=Path)
     return parser
+
+
+def _joint_path(
+    start: dict[str, float],
+    target: dict[str, float],
+    *,
+    step_rad: float,
+) -> tuple[dict[str, float], ...]:
+    max_delta = max(abs(float(target[name]) - float(start[name])) for name in ARM_JOINTS)
+    steps = max(2, int(math.ceil(max_delta / step_rad)) + 1)
+    return tuple(
+        {
+            name: float(start[name])
+            + (float(target[name]) - float(start[name])) * (index / (steps - 1))
+            for name in ARM_JOINTS
+        }
+        for index in range(steps)
+    )
+
+
+def _validate_sleep_family_path(
+    arm: SOARM101,
+    start: dict[str, float],
+    target: dict[str, float],
+) -> None:
+    """Validate a Sleep-family path while ignoring only coarse self-clearance.
+
+    Canonical Sleep already needs this narrow exception because its folded centerlines
+    are intentionally closer than the generic 25 mm heuristic. Floor, reach, base
+    keepout, calibrated joint limits, and all runtime motion guards remain active.
+    """
+    validate_joint_targets(target, limits=arm.get_joint_limits())
+    workspace = {
+        **arm._workspace_kwargs(),
+        "minimum_self_clearance_m": 0.0,
+    }
+    validate_workspace_path(
+        arm.model,
+        _joint_path(
+            start,
+            target,
+            step_rad=arm.config.workspace_check_step_rad,
+        ),
+        tcp=arm.active_tcp,
+        **workspace,
+    )
+
+
+def _move_sleep_family(
+    arm: SOARM101,
+    target: dict[str, float],
+    *,
+    speed: float,
+    acceleration: float,
+    execution_mode: str,
+):
+    start = dict(arm.get_joint_positions().positions)
+    _validate_sleep_family_path(arm, start, target)
+    # The path was just validated with only coarse self-clearance removed. Use
+    # workspace_check="off" here solely to avoid running the generic 25 mm check
+    # a second time inside move_joints; all non-workspace runtime guards remain.
+    return arm.move_joints(
+        target,
+        speed=speed,
+        acceleration=acceleration,
+        execution_mode=execution_mode,
+        workspace_check="off",
+    )
+
+
+def _teach_wrist(
+    arm: SOARM101,
+    library: PoseLibrary,
+    *,
+    speed: float,
+    acceleration: float,
+    execution_mode: str,
+) -> tuple[SavedPose, dict[str, float]]:
+    print()
+    print("TEACH WRIST")
+    print("Moving to canonical Sleep and holding all motors...")
+    arm.move_sleep(
+        speed=speed,
+        acceleration=acceleration,
+        execution_mode=execution_mode,
+    )
+    arm.hold()
+    before = dict(arm.get_joint_positions().positions)
+
+    print()
+    print("Only wrist_flex will now be relaxed.")
+    print("Shoulder pan/lift, elbow, wrist roll, and gripper remain torque-held.")
+    input("Keep hands clear of the other joints and press ENTER to relax wrist_flex: ")
+
+    arm.backend.disable_torque(["wrist_flex"])
+    wrist_reenabled = False
+    try:
+        limits = arm.get_joint_limits()
+        lower, upper = limits["wrist_flex"]
+        while True:
+            print()
+            print("wrist_flex is RELAXED. Move only the wrist by hand to the pose you want.")
+            input("When the wrist looks right, press ENTER to capture it: ")
+            measured = dict(arm.get_joint_positions().positions)
+            wrist = float(measured["wrist_flex"])
+            if lower <= wrist <= upper:
+                break
+            print(
+                "That wrist angle is outside the executable calibrated range: "
+                f"{math.degrees(wrist):.2f} deg not within "
+                f"{math.degrees(lower):.2f}..{math.degrees(upper):.2f} deg."
+            )
+            print("Move the relaxed wrist back inside the range and try again.")
+
+        other_drift = {
+            name: abs(float(measured[name]) - float(before[name]))
+            for name in ARM_JOINTS
+            if name != "wrist_flex"
+        }
+        worst_other = max(other_drift, default=0.0)
+        if worst_other > arm.config.joint_position_tolerance_rad:
+            raise RuntimeError(
+                "a held non-wrist joint moved too far during wrist teaching "
+                f"({math.degrees(worst_other):.2f} deg); refusing to save the pose"
+            )
+
+        # Re-enable only the taught wrist. The hardware backend first latches the
+        # freshly measured position, then enables torque, preventing a stale-goal jump.
+        arm.backend.enable_torque(["wrist_flex"])
+        wrist_reenabled = True
+        arm.hold()
+
+        taught = SavedPose.capture(arm, source="manual_wrist_sleep_teach")
+        library.save(TAUGHT_POSE_NAME, taught)
+        taught_joints = dict(taught.joints)
+        print()
+        print(
+            f"Saved {TAUGHT_POSE_NAME!r}: wrist_flex="
+            f"{math.degrees(taught_joints['wrist_flex']):.2f} deg"
+        )
+        return taught, taught_joints
+    finally:
+        if not wrist_reenabled:
+            try:
+                arm.backend.enable_torque(["wrist_flex"])
+                arm.hold()
+            except Exception:
+                # Preserve the original failure. The operator still has physical
+                # power control if relatching cannot be confirmed.
+                pass
 
 
 def main() -> int:
@@ -145,6 +221,7 @@ def main() -> int:
     ).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     summary_path = output.with_suffix(".summary.json")
+    taught_path = output.with_name("taught-sleep-wrist.json")
 
     speed = math.radians(args.speed_deg_s)
     acceleration = math.radians(args.acceleration_deg_s2)
@@ -160,17 +237,11 @@ def main() -> int:
     print(f"Follower: {port}")
     print(f"Robot ID: {robot_id}")
     print(
-        "Sleep geometry comparison at "
+        "Manual wrist Sleep comparison at "
         f"{args.speed_deg_s:g} deg/s, {args.acceleration_deg_s2:g} deg/s^2, "
         f"mode={args.execution_mode}"
     )
     print(f"Trace: {output}")
-    print()
-    print("Conditions:")
-    print("  A direct: RIGHT -> canonical Sleep")
-    print("  B open_pre_sleep: RIGHT -> deepest strict-workspace-valid neutral-wrist fold")
-    print("  C staged_sleep: RIGHT -> open pre-Sleep -> canonical Sleep")
-    print()
 
     with SOARM101(cfg) as arm:
         arm.enable()
@@ -185,25 +256,42 @@ def main() -> int:
             artifact_label="RIGHT saved pose",
         )
 
-        sleep_target = arm.get_sleep_joint_positions()
-        limits = arm.get_joint_limits()
-        wrist_lower, wrist_upper = limits["wrist_flex"]
-        neutral_wrist = (wrist_lower + wrist_upper) / 2.0
+        taught_pose, taught_sleep = _teach_wrist(
+            arm,
+            library,
+            speed=speed,
+            acceleration=acceleration,
+            execution_mode=args.execution_mode,
+        )
+        taught_path.write_text(
+            json.dumps(
+                {
+                    "pose_name": TAUGHT_POSE_NAME,
+                    "pose": taught_pose.to_mapping(),
+                    "canonical_sleep": arm.get_sleep_joint_positions(),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
+        canonical_sleep = arm.get_sleep_joint_positions()
         metadata = {
-            "kind": "sleep_geometry_comparison",
+            "kind": "manual_sleep_wrist_comparison",
             "git_sha": _git_sha(),
             "speed_deg_s": args.speed_deg_s,
             "acceleration_deg_s2": args.acceleration_deg_s2,
             "execution_mode": args.execution_mode,
-            "canonical_sleep": sleep_target,
-            "neutral_wrist_flex": neutral_wrist,
+            "canonical_sleep": canonical_sleep,
+            "taught_sleep": taught_sleep,
+            "taught_pose_name": TAUGHT_POSE_NAME,
             "right_pose_name": "agent_start_overhead_right",
         }
 
         with PassiveBackendTrace(arm, output, metadata=metadata) as trace:
 
-            def reset_right() -> dict[str, float]:
+            def reset_right() -> None:
                 trace.mark("reset_start", destination="RIGHT")
                 result = arm.move_joints_from_saved_pose(
                     right.joints,
@@ -212,143 +300,109 @@ def main() -> int:
                     execution_mode=args.execution_mode,
                 )
                 arm.hold()
-                measured = dict(arm.get_joint_positions().positions)
                 trace.mark(
                     "reset_end",
                     destination="RIGHT",
                     completed=result.completed,
                     final_positions=dict(result.final_positions),
-                    measured_positions=measured,
-                )
-                return measured
-
-            def open_target_from_right(
-                measured_right: dict[str, float],
-            ) -> tuple[dict[str, float], float, float]:
-                desired = dict(sleep_target)
-                desired["wrist_flex"] = neutral_wrist
-                target, fraction, clearance = _deepest_safe_open_target(
-                    arm,
-                    measured_right,
-                    desired,
-                )
-                trace.mark(
-                    "open_target_selected",
-                    fraction_toward_sleep=fraction,
-                    target=target,
-                    self_clearance_m=clearance,
-                )
-                print(
-                    "Selected open pre-Sleep at "
-                    f"{fraction * 100.0:.0f}% of the RIGHT->neutral-wrist Sleep fold "
-                    f"(coarse clearance {clearance * 1000.0:.1f} mm)."
-                )
-                return target, fraction, clearance
-
-            def run_direct() -> None:
-                reset_right()
-                input(
-                    "\nA DIRECT: arm is at RIGHT. Press ENTER for canonical Sleep, "
-                    "or Ctrl-C to stop: "
-                )
-                trace.mark("condition_start", condition="direct")
-                result = arm.move_sleep(
-                    speed=speed,
-                    acceleration=acceleration,
-                    execution_mode=args.execution_mode,
-                )
-                arm.hold()
-                trace.mark(
-                    "condition_end",
-                    condition="direct",
-                    completed=result.completed,
-                    final_positions=dict(result.final_positions),
                 )
 
-            def run_open_wrist() -> None:
-                measured_right = reset_right()
-                open_target, fraction, clearance = open_target_from_right(measured_right)
-                input(
-                    "\nB OPEN_PRE_SLEEP: arm is at RIGHT. Press ENTER for the deepest "
-                    "strict-workspace-valid neutral-wrist fold, or Ctrl-C to stop: "
-                )
-                trace.mark(
-                    "condition_start",
-                    condition="open_pre_sleep",
-                    fraction_toward_sleep=fraction,
-                    self_clearance_m=clearance,
-                )
-                result = arm.move_joints(
-                    open_target,
-                    speed=speed,
-                    acceleration=acceleration,
-                    execution_mode=args.execution_mode,
-                    workspace_check="full",
-                )
-                arm.hold()
-                trace.mark(
-                    "condition_end",
-                    condition="open_pre_sleep",
-                    completed=result.completed,
-                    final_positions=dict(result.final_positions),
-                )
+            reset_right()
+            input(
+                "\nA DIRECT: arm is at RIGHT. Press ENTER for canonical Sleep, "
+                "or Ctrl-C to stop: "
+            )
+            trace.mark("condition_start", condition="direct_canonical_sleep")
+            direct = arm.move_sleep(
+                speed=speed,
+                acceleration=acceleration,
+                execution_mode=args.execution_mode,
+            )
+            arm.hold()
+            trace.mark(
+                "condition_end",
+                condition="direct_canonical_sleep",
+                completed=direct.completed,
+                final_positions=dict(direct.final_positions),
+            )
 
-            def run_staged_wrist() -> None:
-                measured_right = reset_right()
-                open_target, fraction, clearance = open_target_from_right(measured_right)
-                input(
-                    "\nC STAGED_SLEEP: arm is at RIGHT. Press ENTER for the deepest "
-                    "strict-workspace-valid neutral-wrist pre-Sleep: "
-                )
-                trace.mark(
-                    "condition_start",
-                    condition="staged_sleep_open",
-                    fraction_toward_sleep=fraction,
-                    self_clearance_m=clearance,
-                )
-                first = arm.move_joints(
-                    open_target,
-                    speed=speed,
-                    acceleration=acceleration,
-                    execution_mode=args.execution_mode,
-                    workspace_check="full",
-                )
-                arm.hold()
-                trace.mark(
-                    "condition_end",
-                    condition="staged_sleep_open",
-                    completed=first.completed,
-                    final_positions=dict(first.final_positions),
-                )
-                input(
-                    "Open pre-Sleep reached. Press ENTER to continue from that valid "
-                    "configuration into canonical Sleep: "
-                )
-                trace.mark("condition_start", condition="staged_sleep_final_fold")
-                second = arm.move_sleep(
-                    speed=speed,
-                    acceleration=acceleration,
-                    execution_mode=args.execution_mode,
-                )
-                arm.hold()
-                trace.mark(
-                    "condition_end",
-                    condition="staged_sleep_final_fold",
-                    completed=second.completed,
-                    final_positions=dict(second.final_positions),
-                )
+            reset_right()
+            input(
+                "\nB TAUGHT_WRIST: arm is at RIGHT. Press ENTER for the same folded "
+                "Sleep arm geometry using your taught wrist angle: "
+            )
+            trace.mark("condition_start", condition="direct_taught_wrist_sleep")
+            taught_result = _move_sleep_family(
+                arm,
+                taught_sleep,
+                speed=speed,
+                acceleration=acceleration,
+                execution_mode=args.execution_mode,
+            )
+            arm.hold()
+            trace.mark(
+                "condition_end",
+                condition="direct_taught_wrist_sleep",
+                completed=taught_result.completed,
+                final_positions=dict(taught_result.final_positions),
+            )
 
-            run_direct()
-            run_open_wrist()
-            run_staged_wrist()
+            reset_right()
+            input(
+                "\nC STAGED: arm is at RIGHT. Press ENTER to fold the arm using "
+                "your taught wrist angle first: "
+            )
+            trace.mark("condition_start", condition="staged_taught_wrist")
+            staged_first = _move_sleep_family(
+                arm,
+                taught_sleep,
+                speed=speed,
+                acceleration=acceleration,
+                execution_mode=args.execution_mode,
+            )
+            arm.hold()
+            trace.mark(
+                "condition_end",
+                condition="staged_taught_wrist",
+                completed=staged_first.completed,
+                final_positions=dict(staged_first.final_positions),
+            )
+
+            input(
+                "Taught-wrist Sleep reached. Press ENTER to move only wrist_flex "
+                "into canonical Sleep: "
+            )
+            current = dict(arm.get_joint_positions().positions)
+            final_target = dict(current)
+            final_target["wrist_flex"] = canonical_sleep["wrist_flex"]
+            trace.mark("condition_start", condition="staged_final_wrist_fold")
+            staged_final = _move_sleep_family(
+                arm,
+                final_target,
+                speed=speed,
+                acceleration=acceleration,
+                execution_mode=args.execution_mode,
+            )
+            arm.hold()
+            trace.mark(
+                "condition_end",
+                condition="staged_final_wrist_fold",
+                completed=staged_final.completed,
+                final_positions=dict(staged_final.final_positions),
+            )
+
             arm.hold()
             summary = dict(trace.summary)
 
     summary.update(metadata)
     summary["trace"] = str(output)
+    summary["taught_pose_file"] = str(taught_path)
     summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+
     print()
-    print("Sleep geometry comparison complete; follower remains torque-held.")
+    print("Manual wrist Sleep comparison complete; follower remains torque-held.")
+    print(f"Saved pose: {TAUGHT_POSE_NAME}")
+    print(f"Taught pose artifact: {taught_path}")
     print(f"Trace: {output}")
     print(f"Summary: {summary_path}")
     return 0
