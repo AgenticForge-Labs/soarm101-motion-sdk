@@ -1214,7 +1214,10 @@ class MotionController:
                 + plan.duration_s
                 + self.config.motion_completion_timeout_s
             )
-            observed_path: list[Mapping[str, float]] = [dict(start)]
+            # Workspace escape semantics are anchored to the fresh measured
+            # configuration immediately before the endpoint write, not the earlier
+            # planner snapshot.
+            observed_path: list[Mapping[str, float]] = [dict(previous_actual)]
             while True:
                 self._check_cancelled(cancel_event, cancellation_message)
                 actual = self._monitor_final_target_motion(
