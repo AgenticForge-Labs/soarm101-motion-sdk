@@ -137,7 +137,10 @@ its own persistent connection for live controls; it must not launch CLI subproce
   attempt completed Sleep but was stopped on Sleep -> Overhead by an invalid cross-joint
   phase-coupling guard (0.308 rad vs 0.300 rad). That guard has been removed while preserving
   per-joint corridor/overshoot, reverse-motion, effort/fault, cancellation, timeout, and
-  settle checks; repeat final-target only before drawing a motion-quality conclusion.
+  settle checks. Because the one-shot servos may trace an asynchronous joint combination
+  rather than the synchronized host plan, full-workspace/saved-pose execution now validates
+  the accumulated measured intermediate path on every monitor cycle using the measured-start
+  workspace policy. Repeat final-target only before drawing a motion-quality conclusion.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
