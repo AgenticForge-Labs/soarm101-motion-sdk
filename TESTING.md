@@ -120,6 +120,21 @@ and following-error limit. The replay does not raise or infer limits: it reprodu
 settings under which the commands were originally accepted. Missing/invalid recorded settings
 fail closed. Regression tests cover settings recovery.
 
+### Three-times-speed streamed versus final-target comparison
+
+After the 8 deg/s, 25 deg/s^2 comparison showed substantial rocking in both execution
+strategies, repeat the same route at 3x requested dynamics:
+
+```bash
+bash scripts/run_joint_execution_comparison.sh both 24 75
+```
+
+This keeps the route, saved poses, planning cadence, safety checks, and execution-mode
+comparison unchanged while increasing requested joint speed from 8 to 24 deg/s and requested
+joint acceleration from 25 to 75 deg/s^2. These remain below the configured host-side ceilings
+of approximately 57.3 deg/s and 286.5 deg/s^2. Compare overall rocking and especially the
+deceleration/fold into Sleep. Keep both traces and the generated archive.
+
 ### Streamed versus final-target joint execution — experimental
 
 After the exact teleop replay established that deterministic streamed commands can retain the
