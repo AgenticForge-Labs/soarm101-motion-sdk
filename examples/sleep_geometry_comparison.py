@@ -12,6 +12,7 @@ from pathlib import Path
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion import PassiveBackendTrace
+from soarm101_motion.motion.quality import maximum_joint_drift
 from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.safety import (
     validate_joint_targets,
@@ -161,12 +162,11 @@ def _teach_wrist(
             )
             print("Move the relaxed wrist back inside the range and try again.")
 
-        other_drift = {
-            name: abs(float(measured[name]) - float(before[name]))
-            for name in ARM_JOINTS
-            if name != "wrist_flex"
-        }
-        worst_other = max(other_drift, default=0.0)
+        worst_other = maximum_joint_drift(
+            before,
+            measured,
+            exclude=("wrist_flex",),
+        )
         if worst_other > arm.config.joint_position_tolerance_rad:
             raise RuntimeError(
                 "a held non-wrist joint moved too far during wrist teaching "
