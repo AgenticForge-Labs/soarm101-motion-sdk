@@ -2,6 +2,12 @@
 set -euo pipefail
 
 BRANCH="fix/quantized-slow-tail"
+MODE="${1:-both}"
+if [[ "$MODE" != "both" && "$MODE" != "streamed" && "$MODE" != "final_target" ]]; then
+  echo "usage: $0 [both|streamed|final_target]" >&2
+  exit 2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -40,23 +46,39 @@ echo "Run B = final_target: same validated plan, one synchronized endpoint write
 echo "        with guarded monitoring until settle."
 echo
 echo "Keep physical power accessible and the workspace clear."
-read -r -p "Press ENTER to start RUN A (streamed), or Ctrl-C to stop: "
 
-python examples/motion_quality_trace.py   --execution-mode streamed   --speed-deg-s 8   --acceleration-deg-s2 25   --command-frequency-hz 50   --pause-s 0.5   --output "$OUT_DIR/streamed.jsonl"
+if [[ "$MODE" == "both" || "$MODE" == "streamed" ]]; then
+  read -r -p "Press ENTER to start streamed motion, or Ctrl-C to stop: "
+  python examples/motion_quality_trace.py \
+    --execution-mode streamed \
+    --speed-deg-s 8 \
+    --acceleration-deg-s2 25 \
+    --command-frequency-hz 50 \
+    --pause-s 0.5 \
+    --output "$OUT_DIR/streamed.jsonl"
+  echo
+  echo "Streamed run complete. The arm should be holding in Sleep."
+fi
 
-echo
-echo "RUN A complete. The arm should be holding in Sleep."
-read -r -p "Press ENTER to start RUN B (final_target), or Ctrl-C to stop: "
-
-python examples/motion_quality_trace.py   --execution-mode final_target   --speed-deg-s 8   --acceleration-deg-s2 25   --command-frequency-hz 50   --pause-s 0.5   --output "$OUT_DIR/final-target.jsonl"
+if [[ "$MODE" == "both" || "$MODE" == "final_target" ]]; then
+  read -r -p "Press ENTER to start final_target motion, or Ctrl-C to stop: "
+  python examples/motion_quality_trace.py \
+    --execution-mode final_target \
+    --speed-deg-s 8 \
+    --acceleration-deg-s2 25 \
+    --command-frequency-hz 50 \
+    --pause-s 0.5 \
+    --output "$OUT_DIR/final-target.jsonl"
+  echo
+  echo "Final-target run complete. The arm should be holding in Sleep."
+fi
 
 cat > "$OUT_DIR/README.txt" <<EOF
 SO-ARM101 joint execution comparison
 
 Git SHA: $(git rev-parse HEAD)
 
-Run A: streamed
-Run B: final_target
+Requested mode: $MODE
 
 Route: Sleep -> Overhead -> Left -> Right -> Sleep
 Requested joint speed: 8 deg/s
@@ -70,7 +92,7 @@ final_target:
   The same joint plan is built and validated, but the endpoint is written once per leg.
   Per-joint servo speed limits are derived from the validated planned duration so the
   joints are asked to arrive together. The controller monitors faults, direction,
-  joint-space corridor/coordination error, timeout/cancellation, and final settle.
+  per-joint start-to-target corridor/overshoot, timeout/cancellation, and final settle.
 
 Cartesian move_linear is not part of this comparison and remains host-streamed.
 EOF
@@ -83,8 +105,8 @@ echo "========================================================================"
 echo "COMPARISON COMPLETE"
 echo "========================================================================"
 echo "Folder: $OUT_DIR"
-echo "Streamed trace: $OUT_DIR/streamed.jsonl"
-echo "Final-target trace: $OUT_DIR/final-target.jsonl"
+[[ -f "$OUT_DIR/streamed.jsonl" ]] && echo "Streamed trace: $OUT_DIR/streamed.jsonl"
+[[ -f "$OUT_DIR/final-target.jsonl" ]] && echo "Final-target trace: $OUT_DIR/final-target.jsonl"
 echo "Archive: $ARCHIVE"
 echo
 echo "Follower remains torque-held."
