@@ -130,6 +130,39 @@ def test_final_target_uses_synchronized_per_joint_servo_speeds() -> None:
     assert int(speeds["shoulder_pan"]) > int(speeds["elbow_flex"])
 
 
+def test_final_target_monitors_observed_workspace_path(monkeypatch) -> None:
+    import soarm101_motion.motion.controller as controller_module
+
+    observed: list[tuple[dict[str, float], ...]] = []
+
+    def record_workspace_path(model, samples, *, tcp=None, **kwargs):
+        del model, tcp, kwargs
+        observed.append(tuple(dict(sample) for sample in samples))
+
+    monkeypatch.setattr(
+        controller_module,
+        "validate_workspace_path_from_measured_start",
+        record_workspace_path,
+    )
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.10
+        result = arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+            workspace_check="full",
+        )
+
+    assert result.completed is True
+    assert observed
+    assert len(observed[-1]) == 2
+    assert observed[-1][0]["shoulder_pan"] != observed[-1][1]["shoulder_pan"]
+
+
 def test_final_target_monitor_allows_asynchronous_joint_progress() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
