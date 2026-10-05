@@ -157,6 +157,20 @@ fields: caller metadata cannot duplicate or override them. The geometry script a
 redundant robot ID. Regression coverage verifies the active runtime identity wins over
 conflicting diagnostic metadata.
 
+
+Second attempted run on 2026-10-05 completed direct canonical Sleep, then rejected the
+original neutral-wrist condition before motion because the shoulder/elbow fold still reached
+0.021 m coarse self-clearance against the normal 0.025 m minimum. This is useful evidence:
+neutralizing wrist flex alone does not remove the compact self-clearance geometry.
+
+The diagnostic now derives B/C from the freshly measured RIGHT pose. It searches toward the
+neutral-wrist Sleep target and selects the deepest 1%-increment interpolation whose complete
+joint path passes the normal workspace envelope with an additional 2 mm self-clearance
+reserve. The powered move is then independently revalidated by the ordinary SDK. C continues
+from that strictly valid open pre-Sleep into canonical Sleep using the existing Sleep
+semantics. The selector catches only `SafetyViolationError`; unrelated diagnostic failures
+propagate. Regression tests cover deepest-valid selection and error propagation.
+
 ### Three-times-speed streamed versus final-target comparison
 
 After the 8 deg/s, 25 deg/s^2 comparison showed substantial rocking in both execution
