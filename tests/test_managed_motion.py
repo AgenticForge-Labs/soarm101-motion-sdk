@@ -82,6 +82,73 @@ def test_final_target_joint_execution_writes_endpoint_once() -> None:
     assert history[0] == pytest.approx({name: target[name] for name in ARM_JOINTS})
 
 
+def test_final_target_uses_synchronized_per_joint_servo_speeds() -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.constants import ARM_JOINTS
+
+    class Motor:
+        radians_limits = (-2.0, 2.0)
+
+        @staticmethod
+        def radians_to_raw(value: float) -> int:
+            return int(round(2000.0 + value * 1000.0))
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: Motor() for name in ARM_JOINTS}
+        )
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        target["elbow_flex"] -= 0.10
+        captured: dict[str, object] = {}
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            captured["speed_raw"] = speed_raw
+            captured["acceleration_raw"] = acceleration_raw
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+            workspace_check="off",
+        )
+
+    speeds = captured["speed_raw"]
+    assert isinstance(speeds, dict)
+    assert set(speeds) == set(ARM_JOINTS)
+    assert all(int(value) >= 1 for value in speeds.values())
+    assert int(speeds["shoulder_pan"]) > int(speeds["elbow_flex"])
+
+
+def test_final_target_monitor_rejects_reverse_motion() -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.50
+        previous = dict(start)
+        arm.backend._positions["shoulder_pan"] -= 0.10  # type: ignore[attr-defined]
+
+        with pytest.raises(SafetyViolationError, match="opposite the final target"):
+            arm.motion._monitor_final_target_motion(  # type: ignore[attr-defined]
+                start,
+                target,
+                previous,
+            )
+
+
 def test_streamed_joint_execution_remains_default() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
