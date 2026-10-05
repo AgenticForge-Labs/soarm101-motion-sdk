@@ -140,7 +140,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
   settle checks. Because the one-shot servos may trace an asynchronous joint combination
   rather than the synchronized host plan, full-workspace/saved-pose execution now validates
   the accumulated measured intermediate path on every monitor cycle using the measured-start
-  workspace policy. Repeat final-target only before drawing a motion-quality conclusion.
+  workspace policy. The corrected final-target-only rerun completed the full route but still
+  rocked substantially, so repeated host micro-waypoints are not the primary cause. Retain
+  both execution modes for diagnosis, but shift the next comparison toward teleop-derived
+  command shape versus programmed low-speed servo behavior/profile, especially in the folded
+  Sleep configuration.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
