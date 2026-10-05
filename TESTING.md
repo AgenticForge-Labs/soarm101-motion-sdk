@@ -123,53 +123,48 @@ fail closed. Regression tests cover settings recovery.
 ### Sleep geometry and fold-order comparison
 
 The 24 deg/s runs were subjectively somewhat smoother overall than 8 deg/s, and increasing
-acceleration further did not create a large additional improvement. However, severe rocking
-returned as the arm slowed into the final canonical Sleep posture. This strengthens the
-configuration/load hypothesis: the low-speed problem is amplified by the folded geometry
-itself rather than explained solely by update rate, streamed micro-waypoints, or nominal
-host acceleration.
+acceleration further did not create a large additional improvement. Severe rocking still
+returned as the arm slowed into canonical Sleep, making folded geometry/load an important
+remaining hypothesis.
 
-Run the supervised geometry comparison:
+The first automatic neutral-wrist experiment proved too indirect: neutralizing wrist flex
+while keeping canonical Sleep shoulder/elbow targets still entered the same 0.021 m coarse
+self-clearance state. The experiment now uses an operator-taught wrist angle instead of
+guessing one.
+
+Run:
 
 ```bash
 bash scripts/run_sleep_geometry_comparison.sh streamed 24 150
 ```
 
-It compares three approaches from the same RIGHT saved pose:
+The supervised workflow is:
 
-1. **direct** — the existing canonical Sleep fold.
-2. **open_wrist** — shoulder/lift/elbow/roll use canonical Sleep targets, while wrist flex
-   stays at the midpoint of its calibrated executable range.
-3. **staged_wrist** — first reach that open-wrist pre-Sleep, then fold the remaining wrist
-   into canonical Sleep.
+1. Move into canonical Sleep and hold.
+2. Relax **only `wrist_flex`** while shoulder pan/lift, elbow, wrist roll, and gripper stay
+   torque-held.
+3. The operator hand-places the wrist and presses ENTER.
+4. The measured wrist angle must lie inside the executable calibrated wrist range, and held
+   non-wrist joints must not have drifted beyond the normal joint-position tolerance.
+5. The backend latches the freshly measured wrist position before re-enabling that motor.
+   The resulting full pose is saved as `motion_test_sleep_wrist` and in the experiment
+   folder as `taught-sleep-wrist.json`.
+6. Compare:
+   - **A direct canonical:** RIGHT -> canonical Sleep.
+   - **B taught wrist:** RIGHT -> canonical folded arm geometry with the taught wrist angle.
+   - **C staged wrist:** RIGHT -> taught-wrist Sleep, then move only wrist flex into canonical
+     Sleep.
 
-The open-wrist condition uses normal full workspace validation. Canonical Sleep retains only
-its existing deliberate coarse-workspace exception. Keep all other motion guards unchanged.
-The clean discriminator is whether the rocking appears before the wrist fold, only during the
-final wrist fold, or equally in both geometries.
+B/C reuse the same narrow rationale as canonical Sleep: only the generic coarse
+self-clearance heuristic is omitted. Before powered motion the complete joint path is still
+validated for calibrated joint limits, floor, TCP reach, and base keepout. Runtime
+rate/acceleration/following-error/effort/fault/communication/settle guards remain active.
+This diagnostic is intentionally streamed-only because asynchronous final-target motion would
+require a different measured-path treatment inside the known folded self-clearance state.
 
-
-First attempted run on 2026-10-05 stopped before motion because the geometry diagnostic passed
-`robot_id` inside passive-trace metadata while `PassiveBackendTrace` also supplied its own
-authoritative `robot_id` field, producing a duplicate-keyword `TypeError`. No arm motion
-occurred. The tracer now owns `robot_id` and `calibration_id` as reserved runtime provenance
-fields: caller metadata cannot duplicate or override them. The geometry script also omits the
-redundant robot ID. Regression coverage verifies the active runtime identity wins over
-conflicting diagnostic metadata.
-
-
-Second attempted run on 2026-10-05 completed direct canonical Sleep, then rejected the
-original neutral-wrist condition before motion because the shoulder/elbow fold still reached
-0.021 m coarse self-clearance against the normal 0.025 m minimum. This is useful evidence:
-neutralizing wrist flex alone does not remove the compact self-clearance geometry.
-
-The diagnostic now derives B/C from the freshly measured RIGHT pose. It searches toward the
-neutral-wrist Sleep target and selects the deepest 1%-increment interpolation whose complete
-joint path passes the normal workspace envelope with an additional 2 mm self-clearance
-reserve. The powered move is then independently revalidated by the ordinary SDK. C continues
-from that strictly valid open pre-Sleep into canonical Sleep using the existing Sleep
-semantics. The selector catches only `SafetyViolationError`; unrelated diagnostic failures
-propagate. Regression tests cover deepest-valid selection and error propagation.
+The key observation is whether B is calmer than A, and whether rocking appears primarily in
+C's final wrist-only fold. That directly tests wrist orientation/order while keeping the rest
+of the folded geometry constant.
 
 ### Three-times-speed streamed versus final-target comparison
 
