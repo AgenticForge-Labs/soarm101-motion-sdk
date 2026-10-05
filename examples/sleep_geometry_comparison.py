@@ -13,7 +13,10 @@ from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.poses import PoseLibrary, SavedPose
-from soarm101_motion.safety import validate_joint_targets, validate_workspace_path
+from soarm101_motion.safety import (
+    validate_joint_targets,
+    validate_sleep_family_workspace_path,
+)
 from soarm101_motion.workstation import WorkstationProfileStore
 
 TAUGHT_POSE_NAME = "motion_test_sleep_wrist"
@@ -80,11 +83,7 @@ def _validate_sleep_family_path(
     keepout, calibrated joint limits, and all runtime motion guards remain active.
     """
     validate_joint_targets(target, limits=arm.get_joint_limits())
-    workspace = {
-        **arm._workspace_kwargs(),
-        "minimum_self_clearance_m": 0.0,
-    }
-    validate_workspace_path(
+    validate_sleep_family_workspace_path(
         arm.model,
         _joint_path(
             start,
@@ -92,7 +91,7 @@ def _validate_sleep_family_path(
             step_rad=arm.config.workspace_check_step_rad,
         ),
         tcp=arm.active_tcp,
-        **workspace,
+        **arm._workspace_kwargs(),
     )
 
 
