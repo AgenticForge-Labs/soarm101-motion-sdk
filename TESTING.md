@@ -163,6 +163,22 @@ measured-start workspace policy. Use
 `bash scripts/run_joint_execution_comparison.sh final_target` to continue the physical test
 without repeating the streamed baseline.
 
+
+Corrected physical rerun on 2026-10-05 completed the entire
+Sleep -> Overhead -> Left -> Right -> Sleep route in `final_target` mode with no safety
+trip, but the operator still observed substantial rocking. This rules out repeated host
+micro-waypoint writes as the primary cause of the motion-quality problem. Keep both
+`streamed` and `final_target` implementations for now: they are useful diagnostic
+execution strategies, but neither is yet demonstrated to solve the low-speed shake.
+
+The strongest remaining contrast is now **teleop-derived command shape versus programmed
+low-speed motion**, not streamed versus one-shot transport. Exact teleop-command replay was
+subjectively less mechanical, while both generated streamed motion and generated final-target
+motion rocked, especially around the folded Sleep configuration. Before another architecture
+change, inspect the recorded teleop and final-target traces for actual per-joint velocity,
+raw goal-speed/profile values, low-speed dwell, load-dependent lag, and the final approach to
+Sleep.
+
 ### Teleop versus programmed-motion trace protocol
 
 Before changing PID, command cadence, or trajectory shape again, run the guided comparison
