@@ -54,6 +54,16 @@ Rules:
   schedule and monitoring clock continue unchanged, and the exact final planned sample is
   always written. This actuator-resolution de-duplication does not authorize path retiming,
   larger steps, or weaker speed/acceleration/following-error/fault/effort guards.
+- Joint-space plans may be executed in either `streamed` mode (the default host-sampled
+  trajectory) or the experimental `final_target` mode. Both modes build the same validated
+  joint plan. `final_target` writes the endpoint once with per-joint servo speed limits
+  derived from the validated duration, then observes the hardware until settle. During that
+  transit, endpoint lag is expected and therefore is not treated as ordinary following error;
+  deterministic monitoring instead enforces calibrated/path authority, fault/cancellation,
+  unexpected-direction, joint-space segment corridor/coordination error, timeout, and final
+  settle. This is a different execution primitive, not a bypass around planning or safety.
+  Cartesian `move_linear()` remains host-streamed because its straight TCP path is part of
+  the command contract and cannot be preserved by sending only the final joint solution.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
 
