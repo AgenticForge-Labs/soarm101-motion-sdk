@@ -149,6 +149,10 @@ its own persistent connection for live controls; it must not launch CLI subproce
   only wrist_flex, hand-place it, relatch/save the measured pose, then compare direct canonical
   Sleep, direct taught-wrist Sleep, and a staged final wrist-only fold from RIGHT. Return to
   teleop-derived command shape versus programmed low-speed servo behavior after that result.
+  Prefer the simpler operator-defined `sleep2` experiment first: record the complete current
+  physical pose as `sleep2`, then compare RIGHT -> canonical Sleep against RIGHT -> sleep2 at
+  identical dynamics. Use the manual wrist-teach diagnostic only if the simpler whole-pose
+  comparison shows a geometry effect that needs to be decomposed further.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
