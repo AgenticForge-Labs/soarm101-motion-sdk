@@ -124,10 +124,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
   follower. Capture a marked slow teleop reference, guarded replay of its exact accepted
   arm-joint commands, and the same 8 deg/s saved-pose route at both 50 Hz and 20 Hz. Compare
   raw encoder-step distributions, command-versus-feedback lag, deceleration behavior, and
-  folded/Sleep geometry before selecting the next control change. The physical 20 Hz versus
-  50 Hz comparison showed no large smoothness difference; the strongest remaining symptom is
-  configuration-dependent shake while folding into Sleep. Quantized-target coalescing has
-  looked at most marginally better and is not merge-ready on that evidence alone.
+  folded/Sleep geometry before selecting the next control change. Physical 20 Hz versus 50 Hz
+  comparison showed no large smoothness difference, while exact deterministic replay of the
+  recorded teleop command sequence completed successfully and retained the visibly less-
+  mechanical/smoother character of teleop. This makes generated joint-command structure the
+  leading hypothesis, especially during the folded return to Sleep. Quantized-target
+  coalescing has looked at most marginally better and is not merge-ready on that evidence alone.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
