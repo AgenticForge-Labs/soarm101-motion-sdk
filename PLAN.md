@@ -144,10 +144,11 @@ its own persistent connection for live controls; it must not launch CLI subproce
   rocked substantially, so repeated host micro-waypoints are not the primary cause. Retain
   both execution modes for diagnosis. Faster requested speed is somewhat smoother overall
   and higher acceleration adds little beyond that, while severe rocking returns during the
-  final slowdown into canonical Sleep. Before deeper servo tuning, isolate geometry/fold order:
-  compare direct Sleep, a neutral-wrist pre-Sleep, and a staged wrist fold from the same RIGHT
-  pose. Then return to teleop-derived command shape versus programmed low-speed servo behavior
-  with the geometry result in hand.
+  final slowdown into canonical Sleep. Before deeper servo tuning, isolate wrist
+  orientation/fold order with a physically taught wrist angle: hold canonical Sleep, relax
+  only wrist_flex, hand-place it, relatch/save the measured pose, then compare direct canonical
+  Sleep, direct taught-wrist Sleep, and a staged final wrist-only fold from RIGHT. Return to
+  teleop-derived command shape versus programmed low-speed servo behavior after that result.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
