@@ -10,8 +10,11 @@
 - Corrected the experimental final-target monitor after the first physical run showed that
   cross-joint phase matching falsely rejected normal asynchronous servo progress. Final-target
   now keeps fault/effort, reverse-motion, per-joint corridor/overshoot, timeout/cancellation,
-  and settle guards without requiring joints to remain synchronized in phase. The comparison
-  runner accepts `final_target` as a single-mode rerun.
+  and settle guards without requiring joints to remain synchronized in phase. Full-workspace
+  and saved-pose one-shot moves also validate the accumulated measured intermediate path with
+  the measured-start workspace policy, so asynchronous physical motion is not assumed to
+  follow the synchronized host plan. The comparison runner accepts `final_target` as a
+  single-mode rerun.
 - Added a guided teleop-versus-programmed motion-quality study for the low-speed shake
   investigation. It marks/extracts a slow GUI teleop reference, can replay the exact accepted
   arm-joint command sequence through guarded streaming, runs the same saved-pose route at 50 Hz
