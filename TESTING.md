@@ -120,6 +120,34 @@ and following-error limit. The replay does not raise or infer limits: it reprodu
 settings under which the commands were originally accepted. Missing/invalid recorded settings
 fail closed. Regression tests cover settings recovery.
 
+### Streamed versus final-target joint execution — experimental
+
+After the exact teleop replay established that deterministic streamed commands can retain the
+less-mechanical teleop character, keep the existing streamed implementation and test a second
+joint-only execution strategy rather than replacing it prematurely.
+
+Run:
+
+```bash
+bash scripts/run_joint_execution_comparison.sh
+```
+
+The runner updates the diagnostic branch and executes the same
+Sleep -> Overhead -> Left -> Right -> Sleep route twice at 8 deg/s and 25 deg/s^2:
+
+1. **streamed** — the existing validated host trajectory sends intermediate joint goals.
+2. **final_target** — the same joint plan is built/validated, then exactly one endpoint is
+   written per leg with per-joint servo speed limits derived from the planned duration.
+
+Both runs produce passive JSONL traces in one timestamped directory. Compare visible shake,
+especially Right -> Sleep, plus command count, effective raw servo speeds, feedback progression,
+joint coordination, and final settle. The final-target run is deliberately joint-space only;
+do not infer anything about Cartesian `move_linear()` from this experiment.
+
+The one-shot implementation remains experimental until supervised hardware validation shows
+whether it improves motion quality without introducing coordination, timeout, or safety
+regressions. The default API behavior remains `streamed`.
+
 ### Teleop versus programmed-motion trace protocol
 
 Before changing PID, command cadence, or trajectory shape again, run the guided comparison
