@@ -314,9 +314,10 @@ builds and validates the same joint plan but writes only the endpoint once, usin
 servo speed limits derived from the validated planned duration so the joints are asked to
 arrive together. The controller then observes guarded progress until settle. The one-shot
 mode retains calibrated limits, validated path/workspace policy, fault handling, cancellation,
-unexpected-direction checks, a joint-space corridor/coordination bound, timeout, and final
-settle; it does not apply endpoint following error during the expected transit because the
-servo is intentionally traveling toward that endpoint. Cartesian `move_linear()` remains
+unexpected-direction checks, a per-joint start-to-target corridor/overshoot bound, timeout,
+and final settle; it does not apply endpoint following error or cross-joint phase matching
+during the expected transit because the servos are intentionally executing the endpoint
+internally and may progress at different rates under load. Cartesian `move_linear()` remains
 host-streamed because a single joint endpoint cannot guarantee the requested straight TCP
 path. Use `scripts/run_joint_execution_comparison.sh` for the supervised A/B route.
 
