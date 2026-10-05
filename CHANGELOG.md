@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added a supervised Sleep-geometry diagnostic comparing canonical direct fold, a neutral-
+  wrist pre-Sleep, and a staged final wrist fold from the same RIGHT pose. This isolates
+  configuration/fold-order effects after faster programmed motion proved somewhat smoother
+  overall but still rocked severely during the final slowdown into canonical Sleep.
 - Added an experimental `final_target` execution mode for validated joint-space moves
   alongside the existing default `streamed` mode. Both modes build the same joint plan;
   final-target writes one synchronized endpoint command per leg and monitors guarded progress
