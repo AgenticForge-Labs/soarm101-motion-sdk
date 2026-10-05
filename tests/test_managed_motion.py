@@ -131,8 +131,6 @@ def test_final_target_uses_synchronized_per_joint_servo_speeds() -> None:
 
 
 def test_final_target_monitor_rejects_reverse_motion() -> None:
-    from soarm101_motion.constants import ARM_JOINTS
-
     with SOARM101.simulated() as arm:
         arm.enable()
         start = dict(arm.get_joint_positions().positions)
