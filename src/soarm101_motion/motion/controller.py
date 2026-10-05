@@ -1131,19 +1131,16 @@ class MotionController:
     ) -> dict[str, float]:
         """Monitor one-shot joint motion without treating expected target lag as failure.
 
-        A final-target command intentionally asks the servo to traverse the whole move
-        internally, so ordinary command-vs-measured following error would be large
-        throughout most of the motion. Instead, keep the same configured error bound
-        as a joint-space corridor/coordination guard while preserving fault and
-        unexpected-direction checks.
+        A final-target command intentionally asks each servo to traverse the whole
+        move internally, so ordinary endpoint following error and cross-joint phase
+        matching are not valid transit guards. Keep each joint inside a bounded
+        start-to-target corridor while preserving fault and unexpected-direction checks.
         """
         state = self.backend.get_hardware_state()
         if state.faulted:
             raise HardwareFaultError(state.fault_message or "robot faulted during motion")
         actual = self.backend.read_joint_positions()
 
-        moving: list[str] = []
-        progress: list[float] = []
         for name in ARM_JOINTS:
             delta = float(target[name] - start[name])
             actual_delta = float(actual[name] - previous_actual[name])
@@ -1162,26 +1159,11 @@ class MotionController:
                     raise SafetyViolationError(
                         f"{name} moved {actual_delta:+.3f} rad opposite the final target"
                     )
-                moving.append(name)
-                progress.append((float(actual[name]) - float(start[name])) / delta)
             elif abs(float(actual[name]) - float(start[name])) > self.config.following_error_limit_rad:
                 raise SafetyViolationError(
                     f"{name} drifted {abs(float(actual[name]) - float(start[name])):.3f} rad "
                     "during final-target motion"
                 )
-
-        if moving:
-            reference_progress = min(1.0, max(0.0, float(np.median(progress))))
-            for name in moving:
-                expected = float(start[name]) + (
-                    float(target[name]) - float(start[name])
-                ) * reference_progress
-                coordination_error = abs(float(actual[name]) - expected)
-                if coordination_error > self.config.following_error_limit_rad:
-                    raise SafetyViolationError(
-                        f"{name} final-target coordination error {coordination_error:.3f} rad "
-                        f"exceeds {self.config.following_error_limit_rad:.3f} rad"
-                    )
         return actual
 
     def _execute_final_target_plan(
