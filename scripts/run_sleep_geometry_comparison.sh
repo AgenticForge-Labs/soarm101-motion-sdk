@@ -6,8 +6,8 @@ MODE="${1:-streamed}"
 SPEED_DEG_S="${2:-24}"
 ACCEL_DEG_S2="${3:-150}"
 
-if [[ "$MODE" != "streamed" && "$MODE" != "final_target" ]]; then
-  echo "usage: $0 [streamed|final_target] [speed_deg_s] [accel_deg_s2]" >&2
+if [[ "$MODE" != "streamed" ]]; then
+  echo "usage: $0 [streamed] [speed_deg_s] [accel_deg_s2]" >&2
   exit 2
 fi
 
@@ -38,9 +38,10 @@ echo "Mode: $MODE"
 echo "Speed: $SPEED_DEG_S deg/s"
 echo "Acceleration: $ACCEL_DEG_S2 deg/s^2"
 echo
+echo "Teach: canonical Sleep -> relax wrist_flex only -> hand-place wrist -> ENTER -> relatch/save"
 echo "A: RIGHT -> canonical Sleep"
-echo "B: RIGHT -> deepest strict-workspace-valid neutral-wrist pre-Sleep"
-echo "C: RIGHT -> validated open pre-Sleep -> canonical Sleep"
+echo "B: RIGHT -> same folded Sleep arm geometry with your taught wrist angle"
+echo "C: RIGHT -> taught-wrist Sleep -> fold only wrist_flex into canonical Sleep"
 echo
 echo "Keep physical power accessible and the workspace clear."
 
@@ -56,21 +57,28 @@ Speed: $SPEED_DEG_S deg/s
 Acceleration: $ACCEL_DEG_S2 deg/s^2
 Exit status: $status
 
+Teach:
+  The arm first enters canonical Sleep and holds. Only wrist_flex is relaxed.
+  The operator hand-places that wrist and presses ENTER. The measured wrist must
+  remain inside the executable calibrated range; non-wrist joint drift is checked
+  before wrist_flex is relatched. The complete taught pose is saved locally as
+  motion_test_sleep_wrist and in taught-sleep-wrist.json.
+
 A direct:
   RIGHT -> canonical Sleep.
 
-B open_pre_sleep:
-  RIGHT -> the deepest target found along the neutral-wrist fold toward Sleep
-  whose entire joint path passes the strict workspace envelope with an extra
-  2 mm coarse self-clearance reserve.
+B taught_wrist:
+  RIGHT -> the same canonical folded arm geometry, but using the operator-taught
+  wrist_flex angle.
 
-C staged_sleep:
-  RIGHT -> that validated open pre-Sleep -> canonical Sleep. This tests whether
-  the severe rocking appears only when entering the final deep fold.
+C staged:
+  RIGHT -> taught-wrist Sleep, then only wrist_flex moves into canonical Sleep.
 
-The open pre-Sleep uses the ordinary full workspace validator. Canonical Sleep
-retains its existing deliberate coarse-workspace exception and all other motion
-guards.
+B/C use the same narrow Sleep-family exception for the generic coarse
+self-clearance heuristic. Before motion, the full joint path is checked for
+calibrated joint limits, floor, reach, and base keepout with self-clearance alone
+disabled. Runtime rate/acceleration/following-error/effort/fault/communication/
+settle guards remain active. This diagnostic is intentionally streamed-only.
 EOF
 
 ARCHIVE="$OUT_DIR.tar.gz"
