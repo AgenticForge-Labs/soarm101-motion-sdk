@@ -117,7 +117,6 @@ def main() -> int:
         metadata = {
             "kind": "sleep_geometry_comparison",
             "git_sha": _git_sha(),
-            "robot_id": robot_id,
             "speed_deg_s": args.speed_deg_s,
             "acceleration_deg_s2": args.acceleration_deg_s2,
             "execution_mode": args.execution_mode,
