@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a simple `sleep2` hardware diagnostic: capture the current measured arm pose before
+  any commanded motion, save it as the named pose `sleep2`, then compare RIGHT -> canonical
+  Sleep against RIGHT -> sleep2 at identical dynamics. The test uses the same narrow
+  Sleep-family coarse-self-clearance exception while retaining other workspace preflight and
+  normal streamed runtime guards.
 - Added a supervised Sleep-geometry diagnostic that now teaches the experimental wrist
   position physically: canonical Sleep holds the arm, only wrist_flex is relaxed for manual
   placement, the measured wrist is range/drift checked and safely relatched, and the pose is
