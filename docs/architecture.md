@@ -60,8 +60,11 @@ Rules:
   derived from the validated duration, then observes the hardware until settle. During that
   transit, endpoint lag is expected and therefore is not treated as ordinary following error;
   deterministic monitoring instead enforces calibrated/path authority, fault/cancellation,
-  unexpected-direction, joint-space segment corridor/coordination error, timeout, and final
-  settle. This is a different execution primitive, not a bypass around planning or safety.
+  unexpected-direction, per-joint start-to-target corridor/overshoot bounds, timeout, and
+  final settle. Cross-joint phase matching is intentionally not a transit guard: independent
+  servos may progress at different rates under gravity/load even when their speed limits are
+  chosen for similar arrival time. This is a different execution primitive, not a bypass
+  around planning or safety.
   Cartesian `move_linear()` remains host-streamed because its straight TCP path is part of
   the command contract and cannot be preserved by sending only the final joint solution.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
