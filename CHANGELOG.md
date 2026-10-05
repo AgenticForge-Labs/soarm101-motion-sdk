@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added an experimental `final_target` execution mode for validated joint-space moves
+  alongside the existing default `streamed` mode. Both modes build the same joint plan;
+  final-target writes one synchronized endpoint command per leg and monitors guarded progress
+  to settle rather than sending host micro-waypoints. Cartesian linear motion is unchanged.
+  Added `scripts/run_joint_execution_comparison.sh` for a supervised same-route A/B test.
 - Added a guided teleop-versus-programmed motion-quality study for the low-speed shake
   investigation. It marks/extracts a slow GUI teleop reference, can replay the exact accepted
   arm-joint command sequence through guarded streaming, runs the same saved-pose route at 50 Hz
