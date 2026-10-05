@@ -7,6 +7,11 @@
   final-target writes one synchronized endpoint command per leg and monitors guarded progress
   to settle rather than sending host micro-waypoints. Cartesian linear motion is unchanged.
   Added `scripts/run_joint_execution_comparison.sh` for a supervised same-route A/B test.
+- Corrected the experimental final-target monitor after the first physical run showed that
+  cross-joint phase matching falsely rejected normal asynchronous servo progress. Final-target
+  now keeps fault/effort, reverse-motion, per-joint corridor/overshoot, timeout/cancellation,
+  and settle guards without requiring joints to remain synchronized in phase. The comparison
+  runner accepts `final_target` as a single-mode rerun.
 - Added a guided teleop-versus-programmed motion-quality study for the low-speed shake
   investigation. It marks/extracts a slow GUI teleop reference, can replay the exact accepted
   arm-joint command sequence through guarded streaming, runs the same saved-pose route at 50 Hz
