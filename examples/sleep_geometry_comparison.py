@@ -12,6 +12,7 @@ from pathlib import Path
 
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.exceptions import SafetyViolationError
 from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.poses import PoseLibrary
 from soarm101_motion.safety import (
@@ -90,7 +91,7 @@ def _deepest_safe_open_target(
                 tcp=arm.active_tcp,
                 **workspace,
             )
-        except Exception:
+        except SafetyViolationError:
             continue
         clearance = minimum_workspace_self_clearance(
             arm.model,
@@ -107,7 +108,7 @@ def _deepest_safe_open_target(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compare direct, open-wrist, and staged-wrist approaches to Sleep."
+        description="Compare direct Sleep with a validated open pre-Sleep and staged fold."
     )
     parser.add_argument("--port")
     parser.add_argument("--robot-id")
