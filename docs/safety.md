@@ -172,7 +172,13 @@ therefore does **not** weaken the endpoint or calibrated path authority; instead
 fault state, unexpected/reverse motion, departure outside each joint's start-to-target
 corridor plus the configured overshoot bound, cancellation, timeout, and final settling.
 It does not require joints to remain phase-locked during transit because that would turn
-normal load-dependent servo lag into a false safety trip. Any failure requests STOP/HOLD. Physical power must remain immediately
+normal load-dependent servo lag into a false safety trip. When the caller requested full
+workspace checking, the controller also validates the accumulated measured intermediate
+configurations with the existing measured-start workspace policy at each monitor cycle.
+Therefore the precomputed synchronized host path is not treated as proof that an asynchronous
+one-shot physical path is safe. Target-only/off requests keep their documented narrower
+workspace semantics; Sleep keeps its deliberate coarse-workspace exception. Any failure
+requests STOP/HOLD. Physical power must remain immediately
 accessible during testing.
 
 The final-target mode is joint-space only. Do not use it as a shortcut for Cartesian
