@@ -418,6 +418,8 @@ class SOARM101:
             relative=False,
             wait=wait,
             execution_mode=execution_mode,
+            monitor_workspace=self.config.enable_workspace_checks,
+            tcp=self.active_tcp,
         )
 
     def move_joints(
@@ -449,6 +451,10 @@ class SOARM101:
             servo_acceleration_raw=servo_acceleration_raw,
             synchronize_servo_arrival=synchronize_servo_arrival,
             execution_mode=execution_mode,
+            monitor_workspace=(
+                self.config.enable_workspace_checks and workspace_check == "full"
+            ),
+            tcp=self.active_tcp,
         )
 
     def move_home(
