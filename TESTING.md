@@ -120,6 +120,34 @@ and following-error limit. The replay does not raise or infer limits: it reprodu
 settings under which the commands were originally accepted. Missing/invalid recorded settings
 fail closed. Regression tests cover settings recovery.
 
+### Sleep geometry and fold-order comparison
+
+The 24 deg/s runs were subjectively somewhat smoother overall than 8 deg/s, and increasing
+acceleration further did not create a large additional improvement. However, severe rocking
+returned as the arm slowed into the final canonical Sleep posture. This strengthens the
+configuration/load hypothesis: the low-speed problem is amplified by the folded geometry
+itself rather than explained solely by update rate, streamed micro-waypoints, or nominal
+host acceleration.
+
+Run the supervised geometry comparison:
+
+```bash
+bash scripts/run_sleep_geometry_comparison.sh streamed 24 150
+```
+
+It compares three approaches from the same RIGHT saved pose:
+
+1. **direct** — the existing canonical Sleep fold.
+2. **open_wrist** — shoulder/lift/elbow/roll use canonical Sleep targets, while wrist flex
+   stays at the midpoint of its calibrated executable range.
+3. **staged_wrist** — first reach that open-wrist pre-Sleep, then fold the remaining wrist
+   into canonical Sleep.
+
+The open-wrist condition uses normal full workspace validation. Canonical Sleep retains only
+its existing deliberate coarse-workspace exception. Keep all other motion guards unchanged.
+The clean discriminator is whether the rocking appears before the wrist fold, only during the
+final wrist fold, or equally in both geometries.
+
 ### Three-times-speed streamed versus final-target comparison
 
 After the 8 deg/s, 25 deg/s^2 comparison showed substantial rocking in both execution
