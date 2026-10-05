@@ -120,6 +120,33 @@ and following-error limit. The replay does not raise or infer limits: it reprodu
 settings under which the commands were originally accepted. Missing/invalid recorded settings
 fail closed. Regression tests cover settings recovery.
 
+### Sleep versus sleep2 — primary geometry check
+
+The simplest operator-driven geometry experiment is now the preferred next test:
+
+```bash
+bash scripts/run_sleep2_comparison.sh 24 150
+```
+
+Before invoking the script, physically place the arm in the alternate resting pose you want
+to evaluate. The Python program captures the **current measured pose before issuing any arm
+motion or torque-latch command**, validates its calibrated joint coordinates, and persists it
+as the named pose `sleep2` plus an experiment-local `sleep2.json`.
+
+It then runs a direct A/B from the same RIGHT saved pose:
+
+1. **A — canonical Sleep:** RIGHT -> built-in calibration-relative Sleep.
+2. **B — sleep2:** RIGHT -> the recorded operator-selected pose.
+
+The sleep2 route uses the same narrow Sleep-family exception for the generic coarse
+self-clearance heuristic while retaining calibrated joint limits, floor, TCP reach, base
+keepout, and normal streamed runtime guards. This intentionally avoids wrist-specific
+teaching logic or inferred intermediate geometry; the operator chooses the complete alternate
+resting configuration and the test compares that exact configuration against canonical Sleep.
+
+The earlier manual-wrist diagnostic remains available for deeper follow-up, but sleep2 is the
+preferred next test because it isolates the configuration choice with much less machinery.
+
 ### Sleep geometry and fold-order comparison
 
 The 24 deg/s runs were subjectively somewhat smoother overall than 8 deg/s, and increasing
