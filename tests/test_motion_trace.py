@@ -16,6 +16,33 @@ class _FakeMotor:
         return int(round(2048 + float(value) * 1000.0))
 
 
+def test_passive_backend_trace_reserves_runtime_provenance_fields(tmp_path) -> None:
+    path = tmp_path / "provenance.jsonl"
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            calibration_id="trace-test",
+            motors={name: _FakeMotor() for name in ARM_JOINTS},
+        )
+        arm.enable()
+        with PassiveBackendTrace(
+            arm,
+            path,
+            metadata={
+                "robot_id": "wrong-robot",
+                "calibration_id": "wrong-calibration",
+                "test_case": "reserved-provenance",
+            },
+        ):
+            pass
+
+    start = json.loads(path.read_text().splitlines()[0])
+    assert start["event"] == "trace_start"
+    assert start["robot_id"] == arm.config.robot_id
+    assert start["calibration_id"] == arm.calibration_id
+    assert start["test_case"] == "reserved-provenance"
+
+
 def test_passive_backend_trace_records_existing_motion_io(tmp_path) -> None:
     path = tmp_path / "motion.jsonl"
 
