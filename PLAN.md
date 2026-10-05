@@ -142,9 +142,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
   the accumulated measured intermediate path on every monitor cycle using the measured-start
   workspace policy. The corrected final-target-only rerun completed the full route but still
   rocked substantially, so repeated host micro-waypoints are not the primary cause. Retain
-  both execution modes for diagnosis, but shift the next comparison toward teleop-derived
-  command shape versus programmed low-speed servo behavior/profile, especially in the folded
-  Sleep configuration.
+  both execution modes for diagnosis. Faster requested speed is somewhat smoother overall
+  and higher acceleration adds little beyond that, while severe rocking returns during the
+  final slowdown into canonical Sleep. Before deeper servo tuning, isolate geometry/fold order:
+  compare direct Sleep, a neutral-wrist pre-Sleep, and a staged wrist fold from the same RIGHT
+  pose. Then return to teleop-derived command shape versus programmed low-speed servo behavior
+  with the geometry result in hand.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
