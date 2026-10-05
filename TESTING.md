@@ -75,6 +75,33 @@ unchanged.
 Regression tests cover: improving-but-still-inside motion, deeper-fold rejection, strict
 re-entry rejection after clearing the envelope, and preservation of the floor guard.
 
+### Exact teleop replay physical result — 2026-10-04
+
+The post-study exact teleop replay completed successfully on the physical follower after the
+replay was corrected to reuse the original GUI teleop safety settings. The operator could
+clearly recognize the replay as the recorded teleop motion because its speed varied naturally,
+and reported that it felt **less mechanical and smoother** than the generated programmed route.
+
+This is the strongest physical discriminator in the low-speed investigation so far:
+
+- live teleop is smooth enough to serve as the reference behavior;
+- deterministic replay of the exact accepted teleop arm-command sequence also preserves that
+  less-mechanical character;
+- programmed 20 Hz versus 50 Hz motion showed no large subjective difference;
+- the generated route remains especially shaky while folding back into Sleep.
+
+Therefore frequent position streaming and 20 Hz transport are not sufficient explanations for
+the shake. The leading hypothesis is now the **generated joint-command profile itself**:
+per-joint discrete velocity/acceleration structure, long stretches of very small encoder steps,
+stop/start behavior as joints enter low-speed portions of the synchronized path, and how those
+profiles interact with gravity/backlash/static friction in the folded Sleep geometry.
+
+Before another control change, compare the exact replay trace against both programmed traces
+quantitatively: per-joint raw encoder increment distributions, commanded velocity and
+acceleration, zero/near-zero runs, sign changes, command-versus-actual lag, and the approach to
+Sleep. Do not treat cadence tuning as the primary next intervention unless the trace comparison
+reveals a hidden timing effect.
+
 ### Exact-replay configuration mismatch — 2026-10-04
 
 The first post-study exact replay preflight rejected original teleop sample 117 as
