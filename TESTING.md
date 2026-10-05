@@ -166,6 +166,16 @@ The key observation is whether B is calmer than A, and whether rocking appears p
 C's final wrist-only fold. That directly tests wrist orientation/order while keeping the rest
 of the folded geometry constant.
 
+
+Manual-teach attempt on 2026-10-05 successfully relaxed only `wrist_flex` and captured the
+operator-positioned wrist, but stopped before save/retest because the diagnostic computed
+`max(other_drift)` on a dictionary, yielding a joint-name string rather than the largest
+numeric drift. The failure occurred before the taught pose was persisted. The cleanup path
+re-enabled `wrist_flex` and re-held the arm. The diagnostic now uses the shared
+`maximum_joint_drift(..., exclude=("wrist_flex",))` helper, with regression coverage proving
+the taught wrist can move substantially while the numeric maximum drift of the still-held
+joints is evaluated correctly.
+
 ### Three-times-speed streamed versus final-target comparison
 
 After the 8 deg/s, 25 deg/s^2 comparison showed substantial rocking in both execution
