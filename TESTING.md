@@ -145,8 +145,19 @@ joint coordination, and final settle. The final-target run is deliberately joint
 do not infer anything about Cartesian `move_linear()` from this experiment.
 
 The one-shot implementation remains experimental until supervised hardware validation shows
-whether it improves motion quality without introducing coordination, timeout, or safety
-regressions. The default API behavior remains `streamed`.
+whether it improves motion quality without introducing timeout or safety regressions. The
+default API behavior remains `streamed`.
+
+First physical A/B attempt on 2026-10-05: the streamed route completed. In `final_target`,
+the initial Sleep leg completed, but Sleep -> Overhead was stopped/held by the experimental
+cross-joint phase guard when wrist flex differed from median joint progress by 0.308 rad
+against the reused 0.300 rad following-error threshold. That rule was judged invalid for the
+one-shot contract: independent servos can legitimately advance at different rates while still
+moving in the commanded direction and remaining inside their validated start-to-target joint
+corridors. The phase guard was removed; per-joint corridor/overshoot, reverse-motion,
+hardware/effort fault, cancellation, timeout, and final-settle checks remain. Use
+`bash scripts/run_joint_execution_comparison.sh final_target` to continue the physical test
+without repeating the streamed baseline.
 
 ### Teleop versus programmed-motion trace protocol
 
