@@ -63,8 +63,13 @@ Rules:
   unexpected-direction, per-joint start-to-target corridor/overshoot bounds, timeout, and
   final settle. Cross-joint phase matching is intentionally not a transit guard: independent
   servos may progress at different rates under gravity/load even when their speed limits are
-  chosen for similar arrival time. This is a different execution primitive, not a bypass
-  around planning or safety.
+  chosen for similar arrival time. For full-workspace and saved-pose execution, the measured
+  intermediate joint configurations are appended to an observed path and validated through
+  the same measured-start workspace policy on every monitor cycle. This prevents the endpoint
+  mode from treating the synchronized host plan as evidence for an asynchronous physical path.
+  Explicit target-only/off modes preserve their existing scope, including Sleep's deliberate
+  coarse-workspace exception. This is a different execution primitive, not a bypass around
+  planning or safety.
   Cartesian `move_linear()` remains host-streamed because its straight TCP path is part of
   the command contract and cannot be preserved by sending only the final joint solution.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
