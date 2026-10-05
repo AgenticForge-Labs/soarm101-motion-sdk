@@ -169,9 +169,10 @@ intermediate goals.
 This changes what "following error" can mean during transit: the measured arm is expected to
 be far from the final endpoint immediately after that endpoint is issued. The one-shot mode
 therefore does **not** weaken the endpoint or calibrated path authority; instead it monitors
-fault state, unexpected/reverse motion, departure outside the start-to-target joint corridor,
-cross-joint coordination divergence using the configured error bound, cancellation, timeout,
-and final settling. Any failure requests STOP/HOLD. Physical power must remain immediately
+fault state, unexpected/reverse motion, departure outside each joint's start-to-target
+corridor plus the configured overshoot bound, cancellation, timeout, and final settling.
+It does not require joints to remain phase-locked during transit because that would turn
+normal load-dependent servo lag into a false safety trip. Any failure requests STOP/HOLD. Physical power must remain immediately
 accessible during testing.
 
 The final-target mode is joint-space only. Do not use it as a shortcut for Cartesian
