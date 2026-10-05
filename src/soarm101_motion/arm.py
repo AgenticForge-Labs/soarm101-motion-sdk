@@ -554,8 +554,8 @@ class SOARM101:
         geometry check. The calibrated folded posture places non-neighboring link
         centerlines closer than the generic 25 mm self-clearance heuristic even
         though the physical arm is designed to fold there. Calibrated joint/tool
-        limits, trajectory/rate/acceleration checks, following-error, effort,
-        fault, communication, and completion guards remain active.
+        limits, planned dynamics, the active streamed/final-target progress guards,
+        effort, fault, communication, and completion checks remain active.
         """
         handle = MotionHandle(
             lambda event: self._execute_sleep(
