@@ -49,6 +49,24 @@ def recorded_teleop_settings(rows: Iterable[dict[str, Any]]) -> dict[str, float]
     return result
 
 
+def maximum_joint_drift(
+    reference: dict[str, float],
+    measured: dict[str, float],
+    *,
+    exclude: Iterable[str] = (),
+) -> float:
+    """Return the largest absolute joint drift, optionally excluding named joints."""
+    excluded = set(exclude)
+    names = [name for name in reference if name not in excluded]
+    if any(name not in measured for name in names):
+        missing = [name for name in names if name not in measured]
+        raise ValueError(f"measured joints are missing: {', '.join(missing)}")
+    return max(
+        (abs(float(measured[name]) - float(reference[name])) for name in names),
+        default=0.0,
+    )
+
+
 def teleop_frames(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows if row.get("event") == "teleop_frame"]
 
