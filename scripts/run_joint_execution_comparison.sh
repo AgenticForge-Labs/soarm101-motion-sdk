@@ -3,8 +3,10 @@ set -euo pipefail
 
 BRANCH="fix/quantized-slow-tail"
 MODE="${1:-both}"
+SPEED_DEG_S="${2:-8}"
+ACCEL_DEG_S2="${3:-25}"
 if [[ "$MODE" != "both" && "$MODE" != "streamed" && "$MODE" != "final_target" ]]; then
-  echo "usage: $0 [both|streamed|final_target]" >&2
+  echo "usage: $0 [both|streamed|final_target] [speed_deg_s] [accel_deg_s2]" >&2
   exit 2
 fi
 
@@ -27,6 +29,18 @@ fi
 source .venv/bin/activate
 python -m pip install -e ".[gui]" >/dev/null
 
+python - "$SPEED_DEG_S" "$ACCEL_DEG_S2" <<'PY'
+import math
+import sys
+
+speed = float(sys.argv[1])
+accel = float(sys.argv[2])
+if not math.isfinite(speed) or speed <= 0:
+    raise SystemExit("speed_deg_s must be positive and finite")
+if not math.isfinite(accel) or accel <= 0:
+    raise SystemExit("accel_deg_s2 must be positive and finite")
+PY
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="$HOME/soarm-motion-tests/joint-execution-comparison-$STAMP"
 mkdir -p "$OUT_DIR"
@@ -37,8 +51,8 @@ git rev-parse HEAD
 echo
 echo "Both runs use:"
 echo "  route: Sleep -> Overhead -> Left -> Right -> Sleep"
-echo "  requested joint speed: 8 deg/s"
-echo "  requested joint acceleration: 25 deg/s^2"
+echo "  requested joint speed: $SPEED_DEG_S deg/s"
+echo "  requested joint acceleration: $ACCEL_DEG_S2 deg/s^2"
 echo "  planning cadence: 50 Hz"
 echo
 echo "Run A = streamed: validated host trajectory sends intermediate joint targets."
@@ -56,8 +70,8 @@ if [[ "$MODE" == "both" || "$MODE" == "streamed" ]]; then
   streamed_status=0
   python examples/motion_quality_trace.py \
     --execution-mode streamed \
-    --speed-deg-s 8 \
-    --acceleration-deg-s2 25 \
+    --speed-deg-s "$SPEED_DEG_S" \
+    --acceleration-deg-s2 "$ACCEL_DEG_S2" \
     --command-frequency-hz 50 \
     --pause-s 0.5 \
     --output "$OUT_DIR/streamed.jsonl" || streamed_status=$?
@@ -79,8 +93,8 @@ elif [[ "$MODE" == "both" || "$MODE" == "final_target" ]]; then
   final_status=0
   python examples/motion_quality_trace.py \
     --execution-mode final_target \
-    --speed-deg-s 8 \
-    --acceleration-deg-s2 25 \
+    --speed-deg-s "$SPEED_DEG_S" \
+    --acceleration-deg-s2 "$ACCEL_DEG_S2" \
     --command-frequency-hz 50 \
     --pause-s 0.5 \
     --output "$OUT_DIR/final-target.jsonl" || final_status=$?
@@ -105,8 +119,8 @@ Streamed exit status: $STREAMED_STATUS
 Final-target exit status: $FINAL_TARGET_STATUS
 
 Route: Sleep -> Overhead -> Left -> Right -> Sleep
-Requested joint speed: 8 deg/s
-Requested joint acceleration: 25 deg/s^2
+Requested joint speed: $SPEED_DEG_S deg/s
+Requested joint acceleration: $ACCEL_DEG_S2 deg/s^2
 Planning cadence: 50 Hz
 
 streamed:
