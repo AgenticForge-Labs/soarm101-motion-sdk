@@ -30,7 +30,7 @@ from soarm101_motion.exceptions import (
 )
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
-from soarm101_motion.motion import MotionController, MotionHandle
+from soarm101_motion.motion import JointExecutionMode, MotionController, MotionHandle
 from soarm101_motion.poses import sleep_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
@@ -405,6 +405,7 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Move to saved joint coordinates with a bounded exit from an existing fold."""
         current, target = self._resolve_joint_target(positions, relative=False)
@@ -416,6 +417,7 @@ class SOARM101:
             acceleration=acceleration,
             relative=False,
             wait=wait,
+            execution_mode=execution_mode,
         )
 
     def move_joints(
@@ -429,6 +431,7 @@ class SOARM101:
         servo_speed_raw: int | None = None,
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
+        execution_mode: JointExecutionMode = "streamed",
         workspace_check: Literal["full", "target_only", "off"] = "full",
     ) -> MotionResult | MotionHandle[MotionResult]:
         self._validate_joint_workspace_path(
@@ -445,6 +448,7 @@ class SOARM101:
             servo_speed_raw=servo_speed_raw,
             servo_acceleration_raw=servo_acceleration_raw,
             synchronize_servo_arrival=synchronize_servo_arrival,
+            execution_mode=execution_mode,
         )
 
     def move_home(
@@ -453,12 +457,14 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
         return self.move_joints(
             HOME_JOINTS,
             speed=speed,
             acceleration=acceleration,
             wait=wait,
+            execution_mode=execution_mode,
         )
 
     move_gohome = move_home
@@ -499,12 +505,14 @@ class SOARM101:
         *,
         speed: float | None,
         acceleration: float | None,
+        execution_mode: JointExecutionMode,
     ) -> MotionResult:
         arm_handle = self.move_joints(
             self.get_sleep_joint_positions(),
             speed=speed,
             acceleration=acceleration,
             wait=False,
+            execution_mode=execution_mode,
             workspace_check="off",
         )
         assert isinstance(arm_handle, MotionHandle)
@@ -534,6 +542,7 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Fold the arm into Sleep, then close the stock gripper safely.
 
@@ -553,6 +562,7 @@ class SOARM101:
                 event,
                 speed=speed,
                 acceleration=acceleration,
+                execution_mode=execution_mode,
             )
         )
         handle.start()
@@ -606,6 +616,7 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
         solution = self.solve_ik(
             target,
@@ -621,6 +632,7 @@ class SOARM101:
             speed=speed,
             acceleration=acceleration,
             wait=wait,
+            execution_mode=execution_mode,
         )
 
     def move_linear(
