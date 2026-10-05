@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
@@ -42,6 +42,7 @@ from soarm101_motion.trajectories import Trajectory
 from soarm101_motion.types import MotionResult, Pose
 
 T = TypeVar("T")
+JointExecutionMode = Literal["streamed", "final_target"]
 
 
 class MotionHandle(Generic[T]):
@@ -1122,6 +1123,142 @@ class MotionController:
                 )
         return actual
 
+    def _monitor_final_target_motion(
+        self,
+        start: Mapping[str, float],
+        target: Mapping[str, float],
+        previous_actual: Mapping[str, float],
+    ) -> dict[str, float]:
+        """Monitor one-shot joint motion without treating expected target lag as failure.
+
+        A final-target command intentionally asks the servo to traverse the whole move
+        internally, so ordinary command-vs-measured following error would be large
+        throughout most of the motion. Instead, keep the same configured error bound
+        as a joint-space corridor/coordination guard while preserving fault and
+        unexpected-direction checks.
+        """
+        state = self.backend.get_hardware_state()
+        if state.faulted:
+            raise HardwareFaultError(state.fault_message or "robot faulted during motion")
+        actual = self.backend.read_joint_positions()
+
+        moving: list[str] = []
+        progress: list[float] = []
+        for name in ARM_JOINTS:
+            delta = float(target[name] - start[name])
+            actual_delta = float(actual[name] - previous_actual[name])
+            lower = min(float(start[name]), float(target[name])) - self.config.following_error_limit_rad
+            upper = max(float(start[name]), float(target[name])) + self.config.following_error_limit_rad
+            if actual[name] < lower or actual[name] > upper:
+                raise SafetyViolationError(
+                    f"{name} left final-target motion corridor: measured {actual[name]:.3f} rad "
+                    f"outside {lower:.3f}..{upper:.3f} rad"
+                )
+            if abs(delta) >= self.config.joint_position_tolerance_rad:
+                if (
+                    abs(actual_delta) >= self.config.unexpected_direction_threshold_rad
+                    and actual_delta * delta < 0.0
+                ):
+                    raise SafetyViolationError(
+                        f"{name} moved {actual_delta:+.3f} rad opposite the final target"
+                    )
+                moving.append(name)
+                progress.append((float(actual[name]) - float(start[name])) / delta)
+            elif abs(float(actual[name]) - float(start[name])) > self.config.following_error_limit_rad:
+                raise SafetyViolationError(
+                    f"{name} drifted {abs(float(actual[name]) - float(start[name])):.3f} rad "
+                    "during final-target motion"
+                )
+
+        if moving:
+            reference_progress = min(1.0, max(0.0, float(np.median(progress))))
+            for name in moving:
+                expected = float(start[name]) + (
+                    float(target[name]) - float(start[name])
+                ) * reference_progress
+                coordination_error = abs(float(actual[name]) - expected)
+                if coordination_error > self.config.following_error_limit_rad:
+                    raise SafetyViolationError(
+                        f"{name} final-target coordination error {coordination_error:.3f} rad "
+                        f"exceeds {self.config.following_error_limit_rad:.3f} rad"
+                    )
+        return actual
+
+    def _execute_final_target_plan(
+        self,
+        plan: PlannedPath,
+        cancel_event: threading.Event,
+        *,
+        cancellation_message: str,
+        servo_speed_raw: int | Mapping[str, int] | None = None,
+        servo_acceleration_raw: int | None = None,
+    ) -> MotionResult:
+        """Execute a validated joint plan with exactly one endpoint command.
+
+        The existing host plan still owns endpoint/path validation and timing. The
+        actuator command strategy differs only at execution: one synchronized final
+        target is written, then the controller observes guarded progress until settle.
+        """
+        samples = plan.command_samples
+        start = samples[0]
+        target = samples[-1]
+        try:
+            if len(samples) <= 1:
+                return self._wait_for_settle(target, cancel_event)
+
+            self._check_cancelled(cancel_event, cancellation_message)
+            previous_actual = self.backend.read_joint_positions()
+            command_speed_raw = servo_speed_raw
+            if command_speed_raw is None:
+                command_speed_raw = self._synchronized_servo_speed_raw(
+                    start,
+                    target,
+                    interval_s=max(
+                        plan.duration_s,
+                        1.0 / self.config.command_frequency_hz,
+                    ),
+                )
+            self.backend.write_joint_positions(
+                target,
+                speed_raw=command_speed_raw,
+                acceleration_raw=servo_acceleration_raw,
+            )
+
+            deadline = (
+                time.monotonic()
+                + plan.duration_s
+                + self.config.motion_completion_timeout_s
+            )
+            while True:
+                self._check_cancelled(cancel_event, cancellation_message)
+                actual = self._monitor_final_target_motion(
+                    start,
+                    target,
+                    previous_actual,
+                )
+                error = max(abs(float(actual[name]) - float(target[name])) for name in ARM_JOINTS)
+                if error <= self.config.joint_position_tolerance_rad:
+                    return self._wait_for_settle(target, cancel_event)
+                if time.monotonic() >= deadline:
+                    errors = {
+                        name: float(target[name] - actual[name])
+                        for name in ARM_JOINTS
+                    }
+                    worst_joint = max(ARM_JOINTS, key=lambda name: abs(errors[name]))
+                    raise MotionTimeoutError(
+                        "final-target motion did not reach the destination within "
+                        f"{plan.duration_s + self.config.motion_completion_timeout_s:.2f}s; "
+                        f"worst={worst_joint} error={abs(errors[worst_joint]):.4f} rad"
+                    )
+                previous_actual = actual
+                time.sleep(self.config.trajectory_feedback_interval_s)
+        except BaseException:
+            try:
+                self.backend.stop()
+            except Exception:
+                pass
+            raise
+
     def _wait_for_settle(
         self,
         target: Mapping[str, float],
@@ -1352,7 +1489,12 @@ class MotionController:
         servo_speed_raw: int | None = None,
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
+        if execution_mode not in {"streamed", "final_target"}:
+            raise InvalidCommandError(
+                "execution_mode must be 'streamed' or 'final_target'"
+            )
         if synchronize_servo_arrival and servo_speed_raw is not None:
             raise InvalidCommandError(
                 "servo_speed_raw cannot be combined with synchronize_servo_arrival"
@@ -1404,16 +1546,27 @@ class MotionController:
                 acceleration=joint_acceleration,
                 limits=limits,
             )
-            handle = self._start_locked(
-                lambda event: self._execute_plan(
-                    plan,
-                    event,
-                    cancellation_message="joint motion cancelled",
-                    servo_speed_raw=servo_speed_raw,
-                    servo_acceleration_raw=servo_acceleration_raw,
-                    synchronize_servo_arrival=synchronize_servo_arrival,
+            if execution_mode == "final_target":
+                handle = self._start_locked(
+                    lambda event: self._execute_final_target_plan(
+                        plan,
+                        event,
+                        cancellation_message="joint motion cancelled",
+                        servo_speed_raw=servo_speed_raw,
+                        servo_acceleration_raw=servo_acceleration_raw,
+                    )
                 )
-            )
+            else:
+                handle = self._start_locked(
+                    lambda event: self._execute_plan(
+                        plan,
+                        event,
+                        cancellation_message="joint motion cancelled",
+                        servo_speed_raw=servo_speed_raw,
+                        servo_acceleration_raw=servo_acceleration_raw,
+                        synchronize_servo_arrival=synchronize_servo_arrival,
+                    )
+                )
         return handle.wait() if wait else handle
 
     def move_linear(
