@@ -129,7 +129,7 @@ leaves the arm holding rather than dropping it.
 - Feetech transport and synchronized writes use one reentrant lock.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.
-- Active trajectories monitor faults, following error, unexpected direction, and deadline overruns.
+- Active trajectories monitor faults, following error, unexpected direction, and deadline overruns. Live joint streaming treats a just-commanded reversal specially: it may accept no more than 100 ms of non-growing residual motion in the previous physical direction while the servo brakes. The ordinary planned-motion direction guard remains strict, and any growing/persistent wrong-way motion or following-error/fault/effort violation still stops the stream.
 - Host-streamed planned joint trajectories use the responsive servo tracking profile
   (Goal_Velocity=0, acceleration=254) by default, matching teleoperation. Requested host
   speed/acceleration remain the motion ceilings; this removes a redundant slower actuator
@@ -137,12 +137,12 @@ leaves the arm holding rather than dropping it.
 - Motion failures issue a best-effort hold.
 - `wait=True` verifies measured completion.
 - Stock-gripper moves participate in the arm-level stop lifecycle.
-- Sleep folds the arm first and then parks the stock gripper at the farther-open of a
-  calibration-derived 1° mechanical-stop inset or 2.5% normalized opening. A supervised
-  2026-10-06 run showed that the former 1°-only target could settle successfully and then
-  latch an STS3215 overload while holding near the hard-close stop. The wider minimum keeps
-  the compact Sleep posture without intentionally sustaining end-stop load; saved gripper
-  calibration and drive mode remain authoritative.
+- Sleep folds the arm first and then closes the stock gripper to a calibration-derived
+  target 1° inside the measured closed mechanical stop by default. The 2026-10-06 overload
+  event was subsequently traced to a pen being held in the gripper, not evidence that the
+  calibrated 1° inset itself was invalid. Sleep is not object-aware: remove held objects or
+  otherwise account for the commanded close before invoking it. Saved gripper calibration
+  and drive mode remain authoritative.
 - Calibration snapshots and restores motor EEPROM on failure when possible.
 - Torque enable rolls back motors already energized when a later enable fails.
 
