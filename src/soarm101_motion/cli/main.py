@@ -268,6 +268,60 @@ def _cmd_read(args: argparse.Namespace) -> int:
 
 
 
+def _cmd_motion_envelope(args: argparse.Namespace) -> int:
+    """Report the effective host motion envelope without requiring calibration."""
+
+    config = SOARM101Config(
+        robot_id=str(args.robot_id),
+        **_motion_limit_overrides(args),
+    )
+    human = config.motion_limits_human
+    payload = {
+        "robot_id": config.robot_id,
+        "host_envelope": human,
+        "host_envelope_si": {
+            "max_joint_speed_rad_s": config.max_joint_speed,
+            "max_joint_acceleration_rad_s2": config.max_joint_acceleration,
+            "max_linear_speed_m_s": config.max_linear_speed,
+            "max_linear_acceleration_m_s2": config.max_linear_acceleration,
+            "max_tool_angular_speed_rad_s": config.max_angular_speed,
+            "max_tool_angular_acceleration_rad_s2": config.max_angular_acceleration,
+        },
+        "servo_tracking": {
+            "goal_velocity_raw": TELEOP_SERVO_SPEED_RAW,
+            "acceleration_raw": TELEOP_SERVO_ACCELERATION_RAW,
+            "ownership": (
+                "responsive inner-loop tracking; host trajectory remains the commanded "
+                "speed/acceleration authority"
+            ),
+        },
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(
+            "joint: "
+            f"{human['max_joint_speed_deg_s']:g} deg/s, "
+            f"{human['max_joint_acceleration_deg_s2']:g} deg/s^2"
+        )
+        print(
+            "TCP linear: "
+            f"{human['max_linear_speed_mm_s']:g} mm/s, "
+            f"{human['max_linear_acceleration_mm_s2']:g} mm/s^2"
+        )
+        print(
+            "TCP angular: "
+            f"{human['max_tool_angular_speed_deg_s']:g} deg/s, "
+            f"{human['max_tool_angular_acceleration_deg_s2']:g} deg/s^2"
+        )
+        print(
+            "servo tracking: Goal_Velocity raw "
+            f"{TELEOP_SERVO_SPEED_RAW}, acceleration raw "
+            f"{TELEOP_SERVO_ACCELERATION_RAW}"
+        )
+    return 0
+
+
 def _cmd_limits(args: argparse.Namespace) -> int:
     """Report model, calibration, and effective joint/workspace limits without hardware."""
 
@@ -405,6 +459,16 @@ def _cmd_limits(args: argparse.Namespace) -> int:
                 f"{model[0]:7.1f}..{model[1]:7.1f}  "
                 f"{effective[0]:7.1f}..{effective[1]:7.1f}"
             )
+        envelope = config.motion_limits_human
+        print(
+            "motion envelope: "
+            f"joint {envelope['max_joint_speed_deg_s']:g} deg/s / "
+            f"{envelope['max_joint_acceleration_deg_s2']:g} deg/s^2; "
+            f"TCP {envelope['max_linear_speed_mm_s']:g} mm/s / "
+            f"{envelope['max_linear_acceleration_mm_s2']:g} mm/s^2; "
+            f"tool angular {envelope['max_tool_angular_speed_deg_s']:g} deg/s / "
+            f"{envelope['max_tool_angular_acceleration_deg_s2']:g} deg/s^2"
+        )
         print(
             "coarse TCP reach: "
             f"{payload['coarse_cartesian_envelope_mm']['maximum_tcp_reach']:.1f} mm"
@@ -505,9 +569,19 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
     values = [value * pi / 180.0 if args.degrees else value for value in args.joints]
+    speed = (
+        args.speed_deg_s * pi / 180.0
+        if args.speed_deg_s is not None
+        else args.speed
+    )
+    acceleration = (
+        args.acceleration_deg_s2 * pi / 180.0
+        if args.acceleration_deg_s2 is not None
+        else args.acceleration
+    )
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
-        result = arm.move_joints(values, speed=args.speed, acceleration=args.acceleration)
+        result = arm.move_joints(values, speed=speed, acceleration=acceleration)
         arm.hold()
         _print_motion_result(result, as_json=args.json)
         print("Joint move complete; follower remains torque-held.", file=sys.stderr)
@@ -1668,6 +1742,16 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--json", action="store_true")
     read.set_defaults(func=_cmd_read)
 
+    motion_envelope = sub.add_parser(
+        "motion-envelope",
+        aliases=["motion_settings", "motion-settings"],
+        help="show or evaluate the host motion envelope in human-friendly units",
+    )
+    motion_envelope.add_argument("--robot-id", default="so101")
+    add_motion_limit_options(motion_envelope)
+    motion_envelope.add_argument("--json", action="store_true")
+    motion_envelope.set_defaults(func=_cmd_motion_envelope)
+
     limits = sub.add_parser(
         "limits",
         help="show saved calibrated, model, and effective joint/workspace limits",
@@ -1701,8 +1785,28 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_options(move)
     move.add_argument("joints", nargs=5, type=float)
     move.add_argument("--degrees", action="store_true")
-    move.add_argument("--speed", type=float)
-    move.add_argument("--acceleration", type=float)
+    move_speed = move.add_mutually_exclusive_group()
+    move_speed.add_argument(
+        "--speed",
+        type=float,
+        help="legacy joint speed in rad/s",
+    )
+    move_speed.add_argument(
+        "--speed-deg-s",
+        type=float,
+        help="joint speed in deg/s",
+    )
+    move_acceleration = move.add_mutually_exclusive_group()
+    move_acceleration.add_argument(
+        "--acceleration",
+        type=float,
+        help="legacy joint acceleration in rad/s^2",
+    )
+    move_acceleration.add_argument(
+        "--acceleration-deg-s2",
+        type=float,
+        help="joint acceleration in deg/s^2",
+    )
     move.add_argument("--yes", action="store_true")
     move.add_argument("--json", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
