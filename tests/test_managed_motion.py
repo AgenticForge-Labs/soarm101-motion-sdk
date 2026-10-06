@@ -168,6 +168,9 @@ def test_final_target_uses_synchronized_per_joint_servo_speeds() -> None:
     assert set(speeds) == set(ARM_JOINTS)
     assert all(int(value) >= 1 for value in speeds.values())
     assert int(speeds["shoulder_pan"]) > int(speeds["elbow_flex"])
+    from soarm101_motion.constants import TELEOP_SERVO_ACCELERATION_RAW
+
+    assert captured["acceleration_raw"] == TELEOP_SERVO_ACCELERATION_RAW
 
 
 def test_final_target_monitors_observed_workspace_path(monkeypatch) -> None:
@@ -242,6 +245,49 @@ def test_final_target_monitor_rejects_reverse_motion() -> None:
                 target,
                 previous,
             )
+
+
+def test_recorded_joint_replay_uses_responsive_servo_profile() -> None:
+    import threading
+
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
+    from soarm101_motion.motion.controller import RecordedPlan
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.01
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        arm.motion._execute_recorded(
+            RecordedPlan(
+                command_samples=(start, target),
+                gripper_samples=(0.5, 0.5),
+                duration_s=1.0 / arm.config.command_frequency_hz,
+            ),
+            threading.Event(),
+        )
+
+    assert calls
+    assert all(
+        speed == TELEOP_SERVO_SPEED_RAW
+        and acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for speed, acceleration in calls
+    )
 
 
 def test_streamed_joint_execution_uses_responsive_servo_profile() -> None:
