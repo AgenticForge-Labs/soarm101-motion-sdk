@@ -99,12 +99,18 @@ millimeters from the planned target, so the agent policy reserves a 10 mm ground
 margin. The workspace mapping is used only for this additional safety measurement; actual
 motion still executes through the normal model-frame guarded jog and its SDK safety checks.
 
-Sleep and STOP/HOLD are:
+Sleep, the historical wrist-up override, and STOP/HOLD are:
 
 ```bash
 soarm101 agent sleep
+soarm101 agent sleep-up
 soarm101 agent stop
 ```
+
+Default `sleep` is calibration-relative and places `wrist_flex` 75% of the way from
+its effective lower limit to its effective upper limit. `sleep-up` (alias
+`sleep_up`) preserves the historical fully folded posture with `wrist_flex` at the
+effective lower limit.
 
 Successful agent motion remains torque-held at the reached pose. `agent stop` is available
 even without active motion authority. Relax is intentionally not exposed to the agent.
@@ -218,8 +224,9 @@ For each pose joint it reports:
 The URDF/model limits are the generic fallback/reference. For a calibrated real arm,
 normal executable pose-joint authority follows the saved mechanical-stop calibration with
 a 1° inset from each measured stop by default. `calibrated_joint_stop_margin_deg`
-reports that policy. The same output includes `sleep_pose_rad` and `sleep_pose_deg`,
-derived from those executable limits, plus `sleep_gripper` and
+reports that policy. The same output includes `sleep_pose_rad` / `sleep_pose_deg`
+for the smoother default and `sleep_up_pose_rad` / `sleep_up_pose_deg` for the
+historical wrist-up posture, plus `sleep_gripper` and
 `calibrated_gripper_stop_margin_deg`. The gripper Sleep target is the calibrated closed
 mechanical stop inset 1° toward open by default and is reported in both normalized and raw
 encoder coordinates. Calibration remains the physical authority if a measured range is
@@ -289,9 +296,12 @@ soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 ```
 
 Sleep is computed from the active follower's executable joint limits: shoulder pan
-midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
-wrist roll midpoint. On a calibrated arm the endpoint limits are already inset 1° from the
-measured mechanical stops. After the arm reaches that fold, the stock gripper closes to a
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist roll midpoint, and
+wrist flex at `lower + 0.75 * (upper - lower)`, equivalently
+`upper - 0.25 * (upper - lower)`. The historical fully folded wrist-up posture is
+available as `soarm101 sleep-up` / `soarm101 sleep_up`, which keeps wrist flex at
+the lower executable limit. On a calibrated arm the endpoint limits are already inset 1°
+from the measured mechanical stops. After either posture is reached, the stock gripper closes to a
 target 1° inside its calibrated closed mechanical stop by default. The target is derived
 from the saved gripper encoder range and normalized so calibration handles either motor
 drive direction. Sleep is never triggered automatically by connection or torque enable. After the commanded
