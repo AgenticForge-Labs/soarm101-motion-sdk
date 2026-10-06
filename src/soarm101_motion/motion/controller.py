@@ -307,11 +307,19 @@ class MotionController:
 
     def _bounded(self, value: float | None, default: float, maximum: float, name: str) -> float:
         resolved = self._positive(default if value is None else value, name)
-        if resolved > maximum:
+        # Human-unit CLI/API values are converted to SI at the boundary. Exact
+        # advertised ceilings such as 1000 deg/s^2 can differ from the stored
+        # SI ceiling by a few floating-point ULPs depending on conversion order.
+        if resolved > maximum and not math.isclose(
+            resolved,
+            maximum,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
             raise SafetyViolationError(
                 f"{name} {resolved:.4f} exceeds configured safety maximum {maximum:.4f}"
             )
-        return resolved
+        return min(resolved, maximum)
 
     def _sleep_until(self, deadline: float) -> float:
         if not getattr(self.backend, "realtime", True):
