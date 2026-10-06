@@ -859,12 +859,16 @@ class SOARM101:
         self,
         *,
         frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+        max_speed: float | None = None,
+        max_acceleration: float | None = None,
     ) -> None:
         """Start guarded continuous joint streaming for teleoperation."""
         if self.tool.is_moving:
             self._stop_tool(wait=True)
         self.motion.start_joint_stream(
             frequency_hz=frequency_hz,
+            max_speed=max_speed,
+            max_acceleration=max_acceleration,
             tcp=self.active_tcp,
         )
 
