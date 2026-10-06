@@ -1,5 +1,34 @@
 # Safety
 
+
+## Motion-rate envelope
+
+The current absolute host characterization envelope is:
+
+- joint velocity: **100 deg/s**;
+- joint acceleration: **1000 deg/s^2**;
+- TCP linear velocity: **100 mm/s**;
+- TCP linear acceleration: **1000 mm/s^2**;
+- TCP/tool angular velocity: **100 deg/s**;
+- TCP/tool angular acceleration: **1000 deg/s^2**.
+
+These are software ceilings, not the ordinary defaults and not a manufacturer whole-arm
+rating. A move requesting less remains governed by its requested/default dynamics. A
+Cartesian request is also constrained by the joint-rate envelope after IK.
+
+The STS3215 arm servos use `Goal_Velocity=0` and `Acceleration=254` for planned streamed
+tracking. This intentionally gives the inner position controller more authority than the
+host trajectory so it can follow rather than throttle that trajectory. Do not interpret
+`254` as a host request to accelerate the loaded robot at the nominal raw-register
+equivalent. Conversely, do not lower the hidden servo profile below the host trajectory and
+then compensate by weakening following-error.
+
+Raising the host envelope in the future requires supervised physical characterization.
+Published no-load servo speed alone is insufficient. Calibration, joint limits,
+following-error, unexpected-direction, current/load, hardware fault, workspace, timing,
+STOP/HOLD, and settle checks remain independent safeguards.
+
+
 This is experimental software for a low-cost hobby/educational robot arm, not a certified industrial controller.
 
 - Clear the workspace and remove payloads during initial tests.
