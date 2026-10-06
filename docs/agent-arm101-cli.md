@@ -126,6 +126,39 @@ soarm101 agent disarm
 The optional task-specific robot/camera skill under `agent-as-code/` is outside this
 technical contract.
 
+## Motion envelope
+
+The CLI reports the current absolute Motion SDK envelope in human units:
+
+```bash
+soarm101 motion-envelope
+soarm101 motion-envelope --json
+```
+
+Current defaults are 100 deg/s and 1000 deg/s^2 for joints, 100 mm/s and
+1000 mm/s^2 for TCP translation, and 100 deg/s and 1000 deg/s^2 for TCP/tool
+orientation. These are ceilings, not ordinary requested speeds.
+
+Session-capable commands accept trusted/operator overrides:
+
+```text
+--max-joint-speed-deg-s
+--max-joint-acceleration-deg-s2
+--max-linear-speed-mm-s
+--max-linear-acceleration-mm-s2
+--max-tool-angular-speed-deg-s
+--max-tool-angular-acceleration-deg-s2
+```
+
+For direct joint motion, prefer human units when convenient:
+
+```bash
+soarm101 move-joints ... --degrees --speed-deg-s 80 --acceleration-deg-s2 500
+```
+
+The bounded broker owns these settings for sandboxed agents. `agent capabilities` reports
+the effective envelope, and `robotctl` cannot widen it.
+
 ## Session selection
 
 Commands that support either hardware or simulation accept:
