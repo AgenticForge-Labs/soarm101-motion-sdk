@@ -157,3 +157,13 @@ optional joint-space moves. This avoids layering a second, quantized servo-speed
 on top of 20/50 Hz host setpoints. The resulting joint samples remain subject to deterministic joint, step,
 velocity, acceleration, workspace, following-error, effort, fault, and timing validation
 before and during execution.
+
+### Calibration-relative Sleep semantics
+
+Resting postures remain deterministic SDK-owned primitives rather than machine-local taught
+poses. `Sleep` is derived from the active executable calibration with shoulder pan and wrist
+roll at midpoint, shoulder lift at lower, elbow flex at upper, and wrist flex at 75% of its
+range. `sleep_up` preserves the historical wrist-at-lower-limit fold. Higher-level scripts,
+agents, and broker clients call these semantic primitives; they do not own copied joint
+coordinates.
+
