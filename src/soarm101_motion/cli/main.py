@@ -38,6 +38,8 @@ from soarm101_motion.constants import (
     JOINT_LIMITS,
     MOTOR_IDS,
     STOCK_GRIPPER,
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
@@ -62,6 +64,31 @@ from soarm101_motion.workstation import (
 )
 
 
+def _motion_limit_overrides(args: argparse.Namespace) -> dict[str, float]:
+    """Resolve optional CLI motion-envelope overrides into internal SI units."""
+
+    values: dict[str, float] = {}
+    conversions = {
+        "max_joint_speed_deg_s": ("max_joint_speed", pi / 180.0),
+        "max_joint_acceleration_deg_s2": ("max_joint_acceleration", pi / 180.0),
+        "max_linear_speed_mm_s": ("max_linear_speed", 1.0 / 1000.0),
+        "max_linear_acceleration_mm_s2": (
+            "max_linear_acceleration",
+            1.0 / 1000.0,
+        ),
+        "max_tool_angular_speed_deg_s": ("max_angular_speed", pi / 180.0),
+        "max_tool_angular_acceleration_deg_s2": (
+            "max_angular_acceleration",
+            pi / 180.0,
+        ),
+    }
+    for cli_name, (config_name, scale) in conversions.items():
+        raw = getattr(args, cli_name, None)
+        if raw is not None:
+            values[config_name] = float(raw) * scale
+    return values
+
+
 def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101Config:
     values: dict[str, object] = {
         "port": args.port,
@@ -71,6 +98,7 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
     calibration = getattr(args, "calibration", None)
     if calibration:
         values["calibration_path"] = Path(calibration)
+    values.update(_motion_limit_overrides(args))
     values.update(overrides)
     return SOARM101Config(**values)
 
@@ -80,7 +108,10 @@ def _arm_from_args(
     **config_overrides: object,
 ) -> SOARM101:
     if getattr(args, "simulation", False):
-        return SOARM101.simulated(realtime=True)
+        return SOARM101.simulated(
+            realtime=True,
+            config=_hardware_config(args, **config_overrides),
+        )
     if args.port:
         return SOARM101(_hardware_config(args, **config_overrides))
 
@@ -251,7 +282,10 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             calibration_path = default_calibration_path(robot_id)
 
     calibration = SO101Calibration.load(calibration_path)
-    config = SOARM101Config(robot_id=robot_id)
+    config = SOARM101Config(
+        robot_id=robot_id,
+        **_motion_limit_overrides(args),
+    )
     calibrated_limits = {
         name: calibration.motors[name].radians_limits
         for name in ARM_JOINTS
@@ -318,6 +352,14 @@ def _cmd_limits(args: argparse.Namespace) -> int:
                 int(gripper_motor.range_min),
                 int(gripper_motor.range_max),
             ],
+        },
+        "motion_envelope": {
+            **config.motion_limits_human,
+            "servo_tracking": {
+                "goal_velocity_raw": TELEOP_SERVO_SPEED_RAW,
+                "acceleration_raw": TELEOP_SERVO_ACCELERATION_RAW,
+                "note": "responsive inner servo tracking; host trajectory owns speed/acceleration",
+            },
         },
         "coarse_cartesian_envelope_mm": {
             "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
@@ -1048,8 +1090,13 @@ def _agent_world_direction_payload(robot_id: str) -> dict[str, object]:
     }
 
 
-def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
+def _agent_capabilities_payload(
+    robot_id: str,
+    *,
+    config: SOARM101Config | None = None,
+) -> dict[str, object]:
     profile = WorkstationProfileStore().load()
+    config = config or SOARM101Config(robot_id=robot_id)
     return {
         "authority": AgentAuthorityStore().status(),
         "poses": _agent_pose_names(robot_id),
@@ -1074,6 +1121,14 @@ def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
             "sleep": True,
             "sleep_up": True,
             "stop": "always_available",
+        },
+        "motion_envelope": {
+            **config.motion_limits_human,
+            "servo_tracking": {
+                "goal_velocity_raw": TELEOP_SERVO_SPEED_RAW,
+                "acceleration_raw": TELEOP_SERVO_ACCELERATION_RAW,
+            },
+            "ownership": "trusted host / Motion SDK; broker clients cannot widen it",
         },
         "jog_policy": {
             "physical_height_threshold_mm": AGENT_JOG_HEIGHT_THRESHOLD_M * 1000.0,
@@ -1140,7 +1195,16 @@ def _cmd_agent_disarm(_: argparse.Namespace) -> int:
 
 
 def _cmd_agent_capabilities(args: argparse.Namespace) -> int:
-    print(json.dumps(_agent_capabilities_payload(args.robot_id), indent=2))
+    config = SOARM101Config(
+        robot_id=args.robot_id,
+        **_motion_limit_overrides(args),
+    )
+    print(
+        json.dumps(
+            _agent_capabilities_payload(args.robot_id, config=config),
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -1530,6 +1594,39 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--json", action="store_true")
     discover.set_defaults(func=_cmd_discover)
 
+    def add_motion_limit_options(command: argparse.ArgumentParser) -> None:
+        group = command.add_argument_group("motion envelope")
+        group.add_argument(
+            "--max-joint-speed-deg-s",
+            type=float,
+            help="absolute joint-speed ceiling in deg/s (SDK default: 100)",
+        )
+        group.add_argument(
+            "--max-joint-acceleration-deg-s2",
+            type=float,
+            help="absolute joint-acceleration ceiling in deg/s^2 (SDK default: 1000)",
+        )
+        group.add_argument(
+            "--max-linear-speed-mm-s",
+            type=float,
+            help="absolute TCP linear-speed ceiling in mm/s (SDK default: 100)",
+        )
+        group.add_argument(
+            "--max-linear-acceleration-mm-s2",
+            type=float,
+            help="absolute TCP linear-acceleration ceiling in mm/s^2 (SDK default: 1000)",
+        )
+        group.add_argument(
+            "--max-tool-angular-speed-deg-s",
+            type=float,
+            help="absolute TCP orientation-speed ceiling in deg/s (SDK default: 100)",
+        )
+        group.add_argument(
+            "--max-tool-angular-acceleration-deg-s2",
+            type=float,
+            help="absolute TCP orientation-acceleration ceiling in deg/s^2 (SDK default: 1000)",
+        )
+
     def add_hardware_options(command: argparse.ArgumentParser) -> None:
         command.add_argument("--port", required=True, help="serial port, for example /dev/ttyACM0")
         command.add_argument("--robot-id", default="so101")
@@ -1543,6 +1640,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--robot-id", default="so101")
         command.add_argument("--calibration")
         command.add_argument("--simulation", action="store_true")
+        add_motion_limit_options(command)
 
     def add_linear_options(command: argparse.ArgumentParser) -> None:
         command.add_argument("--orientation-mode", choices=("compatible", "position_only", "exact"), default="compatible")
@@ -1576,6 +1674,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     limits.add_argument("--robot-id", default="so101")
     limits.add_argument("--calibration")
+    add_motion_limit_options(limits)
     limits.add_argument("--json", action="store_true")
     limits.set_defaults(func=_cmd_limits)
 
@@ -1768,6 +1867,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="show the bounded actions, named poses/cameras, and authority state",
     )
     agent_capabilities.add_argument("--robot-id", default="so101")
+    add_motion_limit_options(agent_capabilities)
     agent_capabilities.set_defaults(func=_cmd_agent_capabilities)
 
     agent_state = agent_sub.add_parser("state", help="read robot state without commanding motion")
@@ -1937,6 +2037,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     smoke = sub.add_parser("smoke-test", help="perform a tiny supervised relative one-joint test")
     add_hardware_options(smoke)
+    add_motion_limit_options(smoke)
     smoke.add_argument("--joint", choices=ARM_JOINTS, required=True)
     smoke.add_argument("--degrees", type=float, default=2.0)
     smoke.add_argument("--speed", type=float, default=0.05)
