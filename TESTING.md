@@ -147,6 +147,26 @@ resting configuration and the test compares that exact configuration against can
 The earlier manual-wrist diagnostic remains available for deeper follow-up, but sleep2 is the
 preferred next test because it isolates the configuration choice with much less machinery.
 
+
+Physical A/B follow-up on 2026-10-05 found the operator-selected `sleep2` configuration
+**substantially smoother** than canonical historical Sleep, confirming a large geometry
+component to the rocking. The chosen wrist orientation was on the opposite side of the
+historical lower-limit wrist fold, motivating a portable calibration-relative default rather
+than persisting one machine's taught coordinates.
+
+The production semantic now defines default Sleep `wrist_flex` as:
+
+```text
+lower + 0.75 * (upper - lower)
+= upper - 0.25 * (upper - lower)
+```
+
+using the active executable calibrated range. All other Sleep joint selectors remain
+unchanged. The previous fully folded wrist-at-lower-limit posture is retained as
+`sleep_up`. Existing scripts using `move_sleep()` therefore exercise the new default
+automatically; `move_sleep_up()` is the explicit historical override. The local `sleep2`
+capture is evidence for this design decision, not a runtime source of truth.
+
 ### Sleep geometry and fold-order comparison
 
 The 24 deg/s runs were subjectively somewhat smoother overall than 8 deg/s, and increasing
