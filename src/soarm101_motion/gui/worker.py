@@ -905,7 +905,11 @@ class RobotWorker(QObject):
                 "last_sample_timestamp": None,
                 "last_frame": None,
             }
-            arm.start_joint_stream(frequency_hz=frequency)
+            arm.start_joint_stream(
+                frequency_hz=frequency,
+                max_speed=tracking_max_speed,
+                max_acceleration=tracking_max_acceleration,
+            )
             self.teleop_changed.emit(True)
             self.busy_changed.emit(True)
             self.log_message.emit(
