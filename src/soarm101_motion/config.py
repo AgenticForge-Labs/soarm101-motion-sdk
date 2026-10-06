@@ -27,6 +27,9 @@ from soarm101_motion.constants import (
     DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2,
     DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
     DEFAULT_MAX_TOOL_ANGULAR_SPEED_RAD_S,
+    STS3215_MAX_POSITION_SPEED_RAW,
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.exceptions import ConfigurationError
 
@@ -114,8 +117,11 @@ class SOARM101Config:
     # ``soarm101 configure`` command for one-time recommended motor settings.
     configure_motors_on_connect: bool = False
 
-    hardware_speed_raw: int = 250
-    hardware_acceleration_raw: int = 20
+    # Low-level arm position-write fallback. Keep the inner servo tracker more
+    # responsive than the host trajectory so it follows host-planned motion
+    # instead of becoming a slower competing trajectory generator.
+    hardware_speed_raw: int = TELEOP_SERVO_SPEED_RAW
+    hardware_acceleration_raw: int = TELEOP_SERVO_ACCELERATION_RAW
     # STS3215 factory position P gain. P=16 has been observed to leave a
     # several-degree static/gravity deadband on SO-family follower arms.
     position_p_coefficient: int = 32
@@ -238,10 +244,13 @@ class SOARM101Config:
             if value > maximum:
                 raise ConfigurationError(f"{name} must not exceed its configured maximum {maximum}")
 
-        if not 1 <= self.hardware_speed_raw <= 4095:
-            raise ConfigurationError("hardware_speed_raw must be in [1, 4095]")
-        if not 1 <= self.hardware_acceleration_raw <= 254:
-            raise ConfigurationError("hardware_acceleration_raw must be in [1, 254]")
+        if not 0 <= self.hardware_speed_raw <= STS3215_MAX_POSITION_SPEED_RAW:
+            raise ConfigurationError(
+                "hardware_speed_raw must be in "
+                f"[0, {STS3215_MAX_POSITION_SPEED_RAW}]"
+            )
+        if not 0 <= self.hardware_acceleration_raw <= 254:
+            raise ConfigurationError("hardware_acceleration_raw must be in [0, 254]")
 
         if self.effort_current_trip_raw is not None and self.effort_current_trip_raw <= 0:
             raise ConfigurationError("effort_current_trip_raw must be positive or None")
