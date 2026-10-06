@@ -35,6 +35,11 @@ class SO101Gripper(RobotTool):
     name: str = STOCK_GRIPPER
     open_position: float = 1.0
     closed_position: float = 0.0
+    # Tool contact behavior is intentionally separate from arm trajectory
+    # tracking. Preserve the historical gentler gripper pacing even though the
+    # arm backend fallback is now responsive 0/254.
+    default_speed_raw: int = 250
+    default_acceleration_raw: int = 20
     default_timeout_s: float = 10.0
     _state_lock: threading.RLock = field(
         default_factory=threading.RLock, init=False, repr=False
@@ -143,8 +148,12 @@ class SO101Gripper(RobotTool):
         self._backend().write_tool_position(
             STOCK_GRIPPER,
             target,
-            speed_raw=speed_raw,
-            acceleration_raw=acceleration_raw,
+            speed_raw=self.default_speed_raw if speed_raw is None else speed_raw,
+            acceleration_raw=(
+                self.default_acceleration_raw
+                if acceleration_raw is None
+                else acceleration_raw
+            ),
         )
 
     def _execute_move(
@@ -164,8 +173,12 @@ class SO101Gripper(RobotTool):
             backend.write_tool_position(
                 STOCK_GRIPPER,
                 target,
-                speed_raw=speed_raw,
-                acceleration_raw=acceleration_raw,
+                speed_raw=self.default_speed_raw if speed_raw is None else speed_raw,
+                acceleration_raw=(
+                    self.default_acceleration_raw
+                    if acceleration_raw is None
+                    else acceleration_raw
+                ),
             )
             deadline = time.monotonic() + timeout
             last_progress = time.monotonic()
