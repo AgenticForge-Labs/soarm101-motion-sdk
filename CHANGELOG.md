@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Changed the calibration-relative default Sleep wrist geometry after physical A/B testing:
+  `wrist_flex` now targets 75% of its executable range
+  (`upper - 0.25 * (upper - lower)`). The historical wrist-at-lower-limit fold is preserved
+  as `sleep_up` / `move_sleep_up()`, with operator CLI, bounded-agent CLI, broker, and
+  `robotctl` access. Existing `sleep` callers automatically use the smoother posture.
 - Added a simple `sleep2` hardware diagnostic: capture the current measured arm pose before
   any commanded motion, save it as the named pose `sleep2`, then compare RIGHT -> canonical
   Sleep against RIGHT -> sleep2 at identical dynamics. The test uses the same narrow
