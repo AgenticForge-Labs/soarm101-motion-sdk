@@ -41,9 +41,23 @@ class SOArmAPI(SOARM101):
         self._gripper_speed_raw = resolved
 
     def get_gripper_speed(self) -> int:
-        """Return the configured default gripper speed in raw controller units."""
+        """Return the configured default gripper speed in raw controller units.
 
-        return int(getattr(self, "_gripper_speed_raw", self.config.hardware_speed_raw))
+        Arm position tracking and gripper contact motion intentionally use separate
+        low-level pacing. A hardware_speed_raw value of 0 means unrestricted arm
+        tracking and must not become the gripper default speed.
+        """
+
+        configured = getattr(self, "_gripper_speed_raw", None)
+        if configured is not None:
+            return int(configured)
+        tool = self.tool
+        primary = getattr(tool, "primary", None)
+        for candidate in (tool, primary):
+            default_speed = getattr(candidate, "default_speed_raw", None)
+            if default_speed is not None:
+                return int(default_speed)
+        return 250
 
     def set_gripper_position(
         self,
