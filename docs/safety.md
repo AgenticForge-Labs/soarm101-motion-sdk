@@ -129,7 +129,7 @@ leaves the arm holding rather than dropping it.
 - Feetech transport and synchronized writes use one reentrant lock.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.
-- Active trajectories monitor faults, following error, unexpected direction, and deadline overruns. Live joint streaming treats a just-commanded reversal specially: it may accept no more than 100 ms of non-growing residual motion in the previous physical direction while the servo brakes. The ordinary planned-motion direction guard remains strict, and any growing/persistent wrong-way motion or following-error/fault/effort violation still stops the stream.
+- Active trajectories monitor faults, following error, unexpected direction, and deadline overruns. Live joint streaming treats a recent just-commanded reversal specially: it may accept no more than 100 ms of non-growing residual motion in the previous physical direction while the servo brakes, with cumulative wrong-way travel capped at 0.10 rad. The ordinary planned-motion direction guard remains strict, and any stale, growing, persistent, or over-cap wrong-way motion—or following-error/fault/effort violation—still stops the stream.
 - Host-streamed planned joint trajectories use the responsive servo tracking profile
   (Goal_Velocity=0, acceleration=254) by default, matching teleoperation. Requested host
   speed/acceleration remain the motion ceilings; this removes a redundant slower actuator
