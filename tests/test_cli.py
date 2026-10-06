@@ -209,6 +209,8 @@ def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     assert capabilities["authority"]["armed"] is True
     assert capabilities["poses"] == ["agent_start_overhead"]
     assert capabilities["actions"]["gripper"] == ["open", "close"]
+    assert capabilities["actions"]["sleep"] is True
+    assert capabilities["actions"]["sleep_up"] is True
     assert capabilities["jog_policy"]["physical_height_threshold_mm"] == pytest.approx(100.0)
     assert capabilities["jog_policy"]["minimum_target_height_mm"] == pytest.approx(10.0)
 
@@ -245,6 +247,13 @@ def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     sleep = json.loads(capsys.readouterr().out)
     assert sleep["completed"] is True
     assert sleep["holding"] is True
+    assert sleep["action"] == "sleep"
+
+    assert main(["agent", "sleep-up", "--simulation"]) == 0
+    sleep_up = json.loads(capsys.readouterr().out)
+    assert sleep_up["completed"] is True
+    assert sleep_up["holding"] is True
+    assert sleep_up["action"] == "sleep_up"
 
     assert main(["agent", "disarm"]) == 0
     disarmed = json.loads(capsys.readouterr().out)
@@ -524,12 +533,49 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     assert sleep["elbow_flex"] == pytest.approx(
         payload["joints"]["elbow_flex"]["effective_deg"][1]
     )
+    wrist_lower = payload["joints"]["wrist_flex"]["effective_deg"][0]
+    wrist_upper = payload["joints"]["wrist_flex"]["effective_deg"][1]
     assert sleep["wrist_flex"] == pytest.approx(
-        payload["joints"]["wrist_flex"]["effective_deg"][0]
+        wrist_lower + 0.75 * (wrist_upper - wrist_lower)
     )
     assert sleep["wrist_roll"] == pytest.approx(0.0)
 
+    sleep_up = payload["sleep_up_pose_deg"]
+    assert sleep_up["shoulder_pan"] == pytest.approx(0.0)
+    assert sleep_up["shoulder_lift"] == pytest.approx(
+        payload["joints"]["shoulder_lift"]["effective_deg"][0]
+    )
+    assert sleep_up["elbow_flex"] == pytest.approx(
+        payload["joints"]["elbow_flex"]["effective_deg"][1]
+    )
+    assert sleep_up["wrist_flex"] == pytest.approx(wrist_lower)
+    assert sleep_up["wrist_roll"] == pytest.approx(0.0)
+
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
+
+
+def test_sleep_up_cli_aliases_run_in_simulation(capsys, monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda *args, **kwargs: "")
+
+    for command in ("sleep-up", "sleep_up"):
+        assert (
+            main(
+                [
+                    command,
+                    "--simulation",
+                    "--speed-deg-s",
+                    "8",
+                    "--acceleration-deg-s2",
+                    "25",
+                    "--json",
+                    "--yes",
+                ]
+            )
+            == 0
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["accepted"] is True
+        assert payload["completed"] is True
 
 
 def test_sleep_cli_requires_confirmation_and_runs_in_simulation(
