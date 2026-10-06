@@ -436,7 +436,7 @@ def test_stream_session_enforces_per_joint_acceleration_limits() -> None:
 
 
 def test_stream_reversal_allows_only_brief_non_growing_braking_carry_through() -> None:
-    backend = ScriptedFeedbackBackend([0.02, 0.05, 0.107, 0.159, 0.210])
+    backend = ScriptedFeedbackBackend([0.02, 0.05, 0.107, 0.147, 0.202])
     config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
     arm = SOARM101(config, backend=backend)
     arm.connect()
@@ -488,7 +488,11 @@ def test_stream_reversal_does_not_use_stale_direction_as_braking_grace() -> None
 
 def test_stream_reversal_rejects_growing_wrong_way_motion_during_grace() -> None:
     backend = ScriptedFeedbackBackend([0.02, 0.05, 0.107, 0.180])
-    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    config = SOARM101Config(
+        enable_workspace_checks=False,
+        effort_safety_enabled=False,
+        stream_reversal_max_carrythrough_rad=0.20,
+    )
     arm = SOARM101(config, backend=backend)
     arm.connect()
     arm.enable()
@@ -508,6 +512,35 @@ def test_stream_reversal_rejects_growing_wrong_way_motion_during_grace() -> None
         with pytest.raises(
             SafetyViolationError,
             match="carry-through grew during reversal braking",
+        ):
+            arm.stream_joint_target(target)
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_reversal_caps_cumulative_wrong_way_travel() -> None:
+    backend = ScriptedFeedbackBackend([0.02, 0.05, 0.11, 0.16])
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=radians(100.0),
+            max_acceleration=radians(1000.0),
+        )
+        for wrist_target in (0.04, 0.0575, 0.0315):
+            target = {name: 0.0 for name in ARM_JOINTS}
+            target["wrist_flex"] = wrist_target
+            assert arm.stream_joint_target(target).accepted
+
+        target = {name: 0.0 for name in ARM_JOINTS}
+        target["wrist_flex"] = -0.0015
+        with pytest.raises(
+            SafetyViolationError,
+            match="cumulative reversal carry-through",
         ):
             arm.stream_joint_target(target)
     finally:
