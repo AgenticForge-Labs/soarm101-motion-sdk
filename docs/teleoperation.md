@@ -107,9 +107,10 @@ Planned moves retain their own requested/configured limits.
 Live-stream direction monitoring remains fail-closed but is reversal-aware. A material
 measured move opposite the command still stops the stream immediately unless the command
 has just reversed direction. After a genuine reversal, the stream may accept at most 100 ms
-of residual motion in the previous physical direction, and only while that carry-through is
-non-growing within 0.5° of encoder/noise tolerance. Following-error, hardware-fault, effort,
-joint-limit, and command timing checks remain active throughout the grace interval. Planned
+of residual motion in the previous physical direction, only while that carry-through is
+non-growing within 0.5° of encoder/noise tolerance, and with no more than 0.10 rad of
+cumulative wrong-way travel. Following-error, hardware-fault, effort, joint-limit, and
+command timing checks remain active throughout the grace interval. Planned
 joint trajectories do not use this exception and keep the strict unexpected-direction rule.
 
 Gripper targets
