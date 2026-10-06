@@ -23,6 +23,18 @@ class TeleopTrackingPreset:
     label: str
     max_speed_rad_s: float
     max_acceleration_rad_s2: float
+    joint_speed_overrides_rad_s: tuple[tuple[str, float], ...] = ()
+    joint_acceleration_overrides_rad_s2: tuple[tuple[str, float], ...] = ()
+
+    def joint_speed_limits_rad_s(self) -> dict[str, float]:
+        limits = {name: self.max_speed_rad_s for name in ARM_JOINTS}
+        limits.update(dict(self.joint_speed_overrides_rad_s))
+        return limits
+
+    def joint_acceleration_limits_rad_s2(self) -> dict[str, float]:
+        limits = {name: self.max_acceleration_rad_s2 for name in ARM_JOINTS}
+        limits.update(dict(self.joint_acceleration_overrides_rad_s2))
+        return limits
 
 
 TELEOP_TRACKING_PRESETS = (
@@ -30,9 +42,12 @@ TELEOP_TRACKING_PRESETS = (
     TeleopTrackingPreset("medium", "Medium · current", 1.2, 6.0),
     TeleopTrackingPreset(
         "fast",
-        "Fast · full envelope",
+        "Fast · wrist-aware",
         DEFAULT_MAX_JOINT_SPEED_RAD_S,
         DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+        joint_acceleration_overrides_rad_s2=(
+            ("wrist_flex", math.radians(500.0)),
+        ),
     ),
 )
 DEFAULT_TELEOP_TRACKING_PRESET = "medium"
@@ -110,6 +125,22 @@ def _braking_distance(speed: float, acceleration_step: float, period_s: float) -
     )
 
 
+def _per_joint_limit(
+    value: float | Mapping[str, float],
+    *,
+    label: str,
+) -> dict[str, float]:
+    if isinstance(value, Mapping):
+        if set(value) != set(ARM_JOINTS):
+            raise ValueError(f"{label} must provide exactly the five canonical arm joints")
+        limits = {name: float(value[name]) for name in ARM_JOINTS}
+    else:
+        limits = {name: float(value) for name in ARM_JOINTS}
+    if any(not math.isfinite(limit) or limit <= 0.0 for limit in limits.values()):
+        raise ValueError(f"{label} values must be positive and finite")
+    return limits
+
+
 def limit_joint_target(
     desired: Mapping[str, float],
     previous: Mapping[str, float],
@@ -117,16 +148,22 @@ def limit_joint_target(
     *,
     joint_limits: Mapping[str, tuple[float, float]] | None = None,
     period_s: float,
-    max_speed_rad_s: float,
-    max_acceleration_rad_s2: float,
+    max_speed_rad_s: float | Mapping[str, float],
+    max_acceleration_rad_s2: float | Mapping[str, float],
     max_step_rad: float,
 ) -> tuple[dict[str, float], dict[str, float], bool]:
     """Return a target whose step, speed, and acceleration fit one stream period."""
-    speed_ceiling = min(max_speed_rad_s, max_step_rad / period_s)
+    speed_limits = _per_joint_limit(max_speed_rad_s, label="joint speed limit")
+    acceleration_limits = _per_joint_limit(
+        max_acceleration_rad_s2,
+        label="joint acceleration limit",
+    )
     command: dict[str, float] = {}
     velocity: dict[str, float] = {}
     limited = False
     for name in ARM_JOINTS:
+        speed_ceiling = min(speed_limits[name], max_step_rad / period_s)
+        acceleration_limit = acceleration_limits[name]
         wanted_position = desired[name]
         if joint_limits is not None:
             lower, upper = joint_limits[name]
@@ -145,7 +182,7 @@ def limit_joint_target(
             for _ in range(32):
                 candidate = (low + high) / 2
                 travel = candidate * period_s + _braking_distance(
-                    candidate, max_acceleration_rad_s2 * period_s, period_s
+                    candidate, acceleration_limit * period_s, period_s
                 )
                 if travel <= abs(error):
                     low = candidate
@@ -153,7 +190,7 @@ def limit_joint_target(
                     high = candidate
             wanted = math.copysign(low, error)
         last_velocity = previous_velocity[name]
-        acceleration_step = max_acceleration_rad_s2 * period_s
+        acceleration_step = acceleration_limit * period_s
         bounded = max(last_velocity - acceleration_step, min(last_velocity + acceleration_step, wanted))
         bounded = max(-speed_ceiling, min(speed_ceiling, bounded))
         command[name] = previous[name] + bounded * period_s
