@@ -30,6 +30,39 @@ The goal is not to replace ROS or MoveIt. Those ecosystems are valuable when a p
 
 LeRobot helped inspire this project’s approach to SO-ARM101 hardware and operation. Thank you to the LeRobot contributors and community. The approachable developer experience of the UFactory xArm SDK also helped shape the goal of making arm control easier to discover and use. This SDK is an independent implementation: LeRobot is optional and is not imported by the runtime.
 
+## Motion envelope
+
+The SDK separates **requested host motion** from the faster inner servo tracking profile.
+The current absolute host envelope uses one memorable 100 / 1000 convention:
+
+- joints: **100 deg/s** and **1000 deg/s^2**;
+- TCP translation: **100 mm/s** and **1000 mm/s^2**;
+- TCP/tool orientation: **100 deg/s** and **1000 deg/s^2**.
+
+These are ceilings, not ordinary motion defaults. Existing default moves remain slower unless
+the caller explicitly requests more. Cartesian IK-generated joint motion must also remain
+inside the joint envelope.
+
+Inspect the effective settings without opening hardware:
+
+```bash
+soarm101 motion-envelope
+soarm101 motion-envelope --json
+```
+
+The Python API exposes the same values through `SOARM101Config.motion_limits_human` and
+`SOARM101Config.from_motion_limits(...)`. CLI session commands accept matching
+`--max-...-deg-s` / `--max-...-mm-s` options. `move-joints` also accepts the convenient
+`--speed-deg-s` and `--acceleration-deg-s2` request units while retaining the legacy
+rad/s flags.
+
+Host-streamed planned arm motion uses the responsive Feetech tracking profile
+`Goal_Velocity=0`, `Acceleration=254`. That is inner-loop tracking authority, not a
+1000+ deg/s^2 host trajectory request. Calibration, following-error, current/load, hardware
+fault, joint-limit, workspace, timing, STOP/HOLD, and settle checks remain active. The
+100/1000 envelope is an engineering policy under physical characterization, not a claim that
+a loaded arm is safe at the STS3215 no-load actuator limit.
+
 ## Programming model
 
 The important separation is between **reasoning about what should happen** and the deterministic robot layer responsible for deciding whether and how motion can happen.
