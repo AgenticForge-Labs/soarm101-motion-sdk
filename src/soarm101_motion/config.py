@@ -75,6 +75,11 @@ class SOARM101Config:
     joint_position_tolerance_rad: float = 0.025
     following_error_limit_rad: float = 0.30
     unexpected_direction_threshold_rad: float = 0.05
+    # Live streams may reverse faster than a physical servo can brake. Permit
+    # only a short, bounded carry-through after a commanded reversal; ordinary
+    # planned motion keeps the strict unexpected-direction rule.
+    stream_reversal_grace_s: float = 0.10
+    stream_reversal_decay_tolerance_rad: float = math.radians(0.5)
     trajectory_feedback_interval_s: float = 0.10
     feedback_poll_interval_s: float = 0.02
     settle_time_s: float = 0.08
@@ -202,6 +207,8 @@ class SOARM101Config:
             "joint_position_tolerance_rad": self.joint_position_tolerance_rad,
             "following_error_limit_rad": self.following_error_limit_rad,
             "unexpected_direction_threshold_rad": self.unexpected_direction_threshold_rad,
+            "stream_reversal_grace_s": self.stream_reversal_grace_s,
+            "stream_reversal_decay_tolerance_rad": self.stream_reversal_decay_tolerance_rad,
             "trajectory_feedback_interval_s": self.trajectory_feedback_interval_s,
             "feedback_poll_interval_s": self.feedback_poll_interval_s,
             "settle_time_s": self.settle_time_s,
