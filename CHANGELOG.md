@@ -16,7 +16,9 @@
   actuator profile (Goal_Velocity=0, acceleration=254) unless explicitly overridden, so the
   validated host trajectory owns requested speed/acceleration. This fixes a 40 deg/s,
   250 deg/s² hardware case where wrist_flex lagged the host by 0.305 rad and correctly
-  tripped the unchanged 0.300 rad following-error guard.
+  tripped the unchanged 0.300 rad following-error guard. Recorded arm trajectory replay now
+  uses the same 0/254 tracking profile, and experimental final-target execution keeps its
+  synchronized per-joint speed calculation while defaulting servo acceleration to 254.
 - Changed the calibration-relative default Sleep wrist geometry after physical A/B testing:
   `wrist_flex` now targets 75% of its executable range
   (`upper - 0.25 * (upper - lower)`). The historical wrist-at-lower-limit fold is preserved
