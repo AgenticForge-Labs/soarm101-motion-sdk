@@ -823,19 +823,19 @@ class MotionController:
             max_speed, max_acceleration, max_step = self._trajectory_metrics(samples)
             scale = max(
                 1.0,
-                max_speed / self.config.default_joint_speed
-                if self.config.default_joint_speed
+                max_speed / self.config.max_joint_speed
+                if self.config.max_joint_speed
                 else 1.0,
-                math.sqrt(max_acceleration / self.config.default_joint_acceleration)
-                if max_acceleration and self.config.default_joint_acceleration
+                math.sqrt(max_acceleration / self.config.max_joint_acceleration)
+                if max_acceleration and self.config.max_joint_acceleration
                 else 1.0,
                 max_step / self.config.max_command_step_radians if max_step else 1.0,
             )
             if scale <= 1.001:
                 self._validate_samples(
                     samples,
-                    speed_limit=self.config.default_joint_speed,
-                    acceleration_limit=self.config.default_joint_acceleration,
+                    speed_limit=self.config.max_joint_speed,
+                    acceleration_limit=self.config.max_joint_acceleration,
                     limits=limits,
                 )
                 actual_duration = (len(samples) - 1) / self.config.command_frequency_hz
