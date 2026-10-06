@@ -1558,13 +1558,27 @@ class MotionController:
                     )
                 )
             else:
+                # Host-streamed planned motion owns the requested joint speed and
+                # acceleration profile. Do not impose the backend's much slower
+                # default Feetech Goal_Velocity/Acceleration profile on top of that
+                # trajectory: it can make a perfectly valid fast host plan outrun
+                # the servos and create artificial following-error trips. Match the
+                # responsive profile already used by live teleoperation.
+                streamed_speed_raw = servo_speed_raw
+                if streamed_speed_raw is None and not synchronize_servo_arrival:
+                    streamed_speed_raw = TELEOP_SERVO_SPEED_RAW
+                streamed_acceleration_raw = (
+                    servo_acceleration_raw
+                    if servo_acceleration_raw is not None
+                    else TELEOP_SERVO_ACCELERATION_RAW
+                )
                 handle = self._start_locked(
                     lambda event: self._execute_plan(
                         plan,
                         event,
                         cancellation_message="joint motion cancelled",
-                        servo_speed_raw=servo_speed_raw,
-                        servo_acceleration_raw=servo_acceleration_raw,
+                        servo_speed_raw=streamed_speed_raw,
+                        servo_acceleration_raw=streamed_acceleration_raw,
                         synchronize_servo_arrival=synchronize_servo_arrival,
                     )
                 )
