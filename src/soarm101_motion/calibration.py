@@ -17,6 +17,11 @@ from soarm101_motion.exceptions import CalibrationError, SafetyViolationError
 _LEROBOT_TO_SDK = {"gripper": STOCK_GRIPPER}
 _SDK_TO_LEROBOT = {STOCK_GRIPPER: "gripper"}
 
+# Encoder readings can jitter/backlash a few counts beyond a measured endpoint.
+# The same tolerance is used for torque latching and for proving that a saved
+# measured pose is close enough to be projected inward to an executable target.
+CALIBRATED_ENDPOINT_TOLERANCE_TICKS = 8
+
 
 @dataclass(frozen=True)
 class MotorCalibration:
@@ -64,10 +69,14 @@ class MotorCalibration:
     def raw_to_radians(self, raw: int) -> float:
         return (float(raw) - self.center_raw) * 2.0 * pi / ENCODER_MAX
 
-    def radians_to_raw(self, radians: float) -> int:
-        raw = int(
+    def radians_to_raw_unchecked(self, radians: float) -> int:
+        """Convert radians to the nearest encoder count without applying range policy."""
+        return int(
             round(float(radians) * ENCODER_MAX / (2.0 * pi) + self.center_raw)
         )
+
+    def radians_to_raw(self, radians: float) -> int:
+        raw = self.radians_to_raw_unchecked(radians)
         if not self.range_min <= raw <= self.range_max:
             raise SafetyViolationError(
                 f"joint target maps to raw position {raw}, outside calibrated range "
