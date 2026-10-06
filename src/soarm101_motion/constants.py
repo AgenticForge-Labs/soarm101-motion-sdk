@@ -73,12 +73,34 @@ SLEEP_UP_LIMIT_SELECTORS: dict[str, str] = {
     "wrist_roll": "midpoint",
 }
 
-# Conservative host-side defaults. These are intentionally below the values
-# commonly used by direct teleoperation loops.
+# Conservative per-motion defaults. These remain below the absolute motion
+# envelope so ordinary calls stay gentle unless a caller explicitly asks for more.
 DEFAULT_JOINT_SPEED_RAD_S = 0.45
 DEFAULT_JOINT_ACCEL_RAD_S2 = 1.2
 DEFAULT_LINEAR_SPEED_M_S = 0.03
 DEFAULT_LINEAR_ACCEL_M_S2 = 0.10
+
+# Human-facing absolute motion envelope. The 100 / 1000 convention is deliberate:
+# joints and tool orientation use degrees, while TCP translation uses millimeters.
+# SI aliases are consumed by the deterministic controller.
+DEFAULT_MAX_JOINT_SPEED_DEG_S = 100.0
+DEFAULT_MAX_JOINT_ACCEL_DEG_S2 = 1000.0
+DEFAULT_MAX_LINEAR_SPEED_MM_S = 100.0
+DEFAULT_MAX_LINEAR_ACCEL_MM_S2 = 1000.0
+DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S = 100.0
+DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2 = 1000.0
+
+DEFAULT_MAX_JOINT_SPEED_RAD_S = DEFAULT_MAX_JOINT_SPEED_DEG_S * pi / 180.0
+DEFAULT_MAX_JOINT_ACCEL_RAD_S2 = DEFAULT_MAX_JOINT_ACCEL_DEG_S2 * pi / 180.0
+DEFAULT_MAX_LINEAR_SPEED_M_S = DEFAULT_MAX_LINEAR_SPEED_MM_S / 1000.0
+DEFAULT_MAX_LINEAR_ACCEL_M_S2 = DEFAULT_MAX_LINEAR_ACCEL_MM_S2 / 1000.0
+DEFAULT_MAX_TOOL_ANGULAR_SPEED_RAD_S = (
+    DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S * pi / 180.0
+)
+DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2 = (
+    DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2 * pi / 180.0
+)
+
 DEFAULT_COMMAND_FREQUENCY_HZ = 50.0
 # Live leader→follower teleoperation uses a separate clock because each sample
 # performs synchronous hardware safety/feedback reads on the serial bus. Twenty
