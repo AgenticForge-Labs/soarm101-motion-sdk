@@ -235,3 +235,17 @@ def test_http_server_enforces_token_and_routes_health(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+def test_broker_translates_sleep_up_to_bounded_cli(tmp_path: Path) -> None:
+    expected = ("sleep-up", "--robot-id", "so101")
+    executor = FakeExecutor({expected: {"completed": True, "holding": True}})
+    service = RobotBrokerService(
+        executor=executor,  # type: ignore[arg-type]
+        token="secret",
+        event_path=tmp_path / "events.jsonl",
+    )
+
+    response = service.dispatch("POST", "/v1/sleep-up", {})
+
+    assert response.status == 200
+    assert executor.calls == [expected]
