@@ -1,6 +1,19 @@
 # Changelog
 
 ## Unreleased
+- Added GUI **Tracking response** presets for leader→follower teleoperation while keeping
+  stream cadence independent: Slow is 0.6 rad/s and 3.0 rad/s², Medium preserves the
+  previous 1.2 rad/s and 6.0 rad/s² behavior and remains the default, and Fast uses the
+  configured absolute joint envelope (100 deg/s / 1000 deg/s² by default). The selected
+  response shapes the leader-gap limiter; the deterministic stream guard still owns the
+  absolute envelope, command-step, following-error, fault, effort, and stale-sample checks.
+- Fixed exact human-unit envelope values such as 100 deg/s / 1000 deg/s² being rejected
+  by a few floating-point ULPs after conversion to SI. Boundary-equivalent values now clamp
+  to the configured ceiling while genuinely larger requests remain rejected.
+- Hardened the Sleep-family gripper park target after a supervised run reached the previous
+  1°-inside close target and then latched an STS3215 overload while holding. Sleep now uses
+  the farther-open of that calibration-derived 1° inset or 2.5% normalized opening; the
+  gripper's calibration and normal fault/effort handling remain authoritative.
 - Replaced the original undocumented host motion ceilings with an explicit human-facing
   100/1000 envelope: joints 100 deg/s and 1000 deg/s^2, TCP translation 100 mm/s and
   1000 mm/s^2, and TCP/tool orientation 100 deg/s and 1000 deg/s^2. Ordinary motion
@@ -161,11 +174,12 @@
   remains authoritative. This gives the current arm nearly all of its measured travel,
   including wrist flex to about ±102.91°. Endpoint IK, joint motion, Cartesian planning,
   live streaming, and the limits CLI share this resolver.
-- Sleep now closes the stock gripper after the arm fold completes. The close target is
-  derived from the active gripper calibration and defaults to 1° inside the calibrated
-  closed mechanical stop rather than normalized 0.0 at the stop itself. The conversion is
-  drive-direction independent, and `soarm101 limits --json` reports the normalized/raw
-  Sleep gripper target for read-only inspection.
+- Sleep closes the stock gripper after the arm fold completes. The target is derived from
+  the active gripper calibration; the original implementation used a 1° closed-stop inset,
+  and the current implementation additionally enforces a 2.5% normalized-opening floor to
+  avoid sustained hard-stop load. The conversion is drive-direction independent, and
+  `soarm101 limits --json` reports the normalized/raw Sleep gripper target for read-only
+  inspection.
 - Added a calibration-derived Sleep posture for demos and power-down preparation.
   Sleep is computed from the active executable limits: shoulder pan midpoint, shoulder lift
   lower limit, elbow flex upper limit, wrist flex lower limit, and wrist roll midpoint.
