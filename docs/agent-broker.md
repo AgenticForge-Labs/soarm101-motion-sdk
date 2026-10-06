@@ -104,6 +104,7 @@ POST /v1/joint
 POST /v1/jog
 POST /v1/gripper
 POST /v1/sleep
+POST /v1/sleep-up
 POST /v1/stop
 ```
 
@@ -146,6 +147,8 @@ robotctl joint shoulder_pan --delta-deg 5
 robotctl jog --frame world --x-mm 0 --y-mm 5 --z-mm 0
 robotctl jog --frame tool --x-mm 0 --y-mm 0 --z-mm 2
 robotctl gripper close
+robotctl sleep
+robotctl sleep-up
 robotctl stop
 ```
 
