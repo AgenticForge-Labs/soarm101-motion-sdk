@@ -96,8 +96,9 @@ class SOARM101:
         realtime: bool = False,
         initial_positions: Mapping[str, float] | None = None,
         tool: RobotTool | None = None,
+        config: SOARM101Config | None = None,
     ) -> "SOARM101":
-        config = SOARM101Config(auto_enable_torque=False)
+        config = config or SOARM101Config(auto_enable_torque=False)
         if gui:
             from soarm101_motion.simulation.pybullet import PyBulletSimulationBackend
 
