@@ -722,14 +722,14 @@ class RobotWorker(QObject):
             tracking = teleop_tracking_preset(
                 str(values.get("tracking_preset") or DEFAULT_TELEOP_TRACKING_PRESET)
             )
-            tracking_max_speed = min(
-                tracking.max_speed_rad_s,
-                arm.config.stream_joint_speed_limit,
-            )
-            tracking_max_acceleration = min(
-                tracking.max_acceleration_rad_s2,
-                arm.config.stream_joint_acceleration_limit,
-            )
+            tracking_speed_limits = {
+                name: min(limit, arm.config.stream_joint_speed_limit)
+                for name, limit in tracking.joint_speed_limits_rad_s().items()
+            }
+            tracking_acceleration_limits = {
+                name: min(limit, arm.config.stream_joint_acceleration_limit)
+                for name, limit in tracking.joint_acceleration_limits_rad_s2().items()
+            }
             leader_origin = {
                 name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
             }
@@ -898,8 +898,8 @@ class RobotWorker(QObject):
                 "period_s": period_s,
                 "tracking_preset": tracking.key,
                 "tracking_label": tracking.label,
-                "max_speed_rad_s": tracking_max_speed,
-                "max_acceleration_rad_s2": tracking_max_acceleration,
+                "max_speed_rad_s": tracking_speed_limits,
+                "max_acceleration_rad_s2": tracking_acceleration_limits,
                 "overruns": 0,
                 "last_processing_s": 0.0,
                 "last_sample_timestamp": None,
@@ -907,8 +907,8 @@ class RobotWorker(QObject):
             }
             arm.start_joint_stream(
                 frequency_hz=frequency,
-                max_speed=tracking_max_speed,
-                max_acceleration=tracking_max_acceleration,
+                max_speed=tracking_speed_limits,
+                max_acceleration=tracking_acceleration_limits,
             )
             self.teleop_changed.emit(True)
             self.busy_changed.emit(True)
@@ -928,8 +928,10 @@ class RobotWorker(QObject):
                 worker=self._robot_id,
                 tracking_preset=tracking.key,
                 tracking_label=tracking.label,
-                max_joint_speed_rad_s=tracking_max_speed,
-                max_joint_acceleration_rad_s2=tracking_max_acceleration,
+                max_joint_speed_rad_s=max(tracking_speed_limits.values()),
+                max_joint_acceleration_rad_s2=max(tracking_acceleration_limits.values()),
+                joint_max_speed_rad_s=tracking_speed_limits,
+                joint_max_acceleration_rad_s2=tracking_acceleration_limits,
                 absolute_stream_max_joint_speed_rad_s=arm.config.stream_joint_speed_limit,
                 absolute_stream_max_joint_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
                 gripper_speed_per_s=TELEOP_GRIPPER_SPEED_PER_S,
