@@ -31,7 +31,7 @@ from soarm101_motion.exceptions import (
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.motion import JointExecutionMode, MotionController, MotionHandle
-from soarm101_motion.poses import sleep_joint_positions
+from soarm101_motion.poses import sleep_joint_positions, sleep_up_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
     resolve_effective_joint_limits,
@@ -476,8 +476,12 @@ class SOARM101:
     move_gohome = move_home
 
     def get_sleep_joint_positions(self) -> dict[str, float]:
-        """Return this arm's natural Sleep pose from its executable limits."""
+        """Return this arm's default smoother Sleep pose from executable limits."""
         return sleep_joint_positions(self.get_joint_limits())
+
+    def get_sleep_up_joint_positions(self) -> dict[str, float]:
+        """Return the historical fully folded wrist-up Sleep posture."""
+        return sleep_up_joint_positions(self.get_joint_limits())
 
     def _sleep_gripper(self) -> SO101Gripper | None:
         if isinstance(self.tool, SO101Gripper):
@@ -505,16 +509,18 @@ class SOARM101:
             time.sleep(0.01)
         return handle.wait()
 
-    def _execute_sleep(
+    def _execute_sleep_target(
         self,
         cancel_event: threading.Event,
+        target: Mapping[str, float],
         *,
         speed: float | None,
         acceleration: float | None,
         execution_mode: JointExecutionMode,
+        label: str,
     ) -> MotionResult:
         arm_handle = self.move_joints(
-            self.get_sleep_joint_positions(),
+            target,
             speed=speed,
             acceleration=acceleration,
             wait=False,
@@ -525,7 +531,7 @@ class SOARM101:
         arm_result = self._wait_sleep_child(arm_handle, cancel_event)
         final_positions = dict(arm_result.final_positions)
         if cancel_event.is_set():
-            raise MotionCancelledError("Sleep motion cancelled before gripper close")
+            raise MotionCancelledError(f"{label} motion cancelled before gripper close")
 
         gripper = self._sleep_gripper()
         gripper_target = self.get_sleep_gripper_position()
@@ -542,6 +548,40 @@ class SOARM101:
             final_positions=final_positions,
         )
 
+    def _execute_sleep(
+        self,
+        cancel_event: threading.Event,
+        *,
+        speed: float | None,
+        acceleration: float | None,
+        execution_mode: JointExecutionMode,
+    ) -> MotionResult:
+        return self._execute_sleep_target(
+            cancel_event,
+            self.get_sleep_joint_positions(),
+            speed=speed,
+            acceleration=acceleration,
+            execution_mode=execution_mode,
+            label="Sleep",
+        )
+
+    def _execute_sleep_up(
+        self,
+        cancel_event: threading.Event,
+        *,
+        speed: float | None,
+        acceleration: float | None,
+        execution_mode: JointExecutionMode,
+    ) -> MotionResult:
+        return self._execute_sleep_target(
+            cancel_event,
+            self.get_sleep_up_joint_positions(),
+            speed=speed,
+            acceleration=acceleration,
+            execution_mode=execution_mode,
+            label="sleep_up",
+        )
+
     def move_sleep(
         self,
         *,
@@ -550,21 +590,48 @@ class SOARM101:
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Fold the arm into Sleep, then close the stock gripper safely.
+        """Move to the default calibration-relative Sleep pose and close the gripper.
 
-        If the stock gripper is present, Sleep closes it to a target inset from
-        the calibrated closed mechanical stop by the configured gripper stop
-        margin (1 degree by default).
+        Sleep keeps the historical shoulder/elbow fold but places wrist_flex
+        three-quarters of the way from its executable lower limit to upper limit.
+        Physical testing found this orientation substantially smoother than the
+        historical fully folded wrist-up posture, which remains available through
+        :meth:`move_sleep_up`.
 
-        Sleep intentionally bypasses only the generic coarse arm workspace
-        geometry check. The calibrated folded posture places non-neighboring link
-        centerlines closer than the generic 25 mm self-clearance heuristic even
-        though the physical arm is designed to fold there. Calibrated joint/tool
-        limits, planned dynamics, the active streamed/final-target progress guards,
-        effort, fault, communication, and completion checks remain active.
+        Sleep intentionally bypasses only the generic coarse arm workspace geometry
+        check because the folded shoulder/elbow configuration is closer than the
+        generic 25 mm centerline self-clearance heuristic. Calibrated joint/tool
+        limits, planned dynamics, active progress guards, effort, fault,
+        communication, and completion checks remain active.
         """
         handle = MotionHandle(
             lambda event: self._execute_sleep(
+                event,
+                speed=speed,
+                acceleration=acceleration,
+                execution_mode=execution_mode,
+            )
+        )
+        handle.start()
+        return handle.wait() if wait else handle
+
+    def move_sleep_up(
+        self,
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        """Move to the historical fully folded wrist-up Sleep posture.
+
+        This preserves the pre-sleep2 calibration-relative pose as an explicit
+        override while default :meth:`move_sleep` uses the smoother wrist geometry.
+        The same narrow folded-posture workspace exception and all other runtime
+        safety guards apply.
+        """
+        handle = MotionHandle(
+            lambda event: self._execute_sleep_up(
                 event,
                 speed=speed,
                 acceleration=acceleration,
