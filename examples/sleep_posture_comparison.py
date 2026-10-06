@@ -11,7 +11,9 @@ from pathlib import Path
 
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.exceptions import MotionTimeoutError
 from soarm101_motion.motion import PassiveBackendTrace
+from soarm101_motion.motion.quality import maximum_joint_drift
 from soarm101_motion.poses import PoseLibrary
 from soarm101_motion.workstation import WorkstationProfileStore
 
@@ -130,12 +132,43 @@ def main() -> int:
 
             def reset_right() -> None:
                 trace.mark("reset_start", destination="RIGHT")
-                result = arm.move_joints_from_saved_pose(
-                    right.joints,
-                    speed=speed,
-                    acceleration=acceleration,
-                    execution_mode="streamed",
-                )
+                try:
+                    result = arm.move_joints_from_saved_pose(
+                        right.joints,
+                        speed=speed,
+                        acceleration=acceleration,
+                        execution_mode="streamed",
+                    )
+                except MotionTimeoutError:
+                    measured = dict(arm.get_joint_positions().positions)
+                    worst_error = maximum_joint_drift(right.joints, measured)
+                    retry_bound = 2.0 * arm.config.joint_position_tolerance_rad
+                    trace.mark(
+                        "reset_near_target_timeout",
+                        destination="RIGHT",
+                        worst_error_rad=worst_error,
+                        retry_bound_rad=retry_bound,
+                        measured_positions=measured,
+                    )
+                    if worst_error > retry_bound:
+                        raise
+                    print(
+                        "RIGHT reset missed settle narrowly "
+                        f"({math.degrees(worst_error):.2f} deg worst error); "
+                        "retrying the same guarded target once."
+                    )
+                    result = arm.move_joints_from_saved_pose(
+                        right.joints,
+                        speed=speed,
+                        acceleration=acceleration,
+                        execution_mode="streamed",
+                    )
+                    trace.mark(
+                        "reset_retry_completed",
+                        destination="RIGHT",
+                        completed=result.completed,
+                        final_positions=dict(result.final_positions),
+                    )
                 arm.hold()
                 trace.mark(
                     "reset_end",
