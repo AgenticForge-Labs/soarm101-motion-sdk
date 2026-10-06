@@ -1,9 +1,77 @@
 import json
+import math
 
 import pytest
 
+from soarm101_motion import SOARM101Config
 from soarm101_motion.cli.main import _arm_from_args, build_parser, main
 from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
+
+
+
+
+
+def test_motion_envelope_defaults_are_human_friendly() -> None:
+    limits = SOARM101Config().motion_limits_human
+    assert limits == pytest.approx(
+        {
+            "max_joint_speed_deg_s": 100.0,
+            "max_joint_acceleration_deg_s2": 1000.0,
+            "max_linear_speed_mm_s": 100.0,
+            "max_linear_acceleration_mm_s2": 1000.0,
+            "max_tool_angular_speed_deg_s": 100.0,
+            "max_tool_angular_acceleration_deg_s2": 1000.0,
+        }
+    )
+
+
+def test_motion_envelope_sdk_human_units_convert_to_si() -> None:
+    config = SOARM101Config.from_motion_limits(
+        max_joint_speed_deg_s=80.0,
+        max_joint_acceleration_deg_s2=500.0,
+        max_linear_speed_mm_s=90.0,
+        max_linear_acceleration_mm_s2=900.0,
+        max_tool_angular_speed_deg_s=70.0,
+        max_tool_angular_acceleration_deg_s2=700.0,
+    )
+    assert config.max_joint_speed == pytest.approx(math.radians(80.0))
+    assert config.max_joint_acceleration == pytest.approx(math.radians(500.0))
+    assert config.max_linear_speed == pytest.approx(0.090)
+    assert config.max_linear_acceleration == pytest.approx(0.900)
+    assert config.max_angular_speed == pytest.approx(math.radians(70.0))
+    assert config.max_angular_acceleration == pytest.approx(math.radians(700.0))
+
+
+def test_cli_motion_envelope_overrides_apply_to_simulation() -> None:
+    args = build_parser().parse_args(
+        [
+            "read",
+            "--simulation",
+            "--max-joint-speed-deg-s",
+            "80",
+            "--max-joint-acceleration-deg-s2",
+            "500",
+            "--max-linear-speed-mm-s",
+            "90",
+            "--max-linear-acceleration-mm-s2",
+            "900",
+            "--max-tool-angular-speed-deg-s",
+            "70",
+            "--max-tool-angular-acceleration-deg-s2",
+            "700",
+        ]
+    )
+    arm = _arm_from_args(args)
+    assert arm.config.motion_limits_human == pytest.approx(
+        {
+            "max_joint_speed_deg_s": 80.0,
+            "max_joint_acceleration_deg_s2": 500.0,
+            "max_linear_speed_mm_s": 90.0,
+            "max_linear_acceleration_mm_s2": 900.0,
+            "max_tool_angular_speed_deg_s": 70.0,
+            "max_tool_angular_acceleration_deg_s2": 700.0,
+        }
+    )
 
 
 def test_info(capsys) -> None:
