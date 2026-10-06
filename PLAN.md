@@ -167,12 +167,24 @@ its own persistent connection for live controls; it must not launch CLI subproce
   track the faster validated host trajectory and tripped following-error before the A/B.
   Default streamed planned joint motion now uses the same responsive 0/254 tracking profile
   as teleoperation while retaining the host speed/acceleration ceilings and safety guards.
-  Repeat the 40/250 Sleep-vs-sleep_up A/B; continue deeper servo investigation only for
-  residual rocking after the actuator no longer has this hidden throttle.
+  The 40/250 Sleep-vs-sleep_up rerun completed cleanly after removing the hidden servo
+  throttle, and 80/500 subsequently completed with a large subjective smoothness improvement.
+  GUI teleoperation then isolated a different wrist-specific issue: 20 Hz Medium tracking
+  works, while the former Fast 1000 deg/s² wrist-flex response could command a reversal
+  faster than the physical wrist braked, producing +0.057 rad of carry-through and a strict
+  opposite-direction stop. Fast is now per-joint: wrist_flex retains 100 deg/s speed but uses
+  500 deg/s² acceleration, while the other joints retain 100/1000. Live-stream direction
+  monitoring also permits only a 100 ms non-growing braking carry-through immediately after
+  a genuine command reversal; planned motion remains strict. Validate isolated wrist
+  reversals at 20 Hz with no payload/gripper mirroring before considering this motion-quality
+  branch merge-ready.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
-- [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
-  leader-readout loss, gripper mirroring, and stream safety trips.
+- [ ] Finish guarded leader-to-follower streaming validation. Medium at 20 Hz has passed
+  supervised use; next validate Fast · wrist-aware wrist reversals, STOP, leader-readout
+  loss, and stream safety trips with gripper mirroring disabled, then separately validate
+  gripper mirroring/contact at Normal gripper speed. The pen overload showed that gripper
+  object state must not be conflated with arm-stream dynamics.
 - [ ] Validate sequence execution and edited motion primitives on hardware.
 - [ ] Validate the selected USB camera on the target workstation, confirm negotiated
   resolution/FPS/FourCC, live GUI preview in Camera and Teleoperation, and still capture.
