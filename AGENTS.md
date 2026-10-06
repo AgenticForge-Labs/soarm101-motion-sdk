@@ -32,6 +32,11 @@ changes require development discipline; robot use requires conservative hardware
 11. Preserve the distinction between planned motion and live-streaming safety. Do not weaken
     joint, step, rate, acceleration, following-error, fault, effort, calibration, or
     provenance checks merely to make a new workflow pass.
+    Host-streamed planned joint motion may use the same responsive Feetech tracking profile
+    as teleoperation (Goal_Velocity=0 / acceleration=254) so the validated host trajectory
+    owns speed/acceleration shaping. Do not reintroduce a slower hidden servo-side profile
+    that can make a valid host plan outrun the actuator and trigger artificial following
+    error.
 12. When user-visible behavior, UI names, defaults, calibration rules, CLI behavior, or safety
     gates change, update `README.md`, `CHANGELOG.md`, `TESTING.md`, and the relevant
     files under `docs/` in the same change.
