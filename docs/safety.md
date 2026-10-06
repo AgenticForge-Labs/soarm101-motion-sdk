@@ -209,3 +209,17 @@ robot-specific table frame and tool geometry are calibrated. Other joint, step, 
 acceleration, following-error, fault, and effort checks remain active.
 
 The API uses `stop()` and `software_stop()`. It intentionally does not expose `emergency_stop()` because a Python command cannot replace a physical power or enable circuit.
+
+### Sleep posture geometry
+
+The default calibration-relative Sleep posture intentionally uses `wrist_flex` at 75% of
+its executable range, equivalent to `upper - 0.25 * (upper - lower)`. Physical A/B testing
+on the development follower showed substantially less rocking than the historical
+wrist-at-lower-limit fold. That historical posture remains available explicitly as
+`sleep_up`.
+
+Both postures retain the same narrow exception for the generic coarse folded-arm
+self-clearance heuristic. This semantic change does **not** relax calibrated joint limits,
+trajectory/rate checks, following-error monitoring, effort/fault handling, communication
+checks, or completion/settle validation.
+
