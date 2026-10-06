@@ -81,6 +81,36 @@ Rules:
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
 
+## Motion-envelope ownership
+
+The Motion SDK owns one deterministic host-side motion envelope. Its current absolute
+characterization ceilings are deliberately easy to reason about:
+
+```text
+joint velocity             100 deg/s
+joint acceleration        1000 deg/s^2
+TCP linear velocity        100 mm/s
+TCP linear acceleration   1000 mm/s^2
+TCP angular velocity       100 deg/s
+TCP angular acceleration  1000 deg/s^2
+```
+
+Internal planner math remains SI (`rad/s`, `rad/s^2`, `m/s`, `m/s^2`). These values
+are ceilings rather than default motion requests. Cartesian planning may request translation
+and orientation rates independently, but every IK-generated joint trajectory must also fit
+the joint envelope.
+
+Planned streamed arm motion gives the STS3215 controller a deliberately more responsive
+inner tracking profile (`Goal_Velocity=0`, `Acceleration=254`). The servo profile is not
+a second authored trajectory and must not become a competing source of timing truth. Host
+planning owns the intended trajectory; calibrated limits, following-error, effort/fault,
+workspace, timing, and settle validation own acceptance.
+
+The bounded agent broker does not define another motion envelope. The trusted broker process
+selects an `SOARM101Config` envelope and injects those exact limits into every bounded
+motion subprocess. Sandbox-side `robotctl` has no option or endpoint that can widen the
+trusted-host envelope.
+
 ## Workstation and camera session boundary
 
 Machine-local addressing is stored once in the workstation profile: follower/leader ports,
