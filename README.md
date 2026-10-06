@@ -63,6 +63,24 @@ fault, joint-limit, workspace, timing, STOP/HOLD, and settle checks remain activ
 100/1000 envelope is an engineering policy under physical characterization, not a claim that
 a loaded arm is safe at the STS3215 no-load actuator limit.
 
+### Motion envelope and servo tracking
+
+The default absolute host envelope is intentionally easy to reason about in human units:
+
+- joints: **100 deg/s**, **1000 deg/s²**
+- TCP translation: **100 mm/s**, **1000 mm/s²**
+- TCP/tool orientation: **100 deg/s**, **1000 deg/s²**
+
+Ordinary motion defaults remain slower. These are request ceilings, not default speeds.
+The arm's STS3215 position tracker uses responsive `Goal_Velocity=0` and
+`Acceleration=254` so the inner servo loop has headroom to follow the deterministic
+host trajectory. The arm backend fallback uses that same `0/254` policy; the stock
+gripper is intentionally independent and retains gentler `250/20` pacing.
+
+Use `soarm101 motion-envelope` to inspect the active policy. CLI commands may override
+the six host ceilings in degrees/mm units, and a trusted broker propagates its configured
+envelope into every bounded motion subprocess; sandbox clients cannot widen it.
+
 ## Programming model
 
 The important separation is between **reasoning about what should happen** and the deterministic robot layer responsible for deciding whether and how motion can happen.
