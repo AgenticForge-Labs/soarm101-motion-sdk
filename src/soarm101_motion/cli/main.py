@@ -42,7 +42,12 @@ from soarm101_motion.constants import (
 from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
-from soarm101_motion.poses import PoseLibrary, SavedPose, sleep_joint_positions
+from soarm101_motion.poses import (
+    PoseLibrary,
+    SavedPose,
+    sleep_joint_positions,
+    sleep_up_joint_positions,
+)
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
@@ -300,6 +305,11 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             name: float(value * 180.0 / pi)
             for name, value in sleep_joint_positions(effective_limits).items()
         },
+        "sleep_up_pose_rad": sleep_up_joint_positions(effective_limits),
+        "sleep_up_pose_deg": {
+            name: float(value * 180.0 / pi)
+            for name, value in sleep_up_joint_positions(effective_limits).items()
+        },
         "sleep_gripper": {
             "normalized": float(sleep_gripper_position),
             "raw": int(sleep_gripper_raw),
@@ -319,7 +329,8 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         "notes": [
             "URDF/model joint limits are the generic fallback/reference; calibrated real arms use measured pose-joint travel with the configured stop margin",
             "calibration remains the physical authority if a measured range is narrower than the model range",
-            "Sleep closes the stock gripper to the calibrated closed stop inset by the configured gripper margin",
+            "Sleep uses wrist_flex at 75% of its executable calibrated range; sleep_up preserves the historical wrist-at-lower-limit posture",
+            "Sleep and sleep_up close the stock gripper to the calibrated closed stop inset by the configured gripper margin",
             "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
             "normal Cartesian CLI coordinates are in the soarm101/base model frame",
         ],
@@ -474,6 +485,26 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         _print_motion_result(result, as_json=args.json)
         print(
             "Sleep complete and holding. Press ENTER to relax the arm.",
+            file=sys.stderr,
+        )
+        input()
+        arm.relax()
+    return 0
+
+
+def _cmd_sleep_up(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move without --yes.", file=sys.stderr)
+        return 2
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        arm.enable()
+        result = arm.move_sleep_up(
+            speed=args.speed_deg_s * pi / 180.0,
+            acceleration=args.acceleration_deg_s2 * pi / 180.0,
+        )
+        _print_motion_result(result, as_json=args.json)
+        print(
+            "sleep_up complete and holding. Press ENTER to relax the arm.",
             file=sys.stderr,
         )
         input()
@@ -1041,6 +1072,7 @@ def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
             },
             "gripper": ["open", "close"],
             "sleep": True,
+            "sleep_up": True,
             "stop": "always_available",
         },
         "jog_policy": {
@@ -1368,6 +1400,27 @@ def _cmd_agent_sleep(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_agent_sleep_up(args: argparse.Namespace) -> int:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        authority = _agent_require_authority(args, arm)
+        arm.enable()
+        result = arm.move_sleep_up(
+            speed=8.0 * pi / 180.0,
+            acceleration=25.0 * pi / 180.0,
+        )
+        arm.hold()
+    payload = asdict(result)
+    payload.update(
+        {
+            "action": "sleep_up",
+            "holding": True,
+            "authority": authority,
+        }
+    )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def _cmd_agent_stop(args: argparse.Namespace) -> int:
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
@@ -1557,7 +1610,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sleep = sub.add_parser(
         "sleep",
-        help="move to the calibration-derived natural Sleep posture through normal safety guards",
+        help="move to the calibration-derived smoother default Sleep posture",
     )
     add_session_options(sleep)
     sleep.add_argument("--speed-deg-s", type=float, default=8.0)
@@ -1565,6 +1618,18 @@ def build_parser() -> argparse.ArgumentParser:
     sleep.add_argument("--yes", action="store_true")
     sleep.add_argument("--json", action="store_true")
     sleep.set_defaults(func=_cmd_sleep)
+
+    sleep_up = sub.add_parser(
+        "sleep-up",
+        aliases=["sleep_up"],
+        help="move to the historical fully folded wrist-up Sleep posture",
+    )
+    add_session_options(sleep_up)
+    sleep_up.add_argument("--speed-deg-s", type=float, default=8.0)
+    sleep_up.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    sleep_up.add_argument("--yes", action="store_true")
+    sleep_up.add_argument("--json", action="store_true")
+    sleep_up.set_defaults(func=_cmd_sleep_up)
 
     jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
     add_session_options(jog)
@@ -1765,10 +1830,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_sleep = agent_sub.add_parser(
         "sleep",
-        help="move to calibrated Sleep and remain holding",
+        help="move to calibrated default Sleep and remain holding",
     )
     add_session_options(agent_sleep)
     agent_sleep.set_defaults(func=_cmd_agent_sleep)
+
+    agent_sleep_up = agent_sub.add_parser(
+        "sleep-up",
+        aliases=["sleep_up"],
+        help="move to the historical calibrated wrist-up Sleep and remain holding",
+    )
+    add_session_options(agent_sleep_up)
+    agent_sleep_up.set_defaults(func=_cmd_agent_sleep_up)
 
     agent_stop = agent_sub.add_parser(
         "stop",
