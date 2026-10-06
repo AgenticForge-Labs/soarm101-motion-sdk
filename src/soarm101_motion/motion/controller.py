@@ -124,14 +124,22 @@ class RecordedPlan:
 
 
 @dataclass
+class StreamReversalGrace:
+    remaining_samples: int
+    previous_wrong_way_delta_abs: float
+
+
+@dataclass
 class JointStreamState:
     last_command: dict[str, float]
     last_velocity: dict[str, float] | None
     previous_actual: dict[str, float]
     frequency_hz: float
     limits: dict[str, tuple[float, float]]
-    speed_limit: float
-    acceleration_limit: float
+    speed_limits: dict[str, float]
+    acceleration_limits: dict[str, float]
+    last_nonzero_command_direction: dict[str, int]
+    reversal_grace: dict[str, StreamReversalGrace]
     tcp: Pose | None = None
 
 
@@ -322,6 +330,26 @@ class MotionController:
                 f"{name} {resolved:.4f} exceeds configured safety maximum {maximum:.4f}"
             )
         return min(resolved, maximum)
+
+    def _resolve_stream_joint_limits(
+        self,
+        value: float | Mapping[str, float] | None,
+        *,
+        default: float,
+        maximum: float,
+        name: str,
+    ) -> dict[str, float]:
+        if isinstance(value, Mapping):
+            if set(value) != set(ARM_JOINTS):
+                raise InvalidCommandError(
+                    f"{name} must provide exactly the five canonical arm joints"
+                )
+            return {
+                joint: self._bounded(float(value[joint]), default, maximum, f"{name} {joint}")
+                for joint in ARM_JOINTS
+            }
+        resolved = self._bounded(value, default, maximum, name)
+        return {joint: resolved for joint in ARM_JOINTS}
 
     def _sleep_until(self, deadline: float) -> float:
         if not getattr(self.backend, "realtime", True):
@@ -1103,11 +1131,9 @@ class MotionController:
         if cancel_event.is_set():
             raise MotionCancelledError(message)
 
-    def _monitor_motion(
+    def _read_guarded_actual(
         self,
         command: Mapping[str, float],
-        previous_command: Mapping[str, float],
-        previous_actual: Mapping[str, float],
     ) -> dict[str, float]:
         state = self.backend.get_hardware_state()
         if state.faulted:
@@ -1121,6 +1147,15 @@ class MotionController:
                 f"{self.config.following_error_limit_rad:.3f} rad "
                 f"(target {command[worst_joint]:.3f}, measured {actual[worst_joint]:.3f})"
             )
+        return actual
+
+    def _monitor_motion(
+        self,
+        command: Mapping[str, float],
+        previous_command: Mapping[str, float],
+        previous_actual: Mapping[str, float],
+    ) -> dict[str, float]:
+        actual = self._read_guarded_actual(command)
         for name in ARM_JOINTS:
             command_delta = command[name] - previous_command[name]
             actual_delta = actual[name] - previous_actual[name]
@@ -1132,6 +1167,62 @@ class MotionController:
                 raise SafetyViolationError(
                     f"{name} moved {actual_delta:+.3f} rad opposite the commanded direction"
                 )
+        return actual
+
+    def _monitor_stream_motion(
+        self,
+        command: Mapping[str, float],
+        previous_command: Mapping[str, float],
+        stream_state: JointStreamState,
+    ) -> dict[str, float]:
+        """Monitor a live stream while distinguishing braking lag from runaway motion."""
+        actual = self._read_guarded_actual(command)
+        for name in ARM_JOINTS:
+            command_delta = command[name] - previous_command[name]
+            actual_delta = actual[name] - stream_state.previous_actual[name]
+            if abs(command_delta) < self.config.joint_position_tolerance_rad:
+                continue
+            if abs(actual_delta) < self.config.unexpected_direction_threshold_rad:
+                stream_state.reversal_grace.pop(name, None)
+                continue
+            if command_delta * actual_delta >= 0.0:
+                stream_state.reversal_grace.pop(name, None)
+                continue
+
+            current_direction = 1 if command_delta > 0.0 else -1
+            previous_direction = stream_state.last_nonzero_command_direction[name]
+            grace = stream_state.reversal_grace.get(name)
+            if previous_direction and current_direction != previous_direction:
+                total_samples = max(
+                    1,
+                    math.ceil(
+                        self.config.stream_reversal_grace_s
+                        * stream_state.frequency_hz
+                    ),
+                )
+                stream_state.reversal_grace[name] = StreamReversalGrace(
+                    remaining_samples=total_samples - 1,
+                    previous_wrong_way_delta_abs=abs(actual_delta),
+                )
+                continue
+
+            if grace is not None and grace.remaining_samples > 0:
+                if (
+                    abs(actual_delta)
+                    <= grace.previous_wrong_way_delta_abs
+                    + self.config.stream_reversal_decay_tolerance_rad
+                ):
+                    grace.remaining_samples -= 1
+                    grace.previous_wrong_way_delta_abs = abs(actual_delta)
+                    continue
+                raise SafetyViolationError(
+                    f"{name} opposite-direction carry-through grew during reversal braking "
+                    f"({actual_delta:+.3f} rad)"
+                )
+
+            raise SafetyViolationError(
+                f"{name} moved {actual_delta:+.3f} rad opposite the commanded direction"
+            )
         return actual
 
     def _monitor_final_target_motion(
@@ -1647,8 +1738,8 @@ class MotionController:
         self,
         *,
         frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
-        max_speed: float | None = None,
-        max_acceleration: float | None = None,
+        max_speed: float | Mapping[str, float] | None = None,
+        max_acceleration: float | Mapping[str, float] | None = None,
         tcp: Pose | None = None,
     ) -> None:
         """Begin guarded continuous joint streaming from the current measured pose.
@@ -1658,17 +1749,17 @@ class MotionController:
         synchronous feedback/fault/effort checks on every accepted sample.
         """
         frequency = self._positive(frequency_hz, "stream frequency")
-        speed_limit = self._bounded(
+        speed_limits = self._resolve_stream_joint_limits(
             max_speed,
-            self.config.stream_joint_speed_limit,
-            self.config.stream_joint_speed_limit,
-            "stream joint speed",
+            default=self.config.stream_joint_speed_limit,
+            maximum=self.config.stream_joint_speed_limit,
+            name="stream joint speed",
         )
-        acceleration_limit = self._bounded(
+        acceleration_limits = self._resolve_stream_joint_limits(
             max_acceleration,
-            self.config.stream_joint_acceleration_limit,
-            self.config.stream_joint_acceleration_limit,
-            "stream joint acceleration",
+            default=self.config.stream_joint_acceleration_limit,
+            maximum=self.config.stream_joint_acceleration_limit,
+            name="stream joint acceleration",
         )
         if frequency > self.config.command_frequency_hz:
             raise SafetyViolationError(
@@ -1701,8 +1792,10 @@ class MotionController:
                 previous_actual=present.copy(),
                 frequency_hz=frequency,
                 limits=stream_limits,
-                speed_limit=speed_limit,
-                acceleration_limit=acceleration_limit,
+                speed_limits=speed_limits,
+                acceleration_limits=acceleration_limits,
+                last_nonzero_command_direction={name: 0 for name in ARM_JOINTS},
+                reversal_grace={},
                 tcp=tcp,
             )
 
@@ -1739,23 +1832,23 @@ class MotionController:
                 name: (target[name] - state.last_command[name]) / dt
                 for name in ARM_JOINTS
             }
-            max_speed = max(abs(value) for value in velocity.values())
-            if max_speed > state.speed_limit * 1.001:
-                raise SafetyViolationError(
-                    f"streamed joint speed {max_speed:.4f} rad/s exceeds "
-                    f"{state.speed_limit:.4f} rad/s"
-                )
+            for name, value in velocity.items():
+                if abs(value) > state.speed_limits[name] * 1.001:
+                    raise SafetyViolationError(
+                        f"streamed {name} speed {abs(value):.4f} rad/s exceeds "
+                        f"{state.speed_limits[name]:.4f} rad/s"
+                    )
             if state.last_velocity is not None:
                 acceleration = {
                     name: (velocity[name] - state.last_velocity[name]) / dt
                     for name in ARM_JOINTS
                 }
-                max_acceleration = max(abs(value) for value in acceleration.values())
-                if max_acceleration > state.acceleration_limit * 1.001:
-                    raise SafetyViolationError(
-                        f"streamed joint acceleration {max_acceleration:.4f} rad/s² exceeds "
-                        f"{state.acceleration_limit:.4f} rad/s²"
-                    )
+                for name, value in acceleration.items():
+                    if abs(value) > state.acceleration_limits[name] * 1.001:
+                        raise SafetyViolationError(
+                            f"streamed {name} acceleration {abs(value):.4f} rad/s² exceeds "
+                            f"{state.acceleration_limits[name]:.4f} rad/s²"
+                        )
 
             if self.config.enable_workspace_checks and self.config.teleop_workspace_checks:
                 max_delta = max(
@@ -1815,10 +1908,10 @@ class MotionController:
                         self.backend.write_tool_position(
                             STOCK_GRIPPER, gripper_value, speed_raw=gripper_speed_raw
                         )
-                actual = self._monitor_motion(
+                actual = self._monitor_stream_motion(
                     target,
                     state.last_command,
-                    state.previous_actual,
+                    state,
                 )
             except BaseException:
                 self._joint_stream = None
@@ -1828,6 +1921,10 @@ class MotionController:
                     pass
                 raise
 
+            for name, value in velocity.items():
+                command_delta = target[name] - state.last_command[name]
+                if abs(command_delta) >= self.config.joint_position_tolerance_rad:
+                    state.last_nonzero_command_direction[name] = 1 if value > 0.0 else -1
             state.last_command = dict(target)
             state.last_velocity = velocity
             state.previous_actual = dict(actual)
