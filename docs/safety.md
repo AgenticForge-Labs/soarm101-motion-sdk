@@ -256,3 +256,21 @@ self-clearance heuristic. This semantic change does **not** relax calibrated joi
 trajectory/rate checks, following-error monitoring, effort/fault handling, communication
 checks, or completion/settle validation.
 
+
+
+### Host motion envelope versus servo tracking authority
+
+The default absolute host envelope is **100 deg/s / 1000 deg/s²** for each joint,
+**100 mm/s / 1000 mm/s²** for TCP translation, and **100 deg/s / 1000 deg/s²**
+for TCP orientation. These are ceilings, not ordinary motion defaults.
+
+Arm position commands use responsive STS3215 tracking (`Goal_Velocity=0`,
+`Acceleration=254`). The backend fallback for guarded arm position writes is also
+`0/254`; this is deliberate so the inner servo profile remains faster than the validated
+host trajectory instead of imposing a second slower trajectory. The stock gripper remains
+separately paced at `250/20` by default.
+
+Raising the host envelope and removing the hidden arm-side throttle does **not** remove
+calibrated joint limits, maximum command-step checks, following-error, unexpected-direction,
+effort/current, hardware-fault, workspace, timing, STOP/HOLD, or settle validation.
+Broker clients inherit the trusted host envelope and cannot widen it remotely.
