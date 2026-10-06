@@ -49,10 +49,23 @@ JOINT_LIMITS: dict[str, tuple[float, float]] = {
 
 HOME_JOINTS: dict[str, float] = {joint: 0.0 for joint in ARM_JOINTS}
 
-# Universal semantic recipe for the calibrated Sleep posture. The actual
-# angles are derived at runtime from the active arm calibration/effective limits,
-# so each follower gets a mechanically natural folded pose after calibration.
+# Universal semantic recipes for calibration-relative resting postures.
+# The default Sleep keeps the historical shoulder/elbow fold but places wrist_flex
+# three-quarters of the way from its executable lower limit to its upper limit:
+#     lower + 0.75 * (upper - lower)
+#   = upper - 0.25 * (upper - lower)
+# Physical testing showed this less wrist-up geometry settles substantially more
+# smoothly than the historical fully folded wrist posture. The latter is retained
+# explicitly as sleep_up for callers that need it.
 SLEEP_LIMIT_SELECTORS: dict[str, str] = {
+    "shoulder_pan": "midpoint",
+    "shoulder_lift": "lower",
+    "elbow_flex": "upper",
+    "wrist_flex": "three_quarters",
+    "wrist_roll": "midpoint",
+}
+
+SLEEP_UP_LIMIT_SELECTORS: dict[str, str] = {
     "shoulder_pan": "midpoint",
     "shoulder_lift": "lower",
     "elbow_flex": "upper",
