@@ -15,6 +15,18 @@ from soarm101_motion.constants import (
     DEFAULT_LINEAR_ACCEL_M_S2,
     DEFAULT_LINEAR_SPEED_M_S,
     DEFAULT_MAX_COMMAND_STEP_RAD,
+    DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
+    DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+    DEFAULT_MAX_JOINT_SPEED_DEG_S,
+    DEFAULT_MAX_JOINT_SPEED_RAD_S,
+    DEFAULT_MAX_LINEAR_ACCEL_M_S2,
+    DEFAULT_MAX_LINEAR_ACCEL_MM_S2,
+    DEFAULT_MAX_LINEAR_SPEED_M_S,
+    DEFAULT_MAX_LINEAR_SPEED_MM_S,
+    DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
+    DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2,
+    DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
+    DEFAULT_MAX_TOOL_ANGULAR_SPEED_RAD_S,
 )
 from soarm101_motion.exceptions import ConfigurationError
 
@@ -35,17 +47,17 @@ class SOARM101Config:
     default_angular_speed: float = 0.8
     default_angular_acceleration: float = 2.0
 
-    # Absolute host-side safety ceilings. Per-command overrides may be lower,
-    # but may never exceed these values.
-    max_joint_speed: float = 1.0
-    max_joint_acceleration: float = 5.0
+    # Absolute host-side motion envelope. Public/CLI presentation uses degrees
+    # and millimeters; deterministic internals remain SI.
+    max_joint_speed: float = DEFAULT_MAX_JOINT_SPEED_RAD_S
+    max_joint_acceleration: float = DEFAULT_MAX_JOINT_ACCEL_RAD_S2
     # Optional live-stream ceilings. None keeps the planned-motion ceiling.
     teleop_max_joint_speed: float | None = None
     teleop_max_joint_acceleration: float | None = None
-    max_linear_speed: float = 0.06
-    max_linear_acceleration: float = 0.20
-    max_angular_speed: float = 1.0
-    max_angular_acceleration: float = 2.5
+    max_linear_speed: float = DEFAULT_MAX_LINEAR_SPEED_M_S
+    max_linear_acceleration: float = DEFAULT_MAX_LINEAR_ACCEL_M_S2
+    max_angular_speed: float = DEFAULT_MAX_TOOL_ANGULAR_SPEED_RAD_S
+    max_angular_acceleration: float = DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2
 
     max_command_step_radians: float = DEFAULT_MAX_COMMAND_STEP_RAD
     max_ik_waypoint_jump_radians: float = 0.50
@@ -109,6 +121,47 @@ class SOARM101Config:
     position_p_coefficient: int = 32
     position_i_coefficient: int = 0
     position_d_coefficient: int = 32
+
+    @classmethod
+    def from_motion_limits(
+        cls,
+        *,
+        max_joint_speed_deg_s: float = DEFAULT_MAX_JOINT_SPEED_DEG_S,
+        max_joint_acceleration_deg_s2: float = DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
+        max_linear_speed_mm_s: float = DEFAULT_MAX_LINEAR_SPEED_MM_S,
+        max_linear_acceleration_mm_s2: float = DEFAULT_MAX_LINEAR_ACCEL_MM_S2,
+        max_tool_angular_speed_deg_s: float = DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
+        max_tool_angular_acceleration_deg_s2: float = DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
+        **kwargs: object,
+    ) -> "SOARM101Config":
+        """Build a config using human-friendly motion-envelope units."""
+
+        return cls(
+            **kwargs,
+            max_joint_speed=math.radians(float(max_joint_speed_deg_s)),
+            max_joint_acceleration=math.radians(float(max_joint_acceleration_deg_s2)),
+            max_linear_speed=float(max_linear_speed_mm_s) / 1000.0,
+            max_linear_acceleration=float(max_linear_acceleration_mm_s2) / 1000.0,
+            max_angular_speed=math.radians(float(max_tool_angular_speed_deg_s)),
+            max_angular_acceleration=math.radians(
+                float(max_tool_angular_acceleration_deg_s2)
+            ),
+        )
+
+    @property
+    def motion_limits_human(self) -> dict[str, float]:
+        """Return the configured absolute motion envelope in CLI-facing units."""
+
+        return {
+            "max_joint_speed_deg_s": math.degrees(self.max_joint_speed),
+            "max_joint_acceleration_deg_s2": math.degrees(self.max_joint_acceleration),
+            "max_linear_speed_mm_s": self.max_linear_speed * 1000.0,
+            "max_linear_acceleration_mm_s2": self.max_linear_acceleration * 1000.0,
+            "max_tool_angular_speed_deg_s": math.degrees(self.max_angular_speed),
+            "max_tool_angular_acceleration_deg_s2": math.degrees(
+                self.max_angular_acceleration
+            ),
+        }
 
     @property
     def stream_joint_speed_limit(self) -> float:
