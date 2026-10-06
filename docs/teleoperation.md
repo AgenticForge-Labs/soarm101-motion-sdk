@@ -22,9 +22,9 @@ Tracking-response choices shape how quickly the follower closes the leader gap:
 
 - **Slow · gentle** — 0.6 rad/s, 3.0 rad/s²;
 - **Medium · current** — 1.2 rad/s, 6.0 rad/s²; this preserves the pre-preset behavior and is the default;
-- **Fast · full envelope** — the configured joint envelope, currently 100 deg/s and 1000 deg/s².
+- **Fast · wrist-aware** — all five joints may use 100 deg/s; non-`wrist_flex` joints may use 1000 deg/s² while `wrist_flex` is capped at 500 deg/s².
 
-The selected response limits are enforced twice: the GUI target limiter shapes the follower command toward the leader, and the same per-session speed/acceleration ceilings are passed into the deterministic MotionController stream guard. Those session ceilings are clipped by the configured absolute stream envelope. Selecting a preset can therefore narrow response but never widen joint limits, command-step limits, following-error guards, effort/fault handling, or stale-sample policy.
+The selected response limits are enforced twice: the GUI target limiter shapes the follower command toward the leader, and the same per-joint speed/acceleration ceilings are passed into the deterministic MotionController stream guard. Those session ceilings are clipped by the configured absolute stream envelope. Selecting a preset can therefore narrow response but never widen joint limits, command-step limits, following-error guards, effort/fault handling, or stale-sample policy. The Fast wrist-flex acceleration cap comes from a 2026-10-06 physical run where the former 1000 deg/s² response commanded a reversal while the wrist was still braking and the strict direction guard observed +0.057 rad of carry-through.
 
 After both arms are connected, **Align follower and start** reads a fresh leader
 pose, latches the follower's current positions before enabling torque, and moves
@@ -98,9 +98,21 @@ tab reports how many samples were smoothed. Abrupt leader motion can therefore
 make the follower lag briefly; the controller still rejects any command that
 violates its limits.
 Medium live teleoperation preserves the previous 1.2 rad/s joint-speed and 6.0 rad/s²
-acceleration behavior. Slow halves those response limits; Fast may use the full configured
-joint envelope. In every case the stream controller independently enforces the absolute
-configured envelope. Planned moves retain their own requested/configured limits. Gripper targets
+acceleration behavior. Slow halves those response limits. Fast uses the full configured
+joint speed ceiling and full acceleration ceiling on the four non-wrist-flex joints, while
+`wrist_flex` uses a 500 deg/s² acceleration ceiling. In every case the stream controller
+independently enforces those per-joint session limits under the absolute configured envelope.
+Planned moves retain their own requested/configured limits.
+
+Live-stream direction monitoring remains fail-closed but is reversal-aware. A material
+measured move opposite the command still stops the stream immediately unless the command
+has just reversed direction. After a genuine reversal, the stream may accept at most 100 ms
+of residual motion in the previous physical direction, and only while that carry-through is
+non-growing within 0.5° of encoder/noise tolerance. Following-error, hardware-fault, effort,
+joint-limit, and command timing checks remain active throughout the grace interval. Planned
+joint trajectories do not use this exception and keep the strict unexpected-direction rule.
+
+Gripper targets
 ramp at 1.2 normalized units per second and stop 2.5% short of the
 calibrated hard-close endpoint. When the follower stops moving while closing
 toward the leader target, teleoperation eases open 0.5% and holds that opening
