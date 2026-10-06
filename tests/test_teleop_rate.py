@@ -7,15 +7,19 @@ import pytest
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.constants import (
+    DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+    DEFAULT_MAX_JOINT_SPEED_RAD_S,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.gui.teleop_rate import (
+    DEFAULT_TELEOP_TRACKING_PRESET,
     GripperContactLatch,
     limit_joint_target,
     plan_alignment_target,
     teleop_stale_limit_s,
+    teleop_tracking_preset,
     update_gripper_contact_latch,
 )
 from soarm101_motion.hardware import SimulationBackend
@@ -23,6 +27,26 @@ from soarm101_motion.hardware import SimulationBackend
 
 def test_default_teleop_rate_is_smooth_practical_rate() -> None:
     assert DEFAULT_TELEOP_STREAM_FREQUENCY_HZ == 20.0
+
+
+def test_tracking_presets_preserve_current_medium_and_full_fast_envelope() -> None:
+    slow = teleop_tracking_preset("slow")
+    medium = teleop_tracking_preset("medium")
+    fast = teleop_tracking_preset("fast")
+
+    assert DEFAULT_TELEOP_TRACKING_PRESET == "medium"
+    assert slow.max_speed_rad_s == pytest.approx(0.6)
+    assert slow.max_acceleration_rad_s2 == pytest.approx(3.0)
+    assert medium.max_speed_rad_s == pytest.approx(1.2)
+    assert medium.max_acceleration_rad_s2 == pytest.approx(6.0)
+    assert slow.max_speed_rad_s == pytest.approx(medium.max_speed_rad_s / 2.0)
+    assert slow.max_acceleration_rad_s2 == pytest.approx(
+        medium.max_acceleration_rad_s2 / 2.0
+    )
+    assert fast.max_speed_rad_s == pytest.approx(DEFAULT_MAX_JOINT_SPEED_RAD_S)
+    assert fast.max_acceleration_rad_s2 == pytest.approx(
+        DEFAULT_MAX_JOINT_ACCEL_RAD_S2
+    )
 
 
 def test_backlog_guard_uses_actual_sample_age_not_cycle_duration() -> None:
