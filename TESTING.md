@@ -1056,8 +1056,9 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
     Fast must expose 100 deg/s to every joint, 1000 deg/s² to the four non-wrist-flex joints,
     and 500 deg/s² to wrist_flex in both the GUI limiter and MotionController stream state.
 15. Exercise the stream reversal regression: strict opposite-direction motion still fails,
-    but a genuine command reversal may accept at most 100 ms of non-growing physical
-    carry-through before the ordinary direction fault resumes.
+    but a recent genuine command reversal may accept at most 100 ms of non-growing physical
+    carry-through, never more than 0.10 rad cumulative wrong-way travel, before the ordinary
+    direction fault resumes.
 
 ### 15. Physical Program / radial-pattern execution — DO LATER
 
