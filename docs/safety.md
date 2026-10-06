@@ -101,6 +101,10 @@ leaves the arm holding rather than dropping it.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.
 - Active trajectories monitor faults, following error, unexpected direction, and deadline overruns.
+- Host-streamed planned joint trajectories use the responsive servo tracking profile
+  (Goal_Velocity=0, acceleration=254) by default, matching teleoperation. Requested host
+  speed/acceleration remain the motion ceilings; this removes a redundant slower actuator
+  throttle rather than weakening the following-error/fault/effort safety stack.
 - Motion failures issue a best-effort hold.
 - `wait=True` verifies measured completion.
 - Stock-gripper moves participate in the arm-level stop lifecycle.
