@@ -1,5 +1,37 @@
 # Testing
 
+
+## 100/1000 motion-envelope validation — 2026-10-06
+
+The original absolute joint ceilings (1.0 rad/s, 5.0 rad/s^2) came from an early safety
+hardening pass and had no documented SO-101/STS3215 hardware derivation. After the
+40 deg/s, 250 deg/s^2 Sleep-vs-`sleep_up` rerun completed cleanly with the responsive
+0/254 servo profile, the host characterization envelope was made explicit and human-facing:
+
+```text
+joint        100 deg/s, 1000 deg/s^2
+TCP linear   100 mm/s, 1000 mm/s^2
+TCP angular  100 deg/s, 1000 deg/s^2
+```
+
+Automated acceptance must prove that 80 deg/s, 500 deg/s^2 joint motion is inside the new
+envelope and >100/>1000 requests are rejected. Broker tests must prove that the trusted-host
+envelope is injected into bounded motion subprocesses while camera capture receives no
+irrelevant motion flags.
+
+The next physical gate is the previously rejected request, now expected to pass host
+preflight:
+
+```bash
+bash scripts/run_sleep_posture_comparison.sh 80 500
+```
+
+Acceptance requires no following-error/current/fault safety trip and subjective comparison
+of default Sleep versus `sleep_up`. Do not describe 80/500 as physically validated until
+that run completes. The servo stays on responsive 0/254 tracking; following-error, effort,
+fault, calibrated limits, workspace, timing, STOP/HOLD, and settle guards remain unchanged.
+
+
 ## Bounded agent CLI
 
 Automated tests cover authority expiry/identity matching, non-interactive arming rejection,
