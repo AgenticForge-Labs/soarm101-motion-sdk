@@ -491,11 +491,11 @@ class SOARM101:
         return primary if isinstance(primary, SO101Gripper) else None
 
     def get_sleep_gripper_position(self) -> float | None:
-        """Return the stock gripper Sleep target clear of sustained hard-stop load."""
+        """Return the stock gripper Sleep target inset from its calibrated closed stop."""
         gripper = self._sleep_gripper()
         if gripper is None:
             return None
-        return gripper.calibrated_safe_closed_position(
+        return gripper.calibrated_closed_position(
             stop_margin_rad=self.config.calibrated_gripper_stop_margin_rad
         )
 
