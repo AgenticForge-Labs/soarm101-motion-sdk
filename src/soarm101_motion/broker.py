@@ -25,6 +25,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from soarm101_motion.config import SOARM101Config
+from soarm101_motion.constants import (
+    DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
+    DEFAULT_MAX_JOINT_SPEED_DEG_S,
+    DEFAULT_MAX_LINEAR_ACCEL_MM_S2,
+    DEFAULT_MAX_LINEAR_SPEED_MM_S,
+    DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
+    DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
+)
+
 
 DEFAULT_BROKER_HOST = "127.0.0.1"
 DEFAULT_BROKER_PORT = 8765
@@ -42,18 +52,59 @@ class BrokerResponse:
 
 
 class AgentCommandExecutor:
-    """Invoke only the bounded agent command namespace."""
+    """Invoke only the bounded agent namespace under the broker's motion policy."""
 
-    def __init__(self, *, robot_id: str = "so101") -> None:
-        self.robot_id = str(robot_id)
+    _MOTION_LIMIT_COMMANDS = frozenset(
+        {
+            "capabilities",
+            "state",
+            "go-pose",
+            "joint",
+            "jog",
+            "gripper",
+            "sleep",
+            "sleep-up",
+            "sleep_up",
+            "stop",
+        }
+    )
+
+    def __init__(
+        self,
+        *,
+        robot_id: str = "so101",
+        config: SOARM101Config | None = None,
+    ) -> None:
+        self.config = config or SOARM101Config(robot_id=str(robot_id))
+        self.robot_id = self.config.robot_id
+
+    def _motion_limit_arguments(self) -> list[str]:
+        limits = self.config.motion_limits_human
+        return [
+            "--max-joint-speed-deg-s",
+            f"{limits['max_joint_speed_deg_s']:g}",
+            "--max-joint-acceleration-deg-s2",
+            f"{limits['max_joint_acceleration_deg_s2']:g}",
+            "--max-linear-speed-mm-s",
+            f"{limits['max_linear_speed_mm_s']:g}",
+            "--max-linear-acceleration-mm-s2",
+            f"{limits['max_linear_acceleration_mm_s2']:g}",
+            "--max-tool-angular-speed-deg-s",
+            f"{limits['max_tool_angular_speed_deg_s']:g}",
+            "--max-tool-angular-acceleration-deg-s2",
+            f"{limits['max_tool_angular_acceleration_deg_s2']:g}",
+        ]
 
     def run(self, arguments: Sequence[str]) -> dict[str, object]:
+        bounded_arguments = list(arguments)
+        if bounded_arguments and bounded_arguments[0] in self._MOTION_LIMIT_COMMANDS:
+            bounded_arguments.extend(self._motion_limit_arguments())
         command = [
             sys.executable,
             "-m",
             "soarm101_motion.cli.main",
             "agent",
-            *arguments,
+            *bounded_arguments,
         ]
         try:
             completed = subprocess.run(
@@ -474,6 +525,37 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_BROKER_PORT)
     parser.add_argument("--robot-id", default="so101")
     parser.add_argument("--events", type=Path, default=DEFAULT_EVENT_PATH)
+    envelope = parser.add_argument_group("trusted host motion envelope")
+    envelope.add_argument(
+        "--max-joint-speed-deg-s",
+        type=float,
+        default=DEFAULT_MAX_JOINT_SPEED_DEG_S,
+    )
+    envelope.add_argument(
+        "--max-joint-acceleration-deg-s2",
+        type=float,
+        default=DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
+    )
+    envelope.add_argument(
+        "--max-linear-speed-mm-s",
+        type=float,
+        default=DEFAULT_MAX_LINEAR_SPEED_MM_S,
+    )
+    envelope.add_argument(
+        "--max-linear-acceleration-mm-s2",
+        type=float,
+        default=DEFAULT_MAX_LINEAR_ACCEL_MM_S2,
+    )
+    envelope.add_argument(
+        "--max-tool-angular-speed-deg-s",
+        type=float,
+        default=DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
+    )
+    envelope.add_argument(
+        "--max-tool-angular-acceleration-deg-s2",
+        type=float,
+        default=DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
+    )
     return parser
 
 
@@ -484,15 +566,31 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             "SOARM101_BROKER_TOKEN is required; generate a per-run token before starting the broker"
         )
+    config = SOARM101Config.from_motion_limits(
+        robot_id=args.robot_id,
+        max_joint_speed_deg_s=args.max_joint_speed_deg_s,
+        max_joint_acceleration_deg_s2=args.max_joint_acceleration_deg_s2,
+        max_linear_speed_mm_s=args.max_linear_speed_mm_s,
+        max_linear_acceleration_mm_s2=args.max_linear_acceleration_mm_s2,
+        max_tool_angular_speed_deg_s=args.max_tool_angular_speed_deg_s,
+        max_tool_angular_acceleration_deg_s2=args.max_tool_angular_acceleration_deg_s2,
+    )
     service = RobotBrokerService(
-        executor=AgentCommandExecutor(robot_id=args.robot_id),
+        executor=AgentCommandExecutor(config=config),
         token=token,
         event_path=args.events,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
+    limits = config.motion_limits_human
     print(
         f"SO-ARM101 agent broker listening on http://{args.host}:{args.port}; "
-        "human arming remains external via 'soarm101 agent arm'"
+        "human arming remains external via 'soarm101 agent arm'; "
+        f"motion envelope joint={limits['max_joint_speed_deg_s']:g} deg/s, "
+        f"{limits['max_joint_acceleration_deg_s2']:g} deg/s^2; "
+        f"linear={limits['max_linear_speed_mm_s']:g} mm/s, "
+        f"{limits['max_linear_acceleration_mm_s2']:g} mm/s^2; "
+        f"tool angular={limits['max_tool_angular_speed_deg_s']:g} deg/s, "
+        f"{limits['max_tool_angular_acceleration_deg_s2']:g} deg/s^2"
     )
     try:
         server.serve_forever()
