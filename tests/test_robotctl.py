@@ -120,3 +120,20 @@ def test_robotctl_default_capture_names_include_request_id(
     assert "bbbbbbbbbbbb" in second
     assert Path(first).is_file()
     assert Path(second).is_file()
+
+def test_robotctl_sleep_up_builds_expected_request(monkeypatch, capsys) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_request(*, method: str, path: str, payload=None):
+        observed.update({"method": method, "path": path, "payload": payload})
+        return {"ok": True, "request_id": "sleep-up", "result": {"completed": True}}
+
+    monkeypatch.setattr(robotctl, "_request", fake_request)
+
+    assert robotctl.main(["sleep-up"]) == 0
+    assert observed == {
+        "method": "POST",
+        "path": "/v1/sleep-up",
+        "payload": {},
+    }
+    assert json.loads(capsys.readouterr().out)["ok"] is True
