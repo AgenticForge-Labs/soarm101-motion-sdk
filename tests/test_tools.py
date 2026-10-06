@@ -1,11 +1,16 @@
 from math import radians
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from soarm101_motion import CameraTool, Pose, SOARM101, ToolAssembly
 from soarm101_motion.calibration import MotorCalibration
-from soarm101_motion.constants import ENCODER_MAX
+from soarm101_motion.constants import (
+    DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED,
+    ENCODER_MAX,
+    STOCK_GRIPPER,
+)
 from soarm101_motion.tools import SO101Gripper
 from soarm101_motion.exceptions import InvalidCommandError, MotionTimeoutError
 from soarm101_motion.hardware import SimulationBackend
@@ -53,6 +58,26 @@ def test_calibrated_gripper_closed_target_is_one_degree_inside_either_drive_dire
             abs=1.0,
         )
         assert (target_raw - closed_raw) * (open_raw - closed_raw) > 0
+
+
+def test_calibrated_safe_close_keeps_gripper_clear_of_hard_stop() -> None:
+    motor = MotorCalibration(
+        motor_id=6,
+        drive_mode=0,
+        homing_offset=0,
+        range_min=1000,
+        range_max=2000,
+    )
+    backend = SimulationBackend()
+    backend.calibration = SimpleNamespace(motors={STOCK_GRIPPER: motor})
+    backend.connect()
+    gripper = SO101Gripper(backend=backend)
+
+    target = gripper.calibrated_safe_closed_position(stop_margin_rad=radians(1.0))
+
+    assert target == pytest.approx(DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED)
+    assert target > gripper.calibrated_closed_position(stop_margin_rad=radians(1.0))
+    backend.disconnect()
 
 
 def test_gripper_default_pacing_stays_independent_of_arm_tracking() -> None:
