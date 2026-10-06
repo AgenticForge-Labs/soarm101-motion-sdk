@@ -180,6 +180,24 @@ timed out at the normal 5 s settle boundary with a worst `elbow_flex` error of 0
 (~1.50°), just outside the configured 0.025 rad tolerance; hardware reported the elbow
 stationary with no fault. B therefore did not run.
 
+
+A later 40 deg/s, 250 deg/s² attempt exposed a separate actuator-profile mismatch before A:
+the RIGHT reset tripped the normal 0.300 rad following-error guard on `wrist_flex` at
+0.305 rad. The host trajectory had advanced to -0.556 rad while measured wrist flex was
+-0.861 rad, so the physical joint was ~17.5° behind the host target. The cause was that
+ordinary streamed joint moves still used the backend's fixed Feetech profile
+(`speed_raw=250`, `acceleration_raw=20`) even when the host planner was asked to run much
+faster.
+
+The fix does **not** raise or disable following-error. Default streamed planned joint motion
+now uses the same responsive Feetech profile as live teleoperation:
+`speed_raw=0` (unrestricted/max) and `acceleration_raw=254`, unless a low-level caller
+explicitly supplies servo-profile overrides. The validated host trajectory continues to own
+joint speed and acceleration, while calibrated limits, following-error, unexpected-direction,
+effort/fault, timing, STOP/HOLD, and settle checks remain unchanged. Re-run the 40/250
+Sleep-vs-sleep_up comparison to determine whether the faster host trajectory is physically
+smoother when the servos are no longer artificially throttled.
+
 The A/B harness now retries RIGHT once **only** after a `MotionTimeoutError` whose measured
 worst joint error is within twice the ordinary joint-position tolerance. The retry reissues
 the same fully guarded saved-pose move and must satisfy the normal settle check; no motion
