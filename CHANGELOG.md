@@ -8,10 +8,10 @@
   non-wrist-flex joints, while wrist_flex is capped at 500 deg/s² after a physical Fast run
   showed +0.057 rad of residual motion in the prior direction during a 1000 deg/s² reversal.
   The GUI limiter and deterministic MotionController both enforce the same per-joint limits.
-  Live streams additionally distinguish a genuine commanded reversal from runaway motion:
-  at most 100 ms of non-growing carry-through is permitted while the servo brakes; growing
-  or persistent wrong-way motion still stops the stream. Planned motion keeps the strict
-  direction rule.
+  Live streams additionally distinguish a recent genuine commanded reversal from runaway
+  motion: at most 100 ms of non-growing carry-through is permitted while the servo brakes,
+  capped at 0.10 rad cumulative wrong-way travel; stale, growing, persistent, or over-cap
+  wrong-way motion still stops the stream. Planned motion keeps the strict direction rule.
 - Fixed exact human-unit envelope values such as 100 deg/s / 1000 deg/s² being rejected
   by a few floating-point ULPs after conversion to SI. Boundary-equivalent values now clamp
   to the configured ceiling while genuinely larger requests remain rejected.
