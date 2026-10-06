@@ -194,6 +194,15 @@ def test_manual_workspace_keeps_gripper_visible_across_arm_modes(window):
     assert len(window._coordination_relink_buttons) == 2
 
 
+def test_teleop_tracking_response_defaults_to_medium(window):
+    assert window.teleop_tracking_combo.count() == 3
+    assert window.teleop_tracking_combo.currentData() == "medium"
+    assert [
+        window.teleop_tracking_combo.itemData(index)
+        for index in range(window.teleop_tracking_combo.count())
+    ] == ["slow", "medium", "fast"]
+
+
 def test_gripper_speed_preset_is_shared_by_manual_teleop_edit_and_run(window):
     fast_index = window.manual_gripper_speed_combo.findData(5.0)
     assert fast_index >= 0
