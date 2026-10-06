@@ -198,6 +198,17 @@ class RobotWorker(QObject):
         if arm.motion.is_streaming:
             raise RuntimeError("stop live teleoperation before commanding this arm")
         return arm
+    @staticmethod
+    def _gripper_default_speed_raw(arm: SOARM101) -> int:
+        """Resolve tool pacing independently from responsive arm servo tracking."""
+
+        tool = arm.tool
+        primary = getattr(tool, "primary", None)
+        for candidate in (tool, primary):
+            default_speed = getattr(candidate, "default_speed_raw", None)
+            if default_speed is not None:
+                return int(default_speed)
+        return 250
 
     @staticmethod
     def _pose_diagnostic_payload(pose: Pose) -> dict[str, tuple[float, ...]]:
@@ -699,7 +710,7 @@ class RobotWorker(QObject):
                 raise RuntimeError("wait for active motion to finish before teleoperation")
             values = dict(options)  # type: ignore[arg-type]
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             values["gripper_speed_raw"] = selected_gripper_speed
@@ -1196,7 +1207,7 @@ class RobotWorker(QObject):
                 artifact_label=f"sequence {sequence.name!r}",
             )
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             runner = SequenceRunner(
@@ -1306,7 +1317,7 @@ class RobotWorker(QObject):
                         "saved pose move cancelled before gripper command"
                     )
                 selected_gripper_speed = gripper_speed_raw(
-                    arm.config.hardware_speed_raw,
+                    self._gripper_default_speed_raw(arm),
                     float(values.get("gripper_speed_multiplier", 2.0)),
                 )
                 return (
@@ -1337,7 +1348,7 @@ class RobotWorker(QObject):
                 artifact_label="recorded trajectory",
             )
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             result = arm.play_trajectory(
@@ -1603,7 +1614,7 @@ class RobotWorker(QObject):
             speed = radians(float(values.get("speed_deg_s", 8.0)))
             acceleration = radians(float(values.get("acceleration_deg_s2", 25.0)))
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             source = str(values.get("source") or "other arm")
@@ -1659,7 +1670,7 @@ class RobotWorker(QObject):
             position = float(values["position"])
             arm = self._require_motion_available()
             speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             record_session(
