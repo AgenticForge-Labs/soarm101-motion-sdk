@@ -11,12 +11,20 @@ The normal planned-trajectory command clock remains **50 Hz**. Live teleoperatio
 separate explicit stream rate because the current Feetech safety path performs synchronous
 serial feedback work for every accepted follower sample.
 
-The GUI offers:
+The GUI keeps stream cadence and tracking response separate. Stream-rate choices are:
 
 - **5 Hz — slow check**
 - **10 Hz**
 - **20 Hz — default**
 - **50 Hz — experimental**
+
+Tracking-response choices shape how quickly the follower closes the leader gap:
+
+- **Slow · gentle** — 0.6 rad/s, 3.0 rad/s²;
+- **Medium · current** — 1.2 rad/s, 6.0 rad/s²; this preserves the pre-preset behavior and is the default;
+- **Fast · full envelope** — the configured joint envelope, currently 100 deg/s and 1000 deg/s².
+
+The response limiter is an intent-shaping layer under the deterministic stream envelope. Selecting a preset never widens the configured joint limits, command-step limit, following-error guard, effort/fault handling, or stale-sample policy.
 
 After both arms are connected, **Align follower and start** reads a fresh leader
 pose, latches the follower's current positions before enabling torque, and moves
@@ -65,8 +73,9 @@ use the leader to approach the task, stop following, park the leader, then refin
 follower with Manual angular/Cartesian controls.
 
 The SDK default is 20 Hz. Rates above 20 Hz require an explicit GUI confirmation on
-hardware and are not considered physically validated. The 20 Hz default has not yet
-been physically validated on this arm.
+hardware and are not considered physically validated. A supervised 20 Hz Medium-response
+session completed successfully on 2026-10-06; the full timing/STOP validation ladder below
+still remains the promotion gate for treating that setup as validated.
 
 Each streamed follower sample still performs the normal safety work:
 
@@ -79,8 +88,8 @@ Each streamed follower sample still performs the normal safety work:
 - measured following-error and opposite-direction checks; and
 - managed-backend motor effort/current checks.
 
-The GUI smooths leader samples to fit the configured joint step, speed, and
-acceleration limits before sending them to the guarded stream. Servo speed is no longer
+The GUI smooths leader samples to fit the selected Tracking-response speed and
+acceleration limits plus the configured command-step limit before sending them to the guarded stream. Servo speed is no longer
 additionally capped at the generic 250 ticks/s hardware setting, which had limited
 follower motion below the host-side rate. Cartesian `move_linear()` now follows the
 same principle: its host-side 50 Hz trajectory owns speed/acceleration shaping, while
@@ -88,8 +97,10 @@ the servo receives the responsive 0/254 profile instead of a second slower traje
 tab reports how many samples were smoothed. Abrupt leader motion can therefore
 make the follower lag briefly; the controller still rejects any command that
 violates its limits.
-GUI live teleoperation allows up to 1.2 rad/s joint speed and 6.0 rad/s²
-acceleration; planned moves retain their configured limits. Gripper targets
+Medium live teleoperation preserves the previous 1.2 rad/s joint-speed and 6.0 rad/s²
+acceleration behavior. Slow halves those response limits; Fast may use the full configured
+joint envelope. In every case the stream controller independently enforces the absolute
+configured envelope. Planned moves retain their own requested/configured limits. Gripper targets
 ramp at 1.2 normalized units per second and stop 2.5% short of the
 calibrated hard-close endpoint. When the follower stops moving while closing
 toward the leader target, teleoperation eases open 0.5% and holds that opening
