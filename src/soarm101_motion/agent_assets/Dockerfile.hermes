@@ -1,0 +1,14 @@
+FROM nousresearch/hermes-agent:latest
+
+# OpenShell owns sandbox process identity and lifecycle. Run the sealed Hermes
+# installation directly as its baked runtime UID and keep mutable state under
+# the OpenShell workdir.
+USER root
+RUN mkdir -p /sandbox && chown 10000:10000 /sandbox
+WORKDIR /sandbox
+# OpenShell's Docker identity resolver creates the image before the requested
+# sandbox command override is applied, so the image must have a valid default
+# command. Keep it inert and long-lived; OpenShell still overrides it at run time.
+ENTRYPOINT []
+CMD ["/bin/sh", "-lc", "while :; do sleep 3600; done"]
+USER 10000:10000
