@@ -198,6 +198,18 @@ effort/fault, timing, STOP/HOLD, and settle checks remain unchanged. Re-run the 
 Sleep-vs-sleep_up comparison to determine whether the faster host trajectory is physically
 smoother when the servos are no longer artificially throttled.
 
+
+Physical rerun on 2026-10-06 at **40 deg/s, 250 deg/s²** completed the full
+Sleep-vs-`sleep_up` comparison with the responsive 0/254 servo profile and no following-error
+trip. This confirms the earlier 40/250 wrist lag was caused by the redundant slow actuator
+profile rather than the requested host dynamics alone.
+
+A subsequent request for **80 deg/s, 500 deg/s²** was rejected before motion by the existing
+absolute host ceiling: 80 deg/s = 1.3963 rad/s exceeds `max_joint_speed=1.0 rad/s`
+(~57.3 deg/s). The requested 500 deg/s² would also exceed the current
+`max_joint_acceleration=5.0 rad/s²` (~286.5 deg/s²). No hardware motion occurred in that
+80/500 attempt.
+
 The A/B harness now retries RIGHT once **only** after a `MotionTimeoutError` whose measured
 worst joint error is within twice the ordinary joint-position tolerance. The retry reissues
 the same fully guarded saved-pose move and must satisfy the normal settle check; no motion
