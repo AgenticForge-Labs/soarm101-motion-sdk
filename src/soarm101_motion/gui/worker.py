@@ -28,20 +28,18 @@ from soarm101_motion.sequences import MotionSequence, SequenceRunner
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 from soarm101_motion.gui.session_log import record as record_session
 from soarm101_motion.gui.teleop_rate import (
+    DEFAULT_TELEOP_TRACKING_PRESET,
     GripperContactLatch,
     TELEOP_GRIPPER_SPEED_PER_S,
     gripper_speed_raw,
     limit_joint_target,
     plan_alignment_target,
     teleop_stale_limit_s,
+    teleop_tracking_preset,
     update_gripper_contact_latch,
 )
 from soarm101_motion.exceptions import CalibrationCancelledError, CalibrationError
 from soarm101_motion.hardware.simulation import SimulationBackend
-
-GUI_TELEOP_MAX_JOINT_SPEED_RAD_S = 1.2
-GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2 = 6.0
-
 
 class RobotWorker(QObject):
     state_changed = Signal(object)
@@ -421,10 +419,7 @@ class RobotWorker(QObject):
             self._robot_id = str(values.get("robot_id") or "so101")
             if self._simulation:
                 self.arm = SOARM101(
-                    SOARM101Config(
-                        teleop_max_joint_speed=GUI_TELEOP_MAX_JOINT_SPEED_RAD_S,
-                        teleop_max_joint_acceleration=GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2,
-                    ),
+                    SOARM101Config(),
                     backend=SimulationBackend(realtime=True),
                 )
             else:
@@ -439,8 +434,6 @@ class RobotWorker(QObject):
                         ),
                         configure_motors_on_connect=False,
                         enable_workspace_checks=False,
-                        teleop_max_joint_speed=GUI_TELEOP_MAX_JOINT_SPEED_RAD_S,
-                        teleop_max_joint_acceleration=GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2,
                     )
                 )
             self.arm.connect()
@@ -726,6 +719,17 @@ class RobotWorker(QObject):
                 raise ValueError(
                     "teleoperation frequency exceeds the configured command-frequency ceiling"
                 )
+            tracking = teleop_tracking_preset(
+                str(values.get("tracking_preset") or DEFAULT_TELEOP_TRACKING_PRESET)
+            )
+            tracking_max_speed = min(
+                tracking.max_speed_rad_s,
+                arm.config.stream_joint_speed_limit,
+            )
+            tracking_max_acceleration = min(
+                tracking.max_acceleration_rad_s2,
+                arm.config.stream_joint_acceleration_limit,
+            )
             leader_origin = {
                 name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
             }
@@ -892,6 +896,10 @@ class RobotWorker(QObject):
                 "limited_samples": 0,
                 "frequency_hz": frequency,
                 "period_s": period_s,
+                "tracking_preset": tracking.key,
+                "tracking_label": tracking.label,
+                "max_speed_rad_s": tracking_max_speed,
+                "max_acceleration_rad_s2": tracking_max_acceleration,
                 "overruns": 0,
                 "last_processing_s": 0.0,
                 "last_sample_timestamp": None,
@@ -901,14 +909,25 @@ class RobotWorker(QObject):
             self.teleop_changed.emit(True)
             self.busy_changed.emit(True)
             self.log_message.emit(
-                f"Live teleoperation started in {mode} mapping mode at {frequency:.1f} Hz."
+                f"Live teleoperation started in {mode} mapping mode at {frequency:.1f} Hz "
+                f"with {tracking.label} tracking."
             )
-            record_session("teleop_started", worker=self._robot_id, mode=mode, frequency_hz=frequency)
+            record_session(
+                "teleop_started",
+                worker=self._robot_id,
+                mode=mode,
+                frequency_hz=frequency,
+                tracking_preset=tracking.key,
+            )
             record_session(
                 "teleop_settings",
                 worker=self._robot_id,
-                max_joint_speed_rad_s=arm.config.stream_joint_speed_limit,
-                max_joint_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
+                tracking_preset=tracking.key,
+                tracking_label=tracking.label,
+                max_joint_speed_rad_s=tracking_max_speed,
+                max_joint_acceleration_rad_s2=tracking_max_acceleration,
+                absolute_stream_max_joint_speed_rad_s=arm.config.stream_joint_speed_limit,
+                absolute_stream_max_joint_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
                 gripper_speed_per_s=TELEOP_GRIPPER_SPEED_PER_S,
                 gripper_speed_raw=selected_gripper_speed,
                 max_command_step_rad=arm.config.max_command_step_radians,
@@ -969,8 +988,8 @@ class RobotWorker(QObject):
                 teleop["last_velocity"],
                 joint_limits=teleop["joint_limits"],
                 period_s=float(teleop["period_s"]),
-                max_speed_rad_s=arm.config.stream_joint_speed_limit,
-                max_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
+                max_speed_rad_s=float(teleop["max_speed_rad_s"]),
+                max_acceleration_rad_s2=float(teleop["max_acceleration_rad_s2"]),
                 max_step_rad=arm.config.max_command_step_radians,
             )
             gripper_actual = None
@@ -1108,6 +1127,7 @@ class RobotWorker(QObject):
                         "samples": teleop["samples"],
                         "message": result.message,
                         "frequency_hz": teleop["frequency_hz"],
+                        "tracking_preset": teleop["tracking_preset"],
                         "processing_ms": processing_s * 1000.0,
                         "sample_age_ms": sample_age_s * 1000.0,
                         "overruns": teleop["overruns"],
