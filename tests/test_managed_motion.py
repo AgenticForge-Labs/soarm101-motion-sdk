@@ -339,8 +339,10 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
     assert np.degrees(sleep["elbow_flex"]) == pytest.approx(
         measured_deg["elbow_flex"][1] - 1.0
     )
+    wrist_lower = measured_deg["wrist_flex"][0] + 1.0
+    wrist_upper = measured_deg["wrist_flex"][1] - 1.0
     assert np.degrees(sleep["wrist_flex"]) == pytest.approx(
-        measured_deg["wrist_flex"][0] + 1.0
+        wrist_lower + 0.75 * (wrist_upper - wrist_lower)
     )
     assert np.degrees(sleep["wrist_roll"]) == pytest.approx(0.0)
     assert sleep_gripper == pytest.approx(0.01)
@@ -348,6 +350,48 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
     assert result.final_positions[STOCK_GRIPPER] == pytest.approx(sleep_gripper)
     assert result.completed is True
     for name, target in sleep.items():
+        assert final[name] == pytest.approx(
+            target,
+            abs=arm.config.joint_position_tolerance_rad,
+        )
+
+
+def test_sleep_up_preserves_historical_lower_limit_wrist_fold() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, STOCK_GRIPPER
+
+    measured_deg = {
+        "shoulder_pan": (-121.0, 121.0),
+        "shoulder_lift": (-105.0, 105.0),
+        "elbow_flex": (-97.0, 97.0),
+        "wrist_flex": (-104.0, 104.0),
+        "wrist_roll": (-169.0, 169.0),
+    }
+
+    with SOARM101.simulated() as arm:
+        motors = {
+            name: SimpleNamespace(
+                radians_limits=tuple(np.deg2rad(measured_deg[name]))
+            )
+            for name in ARM_JOINTS
+        }
+        motors[STOCK_GRIPPER] = SimpleNamespace(
+            radians_limits=(0.0, float(np.deg2rad(100.0)))
+        )
+        arm.backend.calibration = SimpleNamespace(motors=motors)
+        sleep_up = arm.get_sleep_up_joint_positions()
+        arm.enable()
+        result = arm.move_sleep_up(speed=0.2, acceleration=0.5)
+        final = dict(arm.get_joint_positions().positions)
+
+    assert np.degrees(sleep_up["wrist_flex"]) == pytest.approx(
+        measured_deg["wrist_flex"][0] + 1.0
+    )
+    assert result.completed is True
+    for name, target in sleep_up.items():
         assert final[name] == pytest.approx(
             target,
             abs=arm.config.joint_position_tolerance_rad,
