@@ -125,7 +125,7 @@ class RecordedPlan:
 
 @dataclass
 class StreamReversalGrace:
-    remaining_samples: int
+    expires_sample: int
     previous_wrong_way_delta_abs: float
 
 
@@ -138,7 +138,9 @@ class JointStreamState:
     limits: dict[str, tuple[float, float]]
     speed_limits: dict[str, float]
     acceleration_limits: dict[str, float]
+    sample_index: int
     last_nonzero_command_direction: dict[str, int]
+    last_nonzero_command_sample: dict[str, int]
     reversal_grace: dict[str, StreamReversalGrace]
     tcp: Pose | None = None
 
@@ -1177,9 +1179,22 @@ class MotionController:
     ) -> dict[str, float]:
         """Monitor a live stream while distinguishing braking lag from runaway motion."""
         actual = self._read_guarded_actual(command)
+        current_sample = stream_state.sample_index + 1
+        total_grace_samples = max(
+            1,
+            math.ceil(
+                self.config.stream_reversal_grace_s
+                * stream_state.frequency_hz
+            ),
+        )
         for name in ARM_JOINTS:
             command_delta = command[name] - previous_command[name]
             actual_delta = actual[name] - stream_state.previous_actual[name]
+            grace = stream_state.reversal_grace.get(name)
+            if grace is not None and current_sample > grace.expires_sample:
+                stream_state.reversal_grace.pop(name, None)
+                grace = None
+
             if abs(command_delta) < self.config.joint_position_tolerance_rad:
                 continue
             if abs(actual_delta) < self.config.unexpected_direction_threshold_rad:
@@ -1191,28 +1206,25 @@ class MotionController:
 
             current_direction = 1 if command_delta > 0.0 else -1
             previous_direction = stream_state.last_nonzero_command_direction[name]
-            grace = stream_state.reversal_grace.get(name)
-            if previous_direction and current_direction != previous_direction:
-                total_samples = max(
-                    1,
-                    math.ceil(
-                        self.config.stream_reversal_grace_s
-                        * stream_state.frequency_hz
-                    ),
-                )
+            previous_direction_sample = stream_state.last_nonzero_command_sample[name]
+            recent_reversal = (
+                previous_direction != 0
+                and current_direction != previous_direction
+                and current_sample - previous_direction_sample <= total_grace_samples
+            )
+            if recent_reversal:
                 stream_state.reversal_grace[name] = StreamReversalGrace(
-                    remaining_samples=total_samples - 1,
+                    expires_sample=current_sample + total_grace_samples - 1,
                     previous_wrong_way_delta_abs=abs(actual_delta),
                 )
                 continue
 
-            if grace is not None and grace.remaining_samples > 0:
+            if grace is not None:
                 if (
                     abs(actual_delta)
                     <= grace.previous_wrong_way_delta_abs
                     + self.config.stream_reversal_decay_tolerance_rad
                 ):
-                    grace.remaining_samples -= 1
                     grace.previous_wrong_way_delta_abs = abs(actual_delta)
                     continue
                 raise SafetyViolationError(
@@ -1794,7 +1806,9 @@ class MotionController:
                 limits=stream_limits,
                 speed_limits=speed_limits,
                 acceleration_limits=acceleration_limits,
+                sample_index=0,
                 last_nonzero_command_direction={name: 0 for name in ARM_JOINTS},
+                last_nonzero_command_sample={name: 0 for name in ARM_JOINTS},
                 reversal_grace={},
                 tcp=tcp,
             )
@@ -1921,10 +1935,12 @@ class MotionController:
                     pass
                 raise
 
+            state.sample_index += 1
             for name, value in velocity.items():
                 command_delta = target[name] - state.last_command[name]
                 if abs(command_delta) >= self.config.joint_position_tolerance_rad:
                     state.last_nonzero_command_direction[name] = 1 if value > 0.0 else -1
+                    state.last_nonzero_command_sample[name] = state.sample_index
             state.last_command = dict(target)
             state.last_velocity = velocity
             state.previous_actual = dict(actual)
