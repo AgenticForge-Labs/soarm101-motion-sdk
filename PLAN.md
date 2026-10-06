@@ -153,8 +153,13 @@ its own persistent connection for live controls; it must not launch CLI subproce
   historical Sleep pose, confirming a large geometry component. Promote that result into a
   portable calibration-relative semantic: default Sleep uses wrist_flex at 75% of its
   executable range, while `sleep_up` preserves the historical lower-limit wrist fold.
-  Re-run the standard route with the new default Sleep on hardware before merging, then
-  continue servo-profile investigation only for residual rocking outside the old geometry.
+  Re-run the standard route with the new default Sleep on hardware before merging. A 40
+  deg/s, 250 deg/s² attempt showed that the old backend 250/20 Feetech profile could no longer
+  track the faster validated host trajectory and tripped following-error before the A/B.
+  Default streamed planned joint motion now uses the same responsive 0/254 tracking profile
+  as teleoperation while retaining the host speed/acceleration ceilings and safety guards.
+  Repeat the 40/250 Sleep-vs-sleep_up A/B; continue deeper servo investigation only for
+  residual rocking after the actuator no longer has this hidden throttle.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
 - [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
