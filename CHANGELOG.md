@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Replaced the original undocumented host motion ceilings with an explicit human-facing
+  100/1000 envelope: joints 100 deg/s and 1000 deg/s^2, TCP translation 100 mm/s and
+  1000 mm/s^2, and TCP/tool orientation 100 deg/s and 1000 deg/s^2. Ordinary motion
+  defaults remain conservative. Added SDK human-unit construction/reporting, a
+  `soarm101 motion-envelope` command, degree-based `move-joints` dynamics flags, and
+  matching CLI envelope overrides. The broker owns the trusted host envelope and propagates
+  it to bounded agent subprocesses; `robotctl` cannot widen it. Cartesian IK-generated
+  joint trajectories are now validated against the absolute joint envelope rather than the
+  slower ordinary defaults.
 - Removed the hidden slow Feetech profile from default host-streamed joint plans.
   Planned joint/saved-pose/Sleep trajectories now use the teleoperation-style responsive
   actuator profile (Goal_Velocity=0, acceleration=254) unless explicitly overridden, so the
