@@ -393,7 +393,7 @@ def test_stream_session_can_enforce_tracking_limits_below_absolute_envelope() ->
         )
         target = dict(arm.get_joint_positions().positions)
         target["shoulder_pan"] += 0.04
-        with pytest.raises(SafetyViolationError, match="streamed joint speed"):
+        with pytest.raises(SafetyViolationError, match="streamed shoulder_pan speed"):
             arm.stream_joint_target(target)
     finally:
         arm.stop_joint_stream(hold=True)
