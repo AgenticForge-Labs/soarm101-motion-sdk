@@ -19,17 +19,26 @@ envelope and >100/>1000 requests are rejected. Broker tests must prove that the 
 envelope is injected into bounded motion subprocesses while camera capture receives no
 irrelevant motion flags.
 
-The next physical gate is the previously rejected request, now expected to pass host
-preflight:
+The previously rejected **80 deg/s, 500 deg/s²** request was rerun on hardware on
+2026-10-06 and completed successfully. The operator reported that motion was substantially
+better/smoother than the earlier conservative runs. The servo remained on responsive 0/254
+tracking; following-error, effort, fault, calibrated limits, workspace, timing, STOP/HOLD,
+and settle guards remained unchanged.
+
+The first **100 deg/s, 1000 deg/s²** attempt did not command hardware motion. It exposed a
+floating-point boundary bug: `math.radians(1000.0)` differed from the configured
+1000-deg/s² SI ceiling by only a few ULPs, so the strict `resolved > maximum` comparison
+rejected two values that both formatted as 17.4533 rad/s². Regression coverage now requires
+exact advertised 100/1000 values to pass while >100/>1000 requests still fail.
+
+The next supervised characterization point is therefore:
 
 ```bash
-bash scripts/run_sleep_posture_comparison.sh 80 500
+bash scripts/run_sleep_posture_comparison.sh 100 1000
 ```
 
-Acceptance requires no following-error/current/fault safety trip and subjective comparison
-of default Sleep versus `sleep_up`. Do not describe 80/500 as physically validated until
-that run completes. The servo stays on responsive 0/254 tracking; following-error, effort,
-fault, calibrated limits, workspace, timing, STOP/HOLD, and settle guards remain unchanged.
+Do not describe 100/1000 as physically validated until that run completes cleanly under the
+unchanged runtime guards.
 
 
 ## Bounded agent CLI
@@ -236,11 +245,10 @@ Sleep-vs-`sleep_up` comparison with the responsive 0/254 servo profile and no fo
 trip. This confirms the earlier 40/250 wrist lag was caused by the redundant slow actuator
 profile rather than the requested host dynamics alone.
 
-A subsequent request for **80 deg/s, 500 deg/s²** was rejected before motion by the existing
-absolute host ceiling: 80 deg/s = 1.3963 rad/s exceeds `max_joint_speed=1.0 rad/s`
-(~57.3 deg/s). The requested 500 deg/s² would also exceed the current
-`max_joint_acceleration=5.0 rad/s²` (~286.5 deg/s²). No hardware motion occurred in that
-80/500 attempt.
+An earlier **80 deg/s, 500 deg/s²** request was rejected before motion by the then-current
+1.0-rad/s / 5.0-rad/s² host ceiling. That historical rejection motivated the explicit
+100/1000 characterization envelope. After the envelope change, the 80/500 hardware rerun on
+2026-10-06 completed successfully and was judged substantially smoother by the operator.
 
 The A/B harness now retries RIGHT once **only** after a `MotionTimeoutError` whose measured
 worst joint error is within twice the ordinary joint-position tolerance. The retry reissues
@@ -605,10 +613,12 @@ coarse workspace-geometry check. The designed folded posture places link centerl
 than the generic 25 mm self-clearance heuristic on this arm, so that heuristic produces a
 known false positive for Sleep. This exception is specific to the calibration-derived Sleep
 primitive; ordinary joint motion continues to use the coarse workspace check. After the arm
-fold completes, Sleep closes the stock gripper to a target 1° inside its calibrated closed
-mechanical stop by default. Verify `soarm101 limits --json` reports the derived normalized
-and raw gripper target before the physical test, then confirm the gripper stops short of the
-mechanical endpoint without an effort/fault trip. Sleep is never automatic.
+fold completes, Sleep parks the stock gripper at the farther-open of a target 1° inside its
+calibrated closed mechanical stop or 2.5% normalized opening. This supersedes the 1°-only
+behavior after a 2026-10-06 GUI session completed Sleep and then reported an STS3215 gripper
+Overload fault while holding near the close stop. Verify `soarm101 limits --json` reports the
+derived normalized/raw target, then confirm the gripper remains fault-free while held. Sleep
+is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
@@ -1020,7 +1030,7 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
 1. Connect follower simulation and leader simulation.
 2. Leave the follower connected with torque off; starting teleoperation should latch its measured pose, enable hold, and run the alignment step.
 3. In Teleoperation choose **Relative / clutch-safe** and leave Mirror gripper enabled.
-4. Confirm **20 Hz — default** is selected, then click **Align follower and start**. Confirm the status reports alignment before live following and ordinary follower jog/sequence controls are disabled while teleop is active.
+4. Confirm **20 Hz — default** and **Medium · current** Tracking response are selected, then click **Align follower and start**. Confirm the status reports alignment before live following and ordinary follower jog/sequence controls are disabled while teleop is active.
 5. Stop live teleoperation and confirm the follower returns to holding state.
 6. Start it again and press the global **STOP / HOLD**. Confirm teleop ends.
 7. Disconnect the leader while teleop is active. Confirm follower teleop terminates and
@@ -1039,6 +1049,9 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
 13. Exercise Slow, Normal, and Fast gripper presets through a manual move, a Program
     gripper step, and recorded-trajectory replay; inspect simulator/backend tests for the
     raw speed propagation because simulation itself has no motor-speed dynamics.
+14. Exercise **Slow · gentle**, **Medium · current**, and **Fast · full envelope** Tracking
+    response in simulation and confirm the stream rate does not change when only the response
+    preset changes. Medium must preserve the historical 1.2 rad/s / 6.0 rad/s² limiter.
 
 ### 15. Physical Program / radial-pattern execution — DO LATER
 
@@ -1324,5 +1337,5 @@ gripper independently preserves 250/20 default pacing.
 
 Automated coverage must verify the backend fallback, explicit streamed 0/254 behavior,
 human-unit CLI envelope reporting/overrides, broker propagation, and gripper independence.
-Physical validation still requires the supervised 80 deg/s / 500 deg/s² Sleep-vs-sleep_up
+Physical validation now has a successful 80 deg/s / 500 deg/s² Sleep-vs-sleep_up run; the remaining full-envelope gate is the supervised 100 deg/s / 1000 deg/s² Sleep-vs-sleep_up
 rerun on the exact branch head.
