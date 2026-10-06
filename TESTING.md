@@ -172,6 +172,19 @@ This performs only two conditions from the same saved RIGHT pose: A is RIGHT -> 
 Sleep and B is RIGHT -> `sleep_up`. The script prints both derived calibrated wrist-flex
 targets before motion and packages the passive trace and summary for comparison.
 
+
+First confirmation attempt on 2026-10-05 derived default Sleep wrist flex at **+51.46°** and
+historical `sleep_up` at **-102.91°**, while all other Sleep joints were identical. A
+(RIGHT -> default Sleep) completed. The subsequent reset from default Sleep back to RIGHT
+timed out at the normal 5 s settle boundary with a worst `elbow_flex` error of 0.0261 rad
+(~1.50°), just outside the configured 0.025 rad tolerance; hardware reported the elbow
+stationary with no fault. B therefore did not run.
+
+The A/B harness now retries RIGHT once **only** after a `MotionTimeoutError` whose measured
+worst joint error is within twice the ordinary joint-position tolerance. The retry reissues
+the same fully guarded saved-pose move and must satisfy the normal settle check; no motion
+tolerance or safety acceptance criterion is relaxed.
+
 using the active executable calibrated range. All other Sleep joint selectors remain
 unchanged. The previous fully folded wrist-at-lower-limit posture is retained as
 `sleep_up`. Existing scripts using `move_sleep()` therefore exercise the new default
