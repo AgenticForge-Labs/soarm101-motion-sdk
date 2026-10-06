@@ -18,6 +18,9 @@ ARM_JOINTS: tuple[str, ...] = (
     "wrist_roll",
 )
 STOCK_GRIPPER = "so101_gripper"
+# Keep ordinary contact/parking closes away from a sustained mechanical-stop load.
+# Normalized gripper convention is 0=closed, 1=open.
+DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED = 0.025
 ALL_MOTORS: tuple[str, ...] = (*ARM_JOINTS, STOCK_GRIPPER)
 
 MOTOR_IDS: OrderedDict[str, int] = OrderedDict(
