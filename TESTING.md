@@ -161,6 +161,17 @@ lower + 0.75 * (upper - lower)
 = upper - 0.25 * (upper - lower)
 ```
 
+
+Confirm the promoted semantic directly on hardware with:
+
+```bash
+bash scripts/run_sleep_posture_comparison.sh 24 150
+```
+
+This performs only two conditions from the same saved RIGHT pose: A is RIGHT -> default
+Sleep and B is RIGHT -> `sleep_up`. The script prints both derived calibrated wrist-flex
+targets before motion and packages the passive trace and summary for comparison.
+
 using the active executable calibrated range. All other Sleep joint selectors remain
 unchanged. The previous fully folded wrist-at-lower-limit posture is retained as
 `sleep_up`. Existing scripts using `move_sleep()` therefore exercise the new default
