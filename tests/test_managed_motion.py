@@ -290,6 +290,18 @@ def test_recorded_joint_replay_uses_responsive_servo_profile() -> None:
     )
 
 
+def test_config_backend_fallback_uses_responsive_servo_profile() -> None:
+    from soarm101_motion import SOARM101Config
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
+
+    config = SOARM101Config()
+    assert config.hardware_speed_raw == TELEOP_SERVO_SPEED_RAW == 0
+    assert config.hardware_acceleration_raw == TELEOP_SERVO_ACCELERATION_RAW == 254
+
+
 def test_streamed_joint_execution_uses_responsive_servo_profile() -> None:
     from soarm101_motion.constants import (
         TELEOP_SERVO_ACCELERATION_RAW,
