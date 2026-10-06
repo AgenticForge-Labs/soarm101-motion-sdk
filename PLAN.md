@@ -83,6 +83,12 @@ its own persistent connection for live controls; it must not launch CLI subproce
 
 ## Physical validation gate
 
+- [ ] Validate the new explicit 100/1000 host motion envelope on the physical follower.
+  The immediate gate is the previously host-rejected 80 deg/s, 500 deg/s^2
+  Sleep-vs-`sleep_up` comparison with responsive 0/254 servo tracking. Confirm clean
+  tracking and retain following-error, effort/fault, calibrated-limit, workspace,
+  STOP/HOLD, and settle safeguards before considering higher characterization points.
+
 - [ ] Run port discovery and six-motor model check on the user's arm.
 - [ ] Import or perform calibration and verify all directions.
 - [ ] Run the conservative 2° CLI smoke test on each joint with no payload and verify
