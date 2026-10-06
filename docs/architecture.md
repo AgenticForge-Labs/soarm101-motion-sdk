@@ -78,7 +78,7 @@ Rules:
   use Goal_Velocity=0 (unrestricted/max) and acceleration=254 unless a low-level caller
   explicitly overrides that profile. This does not relax host-side joint speed/acceleration,
   following-error, fault, effort, timing, or settle guards.
-- Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated. GUI teleoperation adds named Slow/Medium/Fast response presets: Medium preserves the historical 1.2 rad/s / 6.0 rad/s² behavior, Slow halves it, and Fast requests up to the configured absolute joint envelope. The GUI target limiter shapes the command toward the leader, and the same selected speed/acceleration ceilings are passed into the deterministic MotionController stream state. Those per-session ceilings are themselves bounded by the configured absolute stream envelope, so a preset can narrow but never widen the hardware contract.
+- Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated. GUI teleoperation adds named Slow/Medium/Fast response presets: Medium preserves the historical 1.2 rad/s / 6.0 rad/s² behavior, Slow halves it, and Fast is per-joint—100 deg/s is available to all five joints, the four non-wrist-flex joints may use 1000 deg/s², and `wrist_flex` is capped at 500 deg/s² based on physical reversal evidence. The GUI target limiter shapes the command toward the leader, and the same selected per-joint ceilings are passed into the deterministic MotionController stream state. Those session ceilings are themselves bounded by the configured absolute stream envelope, so a preset can narrow but never widen the hardware contract. Live-stream direction monitoring owns one additional bounded state: immediately after a commanded reversal it may tolerate up to 100 ms of non-growing residual motion in the prior physical direction. This is a streaming/braking distinction, not a relaxation of planned-motion direction validation, following-error, fault, effort, or endpoint authority.
 Unprofiled guarded arm writes use the same responsive fallback (`speed_raw=0`,
 `acceleration_raw=254`) so no lower layer can silently reintroduce the historical
 `250/20` throttle. Tool actuators are separate contracts; the stock gripper preserves
@@ -205,9 +205,10 @@ before and during execution.
 Resting postures remain deterministic SDK-owned primitives rather than machine-local taught
 poses. `Sleep` is derived from the active executable calibration with shoulder pan and wrist
 roll at midpoint, shoulder lift at lower, elbow flex at upper, and wrist flex at 75% of its
-range. `sleep_up` preserves the historical wrist-at-lower-limit fold. The stock gripper parks
-at the farther-open of its calibration-derived 1° closed-stop inset or 2.5% normalized opening,
-so the semantic rest primitive does not intentionally sustain hard-stop load. Higher-level
+range. `sleep_up` preserves the historical wrist-at-lower-limit fold. After the arm fold,
+the stock gripper closes to its calibration-derived target 1° inside the measured mechanical
+stop. This action is not object-aware; a held pen caused the gripper servo to enter overload
+protection during physical testing. Higher-level
 scripts, agents, and broker clients call these semantic primitives; they do not own copied joint
 coordinates.
 
