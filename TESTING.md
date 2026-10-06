@@ -1312,3 +1312,17 @@ Cartesian targets and the SDK uses `move_linear(..., workspace_check="target_onl
 the generic model envelope. This retains a generic destination check without allowing the
 known-invalid model table floor to veto the measured paper frame. The full joint/IK/
 dynamic/following-error/effort/fault/communication/timing safety stack remains active.
+
+
+### 100/1000 envelope and responsive fallback regression
+
+The host envelope is 100 deg/s / 1000 deg/s² for joints, 100 mm/s / 1000 mm/s²
+for TCP translation, and 100 deg/s / 1000 deg/s² for tool orientation. The arm
+backend fallback itself is now 0/254, matching streamed/teleop tracking, so direct
+guarded arm writes cannot regress to the historical 250/20 throttle. The stock
+gripper independently preserves 250/20 default pacing.
+
+Automated coverage must verify the backend fallback, explicit streamed 0/254 behavior,
+human-unit CLI envelope reporting/overrides, broker propagation, and gripper independence.
+Physical validation still requires the supervised 80 deg/s / 500 deg/s² Sleep-vs-sleep_up
+rerun on the exact branch head.
