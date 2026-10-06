@@ -204,6 +204,124 @@ def test_final_target_monitor_rejects_reverse_motion() -> None:
             )
 
 
+def test_streamed_joint_execution_uses_responsive_servo_profile() -> None:
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        arm.move_joints(
+            target,
+            speed=0.4,
+            acceleration=1.0,
+            workspace_check="off",
+        )
+
+    assert calls
+    assert all(
+        speed == TELEOP_SERVO_SPEED_RAW
+        and acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for speed, acceleration in calls
+    )
+
+
+def test_streamed_joint_execution_preserves_explicit_servo_profile() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        arm.move_joints(
+            target,
+            speed=0.4,
+            acceleration=1.0,
+            servo_speed_raw=321,
+            servo_acceleration_raw=42,
+            workspace_check="off",
+        )
+
+    assert calls
+    assert all(speed == 321 and acceleration == 42 for speed, acceleration in calls)
+
+
+def test_synchronized_streamed_joint_execution_uses_responsive_acceleration() -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.constants import (
+        ARM_JOINTS,
+        TELEOP_SERVO_ACCELERATION_RAW,
+    )
+
+    class Motor:
+        radians_limits = (-2.0, 2.0)
+
+        @staticmethod
+        def radians_to_raw(value: float) -> int:
+            return int(round(2000.0 + value * 1000.0))
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: Motor() for name in ARM_JOINTS}
+        )
+        arm.enable()
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        target["elbow_flex"] -= 0.10
+        arm.move_joints(
+            target,
+            speed=0.4,
+            acceleration=1.0,
+            synchronize_servo_arrival=True,
+            workspace_check="off",
+        )
+
+    assert calls
+    assert all(isinstance(speed, dict) for speed, _ in calls)
+    assert all(
+        acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for _, acceleration in calls
+    )
+
+
 def test_streamed_joint_execution_remains_default() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
