@@ -22,6 +22,7 @@ from soarm101_motion.gui.teleop_rate import (
     teleop_tracking_preset,
     update_gripper_contact_latch,
 )
+from soarm101_motion.exceptions import SafetyViolationError
 from soarm101_motion.hardware import SimulationBackend
 
 
@@ -313,6 +314,26 @@ def test_smoothed_targets_pass_the_stream_guard_in_simulation(frequency_hz: floa
             assert arm.stream_joint_target(command).accepted
             previous = command
         assert abs(previous["shoulder_pan"] - desired["shoulder_pan"]) < 1e-6
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_session_can_enforce_tracking_limits_below_absolute_envelope() -> None:
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    arm = SOARM101(config, backend=SimulationBackend(realtime=False))
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=0.6,
+            max_acceleration=3.0,
+        )
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.04
+        with pytest.raises(SafetyViolationError, match="streamed joint speed"):
+            arm.stream_joint_target(target)
     finally:
         arm.stop_joint_stream(hold=True)
         arm.disconnect()
