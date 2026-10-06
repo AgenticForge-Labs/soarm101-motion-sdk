@@ -54,7 +54,11 @@ from soarm101_motion.gui.camera_manager import CameraSessionManager
 from soarm101_motion.gui.latest_frame import PreviewFrame
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
-from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
+from soarm101_motion.gui.teleop_rate import (
+    DEFAULT_TELEOP_TRACKING_PRESET,
+    GRIPPER_SPEED_PRESETS,
+    TELEOP_TRACKING_PRESETS,
+)
 from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitive, MotionPrimitiveLibrary
@@ -2141,6 +2145,20 @@ class MainWindow(QMainWindow):
         teleop_grid.addWidget(QLabel("Gripper speed"), 1, 0)
         self.teleop_gripper_speed_combo = self._new_gripper_speed_combo()
         teleop_grid.addWidget(self.teleop_gripper_speed_combo, 1, 1)
+        teleop_grid.addWidget(QLabel("Tracking response"), 1, 2)
+        self.teleop_tracking_combo = QComboBox()
+        for preset in TELEOP_TRACKING_PRESETS:
+            self.teleop_tracking_combo.addItem(preset.label, preset.key)
+        tracking_index = self.teleop_tracking_combo.findData(
+            DEFAULT_TELEOP_TRACKING_PRESET
+        )
+        if tracking_index >= 0:
+            self.teleop_tracking_combo.setCurrentIndex(tracking_index)
+        self.teleop_tracking_combo.setToolTip(
+            "Controls how aggressively the follower closes the gap to the leader. "
+            "The stream rate and lower-level safety envelope remain separate."
+        )
+        teleop_grid.addWidget(self.teleop_tracking_combo, 1, 3)
         self.teleop_button = QPushButton("Align follower and start")
         self.teleop_button.clicked.connect(self._toggle_teleop)
         teleop_grid.addWidget(self.teleop_button, 0, 5)
@@ -4996,6 +5014,10 @@ class MainWindow(QMainWindow):
         self._teleop_start_options = {
             "mode": mode,
             "frequency_hz": frequency_hz,
+            "tracking_preset": str(
+                self.teleop_tracking_combo.currentData()
+                or DEFAULT_TELEOP_TRACKING_PRESET
+            ),
             "mirror_gripper": self.teleop_gripper_check.isChecked(),
             "gripper_speed_multiplier": self._gripper_speed_multiplier,
             "align_follower": align_follower,
@@ -5117,7 +5139,7 @@ class MainWindow(QMainWindow):
             self.teleop_button.setText("Stop live teleop")
             self.teleop_status.setText(
                 f"LIVE / LINKED — {self.teleop_mode_combo.currentText()} "
-                f"at {frequency_hz:.0f} Hz. "
+                f"at {frequency_hz:.0f} Hz · {self.teleop_tracking_combo.currentText()} tracking. "
                 f"{self._teleop_alignment_note or ''}"
             )
             self.leader_stream_start_requested.emit(frequency_hz)
@@ -5788,6 +5810,9 @@ class MainWindow(QMainWindow):
         )
         self.teleop_mode_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_rate_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
+        self.teleop_tracking_combo.setEnabled(
+            not self._teleop_active and not self._teleop_starting
+        )
         self.teleop_gripper_check.setEnabled(not self._teleop_active and not self._teleop_starting)
         for combo in (
             self.teleop_gripper_speed_combo,
