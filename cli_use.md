@@ -77,6 +77,38 @@ soarm101 relax
 
 `relax` always requires explicit ENTER confirmation.
 
+## Motion envelope
+
+Inspect the effective host motion envelope without opening hardware:
+
+```bash
+soarm101 motion-envelope
+soarm101 motion-envelope --json
+```
+
+The default absolute ceilings use a 100/1000 convention:
+
+```text
+joints        100 deg/s       1000 deg/s^2
+TCP linear    100 mm/s        1000 mm/s^2
+TCP angular   100 deg/s       1000 deg/s^2
+```
+
+Ordinary move defaults remain lower. These are maximum requested host dynamics, not servo
+no-load ratings. Planned streamed arm motion uses the separate responsive Feetech tracking
+profile `Goal_Velocity=0`, `Acceleration=254`.
+
+For an explicit joint request in human units:
+
+```bash
+soarm101 move-joints J1 J2 J3 J4 J5 --degrees \
+  --speed-deg-s 80 --acceleration-deg-s2 500 --yes
+```
+
+All session-capable commands also accept `--max-joint-...`, `--max-linear-...`, and
+`--max-tool-angular-...` envelope overrides. When using `robotctl`, those values are
+owned by the trusted broker and cannot be widened from the sandbox.
+
 ## Read-only commands
 
 List candidate serial ports:
