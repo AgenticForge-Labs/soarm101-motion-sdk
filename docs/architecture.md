@@ -78,7 +78,7 @@ Rules:
   use Goal_Velocity=0 (unrestricted/max) and acceleration=254 unless a low-level caller
   explicitly overrides that profile. This does not relax host-side joint speed/acceleration,
   following-error, fault, effort, timing, or settle guards.
-- Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
+- Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated. GUI teleoperation adds a named Slow/Medium/Fast response limiter above that stack: Medium preserves the historical 1.2 rad/s / 6.0 rad/s² behavior, Slow halves it, and Fast requests up to the configured absolute joint envelope. The preset shapes semantic operator intent; it never replaces or widens the deterministic stream envelope.
 Unprofiled guarded arm writes use the same responsive fallback (`speed_raw=0`,
 `acceleration_raw=254`) so no lower layer can silently reintroduce the historical
 `250/20` throttle. Tool actuators are separate contracts; the stock gripper preserves
@@ -205,7 +205,9 @@ before and during execution.
 Resting postures remain deterministic SDK-owned primitives rather than machine-local taught
 poses. `Sleep` is derived from the active executable calibration with shoulder pan and wrist
 roll at midpoint, shoulder lift at lower, elbow flex at upper, and wrist flex at 75% of its
-range. `sleep_up` preserves the historical wrist-at-lower-limit fold. Higher-level scripts,
-agents, and broker clients call these semantic primitives; they do not own copied joint
+range. `sleep_up` preserves the historical wrist-at-lower-limit fold. The stock gripper parks
+at the farther-open of its calibration-derived 1° closed-stop inset or 2.5% normalized opening,
+so the semantic rest primitive does not intentionally sustain hard-stop load. Higher-level
+scripts, agents, and broker clients call these semantic primitives; they do not own copied joint
 coordinates.
 
