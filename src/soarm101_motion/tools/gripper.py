@@ -9,10 +9,7 @@ from math import isfinite
 from typing import Mapping
 
 from soarm101_motion.calibration import MotorCalibration
-from soarm101_motion.constants import (
-    DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED,
-    STOCK_GRIPPER,
-)
+from soarm101_motion.constants import STOCK_GRIPPER
 from soarm101_motion.exceptions import (
     HardwareFaultError,
     InvalidCommandError,
@@ -118,21 +115,6 @@ class SO101Gripper(RobotTool):
             stop_margin_rad=stop_margin_rad,
             closed_position=self.closed_position,
             open_position=self.open_position,
-        )
-
-    def calibrated_safe_closed_position(
-        self,
-        *,
-        stop_margin_rad: float,
-        minimum_opening: float = DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED,
-    ) -> float:
-        """Return a close target that stays clear of sustained hard-stop loading."""
-        safe_floor = float(minimum_opening)
-        if not isfinite(safe_floor) or not 0.0 <= safe_floor <= 1.0:
-            raise InvalidCommandError("minimum safe gripper opening must be within [0, 1]")
-        return max(
-            safe_floor,
-            self.calibrated_closed_position(stop_margin_rad=stop_margin_rad),
         )
 
     def begin_opening(
