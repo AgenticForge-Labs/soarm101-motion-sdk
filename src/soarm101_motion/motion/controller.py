@@ -130,6 +130,8 @@ class JointStreamState:
     previous_actual: dict[str, float]
     frequency_hz: float
     limits: dict[str, tuple[float, float]]
+    speed_limit: float
+    acceleration_limit: float
     tcp: Pose | None = None
 
 
@@ -1645,6 +1647,8 @@ class MotionController:
         self,
         *,
         frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+        max_speed: float | None = None,
+        max_acceleration: float | None = None,
         tcp: Pose | None = None,
     ) -> None:
         """Begin guarded continuous joint streaming from the current measured pose.
@@ -1654,6 +1658,18 @@ class MotionController:
         synchronous feedback/fault/effort checks on every accepted sample.
         """
         frequency = self._positive(frequency_hz, "stream frequency")
+        speed_limit = self._bounded(
+            max_speed,
+            self.config.stream_joint_speed_limit,
+            self.config.stream_joint_speed_limit,
+            "stream joint speed",
+        )
+        acceleration_limit = self._bounded(
+            max_acceleration,
+            self.config.stream_joint_acceleration_limit,
+            self.config.stream_joint_acceleration_limit,
+            "stream joint acceleration",
+        )
         if frequency > self.config.command_frequency_hz:
             raise SafetyViolationError(
                 f"stream frequency {frequency:.1f} Hz exceeds configured command "
@@ -1685,6 +1701,8 @@ class MotionController:
                 previous_actual=present.copy(),
                 frequency_hz=frequency,
                 limits=stream_limits,
+                speed_limit=speed_limit,
+                acceleration_limit=acceleration_limit,
                 tcp=tcp,
             )
 
@@ -1722,10 +1740,10 @@ class MotionController:
                 for name in ARM_JOINTS
             }
             max_speed = max(abs(value) for value in velocity.values())
-            if max_speed > self.config.stream_joint_speed_limit * 1.001:
+            if max_speed > state.speed_limit * 1.001:
                 raise SafetyViolationError(
                     f"streamed joint speed {max_speed:.4f} rad/s exceeds "
-                    f"{self.config.stream_joint_speed_limit:.4f} rad/s"
+                    f"{state.speed_limit:.4f} rad/s"
                 )
             if state.last_velocity is not None:
                 acceleration = {
@@ -1733,10 +1751,10 @@ class MotionController:
                     for name in ARM_JOINTS
                 }
                 max_acceleration = max(abs(value) for value in acceleration.values())
-                if max_acceleration > self.config.stream_joint_acceleration_limit * 1.001:
+                if max_acceleration > state.acceleration_limit * 1.001:
                     raise SafetyViolationError(
                         f"streamed joint acceleration {max_acceleration:.4f} rad/s² exceeds "
-                        f"{self.config.stream_joint_acceleration_limit:.4f} rad/s²"
+                        f"{state.acceleration_limit:.4f} rad/s²"
                     )
 
             if self.config.enable_workspace_checks and self.config.teleop_workspace_checks:
