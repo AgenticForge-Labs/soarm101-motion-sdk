@@ -72,6 +72,12 @@ Rules:
   planning or safety.
   Cartesian `move_linear()` remains host-streamed because its straight TCP path is part of
   the command contract and cannot be preserved by sending only the final joint solution.
+- Planned host-streamed joint motion and live streaming share the responsive Feetech
+  tracking profile: the host trajectory owns speed/acceleration shaping while the servo is
+  not given a second slower velocity/acceleration cap. Default streamed joint writes therefore
+  use Goal_Velocity=0 (unrestricted/max) and acceleration=254 unless a low-level caller
+  explicitly overrides that profile. This does not relax host-side joint speed/acceleration,
+  following-error, fault, effort, timing, or settle guards.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
 
 
