@@ -1,9 +1,6 @@
 # Changelog
 
 ## Unreleased
-- Standardized the host motion envelope around human-readable 100/1000 limits and made the arm backend fallback responsive `0/254`, while keeping the stock gripper independently paced at `250/20`; trusted broker motion commands inherit the host envelope.
-
-
 - Replaced the original undocumented host motion ceilings with an explicit human-facing
   100/1000 envelope: joints 100 deg/s and 1000 deg/s^2, TCP translation 100 mm/s and
   1000 mm/s^2, and TCP/tool orientation 100 deg/s and 1000 deg/s^2. Ordinary motion
