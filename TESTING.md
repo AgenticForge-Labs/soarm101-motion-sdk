@@ -614,12 +614,12 @@ coarse workspace-geometry check. The designed folded posture places link centerl
 than the generic 25 mm self-clearance heuristic on this arm, so that heuristic produces a
 known false positive for Sleep. This exception is specific to the calibration-derived Sleep
 primitive; ordinary joint motion continues to use the coarse workspace check. After the arm
-fold completes, Sleep parks the stock gripper at the farther-open of a target 1° inside its
-calibrated closed mechanical stop or 2.5% normalized opening. This supersedes the 1°-only
-behavior after a 2026-10-06 GUI session completed Sleep and then reported an STS3215 gripper
-Overload fault while holding near the close stop. Verify `soarm101 limits --json` reports the
-derived normalized/raw target, then confirm the gripper remains fault-free while held. Sleep
-is never automatic.
+fold completes, Sleep closes the stock gripper to a target 1° inside its calibrated closed
+mechanical stop. The 2026-10-06 overload event was later explained by a pen already being
+held in the gripper, so it is not evidence that the calibration-derived 1° inset is unsafe.
+It is evidence that Sleep is not object-aware: before physical or agent-triggered Sleep,
+confirm that closing the gripper is appropriate for the current grasp. Verify
+`soarm101 limits --json` reports the derived normalized/raw target. Sleep is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
@@ -1050,9 +1050,14 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
 13. Exercise Slow, Normal, and Fast gripper presets through a manual move, a Program
     gripper step, and recorded-trajectory replay; inspect simulator/backend tests for the
     raw speed propagation because simulation itself has no motor-speed dynamics.
-14. Exercise **Slow · gentle**, **Medium · current**, and **Fast · full envelope** Tracking
+14. Exercise **Slow · gentle**, **Medium · current**, and **Fast · wrist-aware** Tracking
     response in simulation and confirm the stream rate does not change when only the response
     preset changes. Medium must preserve the historical 1.2 rad/s / 6.0 rad/s² limiter.
+    Fast must expose 100 deg/s to every joint, 1000 deg/s² to the four non-wrist-flex joints,
+    and 500 deg/s² to wrist_flex in both the GUI limiter and MotionController stream state.
+15. Exercise the stream reversal regression: strict opposite-direction motion still fails,
+    but a genuine command reversal may accept at most 100 ms of non-growing physical
+    carry-through before the ordinary direction fault resumes.
 
 ### 15. Physical Program / radial-pattern execution — DO LATER
 
@@ -1078,7 +1083,14 @@ Only continue after the Batch 1 and Batch 2 physical checks pass.
 
 ### 16. Physical relative leader → follower teleoperation — DO LATER
 
-This is a new continuous-control path and has not yet been physically validated.
+This path now has partial physical validation on the user's follower. On 2026-10-06,
+20 Hz Medium tracking completed cleanly and felt substantially better than the earlier
+conservative response. A subsequent 20 Hz Fast run improved general tracking but exposed a
+wrist-flex-specific reversal limit: with the former 1000 deg/s² Fast wrist response, the
+controller observed +0.057 rad of wrist motion in the previous physical direction after a
+commanded reversal and correctly stopped. The next hardware gate uses Fast · wrist-aware
+(100 deg/s, 500 deg/s² on wrist_flex) plus the bounded stream-only reversal braking grace.
+Run it with no payload and gripper mirroring disabled first.
 
 1. Complete calibration, joint-direction, FK, low-speed joint, and STOP checks first.
 2. Secure both bases, clear the follower workspace, remove payloads, and keep physical
@@ -1110,12 +1122,24 @@ This is a new continuous-control path and has not yet been physically validated.
     stop receiving stream targets and hold.
 14. Re-enable gripper mirroring and test a small leader gripper delta.
 15. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
-16. Validate 20 Hz (50 ms period) next even though it is the current software default, then treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely because motion looks smooth; record cycle time, queued sample age, overruns, communication errors, STOP response, following errors, and effort trips as described in `docs/teleoperation.md`.
-17. If follower processing exceeds the selected period repeatedly or queued sample age
+16. At 20 Hz, verify **Medium · current** still reproduces the previously successful
+    behavior, then select **Fast · wrist-aware** with gripper mirroring disabled. Sweep
+    wrist_flex alone through several reversals and inspect `teleop_frame` leader, desired,
+    command, command velocity, actual, and following-error fields. Confirm wrist command
+    acceleration does not exceed 500 deg/s² and that any opposite-direction carry-through
+    after reversal is brief/non-growing rather than a persistent drift.
+17. Repeat coordinated five-joint Fast motion only after the isolated wrist test passes.
+    Then re-enable gripper mirroring at Normal gripper speed; keep object contact tests
+    separate from wrist-response testing.
+18. Treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely
+    because motion looks smooth; record cycle time, queued sample age, overruns,
+    communication errors, STOP response, following errors, and effort trips as described
+    in `docs/teleoperation.md`.
+19. If follower processing exceeds the selected period repeatedly or queued sample age
     grows, the software should terminate teleop and hold. Reduce the rate before retrying.
-18. Deliberately move the leader faster only enough to verify configured step/speed/
+20. Deliberately move the leader faster only enough to verify configured step/speed/
     acceleration guards reject unsafe streaming rather than following it.
-19. Do not treat software STOP as an emergency stop; physical power remains the ultimate
+21. Do not treat software STOP as an emergency stop; physical power remains the ultimate
     intervention during these tests.
 
 ### 17. Physical absolute teleoperation — DO LATER, AFTER RELATIVE PASSES
