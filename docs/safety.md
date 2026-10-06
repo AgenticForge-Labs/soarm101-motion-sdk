@@ -137,10 +137,12 @@ leaves the arm holding rather than dropping it.
 - Motion failures issue a best-effort hold.
 - `wait=True` verifies measured completion.
 - Stock-gripper moves participate in the arm-level stop lifecycle.
-- Sleep folds the arm first and then closes the stock gripper to a calibration-derived
-  target 1° inside the measured closed mechanical stop by default. It does not intentionally
-  drive the gripper into the calibrated endpoint; the saved gripper range and drive mode
-  remain authoritative.
+- Sleep folds the arm first and then parks the stock gripper at the farther-open of a
+  calibration-derived 1° mechanical-stop inset or 2.5% normalized opening. A supervised
+  2026-10-06 run showed that the former 1°-only target could settle successfully and then
+  latch an STS3215 overload while holding near the hard-close stop. The wider minimum keeps
+  the compact Sleep posture without intentionally sustaining end-stop load; saved gripper
+  calibration and drive mode remain authoritative.
 - Calibration snapshots and restores motor EEPROM on failure when possible.
 - Torque enable rolls back motors already energized when a later enable fails.
 
