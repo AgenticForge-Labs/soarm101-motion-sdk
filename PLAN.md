@@ -83,11 +83,14 @@ its own persistent connection for live controls; it must not launch CLI subproce
 
 ## Physical validation gate
 
-- [ ] Validate the new explicit 100/1000 host motion envelope on the physical follower.
-  The immediate gate is the previously host-rejected 80 deg/s, 500 deg/s^2
-  Sleep-vs-`sleep_up` comparison with responsive 0/254 servo tracking. Confirm clean
-  tracking and retain following-error, effort/fault, calibrated-limit, workspace,
-  STOP/HOLD, and settle safeguards before considering higher characterization points.
+- [ ] Complete physical characterization of the explicit 100/1000 host motion envelope.
+  The previously host-rejected **80 deg/s, 500 deg/s²** Sleep-vs-`sleep_up` comparison
+  completed successfully on 2026-10-06 with responsive 0/254 tracking and was judged much
+  smoother by the operator. The first **100/1000** attempt never moved because SI conversion
+  differed from the exact configured ceiling by a few floating-point ULPs; that software
+  boundary bug is now fixed. Re-run 100/1000 under the unchanged following-error,
+  effort/fault, calibrated-limit, workspace, STOP/HOLD, and settle safeguards before
+  marking the full characterization gate complete.
 
 - [ ] Run port discovery and six-motor model check on the user's arm.
 - [ ] Import or perform calibration and verify all directions.
