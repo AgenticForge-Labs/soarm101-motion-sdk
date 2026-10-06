@@ -374,6 +374,14 @@ class RobotBrokerService:
                     arguments=["sleep", "--robot-id", self.executor.robot_id],
                 )
 
+            if path in {"/v1/sleep-up", "/v1/sleep_up"}:
+                return self._execute(
+                    request_id=request_id,
+                    action="sleep_up",
+                    request=request,
+                    arguments=["sleep-up", "--robot-id", self.executor.robot_id],
+                )
+
             if path == "/v1/stop":
                 return self._execute(
                     request_id=request_id,
