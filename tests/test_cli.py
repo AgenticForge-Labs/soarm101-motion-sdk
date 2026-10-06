@@ -74,6 +74,46 @@ def test_cli_motion_envelope_overrides_apply_to_simulation() -> None:
     )
 
 
+
+
+
+def test_motion_envelope_cli_reports_100_1000_defaults(capsys) -> None:
+    assert main(["motion-envelope", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["host_envelope"] == pytest.approx(
+        {
+            "max_joint_speed_deg_s": 100.0,
+            "max_joint_acceleration_deg_s2": 1000.0,
+            "max_linear_speed_mm_s": 100.0,
+            "max_linear_acceleration_mm_s2": 1000.0,
+            "max_tool_angular_speed_deg_s": 100.0,
+            "max_tool_angular_acceleration_deg_s2": 1000.0,
+        }
+    )
+    assert payload["servo_tracking"]["goal_velocity_raw"] == 0
+    assert payload["servo_tracking"]["acceleration_raw"] == 254
+
+
+def test_move_joints_parser_accepts_human_degree_dynamics() -> None:
+    args = build_parser().parse_args(
+        [
+            "move-joints",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "--simulation",
+            "--speed-deg-s",
+            "80",
+            "--acceleration-deg-s2",
+            "500",
+        ]
+    )
+    assert args.speed_deg_s == pytest.approx(80.0)
+    assert args.acceleration_deg_s2 == pytest.approx(500.0)
+
+
 def test_info(capsys) -> None:
     assert main(["info"]) == 0
     assert "soarm101-motion-sdk" in capsys.readouterr().out
