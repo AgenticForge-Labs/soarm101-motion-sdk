@@ -311,7 +311,12 @@ command de-duplication at actuator resolution, not trajectory retiming or relaxe
 
 Joint-space motion now also has an **experimental** execution selector while the low-speed
 shake investigation is active. `execution_mode="streamed"` remains the default and sends
-the validated host trajectory as intermediate targets. `execution_mode="final_target"`
+the validated host trajectory as intermediate targets. Streamed planned joint motion now
+uses the same responsive Feetech tracking profile as teleoperation—Goal_Velocity=0
+(unrestricted/max) and acceleration=254—so the validated host trajectory owns the requested
+speed and acceleration instead of being overlaid with the backend's slower 250/20 profile.
+Joint/rate/acceleration/following-error/fault/effort/timing/settle guards remain active.
+`execution_mode="final_target"`
 builds and validates the same joint plan but writes only the endpoint once, using per-joint
 servo speed limits derived from the validated planned duration so the joints are asked to
 arrive together. The controller then observes guarded progress until settle. The one-shot
