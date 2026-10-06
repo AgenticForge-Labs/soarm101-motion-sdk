@@ -605,8 +605,9 @@ because the arm is already inside the coarse self-clearance envelope. The path m
 any non-self-clearance workspace guard fails, if minimum self-clearance decreases while
 exiting, if the path never reaches the configured clearance threshold, or if ordinary
 self-clearance becomes invalid again after the path has cleared it. Sleep is derived from the active executable limits: shoulder pan
-midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
-wrist roll midpoint. On a calibrated physical follower those endpoints are already 1°
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex at 75% of its
+executable range, and wrist roll midpoint. On a calibrated physical follower the selected
+limit-derived endpoints are already 1°
 inside the measured mechanical stops. Sleep retains calibrated joint limits plus trajectory, rate/acceleration, following-error,
 effort, fault, communication, and completion guards, but intentionally skips the generic
 coarse workspace-geometry check. The designed folded posture places link centerlines closer
