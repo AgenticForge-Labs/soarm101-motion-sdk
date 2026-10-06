@@ -26,6 +26,20 @@ def test_joint_motion_accepts_80_500_inside_new_envelope() -> None:
     assert result.completed is True
 
 
+def test_joint_motion_accepts_exact_100_1000_human_unit_boundary() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += math.radians(5.0)
+        result = arm.move_joints(
+            target,
+            speed=math.radians(100.0),
+            acceleration=math.radians(1000.0),
+        )
+
+    assert result.completed is True
+
+
 def test_joint_motion_rejects_requests_above_100_1000_envelope() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
