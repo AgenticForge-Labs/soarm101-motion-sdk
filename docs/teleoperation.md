@@ -24,7 +24,7 @@ Tracking-response choices shape how quickly the follower closes the leader gap:
 - **Medium · current** — 1.2 rad/s, 6.0 rad/s²; this preserves the pre-preset behavior and is the default;
 - **Fast · full envelope** — the configured joint envelope, currently 100 deg/s and 1000 deg/s².
 
-The response limiter is an intent-shaping layer under the deterministic stream envelope. Selecting a preset never widens the configured joint limits, command-step limit, following-error guard, effort/fault handling, or stale-sample policy.
+The selected response limits are enforced twice: the GUI target limiter shapes the follower command toward the leader, and the same per-session speed/acceleration ceilings are passed into the deterministic MotionController stream guard. Those session ceilings are clipped by the configured absolute stream envelope. Selecting a preset can therefore narrow response but never widen joint limits, command-step limits, following-error guards, effort/fault handling, or stale-sample policy.
 
 After both arms are connected, **Align follower and start** reads a fresh leader
 pose, latches the follower's current positions before enabling torque, and moves
