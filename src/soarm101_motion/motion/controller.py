@@ -127,6 +127,7 @@ class RecordedPlan:
 class StreamReversalGrace:
     expires_sample: int
     previous_wrong_way_delta_abs: float
+    cumulative_wrong_way_delta_abs: float
 
 
 @dataclass
@@ -1213,19 +1214,34 @@ class MotionController:
                 and current_sample - previous_direction_sample <= total_grace_samples
             )
             if recent_reversal:
+                carrythrough = abs(actual_delta)
+                if carrythrough > self.config.stream_reversal_max_carrythrough_rad:
+                    raise SafetyViolationError(
+                        f"{name} reversal carry-through {carrythrough:.3f} rad exceeds "
+                        f"{self.config.stream_reversal_max_carrythrough_rad:.3f} rad"
+                    )
                 stream_state.reversal_grace[name] = StreamReversalGrace(
                     expires_sample=current_sample + total_grace_samples - 1,
-                    previous_wrong_way_delta_abs=abs(actual_delta),
+                    previous_wrong_way_delta_abs=carrythrough,
+                    cumulative_wrong_way_delta_abs=carrythrough,
                 )
                 continue
 
             if grace is not None:
+                carrythrough = abs(actual_delta)
+                cumulative = grace.cumulative_wrong_way_delta_abs + carrythrough
+                if cumulative > self.config.stream_reversal_max_carrythrough_rad:
+                    raise SafetyViolationError(
+                        f"{name} cumulative reversal carry-through {cumulative:.3f} rad "
+                        f"exceeds {self.config.stream_reversal_max_carrythrough_rad:.3f} rad"
+                    )
                 if (
-                    abs(actual_delta)
+                    carrythrough
                     <= grace.previous_wrong_way_delta_abs
                     + self.config.stream_reversal_decay_tolerance_rad
                 ):
-                    grace.previous_wrong_way_delta_abs = abs(actual_delta)
+                    grace.previous_wrong_way_delta_abs = carrythrough
+                    grace.cumulative_wrong_way_delta_abs = cumulative
                     continue
                 raise SafetyViolationError(
                     f"{name} opposite-direction carry-through grew during reversal braking "
