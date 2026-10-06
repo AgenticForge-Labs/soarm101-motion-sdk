@@ -358,6 +358,40 @@ def test_enable_moves_small_endpoint_overshoot_inward_before_latching(
     backend.disconnect()
 
 
+def test_joint_write_recovers_only_inward_from_tolerated_endpoint_overshoot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False)
+    )
+    backend.connect()
+    backend.enable_torque()
+    packet = backend._packet_handler
+    motor_id = MOTOR_IDS["elbow_flex"]
+    motor = backend.calibration.motors["elbow_flex"]
+
+    packet.positions[motor_id] = motor.range_max + 1
+    backend.write_joint_positions(
+        {"elbow_flex": motor.raw_to_radians(motor.range_max + 1)}
+    )
+    assert packet.positions[motor_id] == motor.range_max
+
+    packet.positions[motor_id] = motor.range_max + 1
+    with pytest.raises(SafetyViolationError, match="outside calibrated range"):
+        backend.write_joint_positions(
+            {"elbow_flex": motor.raw_to_radians(motor.range_max + 2)}
+        )
+
+    packet.positions[motor_id] = motor.range_max
+    with pytest.raises(SafetyViolationError, match="outside calibrated range"):
+        backend.write_joint_positions(
+            {"elbow_flex": motor.raw_to_radians(motor.range_max + 1)}
+        )
+
+    backend.disconnect()
+
+
 def test_gripper_begin_opening_writes_one_goal_on_fake_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
