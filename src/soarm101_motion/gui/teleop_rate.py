@@ -6,10 +6,43 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.constants import (
+    ARM_JOINTS,
+    DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED,
+    DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+    DEFAULT_MAX_JOINT_SPEED_RAD_S,
+)
 
 TELEOP_GRIPPER_SPEED_PER_S = 1.2
 GRIPPER_SPEED_PRESETS = (("Slow · original", 1.0), ("Normal · 2×", 2.0), ("Fast · 5×", 5.0))
+
+
+@dataclass(frozen=True)
+class TeleopTrackingPreset:
+    key: str
+    label: str
+    max_speed_rad_s: float
+    max_acceleration_rad_s2: float
+
+
+TELEOP_TRACKING_PRESETS = (
+    TeleopTrackingPreset("slow", "Slow · gentle", 0.6, 3.0),
+    TeleopTrackingPreset("medium", "Medium · current", 1.2, 6.0),
+    TeleopTrackingPreset(
+        "fast",
+        "Fast · full envelope",
+        DEFAULT_MAX_JOINT_SPEED_RAD_S,
+        DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+    ),
+)
+DEFAULT_TELEOP_TRACKING_PRESET = "medium"
+
+
+def teleop_tracking_preset(key: str) -> TeleopTrackingPreset:
+    for preset in TELEOP_TRACKING_PRESETS:
+        if preset.key == key:
+            return preset
+    raise ValueError(f"unknown teleop tracking preset: {key}")
 
 
 def teleop_stale_limit_s(period_s: float) -> float:
@@ -155,7 +188,7 @@ def update_gripper_contact_latch(
     movement_epsilon: float = 0.01,
     stalled_samples_required: int = 6,
     release_margin: float = 0.04,
-    minimum_opening: float = 0.025,
+    minimum_opening: float = DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED,
     contact_relief: float = 0.005,
 ) -> tuple[float, bool, bool, bool]:
     """Rate-limit closing and ease open slightly after contact.
