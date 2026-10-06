@@ -175,7 +175,8 @@ its own persistent connection for live controls; it must not launch CLI subproce
   opposite-direction stop. Fast is now per-joint: wrist_flex retains 100 deg/s speed but uses
   500 deg/s² acceleration, while the other joints retain 100/1000. Live-stream direction
   monitoring also permits only a 100 ms non-growing braking carry-through immediately after
-  a genuine command reversal; planned motion remains strict. Validate isolated wrist
+  a recent genuine command reversal, capped at 0.10 rad cumulative wrong-way travel;
+  planned motion remains strict. Validate isolated wrist
   reversals at 20 Hz with no payload/gripper mirroring before considering this motion-quality
   branch merge-ready.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
