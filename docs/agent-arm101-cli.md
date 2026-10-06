@@ -260,9 +260,9 @@ a 1° inset from each measured stop by default. `calibrated_joint_stop_margin_de
 reports that policy. The same output includes `sleep_pose_rad` / `sleep_pose_deg`
 for the smoother default and `sleep_up_pose_rad` / `sleep_up_pose_deg` for the
 historical wrist-up posture, plus `sleep_gripper` and
-`calibrated_gripper_stop_margin_deg`. The gripper Sleep target is the farther-open of the
-calibrated closed mechanical stop inset 1° toward open or 2.5% normalized opening and is
-reported in both normalized and raw encoder coordinates. Calibration remains the physical authority if a measured range is
+`calibrated_gripper_stop_margin_deg`. The gripper Sleep target is the calibrated closed
+mechanical stop inset 1° toward open by default and is reported in both normalized and raw
+encoder coordinates. Calibration remains the physical authority if a measured range is
 narrower than the model range.
 
 It also reports the configured coarse model-space Cartesian envelope, including maximum
@@ -334,10 +334,13 @@ wrist flex at `lower + 0.75 * (upper - lower)`, equivalently
 `upper - 0.25 * (upper - lower)`. The historical fully folded wrist-up posture is
 available as `soarm101 sleep-up` / `soarm101 sleep_up`, which keeps wrist flex at
 the lower executable limit. On a calibrated arm the endpoint limits are already inset 1°
-from the measured mechanical stops. After either posture is reached, the stock gripper parks at
-the farther-open of a target 1° inside its calibrated closed mechanical stop or 2.5%
-normalized opening. The target is derived from the saved gripper encoder range and
-normalized so calibration handles either motor drive direction. Sleep is never triggered automatically by connection or torque enable. After the commanded
+from the measured mechanical stops. After either posture is reached, the stock gripper closes
+to a target 1° inside its calibrated closed mechanical stop by default. The target is derived
+from the saved gripper encoder range and normalized so calibration handles either motor drive
+direction. Sleep does not detect whether an object is already being held; a pen held during
+physical testing triggered gripper overload protection. Treat the close as a consequential
+tool action and ensure it is appropriate for the current grasp before issuing Sleep. Sleep is
+never triggered automatically by connection or torque enable. After the commanded
 Sleep move completes, the CLI keeps torque enabled and waits for the operator to press ENTER
 before it relaxes the arm.
 
