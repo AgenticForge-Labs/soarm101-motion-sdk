@@ -994,8 +994,8 @@ class RobotWorker(QObject):
                 teleop["last_velocity"],
                 joint_limits=teleop["joint_limits"],
                 period_s=float(teleop["period_s"]),
-                max_speed_rad_s=float(teleop["max_speed_rad_s"]),
-                max_acceleration_rad_s2=float(teleop["max_acceleration_rad_s2"]),
+                max_speed_rad_s=teleop["max_speed_rad_s"],
+                max_acceleration_rad_s2=teleop["max_acceleration_rad_s2"],
                 max_step_rad=arm.config.max_command_step_radians,
             )
             gripper_actual = None
