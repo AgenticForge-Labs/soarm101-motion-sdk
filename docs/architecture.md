@@ -79,6 +79,12 @@ Rules:
   explicitly overrides that profile. This does not relax host-side joint speed/acceleration,
   following-error, fault, effort, timing, or settle guards.
 - Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
+Unprofiled guarded arm writes use the same responsive fallback (`speed_raw=0`,
+`acceleration_raw=254`) so no lower layer can silently reintroduce the historical
+`250/20` throttle. Tool actuators are separate contracts; the stock gripper preserves
+its gentler `250/20` default pacing because contact-tool behavior is not arm-trajectory
+tracking.
+
 
 
 ## Motion-envelope ownership
