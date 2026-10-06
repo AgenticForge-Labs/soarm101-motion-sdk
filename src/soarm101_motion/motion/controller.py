@@ -1203,10 +1203,15 @@ class MotionController:
                         1.0 / self.config.command_frequency_hz,
                     ),
                 )
+            command_acceleration_raw = (
+                servo_acceleration_raw
+                if servo_acceleration_raw is not None
+                else TELEOP_SERVO_ACCELERATION_RAW
+            )
             self.backend.write_joint_positions(
                 target,
                 speed_raw=command_speed_raw,
-                acceleration_raw=servo_acceleration_raw,
+                acceleration_raw=command_acceleration_raw,
             )
 
             deadline = (
@@ -1414,6 +1419,8 @@ class MotionController:
                     plan.pre_roll,
                     cancel_event,
                     cancellation_message="recorded trajectory pre-roll cancelled",
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
                 )
 
             frequency = self.config.command_frequency_hz
@@ -1432,7 +1439,11 @@ class MotionController:
                         f"recorded trajectory command deadline missed by {lateness:.3f}s"
                     )
                 self._check_cancelled(cancel_event, "recorded trajectory cancelled")
-                self.backend.write_joint_positions(command)
+                self.backend.write_joint_positions(
+                    command,
+                    speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                )
                 self.backend.write_tool_position(
                     STOCK_GRIPPER,
                     gripper_samples[index],
