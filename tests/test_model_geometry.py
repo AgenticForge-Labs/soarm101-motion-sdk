@@ -43,6 +43,58 @@ def test_native_fk_matches_packaged_urdf_at_varied_configurations():
     )
 
 
+def test_presentation_link_segments_follow_packaged_urdf_visual_bodies():
+    root = ET.fromstring(files("soarm101_motion.models").joinpath("so101.urdf").read_text())
+    model = SO101KinematicModel()
+    joints = np.array([0.2, -0.35, 0.5, -0.4, 0.3])
+    frames = model.link_frames(joints)
+    segments = model.presentation_link_segments(joints)
+    links = {
+        "base": "base_link",
+        "shoulder": "shoulder_link",
+        "upper_arm": "upper_arm_link",
+        "lower_arm": "lower_arm_link",
+        "wrist": "wrist_link",
+        "gripper_body": "gripper_link",
+    }
+
+    for segment_name, link_name in links.items():
+        link = root.find(f"link[@name='{link_name}']")
+        visual = link.find("visual")
+        visual_frame = _origin(visual)
+        geometry = visual.find("geometry")
+        box = geometry.find("box")
+        cylinder = geometry.find("cylinder")
+        if box is not None:
+            size = np.fromstring(box.get("size"), sep=" ")
+            axis = int(np.argmax(size))
+            length = float(size[axis])
+        else:
+            axis = 2
+            length = float(cylinder.get("length"))
+        local_axis = np.zeros(3)
+        local_axis[axis] = 1.0
+        center = visual_frame[:3, 3]
+        direction = visual_frame[:3, :3] @ local_axis
+        expected_local = (
+            center - direction * length / 2.0,
+            center + direction * length / 2.0,
+        )
+        frame = frames[link_name]
+        expected = tuple(
+            frame[:3, 3] + frame[:3, :3] @ point
+            for point in expected_local
+        )
+        actual = segments[segment_name]
+        direct_error = np.linalg.norm(actual[0] - expected[0]) + np.linalg.norm(
+            actual[1] - expected[1]
+        )
+        reversed_error = np.linalg.norm(actual[0] - expected[1]) + np.linalg.norm(
+            actual[1] - expected[0]
+        )
+        assert min(direct_error, reversed_error) < 1e-8
+
+
 def test_stock_jaw_rotates_about_fixed_pivot_and_ignores_active_tool_tcp():
     model = SO101KinematicModel()
     joints = np.array([0.3, -0.4, 0.7, 0.2, -0.3])
