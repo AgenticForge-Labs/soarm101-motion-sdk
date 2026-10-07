@@ -157,9 +157,11 @@ constrained SDK primitives used manually.
 ## Live desktop visualization
 
 The GUI does not open a second hardware-feedback loop while motion is active. Planned
-motion, live streaming, and the stock gripper already read measured feedback for safety,
-settling, or progress. Those owning threads may publish best-effort observational copies to
-the GUI, which updates measured joint angles, model-estimated TCP state, and gripper aperture.
+motion, live streaming, and the stock gripper own their feedback loops for safety, settling,
+or progress. Those same owning threads publish best-effort observational copies to the GUI,
+which updates measured joint angles, model-estimated TCP state, and gripper aperture. When a
+combined recorded/alignment path needs live jaw state, the owner may sample the gripper at an
+existing controller feedback checkpoint rather than creating a second timer or polling thread.
 Display callbacks cannot command hardware and their failures are isolated from deterministic
 motion execution. The slower full-state GUI poll remains suspended while a motion handle owns
 the transport.
