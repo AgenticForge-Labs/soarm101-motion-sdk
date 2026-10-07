@@ -377,7 +377,7 @@ def test_gui_buttons_have_explicit_visual_roles_and_contrast(window):
 
     assert window.connect_button.property("buttonRole") == "primary"
     assert window.leader_connect_button.property("buttonRole") == "primary"
-    assert window.find_arms_button.property("buttonRole") == "primary"
+    assert window.find_arms_button.property("buttonRole") != "primary"
     assert window.teleop_button.property("buttonRole") == "primary"
     assert window.run_sequence_button.property("buttonRole") == "primary"
     assert window.stop_button.property("buttonRole") == "danger"

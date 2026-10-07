@@ -1,5 +1,11 @@
 # Changelog
 
+## Guided desktop setup (pending local workstation validation)
+
+- Compact arm readiness cards; calibration and diagnostics open on demand inside Setup.
+- Optional remembered guidance, readable light/dark colors, responsive calibration gauges, and explicit offline model labeling.
+- Validated portable setup backup/restore with previous-file recovery and no hardware I/O.
+
 ## Unreleased
 
 - Added a narrow host-side HTTP/JSON broker for isolated reasoning agents. The broker
