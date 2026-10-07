@@ -32,6 +32,15 @@ transforms. No evidence supports changing those link dimensions by guesswork.
   as the drawing. Label the grid as model Z=0, not a measured table.
 - [x] Add native/bundled-URDF parity, fixed-pivot, stable-scale, and active-TCP regression
   coverage. These checks establish software consistency, not physical accuracy.
+- [x] Feed the persistent GUI model from measurements already owned by active motion/tool
+  threads so commanded joint motion, model-estimated TCP readout, and gripper aperture remain
+  live while the slower full-state poll is intentionally suspended. This adds no competing
+  serial polling and no visualization authority over motion.
+- [ ] Replace the current visual arm skeleton's use of coarse safety/joint-frame centerline
+  points with dedicated presentation geometry. Front view exposes URDF joint-frame Y offsets
+  as sideways link kinks; FK/URDF parity remains correct, but the safety centerline is not a
+  faithful physical-link drawing. Keep safety geometry, kinematic authority, and presentation
+  geometry separate.
 - [ ] Add optional official CAD meshes with a switchable joint-center overlay. Preserve
   shared FK/tool authority, source revision/license, bounded rendering cost, and small
   window readability. Current schematic/primitive PyBullet visuals do not represent
