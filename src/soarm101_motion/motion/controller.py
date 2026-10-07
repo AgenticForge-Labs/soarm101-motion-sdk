@@ -160,6 +160,30 @@ class MotionController:
         self._state_lock = threading.RLock()
         self._active_handle: MotionHandle[MotionResult] | None = None
         self._joint_stream: JointStreamState | None = None
+        self._feedback_callback: Callable[[Mapping[str, float]], None] | None = None
+
+    def set_feedback_callback(
+        self,
+        callback: Callable[[Mapping[str, float]], None] | None,
+    ) -> None:
+        """Install an observational measured-joint callback.
+
+        The callback receives copies of measurements the controller already reads for
+        safety/settling. It must never become motion authority or add hardware polling.
+        Callback failures are deliberately isolated from deterministic motion execution.
+        """
+        with self._state_lock:
+            self._feedback_callback = callback
+
+    def _publish_feedback(self, actual: Mapping[str, float]) -> None:
+        callback = self._feedback_callback
+        if callback is None:
+            return
+        try:
+            callback(dict(actual))
+        except Exception:
+            # Visualization/telemetry is observational and must not change motion safety.
+            pass
 
     @property
     def is_moving(self) -> bool:
@@ -1142,6 +1166,7 @@ class MotionController:
         if state.faulted:
             raise HardwareFaultError(state.fault_message or "robot faulted during motion")
         actual = self.backend.read_joint_positions()
+        self._publish_feedback(actual)
         worst_joint = max(ARM_JOINTS, key=lambda name: abs(actual[name] - command[name]))
         following_error = abs(actual[worst_joint] - command[worst_joint])
         if following_error > self.config.following_error_limit_rad:
@@ -1270,6 +1295,7 @@ class MotionController:
         if state.faulted:
             raise HardwareFaultError(state.fault_message or "robot faulted during motion")
         actual = self.backend.read_joint_positions()
+        self._publish_feedback(actual)
 
         for name in ARM_JOINTS:
             delta = float(target[name] - start[name])
@@ -1322,6 +1348,7 @@ class MotionController:
 
             self._check_cancelled(cancel_event, cancellation_message)
             previous_actual = self.backend.read_joint_positions()
+            self._publish_feedback(previous_actual)
             command_speed_raw = servo_speed_raw
             if command_speed_raw is None:
                 command_speed_raw = self._synchronized_servo_speed_raw(
@@ -1400,6 +1427,7 @@ class MotionController:
         while True:
             self._check_cancelled(cancel_event, "motion cancelled while settling")
             actual = self.backend.read_joint_positions()
+            self._publish_feedback(actual)
             error = max(abs(actual[name] - target[name]) for name in ARM_JOINTS)
             state = self.backend.get_hardware_state()
             if state.faulted:
@@ -1475,6 +1503,7 @@ class MotionController:
             )
             previous_command = samples[0]
             previous_actual = self.backend.read_joint_positions()
+            self._publish_feedback(previous_actual)
             last_command_sent = samples[0]
             last_encoder_target = self._encoder_target_key(samples[0])
             for index, command in enumerate(samples[1:], start=1):
@@ -1560,6 +1589,7 @@ class MotionController:
             )
             previous_command = samples[0]
             previous_actual = self.backend.read_joint_positions()
+            self._publish_feedback(previous_actual)
             for index, command in enumerate(samples[1:], start=1):
                 self._check_cancelled(cancel_event, "recorded trajectory cancelled")
                 lateness = self._sleep_until(started + index / frequency)
