@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.gui.cartesian_view import CartesianArmView
+from soarm101_motion.kinematics import DEFAULT_GRIPPER_TCP
+from soarm101_motion.types import Pose
 
 
 class RobotStatusPanel(QWidget):
@@ -54,7 +56,7 @@ class RobotStatusPanel(QWidget):
                 font-weight: 750;
             }
             QLabel#robotStatusSubtitle {
-                color: palette(mid);
+                color: palette(text);
                 font-size: 11px;
             }
             QLabel#robotStatusChip {
@@ -66,11 +68,11 @@ class RobotStatusPanel(QWidget):
             QLabel#robotSectionTitle {
                 font-size: 11px;
                 font-weight: 700;
-                color: palette(mid);
+                color: palette(text);
                 padding-top: 3px;
             }
             QLabel#robotMetricName {
-                color: palette(mid);
+                color: palette(text);
             }
             QLabel#robotMetricValue {
                 font-family: monospace;
@@ -95,6 +97,7 @@ class RobotStatusPanel(QWidget):
         self.title_label.setObjectName("robotStatusTitle")
         title_box.addWidget(self.title_label)
         self.subtitle_label = QLabel(subtitle)
+        self.subtitle_label.setWordWrap(True)
         self.subtitle_label.setObjectName("robotStatusSubtitle")
         self.subtitle_label.setVisible(bool(subtitle))
         title_box.addWidget(self.subtitle_label)
@@ -111,13 +114,18 @@ class RobotStatusPanel(QWidget):
         self.context_label.setWordWrap(True)
         layout.addWidget(self.context_label)
 
+        self.measurement_label = QLabel("Illustration — not live")
+        self.measurement_label.setWordWrap(True)
+        layout.addWidget(self.measurement_label)
+        self._has_measurement = False
         self.view = CartesianArmView()
         self.view.setMinimumSize(270, 270)
         self.view.setMaximumHeight(370 if not compact else 300)
         layout.addWidget(self.view, 1)
 
-        pose_title = QLabel("TOOL POSE")
+        pose_title = QLabel("ESTIMATED TOOL POSE · MODEL FRAME")
         pose_title.setObjectName("robotSectionTitle")
+        pose_title.setWordWrap(True)
         layout.addWidget(pose_title)
 
         pose_grid = QGridLayout()
@@ -214,6 +222,7 @@ class RobotStatusPanel(QWidget):
     def clear_state(self, *, label: str = "OFFLINE") -> None:
         self._set_status_chip(label, "offline")
         self.view.setEnabled(False)
+        self.measurement_label.setText("Last measured pose — disconnected" if self._has_measurement else "Illustration — not live")
         for value in self.pose_value_labels.values():
             value.setText("—")
         for value in self.joint_value_labels.values():
@@ -236,7 +245,13 @@ class RobotStatusPanel(QWidget):
             return
 
         self.view.setEnabled(True)
+        self._has_measurement = True
+        self.measurement_label.setText("Simulated state" if state.get("simulation") else "Measured joints · model-estimated tool pose")
         joints = {name: float(state["joints_deg"][name]) for name in ARM_JOINTS}
+        tcp_values = state.get("tcp_xyz_rpy")
+        self.view.set_tcp(
+            DEFAULT_GRIPPER_TCP if tcp_values is None else Pose.from_xyz_rpy(*tcp_values)
+        )
         self.view.set_joint_degrees(joints)
         for name, angle in joints.items():
             self.joint_value_labels[name].setText(f"{angle:+.1f}°")
