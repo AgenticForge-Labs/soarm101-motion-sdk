@@ -154,6 +154,16 @@ The camera layer deliberately stops at raw observation: it does not identify obj
 task state, plan motion, or bypass motion safety. Agent reasoning remains above the same
 constrained SDK primitives used manually.
 
+## Live desktop visualization
+
+The GUI does not open a second hardware-feedback loop while motion is active. Planned
+motion, live streaming, and the stock gripper already read measured feedback for safety,
+settling, or progress. Those owning threads may publish best-effort observational copies to
+the GUI, which updates measured joint angles, model-estimated TCP state, and gripper aperture.
+Display callbacks cannot command hardware and their failures are isolated from deterministic
+motion execution. The slower full-state GUI poll remains suspended while a motion handle owns
+the transport.
+
 ## Desktop setup presentation
 
 `gui/setup_panel.py` owns the Setup overview and navigation to existing calibration,
