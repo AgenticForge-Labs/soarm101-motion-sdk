@@ -276,8 +276,10 @@ def test_kinematic_view_gripper_uses_wrist_frame_and_changes_aperture(window):
         tcp=Pose.identity(),
     )[:3, 3]
     assert closed["origin"] == pytest.approx(expected_origin)
-    closed_gap = np.linalg.norm(closed["left_tip"] - closed["right_tip"])
-    open_gap = np.linalg.norm(opened["left_tip"] - opened["right_tip"])
+    assert closed["fixed_tip"] == pytest.approx(opened["fixed_tip"])
+    assert closed["moving_pivot"] == pytest.approx(opened["moving_pivot"])
+    closed_gap = np.linalg.norm(closed["fixed_tip"] - closed["moving_tip"])
+    open_gap = np.linalg.norm(opened["fixed_tip"] - opened["moving_tip"])
     assert open_gap > closed_gap
 
 
