@@ -16,6 +16,12 @@
   shaking investigations in PLAN.md; motion/calibration policy is unchanged.
 
 ## Unreleased
+- Rebalanced the Teleoperation workspace around live operation: widened the shared follower
+  sidebar and model view, placed leader/follower coordination beside teleop settings, replaced
+  the duplicate bottom joint-value table with a rolling 10-second measured joint-angle /
+  tracking-error trace, and show all named cameras together with Start all / Stop all controls.
+  The trace consumes the existing leader stream and follower measurements only; it adds no
+  high-rate current/load or servo-register polling.
 - Reworked the desktop robot schematic so physical presentation no longer reuses the coarse
   joint-origin safety polyline. Link strokes now follow the packaged URDF visual-body axes,
   while FK/joint markers and safety geometry keep their existing authoritative roles.
