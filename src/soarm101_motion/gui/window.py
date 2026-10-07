@@ -5625,6 +5625,7 @@ class MainWindow(QMainWindow):
         self._refresh_named_pose_status()
         self._refresh_point_list()
         self._refresh_sidebar_context()
+        self._refresh_status_banner()
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
@@ -5642,6 +5643,7 @@ class MainWindow(QMainWindow):
             self._sequence_paused = False
             if hasattr(self, "pause_sequence_button"):
                 self.pause_sequence_button.setText("Pause after current step")
+        self._refresh_status_banner()
         self._update_enabled_state()
 
     @Slot(object)
