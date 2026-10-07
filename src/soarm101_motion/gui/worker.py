@@ -117,9 +117,9 @@ class RobotWorker(QObject):
 
         arm.motion.set_feedback_callback(publish_joints)
 
-        publish_gripper = lambda position: self.live_measurements.emit(
-            {"gripper": float(position)}
-        )
+        def publish_gripper(position: float) -> None:
+            self.live_measurements.emit({"gripper": float(position)})
+
         arm.motion.set_tool_feedback_callback(publish_gripper)
         primary_tool = getattr(arm.tool, "primary", arm.tool)
         set_tool_feedback = getattr(primary_tool, "set_feedback_callback", None)
