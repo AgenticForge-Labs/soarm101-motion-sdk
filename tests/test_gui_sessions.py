@@ -38,6 +38,7 @@ def test_roles_are_in_setup_tab(window):
     assert window.camera_page.isAncestorOf(window.camera_device_combo)
     assert window.teleop_page.isAncestorOf(window.teleop_button)
     assert window.teleop_page.isAncestorOf(window.teleop_camera_preview)
+    assert window.teleop_page.isAncestorOf(window.teleop_motion_trace)
     assert window.record_page.isAncestorOf(window.save_point_button)
     assert window.record_page.isAncestorOf(window.record_button)
 
@@ -55,6 +56,9 @@ def test_persistent_robot_sidebar_is_outside_tabs_and_shared(window):
     assert window.program_arm_panel is window.robot_sidebar
     assert window.cartesian_view is window.robot_sidebar.view
     assert window._follower_status_panels == [window.robot_sidebar]
+    assert window.robot_sidebar_container.minimumWidth() == 430
+    assert window.robot_sidebar_container.maximumWidth() == 520
+    assert window.cartesian_view.minimumWidth() >= 310
 
     for page in (
         window.calibration_page,
@@ -505,6 +509,98 @@ def test_camera_preview_grid_splits_two_named_cameras_side_by_side(window):
     second_row, second_col, _, _ = window.camera_preview_grid.getItemPosition(second_index)
     assert (first_row, first_col) == (0, 0)
     assert (second_row, second_col) == (0, 1)
+
+
+def test_teleop_camera_grid_shows_two_named_cameras_side_by_side(window):
+    from soarm101_motion.camera import CameraSettings
+
+    existing_names = list(window._workstation_profile.cameras)
+    assert existing_names
+    second_name = "wrist" if "wrist" not in existing_names else "side"
+    window._workstation_profile = window._workstation_profile.with_camera(
+        second_name,
+        CameraSettings(device="/dev/video96", width=640, height=480),
+        select=False,
+    )
+    window._refresh_camera_profile_choices()
+    window._rebuild_teleop_camera_grid()
+
+    names = list(window._workstation_profile.cameras)
+    assert set(window.teleop_camera_previews) == set(names)
+    first_index = window.teleop_camera_grid.indexOf(
+        window.teleop_camera_cards[names[0]]
+    )
+    second_index = window.teleop_camera_grid.indexOf(
+        window.teleop_camera_cards[second_name]
+    )
+    first_row, first_col, _, _ = window.teleop_camera_grid.getItemPosition(first_index)
+    second_row, second_col, _, _ = window.teleop_camera_grid.getItemPosition(second_index)
+    assert (first_row, first_col) == (0, 0)
+    assert (second_row, second_col) == (0, 1)
+
+
+def test_camera_frame_routes_to_all_named_teleop_previews(window):
+    from PySide6.QtGui import QImage
+    from soarm101_motion.camera import CameraSettings
+
+    second_name = "wrist"
+    if second_name in window._workstation_profile.cameras:
+        second_name = "side"
+    window._workstation_profile = window._workstation_profile.with_camera(
+        second_name,
+        CameraSettings(device="/dev/video95", width=320, height=240),
+        select=False,
+    )
+    window._refresh_camera_profile_choices()
+    window._rebuild_teleop_camera_grid()
+
+    image = QImage(320, 240, QImage.Format.Format_RGB32)
+    image.fill(0xFF224466)
+    window._on_camera_frame(second_name, image)
+
+    preview = window.teleop_camera_previews[second_name]
+    assert preview.pixmap() is not None
+    assert not preview.pixmap().isNull()
+
+
+def test_teleop_start_all_uses_existing_camera_sessions(window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(window._camera_manager, "start_all", lambda: calls.append("start"))
+    window._start_all_teleop_cameras()
+    assert calls == ["start"]
+
+
+def test_teleop_motion_trace_uses_existing_stream_measurements(window):
+    from math import radians
+
+    leader = {
+        "timestamp": 10.0,
+        "joints_rad": {
+            "shoulder_pan": radians(1.0),
+            "shoulder_lift": radians(2.0),
+            "elbow_flex": radians(3.0),
+            "wrist_flex": radians(4.0),
+            "wrist_roll": radians(5.0),
+        },
+        "gripper": 0.5,
+    }
+    follower = {
+        "shoulder_pan": 1.2,
+        "shoulder_lift": 2.2,
+        "elbow_flex": 3.2,
+        "wrist_flex": 4.2,
+        "wrist_roll": 5.2,
+    }
+
+    window._teleop_active = True
+    window._on_leader_stream_sample(leader)
+    window._on_follower_joint_measurements(follower)
+    assert window.teleop_motion_trace.sample_count == 1
+
+    window.teleop_trace_mode_combo.setCurrentIndex(
+        window.teleop_trace_mode_combo.findData("error")
+    )
+    assert window.teleop_motion_trace.mode == "error"
 
 
 def test_camera_frame_routes_to_its_named_preview_card(window):
