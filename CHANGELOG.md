@@ -16,6 +16,11 @@
   shaking investigations in PLAN.md; motion/calibration policy is unchanged.
 
 ## Unreleased
+- Reworked the desktop robot schematic so physical presentation no longer reuses the coarse
+  joint-origin safety polyline. Link strokes now follow the packaged URDF visual-body axes,
+  while FK/joint markers and safety geometry keep their existing authoritative roles.
+  Offline views use a neutral 45% gripper opening and render the moving jaw distinctly from
+  the fixed finger, making Front/Side/Top views easier to interpret without changing motion.
 - Made the persistent GUI robot view live during commanded motion without adding a competing
   hardware poller. The MotionController and stock gripper publish motion-owned measured
   feedback so the GUI animates measured joints, model-estimated TCP readouts, and jaw aperture
