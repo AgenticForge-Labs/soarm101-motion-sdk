@@ -119,7 +119,7 @@ class SweepGauge(QWidget):
         inner = outer.adjusted(inset, inset, -inset, -inset)
         for rect, fraction in ((inner, first_fraction), (outer, second_fraction)):
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(palette.mid().color(), ring_width))
+            painter.setPen(QPen(QColor("#8190a5" if palette.window().color().lightness() < 128 else "#65758b"), ring_width))
             painter.drawEllipse(rect)
             if fraction > 0.0:
                 painter.setPen(QPen(sweep_color(fraction), ring_width, Qt.PenStyle.SolidLine,
@@ -131,7 +131,7 @@ class SweepGauge(QWidget):
         painter.drawText(
             inner.adjusted(ring_width / 2, ring_width / 2, -ring_width / 2, -ring_width / 2),
             Qt.AlignmentFlag.AlignCenter,
-            f"{percent}%\n{'DONE' if self.passed else f'{self.sweep_number}/2'}",
+            f"{percent}%\n{'DONE' if self.passed else f'{self.sweep_number}/2'}" if self.fraction or self.traversals_completed else "Ready\n0/2",
         )
 
         if self.pop_progress is not None:
@@ -160,12 +160,19 @@ class CalibrationSweepPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QGridLayout(self)
+        self.grid = layout
         layout.setContentsMargins(0, 0, 0, 0)
         self.gauges: dict[str, SweepGauge] = {}
         for index, motor in enumerate(ALL_MOTORS):
             gauge = SweepGauge(motor)
             self.gauges[motor] = gauge
             layout.addWidget(gauge, 0, index)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        columns = 6 if self.width() >= 810 else 3
+        for index, gauge in enumerate(self.gauges.values()):
+            self.grid.addWidget(gauge, index // columns, index % columns)
 
     def set_progress(self, progress: Mapping[str, Mapping[str, object]]) -> None:
         for motor, gauge in self.gauges.items():
