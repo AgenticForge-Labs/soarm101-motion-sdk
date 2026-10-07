@@ -1251,6 +1251,22 @@ recalibrate a working arm solely for a cosmetic smoke test.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## Teleoperation workspace layout and live diagnostics
+
+Software/offscreen checks should confirm the persistent right sidebar is 430–520 px wide,
+the follower model has a larger minimum viewport, the coordination and teleoperation-setting
+groups share the top row, and two configured named cameras occupy the first row side by side.
+Teleoperation must provide Start all / Stop all camera controls without creating duplicate
+camera workers. Feed synthetic leader stream samples and follower joint measurements and
+confirm the 10-second Motion trace accepts samples in both Joint angles and Tracking error
+modes. The trace must not initiate motor/register reads.
+
+Local GUI review with two configured cameras: open Teleoperation at the normal desktop size,
+confirm both camera cards are visible simultaneously, Start all starts both existing sessions,
+and the lower trace remains readable while the right robot model is visibly larger. Current/load
+diagnostics remain in the existing effort/recording workflows rather than being added as a
+new high-rate GUI poller.
+
 ## GUI model geometry and scale
 
 ```bash
