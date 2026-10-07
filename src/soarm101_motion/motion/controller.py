@@ -161,6 +161,7 @@ class MotionController:
         self._active_handle: MotionHandle[MotionResult] | None = None
         self._joint_stream: JointStreamState | None = None
         self._feedback_callback: Callable[[Mapping[str, float]], None] | None = None
+        self._tool_feedback_callback: Callable[[float], None] | None = None
 
     def set_feedback_callback(
         self,
@@ -183,6 +184,20 @@ class MotionController:
             callback(dict(actual))
         except Exception:
             # Visualization/telemetry is observational and must not change motion safety.
+            pass
+
+    def set_tool_feedback_callback(self, callback: Callable[[float], None] | None) -> None:
+        """Install a best-effort observer for tool feedback owned by this controller."""
+        with self._state_lock:
+            self._tool_feedback_callback = callback
+
+    def _publish_tool_feedback(self, position: float) -> None:
+        callback = self._tool_feedback_callback
+        if callback is None:
+            return
+        try:
+            callback(float(position))
+        except Exception:
             pass
 
     @property
@@ -1614,10 +1629,13 @@ class MotionController:
                         previous_command,
                         previous_actual,
                     )
+                    actual_gripper = self.backend.read_tool_position(STOCK_GRIPPER)
+                    self._publish_tool_feedback(actual_gripper)
                     previous_command = command
 
             settled = self._wait_for_settle(samples[-1], cancel_event)
             actual_gripper = self.backend.read_tool_position(STOCK_GRIPPER)
+            self._publish_tool_feedback(actual_gripper)
             if abs(actual_gripper - gripper_samples[-1]) > 0.05:
                 raise MotionTimeoutError(
                     "recorded trajectory joints settled but gripper did not reach "
