@@ -403,3 +403,33 @@ Open an issue or pull request on [GitHub](https://github.com/AgenticForge-Labs/s
 - [Validation](docs/validation.md)
 - [Architecture](docs/architecture.md)
 - [Development plan](PLAN.md)
+
+### Setup for new and returning users
+
+Setup opens on a compact arm overview. Valid saved calibration is reused; **Saved
+calibration found** does not mean a device is connected. **Calibration loaded** is
+shown only from the connected session's matching robot identity. Discovery suggests
+arm assignments; confirm physical devices under **Manage…**. Connecting and enabling
+hold remain separate explicit actions.
+
+Choose **Set up this arm…** when calibration is missing, or **Manage… → Calibrate /
+Recalibrate…** for a changed setup. Calibration opens inside Setup and keeps the
+persistent follower sidebar and STOP/HOLD visible. Calibration records hand movement
+with motors off. **Back to Setup** is blocked while a sweep is active; finish or cancel
+it first. Existing cancellation/rollback and motion guards are unchanged.
+
+**Guide me through setup…** opens a state-driven follower walkthrough: discovery,
+explicit device confirmation, calibration or connection, then Manual. It skips
+calibration when a valid profile exists and never starts motion.
+
+**Show setup guidance** remembers your preference and controls short task instructions
+across the workspace. Experienced users can hide them without losing direct controls.
+**Diagnostics / advanced…** contains detailed logging and effort characterization.
+
+**Back up setup…** exports calibration aliases/history, workspace calibration, and
+workstation settings to a JSON archive outside Git. **Restore setup…** validates all
+entries, requires both arms disconnected, preserves replaced files in
+`~/.config/soarm101/restore-history/`, and closes the GUI so the next launch reloads
+settings. Confirm ports and camera devices after moving a backup to another machine.
+Backups do not include saved motion libraries or camera images. Keep a copy on a
+separate disk or backup service; local calibration history alone is not a disk backup.
