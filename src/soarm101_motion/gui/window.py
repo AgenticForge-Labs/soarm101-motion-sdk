@@ -234,6 +234,7 @@ class MainWindow(QMainWindow):
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.joint_measurements.connect(self._on_follower_joint_measurements)
+        self._worker.live_measurements.connect(self._on_follower_live_measurements)
         self._worker.connected_changed.connect(self._on_connected)
         self._worker.busy_changed.connect(self._on_busy)
         self._worker.log_message.connect(self._log)
@@ -5462,15 +5463,50 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_follower_joint_measurements(self, joints: object) -> None:
-        measured = {name: float(value) for name, value in dict(joints).items()}
-        if self._latest_state is not None:
-            self._latest_state["joints_deg"] = measured
-        for name in ARM_JOINTS:
-            self.joint_actual_labels[name].setText(f"{measured[name]:.1f}°")
-            if not self.edit_joint_targets_check.isChecked():
-                self.joint_spins[name].setValue(measured[name])
+        self._on_follower_live_measurements({"joints_deg": dict(joints)})
+
+    @Slot(object)
+    def _on_follower_live_measurements(self, measurements: object) -> None:
+        """Refresh the follower visualization from motion-owned feedback."""
+
+        values = dict(measurements)  # type: ignore[arg-type]
+        joints = values.get("joints_deg")
+        if joints is not None:
+            measured = {name: float(value) for name, value in dict(joints).items()}
+            values["joints_deg"] = measured
+            if self._latest_state is not None:
+                self._latest_state["joints_deg"] = measured
+            for name in ARM_JOINTS:
+                self.joint_actual_labels[name].setText(f"{measured[name]:.1f}°")
+                if not self.edit_joint_targets_check.isChecked():
+                    self.joint_spins[name].setValue(measured[name])
+
+        pose_values = values.get("pose_mm_deg")
+        if pose_values is not None:
+            pose = tuple(float(value) for value in pose_values)
+            values["pose_mm_deg"] = pose
+            if self._latest_state is not None:
+                self._latest_state["pose_mm_deg"] = pose
+            for label, value in zip(self.pose_value_labels, pose, strict=True):
+                label.setText(f"{value:.2f}")
+            self.pose_summary.setText(
+                f"TCP: X {pose[0]:.1f}  Y {pose[1]:.1f}  Z {pose[2]:.1f} mm"
+            )
+
+        if "gripper" in values:
+            gripper = float(values["gripper"])
+            values["gripper"] = gripper
+            if self._latest_state is not None:
+                self._latest_state["gripper"] = gripper
+            self.gripper_measured.setText(f"Measured: {gripper:.3f}")
+
+        if self._latest_state is not None and "tcp_xyz_rpy" in values:
+            self._latest_state["tcp_xyz_rpy"] = tuple(
+                float(value) for value in values["tcp_xyz_rpy"]
+            )
+
         if hasattr(self, "robot_sidebar"):
-            self.robot_sidebar.update_joint_degrees(measured)
+            self.robot_sidebar.update_live_measurements(values)
         self._update_teach_readout()
 
     def _on_state(self, state: object) -> None:
