@@ -63,6 +63,7 @@ class RobotWorker(QObject):
     measured_pose_captured = Signal(object)
     teleop_start_pose = Signal(object)
     joint_measurements = Signal(object)
+    live_measurements = Signal(object)
     jog_queue_changed = Signal(object)
     cartesian_jog_diagnostic = Signal(object)
 
@@ -90,6 +91,48 @@ class RobotWorker(QObject):
         self._active_jog_start: Pose | None = None
         self._active_jog_target: Pose | None = None
         self._active_jog_command: dict[str, Any] | None = None
+
+    def _install_live_feedback(self, arm: SOARM101) -> None:
+        """Bridge existing motion/tool measurements into GUI-only live state."""
+
+        def publish_joints(joints: object) -> None:
+            values = {name: float(dict(joints)[name]) for name in ARM_JOINTS}
+            pose = arm.model.forward(values, tcp=arm.active_tcp).xyz_rpy()
+            self.live_measurements.emit(
+                {
+                    "joints_deg": {
+                        name: degrees(values[name]) for name in ARM_JOINTS
+                    },
+                    "pose_mm_deg": (
+                        pose[0] * 1000.0,
+                        pose[1] * 1000.0,
+                        pose[2] * 1000.0,
+                        degrees(pose[3]),
+                        degrees(pose[4]),
+                        degrees(pose[5]),
+                    ),
+                    "tcp_xyz_rpy": arm.active_tcp.xyz_rpy(),
+                }
+            )
+
+        arm.motion.set_feedback_callback(publish_joints)
+
+        primary_tool = getattr(arm.tool, "primary", arm.tool)
+        set_tool_feedback = getattr(primary_tool, "set_feedback_callback", None)
+        if callable(set_tool_feedback):
+            set_tool_feedback(
+                lambda position: self.live_measurements.emit(
+                    {"gripper": float(position)}
+                )
+            )
+
+    @staticmethod
+    def _clear_live_feedback(arm: SOARM101) -> None:
+        arm.motion.set_feedback_callback(None)
+        primary_tool = getattr(arm.tool, "primary", arm.tool)
+        set_tool_feedback = getattr(primary_tool, "set_feedback_callback", None)
+        if callable(set_tool_feedback):
+            set_tool_feedback(None)
 
     @Slot()
     def start(self) -> None:
@@ -437,6 +480,7 @@ class RobotWorker(QObject):
                     )
                 )
             self.arm.connect()
+            self._install_live_feedback(self.arm)
             self.connected_changed.emit(True)
             self.log_message.emit(
                 "Connected to simulation." if self._simulation else "Connected to SO-ARM101."
@@ -466,6 +510,7 @@ class RobotWorker(QObject):
         self._teleop = None
         self.teleop_changed.emit(False)
         if arm is not None:
+            self._clear_live_feedback(arm)
             try:
                 arm.stop()
             except Exception:
@@ -1074,6 +1119,8 @@ class RobotWorker(QObject):
             self.joint_measurements.emit({
                 name: degrees(float(result.final_positions[name])) for name in ARM_JOINTS
             })
+            if gripper_actual is not None:
+                self.live_measurements.emit({"gripper": float(gripper_actual)})
             teleop["last_sample_timestamp"] = sample_timestamp
             teleop["last_command"] = command
             teleop["last_velocity"] = velocity
