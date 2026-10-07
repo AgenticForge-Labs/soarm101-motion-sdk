@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from math import isfinite
+from collections.abc import Callable
 from typing import Mapping
 
 from soarm101_motion.calibration import MotorCalibration
@@ -47,6 +48,24 @@ class SO101Gripper(RobotTool):
     _active_handle: MotionHandle[MotionResult] | None = field(
         default=None, init=False, repr=False
     )
+    _feedback_callback: Callable[[float], None] | None = field(
+        default=None, init=False, repr=False
+    )
+
+    def set_feedback_callback(self, callback: Callable[[float], None] | None) -> None:
+        """Install a best-effort observer for already-read measured aperture."""
+        with self._state_lock:
+            self._feedback_callback = callback
+
+    def _publish_feedback(self, position: float) -> None:
+        callback = self._feedback_callback
+        if callback is None:
+            return
+        try:
+            callback(float(position))
+        except Exception:
+            # Display/telemetry observers must never change tool motion behavior.
+            pass
 
     @property
     def tcp_frames(self) -> Mapping[str, Pose]:
@@ -190,6 +209,7 @@ class SO101Gripper(RobotTool):
                 if state.faulted:
                     raise HardwareFaultError(state.fault_message or "robot faulted during gripper move")
                 actual = backend.read_tool_position(STOCK_GRIPPER)
+                self._publish_feedback(actual)
                 error = abs(actual - target)
                 if error <= tolerance:
                     return MotionResult(True, True, final_positions={STOCK_GRIPPER: actual})
@@ -205,6 +225,7 @@ class SO101Gripper(RobotTool):
                     break
                 time.sleep(0.02)
             actual = backend.read_tool_position(STOCK_GRIPPER)
+            self._publish_feedback(actual)
             raise MotionTimeoutError(
                 f"gripper did not reach {target:.3f} within {timeout:.2f}s; "
                 f"actual position is {actual:.3f}"
