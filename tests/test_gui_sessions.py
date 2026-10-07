@@ -3,10 +3,23 @@ import pytest
 
 
 @pytest.fixture
-def window(monkeypatch):
+def window(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv(
+        "SOARM101_WORKSTATION_CONFIG", str(tmp_path / "workstation.json")
+    )
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
+    import soarm101_motion.workstation as workstation_module
+
+    # GUI unit tests must not migrate or depend on the operator's real legacy
+    # camera settings. Keep both workstation and legacy camera persistence inside
+    # pytest's temporary directory so camera-card counts/layouts are deterministic.
+    monkeypatch.setattr(
+        workstation_module,
+        "DEFAULT_CAMERA_CONFIG_PATH",
+        tmp_path / "camera.json",
+    )
     from soarm101_motion.gui.window import MainWindow
     app = QApplication.instance() or QApplication([])
     gui = MainWindow(simulation=True)
