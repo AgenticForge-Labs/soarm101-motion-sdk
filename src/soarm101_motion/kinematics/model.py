@@ -83,10 +83,11 @@ STOCK_JAW_JOINT = JointDefinition(
 )
 STOCK_JAW_LIMITS = (-0.174533, 1.74533)
 
-# Presentation-only centerlines from the packaged URDF visual primitives.
+# Presentation-only centerlines from selected packaged URDF visual primitives.
 # These are deliberately separate from link_points(), whose joint-origin chain is
-# retained for coarse workspace/safety checks. Each segment follows the long axis
-# of the corresponding simplified visual body in its child-link frame.
+# retained for coarse workspace/safety checks. The simplified shoulder_link and
+# wrist_link boxes are intentionally omitted from the GUI schematic because physical
+# comparison showed those proxy bars do not correspond to real arm members.
 SO101_PRESENTATION_LINKS: tuple[PresentationLinkDefinition, ...] = (
     PresentationLinkDefinition(
         "base",
@@ -94,13 +95,6 @@ SO101_PRESENTATION_LINKS: tuple[PresentationLinkDefinition, ...] = (
         (0.0, 0.0, 0.0),
         (0.0, 0.0, 0.06),
         0.090,
-    ),
-    PresentationLinkDefinition(
-        "shoulder",
-        "shoulder_link",
-        (-0.075, 0.0, 0.0),
-        (0.015, 0.0, 0.0),
-        0.060,
     ),
     PresentationLinkDefinition(
         "upper_arm",
@@ -115,13 +109,6 @@ SO101_PRESENTATION_LINKS: tuple[PresentationLinkDefinition, ...] = (
         (-0.1345, 0.0, 0.0),
         (0.0005, 0.0, 0.0),
         0.035,
-    ),
-    PresentationLinkDefinition(
-        "wrist",
-        "wrist_link",
-        (-0.080, 0.0, 0.0),
-        (0.0, 0.0, 0.0),
-        0.045,
     ),
     PresentationLinkDefinition(
         "gripper_body",

@@ -51,12 +51,12 @@ def test_presentation_link_segments_follow_packaged_urdf_visual_bodies():
     segments = model.presentation_link_segments(joints)
     links = {
         "base": "base_link",
-        "shoulder": "shoulder_link",
         "upper_arm": "upper_arm_link",
         "lower_arm": "lower_arm_link",
-        "wrist": "wrist_link",
         "gripper_body": "gripper_link",
     }
+    assert "shoulder" not in segments
+    assert "wrist" not in segments
 
     for segment_name, link_name in links.items():
         link = root.find(f"link[@name='{link_name}']")

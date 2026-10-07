@@ -42,9 +42,11 @@ transforms. No evidence supports changing those link dimensions by guesswork.
   a neutral 45% jaw opening and visually distinguishes the moving jaw from the fixed finger.
   Follow-up GUI review now keeps URDF-derived body strokes deliberately thinner and flat-ended,
   removes the extra shadow, uses smaller pivot markers, and renders the moving jaw neutral dark
-  and slightly heavier. This avoids treating omitted servo/printed housings as artificial bulk
-  while improving Front/Side/Top readability without claiming full printed-housing or collision
-  fidelity.
+  and slightly heavier. Physical comparison also showed that the simplified shoulder_link and
+  wrist_link visual boxes do not correspond to real arm members, so those two proxy bars are
+  omitted from the GUI presentation. This avoids treating simplified or missing housings as
+  artificial bulk while improving Front/Side/Top readability without claiming full
+  printed-housing or collision fidelity.
 - [ ] Add optional official CAD meshes with a switchable joint-center overlay. Preserve
   shared FK/tool authority, source revision/license, bounded rendering cost, and small
   window readability. Current schematic/primitive PyBullet visuals do not represent
