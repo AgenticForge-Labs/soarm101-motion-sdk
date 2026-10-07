@@ -11,6 +11,7 @@ from typing import Any
 from PySide6.QtCore import QMetaObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QPalette, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -49,6 +50,7 @@ from soarm101_motion.constants import (
     JOINT_LIMITS,
 )
 from soarm101_motion.gui.arm_status import RobotStatusPanel
+from soarm101_motion.gui.setup_panel import SetupPanel
 from soarm101_motion.gui.calibration_progress import CalibrationSweepPanel
 from soarm101_motion.gui.camera_manager import CameraSessionManager
 from soarm101_motion.gui.latest_frame import PreviewFrame
@@ -317,6 +319,25 @@ class MainWindow(QMainWindow):
 
     def _apply_modern_style(self) -> None:
         palette = self.palette()
+        dark_theme = palette.color(QPalette.ColorRole.Window).lightness() < 128
+        colors = {
+            QPalette.ColorRole.Window: "#171b22" if dark_theme else "#f4f6f8",
+            QPalette.ColorRole.Base: "#222833" if dark_theme else "#ffffff",
+            QPalette.ColorRole.AlternateBase: "#303949" if dark_theme else "#e8edf2",
+            QPalette.ColorRole.WindowText: "#f1f5f9" if dark_theme else "#17212f",
+            QPalette.ColorRole.Text: "#f1f5f9" if dark_theme else "#17212f",
+            QPalette.ColorRole.Mid: "#8190a5" if dark_theme else "#65758b",
+            QPalette.ColorRole.Highlight: "#a8380b",
+            QPalette.ColorRole.HighlightedText: "#ffffff",
+        }
+        for role, color in colors.items():
+            palette.setColor(role, QColor(color))
+        # Stylesheet palette() lookups use the application palette on some Qt styles.
+        # Set it as well as the window palette so child text and custom painting agree.
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(palette)
+        self.setPalette(palette)
         window = palette.color(QPalette.ColorRole.Window)
         text = palette.color(QPalette.ColorRole.WindowText)
         highlight = palette.color(QPalette.ColorRole.Highlight)
@@ -340,11 +361,11 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             f"""
             QMainWindow, QWidget {{
-                font-size: 12px;
+                font-size: 14px;
             }}
             QGroupBox {{
                 font-weight: 700;
-                border: 1px solid palette(midlight);
+                border: 1px solid palette(mid);
                 border-radius: 12px;
                 margin-top: 10px;
                 padding-top: 8px;
@@ -356,7 +377,7 @@ class MainWindow(QMainWindow):
                 padding: 0 5px;
             }}
             QTabWidget::pane {{
-                border: 1px solid palette(midlight);
+                border: 1px solid palette(mid);
                 border-radius: 12px;
                 top: -1px;
                 background: palette(window);
@@ -470,19 +491,19 @@ class MainWindow(QMainWindow):
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {{
                 min-height: 27px;
                 padding: 3px 6px;
-                border: 1px solid palette(midlight);
+                border: 1px solid palette(mid);
                 border-radius: 7px;
                 background: palette(base);
             }}
             QListWidget {{
-                border: 1px solid palette(midlight);
+                border: 1px solid palette(mid);
                 border-radius: 9px;
                 background: palette(base);
                 padding: 4px;
             }}
             QProgressBar {{
                 min-height: 18px;
-                border: 1px solid palette(midlight);
+                border: 1px solid palette(mid);
                 border-radius: 7px;
                 text-align: center;
                 background: palette(alternate-base);
@@ -502,9 +523,6 @@ class MainWindow(QMainWindow):
         primary_names = (
             "connect_button",
             "leader_connect_button",
-            "find_arms_button",
-            "setup_find_arms_button",
-            "setup_connect_button",
             "run_calibration_button",
             "camera_apply_button",
             "camera_toggle_button",
@@ -711,10 +729,16 @@ class MainWindow(QMainWindow):
         workspace.addWidget(self.robot_sidebar_container)
         workspace.setStretchFactor(0, 1)
         workspace.setStretchFactor(1, 0)
-        workspace.setSizes([1040, 360])
+        workspace.setSizes([1000, 400])
         layout.addWidget(workspace, 1)
         self.workspace_splitter = workspace
 
+        self.walkthrough_label = QLabel()
+        self.walkthrough_label.setWordWrap(True)
+        self.walkthrough_label.setStyleSheet("padding: 8px; background: palette(alternate-base); color: palette(text);")
+        layout.insertWidget(1, self.walkthrough_label)
+        self.walkthrough_label.setVisible(self.setup_panel.guided.isChecked())
+        self._refresh_walkthrough()
         self.setCentralWidget(root)
         self._style_action_buttons()
         self._refresh_sidebar_context()
@@ -722,7 +746,7 @@ class MainWindow(QMainWindow):
     def _build_persistent_robot_sidebar(self) -> RobotStatusPanel:
         container = QWidget()
         container.setObjectName("robotSidebarContainer")
-        container.setMinimumWidth(330)
+        container.setMinimumWidth(380)
         container.setMaximumWidth(430)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(4, 2, 4, 4)
@@ -730,7 +754,7 @@ class MainWindow(QMainWindow):
 
         heading = QHBoxLayout()
         title = QLabel("ROBOT")
-        title.setStyleSheet("font-size: 11px; font-weight: 800; color: palette(mid);")
+        title.setStyleSheet("font-size: 11px; font-weight: 800; color: palette(text);")
         heading.addWidget(title)
         heading.addStretch(1)
         self.sidebar_mode_label = QLabel("FOLLOWER")
@@ -767,14 +791,14 @@ class MainWindow(QMainWindow):
         self.sidebar_enable_button.clicked.connect(
             lambda _checked=False: self.enable_requested.emit()
         )
-        controls_layout.addWidget(self.sidebar_enable_button, 1, 0)
+        controls_layout.addWidget(self.sidebar_enable_button, 1, 0, 1, 2)
 
         self.stop_button.setObjectName("stopButton")
         self.stop_button.setStyleSheet(
             "QPushButton#stopButton { font-weight: 800; min-height: 34px; "
             "border: 2px solid #b91c1c; border-radius: 9px; }"
         )
-        controls_layout.addWidget(self.stop_button, 1, 1)
+        controls_layout.addWidget(self.stop_button, 2, 0, 1, 3)
 
         self.sidebar_relax_button = QPushButton("Relax")
         self.sidebar_relax_button.setToolTip("Disable follower servo torque.")
@@ -785,14 +809,30 @@ class MainWindow(QMainWindow):
 
         self.pose_summary = QLabel("TCP: —")
         self.pose_summary.setWordWrap(True)
-        self.pose_summary.setStyleSheet("color: palette(mid);")
-        controls_layout.addWidget(self.pose_summary, 2, 0, 1, 3)
+        self.pose_summary.setStyleSheet("color: palette(text);")
+        controls_layout.addWidget(self.pose_summary, 3, 0, 1, 3)
         layout.addWidget(controls)
 
         self.robot_sidebar_container = container
         return panel
 
+    def _refresh_walkthrough(self) -> None:
+        if not hasattr(self, "walkthrough_label"):
+            return
+        guides = {
+            "Setup": "Connect your saved arms, or choose Set up this arm for first-time calibration. Guidance can be turned off below.",
+            "Camera": "Choose a named camera → select its device → start preview → capture a test picture.",
+            "Manual": "Connect the follower → Enable hold → choose joint or Cartesian control → edit a target → explicitly start the move.",
+            "Teleoperation": "Connect both arms → confirm their assignments → choose the mapping → explicitly align and start. Use STOP / HOLD to stop motion.",
+            "Teach / Record": "Choose follower or leader → position the arm → save a named position, or start and stop a demonstration recording.",
+            "Edit recordings": "Select a recording → scrub its preview → trim or adjust → save a copy. Previewing does not move the physical arm.",
+            "Programs": "Add saved-position, gripper, or wait steps → review their order → explicitly run. The sidebar always shows the follower.",
+            "Log": "Review connection and motion events here. Detailed recording controls are in Setup → Diagnostics / advanced.",
+        }
+        self.walkthrough_label.setText(guides.get(self.tabs.tabText(self.tabs.currentIndex()), guides["Log"]))
+
     def _on_tab_changed(self, index: int) -> None:
+        self._refresh_walkthrough()
         if self.tabs.widget(index) is self.log_page:
             self.tabs.setTabText(index, "Log")
         self._refresh_sidebar_context()
@@ -1012,10 +1052,6 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        sessions = QHBoxLayout()
-        sessions.addWidget(self.follower_connection_panel, 1)
-        sessions.addWidget(self.leader_connection_panel, 1)
-        layout.addLayout(sessions)
 
         heading = QLabel("Mechanical-stop calibration · two full sweeps")
         heading.setStyleSheet("font-size: 18px; font-weight: 700; padding: 6px 0;")
@@ -1024,7 +1060,7 @@ class MainWindow(QMainWindow):
         calibration = QGroupBox("Calibrate arm — mechanical stops")
         calibration.setStyleSheet("QGroupBox { font-weight: 700; }")
         grid = QGridLayout(calibration)
-        explanation = QLabel("Select arm → connect torque off → run two full sweeps.")
+        explanation = QLabel("Connect with motors off. Start recording, then gently move each joint by hand through both traversals. The software will not move the arm.")
         explanation.setWordWrap(True)
         grid.addWidget(explanation, 0, 0, 1, 3)
         grid.addWidget(
@@ -1071,7 +1107,7 @@ class MainWindow(QMainWindow):
         )
         grid.addWidget(self.leader_allow_uncalibrated_check, 3, 0, 1, 4)
 
-        self.run_calibration_button = QPushButton("3. Start calibration sweep")
+        self.run_calibration_button = QPushButton("3. Record hand-moved calibration")
         self.run_calibration_button.setMinimumHeight(36)
         self.run_calibration_button.setStyleSheet("font-weight: 700;")
         self.run_calibration_button.clicked.connect(self._start_calibration)
@@ -1109,6 +1145,11 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.calibration_target_note, 7, 0, 1, 4)
         layout.addWidget(calibration)
 
+        layout.addStretch(1)
+        calibration_page = page
+        diagnostics = QWidget()
+        page = diagnostics
+        layout = QVBoxLayout(diagnostics)
         logging_box = QGroupBox("Session logging")
         logging_layout = QVBoxLayout(logging_box)
         self.detailed_logging_check = QCheckBox("Record detailed motion diagnostics")
@@ -1207,17 +1248,18 @@ class MainWindow(QMainWindow):
         effort_grid.addWidget(self.effort_status_label, 10, 0, 1, 8)
         layout.addWidget(effort)
 
-        later = QLabel(
-            "Physical validation is intentionally deferred. Follow TESTING.md when you are "
-            "ready to use the real arm."
-        )
+        later = QLabel("These settings are for diagnosis and tuning. Active faults remain visible in the robot sidebar.")
         later.setWordWrap(True)
         layout.addWidget(later)
         layout.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
-        return scroll
+        calibration_scroll = QScrollArea()
+        calibration_scroll.setWidgetResizable(True)
+        calibration_scroll.setWidget(calibration_page)
+        self.setup_panel = SetupPanel(self, calibration_scroll, scroll)
+        return self.setup_panel
 
     @Slot(bool)
     def _set_detailed_logging(self, enabled: bool) -> None:
@@ -1714,7 +1756,7 @@ class MainWindow(QMainWindow):
             status = QLabel(self._camera_card_status(name))
             status.setWordWrap(False)
             status.setStyleSheet(
-                "font-size: 10px; color: palette(mid); padding: 1px 3px;"
+                "font-size: 10px; color: palette(text); padding: 1px 3px;"
             )
             card_layout.addWidget(preview)
             card_layout.addWidget(status)
@@ -2629,7 +2671,7 @@ class MainWindow(QMainWindow):
             "→ MOVE above_drop → MOVE drop → OPEN."
         )
         simple_hint.setWordWrap(True)
-        simple_hint.setStyleSheet("color: palette(mid); padding-top: 4px;")
+        simple_hint.setStyleSheet("color: palette(text); padding-top: 4px;")
         simple_grid.addWidget(simple_hint, 3, 0, 1, 6)
 
         pan_box = QGroupBox("Radial / shoulder-pan pattern")
@@ -3514,7 +3556,7 @@ class MainWindow(QMainWindow):
         self.calibration_status.setText(
             f"{target.title().upper()} CALIBRATION SAVED ({values.get('source', 'unknown')}); "
             f"ID {short_id}; saved to {values.get('path', 'unknown path')}. "
-            "Disconnect, turn off 'allow uncalibrated connection', then reconnect normally."
+            "This arm will reuse the saved calibration next time. Disconnect, turn off 'allow uncalibrated connection', then reconnect normally."
         )
         limits = values.get("joint_limits_deg")
         if target == "follower" and limits:
@@ -5169,6 +5211,8 @@ class MainWindow(QMainWindow):
     def _on_leader_connected(self, connected: bool) -> None:
         self._leader_connecting = False
         self._leader_connected = connected
+        if not connected:
+            self._latest_leader_state = None
         if connected and self.leader_allow_uncalibrated_check.isChecked():
             self.calibration_status.setText(
                 "Leader connected for calibration with torque off. Start the sweep when ready."
@@ -5377,6 +5421,7 @@ class MainWindow(QMainWindow):
         self._follower_connecting = False
         self._connected = connected
         if not connected:
+            self._latest_state = None
             self._follower_setup_session = False
             self._torque_enabled = False
             self._busy = False
