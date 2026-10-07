@@ -59,3 +59,22 @@ soarm101 kinematics-check \
 For a read-only repeated-point check that helps separate table/base offset from pose-dependent TCP or kinematic error, use `examples/tcp_table_calibration.py` with follower torque disabled.
 
 Collect several well-spread poses before trusting larger Cartesian moves. These measurements are the basis for a future optional geometric/TCP calibration layer; they are intentionally separate from encoder calibration.
+
+## Desktop setup and recovery
+
+Routine Setup displays arm cards rather than the full calibration procedure. Missing,
+invalid, or factory-range calibration offers **Set up this arm…**. A valid saved file
+is reported separately from calibration loaded by a connected session. **Manage…**
+shows the default profile path, opens its folder/history, and provides recalibration.
+The status lookup uses the same native/LeRobot calibration resolver as GUI connection.
+
+**Back up setup…** exports a versioned JSON bundle of calibration files (including
+history), workspace calibration, and workstation settings. Explicit external calibration
+references from the workstation profile are included under the corresponding robot ID.
+Restore validates the entire bundle, rejects unsupported paths and corrupt fingerprints,
+rebases calibration references to the destination config folder, preserves existing
+files in `restore-history`, and uses atomic writes with rollback on an installation
+error. Valid existing history snapshots are not replaced. No backup operation connects
+hardware. The GUI refuses restore while either arm is connected or connecting, or a
+worker is busy; restart after restore before connecting. Calibration remains machine
+configuration outside the source repository.
