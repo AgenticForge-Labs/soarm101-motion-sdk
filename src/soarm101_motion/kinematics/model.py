@@ -18,12 +18,13 @@ FloatArray = NDArray[np.float64]
 
 @dataclass(frozen=True)
 class PresentationLinkDefinition:
-    """Simplified visual-link centerline derived from the packaged URDF visual."""
+    """Simplified visual-link body derived from the packaged URDF visual."""
 
     name: str
     frame: str
     start_local: tuple[float, float, float]
     end_local: tuple[float, float, float]
+    thickness_m: float
 
 
 @dataclass(frozen=True)
@@ -92,36 +93,42 @@ SO101_PRESENTATION_LINKS: tuple[PresentationLinkDefinition, ...] = (
         "base_link",
         (0.0, 0.0, 0.0),
         (0.0, 0.0, 0.06),
+        0.090,
     ),
     PresentationLinkDefinition(
         "shoulder",
         "shoulder_link",
         (-0.075, 0.0, 0.0),
         (0.015, 0.0, 0.0),
+        0.060,
     ),
     PresentationLinkDefinition(
         "upper_arm",
         "upper_arm_link",
         (-0.130, 0.0, 0.0),
         (0.0, 0.0, 0.0),
+        0.035,
     ),
     PresentationLinkDefinition(
         "lower_arm",
         "lower_arm_link",
         (-0.1345, 0.0, 0.0),
         (0.0005, 0.0, 0.0),
+        0.035,
     ),
     PresentationLinkDefinition(
         "wrist",
         "wrist_link",
         (-0.080, 0.0, 0.0),
         (0.0, 0.0, 0.0),
+        0.045,
     ),
     PresentationLinkDefinition(
         "gripper_body",
         "gripper_link",
         (0.0, 0.0, -0.090),
         (0.0, 0.0, 0.010),
+        0.055,
     ),
 )
 
@@ -221,6 +228,14 @@ class SO101KinematicModel:
                 world(definition.end_local),
             )
         return segments
+
+    def presentation_link_thicknesses(self) -> dict[str, float]:
+        """Return nominal visual-body thicknesses for GUI rendering only."""
+
+        return {
+            definition.name: float(definition.thickness_m)
+            for definition in SO101_PRESENTATION_LINKS
+        }
 
     def link_points(
         self,
