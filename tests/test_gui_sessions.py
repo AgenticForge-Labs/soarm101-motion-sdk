@@ -422,8 +422,61 @@ def test_error_marks_log_tab_and_teleop_status(window):
     window.show()
     window._on_error("live teleoperation: streamed joint acceleration exceeded limit")
     assert window.tabs.tabText(window.tabs.indexOf(window.log_page)) == "Log •"
+    assert window.status_banner.isVisible()
     assert window.alert_label.isVisible()
+    assert window.alert_clear_button.isVisible()
     assert "acceleration exceeded" in window.teleop_status.text()
+
+
+def test_status_banner_is_always_present_and_clear_acknowledges_notice(window):
+    window.show()
+    assert window.status_banner.isVisible()
+    assert "READY" in window.alert_label.text()
+    assert not window.alert_clear_button.isVisible()
+
+    window._on_error("temporary diagnostic notice")
+    assert "temporary diagnostic notice" in window.alert_label.text()
+    assert window.alert_clear_button.isVisible()
+
+    window.alert_clear_button.click()
+    assert window.status_banner.isVisible()
+    assert "temporary diagnostic notice" not in window.alert_label.text()
+    assert "READY" in window.alert_label.text()
+    assert not window.alert_clear_button.isVisible()
+
+
+def test_clearing_teleop_fault_keeps_non_dismissible_stopped_state(window):
+    window._teleop_active = True
+    window._on_teleop_faulted(
+        {
+            "reason": "leader sample is 206 ms old; teleop stale limit is 150 ms",
+            "frequency_hz": 20.0,
+            "processing_ms": 52.0,
+            "requires_relink": True,
+            "follower_holding": True,
+        }
+    )
+    assert window.alert_clear_button.isVisible()
+    assert "206 ms old" in window.alert_label.text()
+
+    window.alert_clear_button.click()
+    assert not window.alert_clear_button.isVisible()
+    assert "TELEOP STOPPED" in window.alert_label.text()
+    assert "realign or relink" in window.alert_label.text()
+
+
+def test_clearing_notice_does_not_hide_active_robot_fault(window):
+    window._banner_notice = ("old notice", "error")
+    window._connected = True
+    window._latest_state = {
+        "faulted": True,
+        "fault_message": "motor overload",
+    }
+    window._clear_status_banner_notice()
+
+    assert "FOLLOWER FAULT" in window.alert_label.text()
+    assert "motor overload" in window.alert_label.text()
+    assert not window.alert_clear_button.isVisible()
 
 
 
