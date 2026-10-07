@@ -1199,6 +1199,23 @@ streaming, richer mesh collision models, and show-level orchestration in the app
 Robo Puppeteer/Director repositories.
 
 
+## Live GUI motion visualization
+
+Automated coverage verifies that MotionController and the stock gripper publish only
+measurements they already read during guarded execution, and that partial GUI live updates
+animate the arm joints, model-estimated TCP readout, and jaw aperture while preserving the
+latest full-state snapshot.
+
+Local GUI acceptance:
+1. connect the follower and leave the sidebar visible;
+2. command a small joint move and confirm the arm schematic and TCP readout move during transit;
+3. command gripper open/close and confirm both the jaw schematic and numeric aperture move
+   continuously rather than only jumping after completion;
+4. run 20 Hz teleoperation and confirm measured joints and mirrored gripper remain live;
+5. confirm no new communication errors or timing misses appear from visualization activity.
+
+The live-display path must not add a second serial poller while a motion handle owns feedback.
+
 ## Guided Setup GUI validation
 
 Automated checks:
