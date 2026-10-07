@@ -1914,7 +1914,8 @@ class RobotWorker(QObject):
         try:
             state = self.arm.get_state()
             joints = self.arm.get_joint_positions().positions
-            pose = self.arm.get_position().xyz_rpy()
+            # One joint snapshot owns both the drawing and numerical FK readout.
+            pose = self.arm.model.forward(joints, tcp=self.arm.active_tcp).xyz_rpy()
             gripper = self.arm.tool.get_position()
             payload = {
                 "connected": state.connected,
@@ -1923,6 +1924,7 @@ class RobotWorker(QObject):
                 "faulted": state.faulted,
                 "fault_message": state.fault_message,
                 "simulation": self._simulation,
+                "tcp_xyz_rpy": self.arm.active_tcp.xyz_rpy(),
                 "joints_deg": {name: degrees(joints[name]) for name in ARM_JOINTS},
                 "pose_mm_deg": (
                     pose[0] * 1000.0,
