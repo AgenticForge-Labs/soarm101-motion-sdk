@@ -16,6 +16,10 @@
   shaking investigations in PLAN.md; motion/calibration policy is unchanged.
 
 ## Unreleased
+- Replaced the sticky error-only strip with an always-visible operating-status banner. The
+  banner shows current follower/teleoperation state, surfaces important errors as dismissible
+  notices, and provides Clear as an acknowledgement only: clearing a notice never clears a
+  robot fault or safety state and falls back to the current underlying status.
 - Rebalanced the Teleoperation workspace around live operation: widened the shared follower
   sidebar and model view, placed leader/follower coordination beside teleop settings, replaced
   the duplicate bottom joint-value table with a rolling 10-second measured joint-angle /
