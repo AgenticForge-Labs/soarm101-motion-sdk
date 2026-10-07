@@ -753,6 +753,22 @@ recalibrate a working arm solely for a cosmetic smoke test.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## GUI model geometry and scale
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest tests/test_model_geometry.py tests/test_gui_model_geometry.py tests/test_gui_sessions.py -o addopts=""
+```
+
+The tests compare native FK with the bundled URDF and verify fixed-finger/rotating-jaw
+behavior, stable scale under pose/ghost/target changes, standard views, and active TCP.
+
+Local GUI review: open simulation; compare Side/Front/Top/Isometric, drag, zoom,
+double-click reset, Fit, and Auto fit at normal and smaller window sizes. With Auto
+fit off, pose and target changes must not alter ruler length. Jaw opening must leave
+the fixed finger still and rotate only the moving jaw. Confirm the model Z=0 label
+and readable toolbar/ruler. No hardware motion is needed for these presentation checks.
+Physical TCP/geometry and shaking validation remain separate tasks in PLAN.md.
+
 ## Camera stream rate and lifecycle — workstation / hardware
 
 1. Start one named camera at its requested format and confirm the negotiated format and

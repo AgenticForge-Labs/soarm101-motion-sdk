@@ -65,6 +65,13 @@ DEFAULT_GRIPPER_TCP = Pose.from_xyz_rpy(
     0.0,
 )
 
+# Stock jaw pivot and nominal angular travel from the same official new-calibration
+# URDF as the arm. These describe visualization, not calibrated actuator limits.
+STOCK_JAW_JOINT = JointDefinition(
+    "gripper", (0.0202, 0.0188, -0.0234), (pi / 2, 0.0, 0.0)
+)
+STOCK_JAW_LIMITS = (-0.174533, 1.74533)
+
 
 class SO101KinematicModel:
     """Small native kinematic model independent of ROS or URDF parsers."""
@@ -135,6 +142,35 @@ class SO101KinematicModel:
         tcp: Pose | None = None,
     ) -> Pose:
         return Pose.from_matrix(self.forward_matrix(joints, tcp=tcp))
+
+    def stock_gripper_points(
+        self, joints: Mapping[str, float] | FloatArray, opening: float
+    ) -> dict[str, FloatArray]:
+        """Nominal fixed-finger/rotating-jaw outline, independent of the active TCP.
+
+        The jaw endpoints use the official moving-jaw mesh's 82 mm extent and
+        18.9 mm visual-origin offset. This is a schematic, not collision geometry;
+        normalized opening maps to nominal URDF travel, not measured jaw angle.
+        """
+        flange = self.forward_matrix(joints, tcp=Pose.identity())
+        angle = STOCK_JAW_LIMITS[0] + float(np.clip(opening, 0.0, 1.0)) * (
+            STOCK_JAW_LIMITS[1] - STOCK_JAW_LIMITS[0]
+        )
+        jaw = flange @ STOCK_JAW_JOINT.origin_transform @ rotation_about_axis(
+            np.array(STOCK_JAW_JOINT.axis), angle
+        )
+
+        def point(frame: FloatArray, local: tuple[float, float, float]) -> FloatArray:
+            return frame[:3, 3] + frame[:3, :3] @ np.asarray(local)
+
+        return {
+            "origin": flange[:3, 3].copy(),
+            "fixed_root": point(flange, (-0.0079, -0.000218121, -0.052)),
+            "fixed_tip": point(flange, tuple(DEFAULT_GRIPPER_TCP.position)),
+            "moving_pivot": jaw[:3, 3].copy(),
+            "moving_root": point(jaw, (0.0, -0.015, 0.0189)),
+            "moving_tip": point(jaw, (-0.010, -0.082, 0.0189)),
+        }
 
     def jacobian(
         self,

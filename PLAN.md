@@ -1,6 +1,98 @@
 # Development plan
 
-Robo Director is the primary source of cross-repository integration requirements. The motion SDK remains authoritative for hardware, calibration, kinematics, planning, and safety; Studio and Puppeteer own the adapters that expose those abilities to Director.
+The motion SDK remains authoritative for hardware, calibration, kinematics, planning,
+and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
+historical Director/Studio integration references below describe older adapter work.
+
+## Model, coordinates, and shaking audit — 2026-10-07
+
+Reviewed main at `8830d9064bc6551674d1a7ec00c078a07ae73d12` and open motion
+PR #79 at `583e4d554d7d7e898d83687cfb003af0ff6a7abd`. This visual correction is
+independent of that PR; its motion changes must not be treated as merged behavior.
+
+### Confirmed model and presentation findings
+
+The planner and desktop GUI use native `SO101KinematicModel`, not a runtime URDF
+parser. Optional PyBullet uses the bundled simplified URDF. Comparing 1,000 random
+configurations against TheRobotStudio's official
+`Simulation/SO101/so101_new_calib.urdf` gave maximum TCP position difference
+0.00394 mm and orientation difference 0.000926 degrees. The reference file's last
+modifying commit was `385e8d7c68e24945df6c60d9bd68837a4b7411ae`.
+Nominal shoulder-lift→elbow, elbow→wrist-flex, and wrist-flex→wrist-roll origin
+distances are 116.0, 135.0, and 63.7 mm. These are joint-origin distances, not housing
+lengths. LeRobot's published new-calibration model contains the same chain/TCP
+transforms. No evidence supports changing those link dimensions by guesswork.
+
+- [x] Replace symmetric sliding-finger GUI geometry with a nominal fixed finger and
+  rotating jaw using the official pivot/travel and mesh extents. This outline is not
+  measured jaw angle or collision geometry.
+- [x] Preserve scale across pose/target/ghost updates; provide explicit Fit, optional
+  Auto fit, side/front/top/isometric views, and a screen-plane ruler.
+- [x] Draw the active session TCP and compute numerical FK from the same joint snapshot
+  as the drawing. Label the grid as model Z=0, not a measured table.
+- [x] Add native/bundled-URDF parity, fixed-pivot, stable-scale, and active-TCP regression
+  coverage. These checks establish software consistency, not physical accuracy.
+- [ ] Add optional official CAD meshes with a switchable joint-center overlay. Preserve
+  shared FK/tool authority, source revision/license, bounded rendering cost, and small
+  window readability. Current schematic/primitive PyBullet visuals do not represent
+  full printed housings or certified collision geometry.
+- [ ] Display measured table/workspace overlays only with matching workspace and motor
+  calibration provenance; do not label model Z=0 as physical ground.
+
+### Physical coordinate investigation
+
+Prior workstation reports include physical-to-model scales X≈0.829, Y≈0.927,
+UP≈0.729; physical +50 mm D→UP produced model displacement approximately
+(+11.5,+5.2,+30.9) mm. A model +Z hover also moved laterally and contacted the table.
+These are reported hardware observations, not reproduced by this software audit.
+Unequal scales cannot be corrected by rigid base-frame rotation/translation alone.
+The cause remains unidentified.
+
+- [ ] Collect read-only, torque-off joint/TCP correspondences at multiple heights,
+  extensions, and wrist orientations using a repeatable physical base reference and
+  one identified contact point. Repeat approaches from both directions to characterize
+  backlash/compliance. Record raw/calibrated joints, calibration ID, active TCP,
+  measurement uncertainty, payload, and model revision.
+- [ ] Fit base alignment and TCP offset first; then assess joint-zero offsets, stop
+  capture coverage, assembly indexing/variant, and independently measured link lengths.
+  Encoder midpoint/travel calibration is not geometric calibration. Keep any geometric
+  corrections separate from motor EEPROM calibration and preserve saved-motion/model
+  provenance if a fitted model is adopted.
+- [ ] Validate on held-out poses and multiple independent UP references. A four-corner
+  plus one-UP affine fit has no independent vertical validation and may compensate only
+  locally; do not promote its scale/shear to a global geometry repair.
+- [ ] After measurement review, design supervised small-displacement physical-direction
+  and straightness checks with before/after measurement. Preserve full-path preflight
+  and physical guards. Lowering the floor, loosening IK tolerance, or substituting
+  joint replay does not repair geometry.
+
+### Linear motion and shaking investigation
+
+The current Cartesian controller already samples the Cartesian line at command rate,
+uses sequential IK with continuity checks and Cartesian-constrained smoothing, and
+executes with responsive servo tracking `0/254`. No swapped-axis or mm/m conversion
+error was identified in shared jogging. Software agreement does not prove physical
+TCP straightness.
+
+- [ ] Complete PR #79's outstanding supervised gates on its exact head before adopting
+  its motion changes. The branch contains duplicate encoder-target coalescing,
+  responsive ordinary joint tracking, less-folded default Sleep, and wrist-aware teleop.
+  Prior reported final-target execution still rocked: repeated writes are not the sole
+  cause. The taught sleep2 posture and later 80 deg/s, 500 deg/s² responsive-profile
+  tests were reported substantially smoother; low-speed Cartesian shake remains
+  unresolved. Finish existing branch validation rather than duplicating its changes here.
+- [ ] Compare planned joint derivatives/reversals/quantized goals with measured joint
+  position, following error, current/load, actual servo profile, and cycle timing on
+  matched paths, postures, payloads, and cadences. Distinguish oscillating commands
+  from oscillating mechanics under smooth commands. Compare taught teleop replay with
+  Cartesian plans using the existing PR #79 diagnostic tools.
+- [ ] Inspect wrist mounts/horns, fasteners, cable forces, backlash, gravity loading,
+  and near-limit/folded postures. Position-only IK permits posture changes; report
+  Jacobian conditioning and limit margins rather than assuming all shaking is IK.
+- [ ] Consider servo tuning/path shaping only after traces identify a cause. Faster
+  motion provides evidence about low-speed behavior, not a universal repair. Preserve
+  joint, following-error, fault, effort, timing, workspace, and stop protections.
+
 
 ## Implemented motion foundation
 
