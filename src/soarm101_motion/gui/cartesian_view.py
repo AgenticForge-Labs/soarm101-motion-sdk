@@ -1,7 +1,9 @@
 """Interactive SO-101 kinematic renderer shared by GUI motion workspaces.
 
-The arm centerline and gripper frame come from the SDK's native FK model.  The renderer is
-purposefully lightweight: it is a diagnostic/teaching view, not a second physics engine.
+FK and joint markers come from the SDK's native kinematic model. The visible arm bodies use
+presentation-only centerlines derived from the packaged URDF visual primitives; coarse safety
+centerlines remain separate. The renderer is a diagnostic/teaching view, not a physics engine
+or certified collision model.
 """
 
 from __future__ import annotations
@@ -65,7 +67,7 @@ class CartesianArmView(QWidget):
         self._last_mouse: QPointF | None = None
         self.setMinimumSize(220, 220)
         self.setToolTip(
-            "Nominal SO-101 joint and jaw schematic in model/base coordinates. "
+            "Nominal SO-101 URDF-visual and jaw schematic in model/base coordinates. "
             "The grid is model Z=0, not a measured table. Drag to rotate, wheel to zoom."
         )
         layout = QVBoxLayout(self)
@@ -470,7 +472,7 @@ class CartesianArmView(QWidget):
         painter.drawText(
             12,
             self.height() - 11,
-            "Model schematic · Grid: model Z=0",
+            "URDF visual schematic · Grid: model Z=0",
         )
         painter.end()
 
