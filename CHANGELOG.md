@@ -1,5 +1,20 @@
 # Changelog
 
+## Guided desktop setup (locally validated)
+
+- Compact arm readiness cards; calibration and diagnostics open on demand inside Setup.
+- Optional remembered guidance, readable light/dark colors, responsive calibration gauges, and explicit offline model labeling.
+- Validated portable setup backup/restore with previous-file recovery and no hardware I/O.
+
+## Model visualization (software validated)
+
+- Corrected the GUI stock-gripper schematic to show a fixed finger and rotating jaw
+  using the official model pivot/travel. Added stable scale, standard orthographic
+  views, Fit/optional Auto fit, and a millimeter ruler. The grid is explicitly model
+  Z=0. Active TCP markers and numerical FK now share the measured joint snapshot.
+- Recorded the nominal-model comparison and remaining physical geometry/TCP and
+  shaking investigations in PLAN.md; motion/calibration policy is unchanged.
+
 ## Unreleased
 - Added a pluggable self-contained `soarm101 agent sandbox` workflow for constrained
   autonomous robot operation without Forge-Bench or another harness. Hermes/OpenRouter and
