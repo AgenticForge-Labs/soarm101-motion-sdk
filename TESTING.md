@@ -1251,6 +1251,17 @@ recalibrate a working arm solely for a cosmetic smoke test.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## Persistent operating-status banner
+
+The top status banner must remain visible in normal operation, including when no error is
+active. Verify the neutral/green/amber base text follows follower connection, holding/moving,
+and teleoperation linked/delinked state. Trigger a synthetic GUI error and confirm **Clear**
+appears; pressing it must remove only the transient notice and leave the banner visible.
+For a teleoperation stale-sample stop, clearing the red notice must fall back to the amber
+TELEOP STOPPED / follower holding / relink-required state. For an active robot fault, clearing
+any prior notice must still show the non-dismissible fault state. The complete event remains
+in Log regardless of banner acknowledgement.
+
 ## Teleoperation workspace layout and live diagnostics
 
 Software/offscreen checks should confirm the persistent right sidebar is 430–520 px wide,
