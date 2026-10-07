@@ -531,7 +531,7 @@ class CartesianArmView(QWidget):
         painter.drawText(
             12,
             self.height() - 11,
-            "URDF visual schematic · Grid: model Z=0",
+            "SO-101 physical schematic · Grid: model Z=0",
         )
         painter.end()
 
