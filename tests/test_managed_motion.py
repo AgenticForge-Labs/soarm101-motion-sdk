@@ -12,6 +12,21 @@ from soarm101_motion.exceptions import InvalidCommandError, SafetyViolationError
 
 
 
+def test_motion_feedback_callback_reuses_guarded_joint_measurements() -> None:
+    seen: list[dict[str, float]] = []
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.motion.set_feedback_callback(lambda joints: seen.append(dict(joints)))
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += math.radians(5.0)
+
+        result = arm.move_joints(target, speed=0.4, acceleration=1.0)
+
+    assert result.completed is True
+    assert seen
+    assert seen[-1]["shoulder_pan"] == pytest.approx(target["shoulder_pan"])
+
+
 def test_joint_motion_accepts_80_500_inside_new_envelope() -> None:
     with SOARM101.simulated() as arm:
         arm.enable()
