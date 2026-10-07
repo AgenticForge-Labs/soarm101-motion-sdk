@@ -244,6 +244,11 @@ def test_manual_kinematic_view_draws_all_links_and_gripper_in_frame(window, capf
         projected = view._project(point)
         assert 0 < projected.x() < view.width()
         assert 0 < projected.y() < view.height()
+    for segment in view._model.presentation_link_segments(joints).values():
+        for point in segment:
+            projected = view._project(point)
+            assert 0 < projected.x() < view.width()
+            assert 0 < projected.y() < view.height()
     for point in view.gripper_geometry().values():
         projected = view._project(point)
         assert 0 < projected.x() < view.width()
