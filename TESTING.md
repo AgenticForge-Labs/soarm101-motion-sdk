@@ -1201,10 +1201,11 @@ Robo Puppeteer/Director repositories.
 
 ## Live GUI motion visualization
 
-Automated coverage verifies that MotionController and the stock gripper publish only
-measurements they already read during guarded execution, and that partial GUI live updates
-animate the arm joints, model-estimated TCP readout, and jaw aperture while preserving the
-latest full-state snapshot.
+Automated coverage verifies that MotionController and the stock gripper publish motion-owned
+feedback during guarded execution, and that partial GUI live updates animate the arm joints,
+model-estimated TCP readout, and jaw aperture while preserving the latest full-state snapshot.
+Recorded/alignment paths may add a gripper sample at an existing controller feedback checkpoint,
+but must never start an independent hardware polling loop.
 
 Local GUI acceptance:
 1. connect the follower and leave the sidebar visible;
