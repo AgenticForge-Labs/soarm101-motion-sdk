@@ -36,11 +36,12 @@ transforms. No evidence supports changing those link dimensions by guesswork.
   threads so commanded joint motion, model-estimated TCP readout, and gripper aperture remain
   live while the slower full-state poll is intentionally suspended. This adds no competing
   serial polling and no visualization authority over motion.
-- [ ] Replace the current visual arm skeleton's use of coarse safety/joint-frame centerline
-  points with dedicated presentation geometry. Front view exposes URDF joint-frame Y offsets
-  as sideways link kinks; FK/URDF parity remains correct, but the safety centerline is not a
-  faithful physical-link drawing. Keep safety geometry, kinematic authority, and presentation
-  geometry separate.
+- [x] Replace the visual arm skeleton's coarse safety/joint-frame polyline with dedicated
+  presentation geometry derived from the packaged URDF visual bodies. FK/URDF parity and
+  coarse safety centerlines remain unchanged and separate. The offline illustration now uses
+  a neutral 45% jaw opening and visually distinguishes the moving jaw from the fixed finger.
+  This improves Front/Side/Top readability without claiming full printed-housing or collision
+  fidelity.
 - [ ] Add optional official CAD meshes with a switchable joint-center overlay. Preserve
   shared FK/tool authority, source revision/license, bounded rendering cost, and small
   window readability. Current schematic/primitive PyBullet visuals do not represent
