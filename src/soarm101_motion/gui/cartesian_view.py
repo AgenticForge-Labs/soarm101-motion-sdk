@@ -6,7 +6,6 @@ purposefully lightweight: it is a diagnostic/teaching view, not a second physics
 
 from __future__ import annotations
 
-from itertools import pairwise
 from math import cos, radians, sin
 from typing import Mapping, Sequence
 
@@ -29,6 +28,9 @@ from soarm101_motion.kinematics import SO101KinematicModel
 from soarm101_motion.types import Pose
 
 
+_OFFLINE_GRIPPER_POSITION = 0.45
+
+
 def _mix(first: QColor, second: QColor, amount: float) -> QColor:
     t = max(0.0, min(1.0, float(amount)))
     return QColor(
@@ -46,9 +48,9 @@ class CartesianArmView(QWidget):
         super().__init__(parent)
         self._model = SO101KinematicModel()
         self._joints = dict(HOME_JOINTS)
-        self._gripper_position = 1.0
+        self._gripper_position = _OFFLINE_GRIPPER_POSITION
         self._secondary_joints: dict[str, float] | None = None
-        self._secondary_gripper = 1.0
+        self._secondary_gripper = _OFFLINE_GRIPPER_POSITION
         self._secondary_label = "preview"
         self._target_position_m: np.ndarray | None = None
         self._queue_active = False
@@ -127,7 +129,7 @@ class CartesianArmView(QWidget):
         self,
         joints_deg: Mapping[str, float],
         *,
-        gripper: float = 1.0,
+        gripper: float = _OFFLINE_GRIPPER_POSITION,
         label: str = "preview",
     ) -> None:
         self._secondary_joints = {
@@ -259,25 +261,27 @@ class CartesianArmView(QWidget):
             "wrist_roll",
         )
         joint_points = [points[name] for name in joint_names]
+        segments = self._model.presentation_link_segments(joints)
         gripper = self._gripper_geometry_for(joints, gripper_position)
 
+        style = Qt.PenStyle.DashLine if ghost else Qt.PenStyle.SolidLine
         if ghost:
             painter.setPen(
                 QPen(
                     link_color,
                     4.0,
-                    Qt.PenStyle.DashLine,
+                    style,
                     Qt.PenCapStyle.RoundCap,
                 )
             )
-            for first, second in pairwise(joint_points):
+            for first, second in segments.values():
                 painter.drawLine(self._project(first), self._project(second))
         else:
             shadow = QColor(0, 0, 0, 44)
             painter.setPen(
-                QPen(shadow, 10.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+                QPen(shadow, 10.0, style, Qt.PenCapStyle.RoundCap)
             )
-            for first, second in pairwise(joint_points):
+            for first, second in segments.values():
                 painter.drawLine(
                     self._project(first) + QPointF(1.5, 2.5),
                     self._project(second) + QPointF(1.5, 2.5),
@@ -286,22 +290,27 @@ class CartesianArmView(QWidget):
                 QPen(
                     link_color,
                     7.0,
-                    Qt.PenStyle.SolidLine,
+                    style,
                     Qt.PenCapStyle.RoundCap,
                 )
             )
-            for first, second in pairwise(joint_points):
+            for first, second in segments.values():
                 painter.drawLine(self._project(first), self._project(second))
 
         width = 3.2 if ghost else 5.0
-        style = Qt.PenStyle.DashLine if ghost else Qt.PenStyle.SolidLine
         painter.setPen(QPen(link_color, width, style, Qt.PenCapStyle.RoundCap))
         for start, end in (("origin", "fixed_root"), ("origin", "moving_pivot")):
             painter.drawLine(self._project(gripper[start]), self._project(gripper[end]))
+
         finger_width = 2.4 if ghost else 4.0
         painter.setPen(QPen(link_color, finger_width, style, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(
+            self._project(gripper["fixed_root"]),
+            self._project(gripper["fixed_tip"]),
+        )
+        jaw_color = _mix(link_color, joint_color, 0.62)
+        painter.setPen(QPen(jaw_color, finger_width, style, Qt.PenCapStyle.RoundCap))
         for start, end in (
-            ("fixed_root", "fixed_tip"),
             ("moving_pivot", "moving_root"),
             ("moving_root", "moving_tip"),
         ):
@@ -338,11 +347,13 @@ class CartesianArmView(QWidget):
         painter.drawRoundedRect(rect, 16.0, 16.0)
 
         points = self._model.link_points(self._joints)
+        segments = self._model.presentation_link_segments(self._joints)
         tcp_pose = self._model.forward(self._joints)
         tcp = tcp_pose.position
         gripper = self.gripper_geometry()
         fit_points = [
             *points.values(),
+            *(point for segment in segments.values() for point in segment),
             *gripper.values(),
             np.zeros(3, dtype=float),
             np.array([0.12, 0.0, 0.0]),
@@ -352,11 +363,19 @@ class CartesianArmView(QWidget):
 
         if self._secondary_joints is not None:
             secondary_points = self._model.link_points(self._secondary_joints)
+            secondary_segments = self._model.presentation_link_segments(
+                self._secondary_joints
+            )
             secondary_gripper = self._gripper_geometry_for(
                 self._secondary_joints,
                 self._secondary_gripper,
             )
             fit_points.extend(secondary_points.values())
+            fit_points.extend(
+                point
+                for segment in secondary_segments.values()
+                for point in segment
+            )
             fit_points.extend(secondary_gripper.values())
         if self._target_position_m is not None:
             fit_points.append(self._target_position_m)
