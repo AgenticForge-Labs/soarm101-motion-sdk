@@ -17,6 +17,16 @@ FloatArray = NDArray[np.float64]
 
 
 @dataclass(frozen=True)
+class PresentationLinkDefinition:
+    """Simplified visual-link centerline derived from the packaged URDF visual."""
+
+    name: str
+    frame: str
+    start_local: tuple[float, float, float]
+    end_local: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
 class JointDefinition:
     name: str
     origin_xyz: tuple[float, float, float]
@@ -72,6 +82,49 @@ STOCK_JAW_JOINT = JointDefinition(
 )
 STOCK_JAW_LIMITS = (-0.174533, 1.74533)
 
+# Presentation-only centerlines from the packaged URDF visual primitives.
+# These are deliberately separate from link_points(), whose joint-origin chain is
+# retained for coarse workspace/safety checks. Each segment follows the long axis
+# of the corresponding simplified visual body in its child-link frame.
+SO101_PRESENTATION_LINKS: tuple[PresentationLinkDefinition, ...] = (
+    PresentationLinkDefinition(
+        "base",
+        "base_link",
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.06),
+    ),
+    PresentationLinkDefinition(
+        "shoulder",
+        "shoulder_link",
+        (-0.075, 0.0, 0.0),
+        (0.015, 0.0, 0.0),
+    ),
+    PresentationLinkDefinition(
+        "upper_arm",
+        "upper_arm_link",
+        (-0.130, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
+    ),
+    PresentationLinkDefinition(
+        "lower_arm",
+        "lower_arm_link",
+        (-0.1345, 0.0, 0.0),
+        (0.0005, 0.0, 0.0),
+    ),
+    PresentationLinkDefinition(
+        "wrist",
+        "wrist_link",
+        (-0.080, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
+    ),
+    PresentationLinkDefinition(
+        "gripper_body",
+        "gripper_link",
+        (0.0, 0.0, -0.090),
+        (0.0, 0.0, 0.010),
+    ),
+)
+
 
 class SO101KinematicModel:
     """Small native kinematic model independent of ROS or URDF parsers."""
@@ -113,6 +166,61 @@ class SO101KinematicModel:
                 np.asarray(definition.axis, dtype=float), float(angle)
             )
         return transform, points
+
+    def link_frames(
+        self,
+        joints: Mapping[str, float] | FloatArray,
+    ) -> dict[str, FloatArray]:
+        """Return child-link frames after applying each joint rotation."""
+
+        q = self.vector(joints)
+        transform = np.eye(4)
+        frames: dict[str, FloatArray] = {"base_link": transform.copy()}
+        child_links = (
+            "shoulder_link",
+            "upper_arm_link",
+            "lower_arm_link",
+            "wrist_link",
+            "gripper_link",
+        )
+        for definition, child_link, angle in zip(
+            SO101_JOINT_DEFINITIONS,
+            child_links,
+            q,
+            strict=True,
+        ):
+            transform = transform @ definition.origin_transform
+            transform = transform @ rotation_about_axis(
+                np.asarray(definition.axis, dtype=float), float(angle)
+            )
+            frames[child_link] = transform.copy()
+        return frames
+
+    def presentation_link_segments(
+        self,
+        joints: Mapping[str, float] | FloatArray,
+    ) -> dict[str, tuple[FloatArray, FloatArray]]:
+        """Return presentation-only visual-body centerlines in world coordinates.
+
+        Unlike link_points(), these segments follow the packaged URDF visual bodies
+        rather than connecting joint origins. They are for drawing only and must not
+        be used for collision, workspace, planning, or hardware safety decisions.
+        """
+
+        frames = self.link_frames(joints)
+        segments: dict[str, tuple[FloatArray, FloatArray]] = {}
+        for definition in SO101_PRESENTATION_LINKS:
+            frame = frames[definition.frame]
+
+            def world(local: tuple[float, float, float]) -> FloatArray:
+                vector = np.asarray(local, dtype=float)
+                return frame[:3, 3] + frame[:3, :3] @ vector
+
+            segments[definition.name] = (
+                world(definition.start_local),
+                world(definition.end_local),
+            )
+        return segments
 
     def link_points(
         self,
