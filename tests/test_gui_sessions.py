@@ -283,6 +283,56 @@ def test_kinematic_view_gripper_uses_wrist_frame_and_changes_aperture(window):
     assert open_gap > closed_gap
 
 
+def test_live_measurements_animate_joints_tcp_and_gripper(window):
+    import numpy as np
+
+    state = {
+        "connected": True,
+        "torque_enabled": True,
+        "moving": True,
+        "faulted": False,
+        "simulation": True,
+        "joints_deg": {
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 0.0,
+            "elbow_flex": 0.0,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+        },
+        "pose_mm_deg": (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        "gripper": 0.0,
+        "joint_limits_deg": {},
+    }
+    window._on_state(state)
+    closed = window.cartesian_view.gripper_geometry()
+    closed_gap = np.linalg.norm(closed["fixed_tip"] - closed["moving_tip"])
+
+    window._on_follower_live_measurements(
+        {
+            "joints_deg": {
+                "shoulder_pan": 5.0,
+                "shoulder_lift": -10.0,
+                "elbow_flex": 15.0,
+                "wrist_flex": -20.0,
+                "wrist_roll": 25.0,
+            },
+            "pose_mm_deg": (101.0, 22.0, 133.0, 1.0, 2.0, 3.0),
+            "gripper": 1.0,
+        }
+    )
+
+    opened = window.cartesian_view.gripper_geometry()
+    open_gap = np.linalg.norm(opened["fixed_tip"] - opened["moving_tip"])
+    assert open_gap > closed_gap
+    assert window.robot_sidebar.gripper_bar.format() == "1.000"
+    assert window.gripper_measured.text() == "Measured: 1.000"
+    assert window.robot_sidebar.joint_value_labels["wrist_roll"].text() == "+25.0°"
+    assert window.robot_sidebar.pose_value_labels["x"].text() == "+101.0 mm"
+    assert "X 101.0" in window.pose_summary.text()
+    assert window._latest_state["gripper"] == pytest.approx(1.0)
+    assert window._latest_state["joints_deg"]["shoulder_pan"] == pytest.approx(5.0)
+
+
 def test_leader_park_release_and_sync_capture_are_explicit(window):
     park_requests = []
     release_requests = []
