@@ -719,6 +719,27 @@ streaming, richer mesh collision models, and show-level orchestration in the app
 Robo Puppeteer/Director repositories.
 
 
+## Guided Setup GUI validation
+
+Automated checks:
+
+```bash
+pytest tests/test_gui_setup_panel.py tests/test_setup_backup.py tests/test_gui_calibration_flow.py tests/test_gui_sessions.py --no-cov
+```
+Regression coverage includes missing/corrupt/valid calibration, no implicit connection
+on navigation, optional guidance, palette contrast, offline model labeling, backup
+fingerprint/path rejection, previous-file preservation, and rollback on write failure.
+
+Local workstation acceptance: run `soarm101-gui` at normal scale and enlarged desktop
+text, in both light and dark themes. At 1080×720 and full screen, verify Setup is readable,
+sidebar STOP/HOLD stays visible, and calibration gauges reflow. With existing arms,
+verify discovery assignments, saved-vs-loaded calibration status, explicit connection,
+and calibration reuse. Open/leave calibration without starting a sweep; verify no
+motion. With a supervised calibration session, check cancellation and completion, then
+normal reconnection. Export a backup to a separate location; inspect/restore a copy only
+with arms disconnected. Verify restart and matching calibration provenance. Do not
+recalibrate a working arm solely for a cosmetic smoke test.
+
 ## GUI control contrast — visual validation
 
 1. Launch Motion Studio with the normal desktop theme.

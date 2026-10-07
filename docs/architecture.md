@@ -70,6 +70,15 @@ The camera layer deliberately stops at raw observation: it does not identify obj
 task state, plan motion, or bypass motion safety. Agent reasoning remains above the same
 constrained SDK primitives used manually.
 
+## Desktop setup presentation
+
+`gui/setup_panel.py` owns the Setup overview and navigation to existing calibration,
+device settings, and diagnostics controls. It invokes the same MainWindow signals and
+worker operations; it is not another calibration or motion controller. Guidance is an
+optional persisted presentation preference in Qt settings. Calibration authority remains
+in the existing files and SDK resolver, not in Qt settings or widget visibility.
+`setup_backup.py` owns deterministic validated setup export/restore, with no hardware I/O.
+
 ## Bounded agent authority and CLI
 
 The full CLI is an operator/developer surface. External reasoning agents use a smaller
