@@ -267,6 +267,14 @@ The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves th
 
 The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. A resizable workspace keeps the task tabs on the left and the persistent follower sidebar on the right, including Setup and Log, so robot state never disappears while changing workflows. If vertical space is tight, the model/readout area scrolls while Enable hold, STOP/HOLD, and Relax remain pinned and visible. Programs are stored using the existing `MotionSequence` format, so GUI Programs and SDK/CLI sequence execution share the same guarded runner and provenance rules. See [Programs and saved positions](docs/programs.md) for the simple position-program workflow. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
 
+The sidebar's model schematic now shows a fixed finger and rotating stock jaw. Side,
+Front, Top, and Isometric views help inspect depth; drag rotates and wheel zooms.
+The scale remains fixed while the robot moves. Use Fit to reframe once or enable
+Auto fit for continuous reframing. A screen-plane ruler shows millimeters; the grid
+is model Z=0 rather than the measured table. The TCP marker uses the session's active
+tool transform. This view estimates geometry from measured joints; it does not certify
+physical Cartesian accuracy. See PLAN.md for the remaining measurement and shaking work.
+
 ### CLI examples
 
 After a successful GUI follower connection has been saved in the workstation profile,
