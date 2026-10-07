@@ -38,10 +38,14 @@ Rules:
   may add a secondary leader/saved/recorded/program ghost without replacing that primary
   state.
 - Kinematic GUI previews consume the same `SO101KinematicModel` used by planning; ghost
-  overlays are visualization only and never authorize or execute motion.
-  Session state supplies the active TCP transform and one joint snapshot for numerical
-  FK and drawing. Nominal jaw outlines are shared model helpers; camera scale/presets
-  are GUI presentation. Model Z=0 is not a measured table or collision authority.
+  overlays are visualization only and never authorize or execute motion. Session state
+  supplies the active TCP transform and one joint snapshot for numerical FK and drawing.
+  Joint markers/TCP remain FK-derived. Visible link strokes use presentation-only centerlines
+  derived from the packaged URDF visual primitives, while `link_points()` remains the
+  separate coarse safety/workspace centerline. Nominal jaw outlines are shared model helpers;
+  the offline illustration uses a neutral jaw opening until measured aperture arrives.
+  Camera scale/presets are GUI presentation. Model Z=0 is not a measured table or collision
+  authority.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
 - Motor calibration and workspace calibration are separate authorities. Motor calibration maps encoder state to joint coordinates; machine-local workspace calibration records measured physical-workspace correspondences tied to one motor-calibration ID.
 - Executable pose-joint limits are resolved once in the motion safety layer. The official
