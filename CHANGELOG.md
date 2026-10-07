@@ -16,6 +16,11 @@
   shaking investigations in PLAN.md; motion/calibration policy is unchanged.
 
 ## Unreleased
+- Made the persistent GUI robot view live during commanded motion without adding competing
+  hardware polling. The MotionController and stock gripper now expose best-effort copies of
+  measurements they already read for safety/settling/progress; the GUI uses them to animate
+  measured joints, model-estimated TCP readouts, and jaw aperture while normal full-state
+  polling is paused. Visualization callbacks are observational and cannot affect motion.
 - Added a pluggable self-contained `soarm101 agent sandbox` workflow for constrained
   autonomous robot operation without Forge-Bench or another harness. Hermes/OpenRouter and
   Codex are first-class adapters behind the same OpenShell, `robotctl`, broker, authority,
