@@ -12,12 +12,12 @@ from soarm101_motion.kinematics.model import STOCK_JAW_JOINT, STOCK_JAW_LIMITS
 from soarm101_motion.types import Pose
 
 
-def _origin(joint):
-    element = joint.find("origin")
+def _origin(element_parent):
+    element = element_parent.find("origin")
     frame = np.eye(4)
-    frame[:3, 3] = np.fromstring(element.get("xyz"), sep=" ")
+    frame[:3, 3] = np.fromstring(element.get("xyz", "0 0 0"), sep=" ")
     frame[:3, :3] = Rotation.from_euler(
-        "xyz", np.fromstring(element.get("rpy"), sep=" ")
+        "xyz", np.fromstring(element.get("rpy", "0 0 0"), sep=" ")
     ).as_matrix()
     return frame
 
@@ -86,6 +86,14 @@ def test_presentation_link_segments_follow_packaged_urdf_visual_bodies():
             for point in expected_local
         )
         actual = segments[segment_name]
+        expected_thickness = (
+            2.0 * float(cylinder.get("radius"))
+            if cylinder is not None
+            else float(np.max(np.delete(size, axis)))
+        )
+        assert model.presentation_link_thicknesses()[segment_name] == pytest.approx(
+            expected_thickness
+        )
         direct_error = np.linalg.norm(actual[0] - expected[0]) + np.linalg.norm(
             actual[1] - expected[1]
         )
