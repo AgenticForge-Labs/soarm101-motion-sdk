@@ -119,8 +119,8 @@ class RobotStatusPanel(QWidget):
         layout.addWidget(self.measurement_label)
         self._has_measurement = False
         self.view = CartesianArmView()
-        self.view.setMinimumSize(270, 270)
-        self.view.setMaximumHeight(370 if not compact else 300)
+        self.view.setMinimumSize(310 if not compact else 270, 310 if not compact else 270)
+        self.view.setMaximumHeight(430 if not compact else 300)
         layout.addWidget(self.view, 1)
 
         pose_title = QLabel("ESTIMATED TOOL POSE · MODEL FRAME")
