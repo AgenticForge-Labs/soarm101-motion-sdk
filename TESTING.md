@@ -1262,9 +1262,12 @@ behavior, stable scale under pose/ghost/target changes, standard views, and acti
 
 Local GUI review: open simulation; compare Side/Front/Top/Isometric, drag, zoom,
 double-click reset, Fit, and Auto fit at normal and smaller window sizes. With Auto
-fit off, pose and target changes must not alter ruler length. Jaw opening must leave
-the fixed finger still and rotate only the moving jaw. Confirm the model Z=0 label
-and readable toolbar/ruler. No hardware motion is needed for these presentation checks.
+fit off, pose and target changes must not alter ruler length. Confirm link ends are flat and
+no longer form oversized round blobs where short visual primitives overlap; the smaller joint
+markers should remain clearly distinguishable from the link bodies. Jaw opening must leave
+the fixed finger still and rotate only the moving jaw; in the normal light theme the moving
+jaw should read as neutral dark/black and slightly heavier than the fixed finger. Confirm the
+model Z=0 label and readable toolbar/ruler. No hardware motion is needed for these presentation checks.
 Physical TCP/geometry and shaking validation remain separate tasks in PLAN.md.
 
 ## Camera stream rate and lifecycle — workstation / hardware

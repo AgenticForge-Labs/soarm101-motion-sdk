@@ -40,7 +40,10 @@ transforms. No evidence supports changing those link dimensions by guesswork.
   presentation geometry derived from the packaged URDF visual bodies. FK/URDF parity and
   coarse safety centerlines remain unchanged and separate. The offline illustration now uses
   a neutral 45% jaw opening and visually distinguishes the moving jaw from the fixed finger.
-  This improves Front/Side/Top readability without claiming full printed-housing or collision
+  Follow-up GUI review now keeps URDF-derived body strokes deliberately thinner and flat-ended,
+  removes the extra shadow, uses smaller pivot markers, and renders the moving jaw neutral dark
+  and slightly heavier. This avoids treating omitted servo/printed housings as artificial bulk
+  while improving Front/Side/Top readability without claiming full printed-housing or collision
   fidelity.
 - [ ] Add optional official CAD meshes with a switchable joint-center overlay. Preserve
   shared FK/tool authority, source revision/license, bounded rendering cost, and small

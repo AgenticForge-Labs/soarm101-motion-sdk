@@ -33,6 +33,20 @@ from soarm101_motion.types import Pose
 _OFFLINE_GRIPPER_POSITION = 0.45
 
 
+def _presentation_body_width(thickness_m: float, scale: float, *, ghost: bool) -> float:
+    """Map nominal URDF thickness to a restrained 2D schematic stroke.
+
+    The packaged URDF omits servo housings and printed brackets, so raw primitive
+    thickness is not a faithful proxy for all visible robot bulk. Keep the visual
+    bodies readable without turning missing hardware into oversized round blobs.
+    """
+
+    floor = 3.0 if ghost else 4.0
+    ceiling = 18.0 if ghost else 28.0
+    factor = 0.46 if ghost else 0.62
+    return max(floor, min(ceiling, float(thickness_m) * float(scale) * factor))
+
+
 def _mix(first: QColor, second: QColor, amount: float) -> QColor:
     t = max(0.0, min(1.0, float(amount)))
     return QColor(
@@ -269,51 +283,40 @@ class CartesianArmView(QWidget):
 
         style = Qt.PenStyle.DashLine if ghost else Qt.PenStyle.SolidLine
         scale = self._projection_scale * self._zoom
-        shadow = QColor(0, 0, 0, 44)
         for name, (first, second) in segments.items():
-            body_width = max(
-                4.0 if ghost else 6.0,
-                min(
-                    32.0 if ghost else 48.0,
-                    thicknesses[name] * scale * (0.72 if ghost else 1.0),
-                ),
+            body_width = _presentation_body_width(
+                thicknesses[name], scale, ghost=ghost
             )
-            if not ghost:
-                painter.setPen(
-                    QPen(
-                        shadow,
-                        body_width + 4.0,
-                        style,
-                        Qt.PenCapStyle.RoundCap,
-                    )
-                )
-                painter.drawLine(
-                    self._project(first) + QPointF(1.5, 2.5),
-                    self._project(second) + QPointF(1.5, 2.5),
-                )
             painter.setPen(
                 QPen(
                     link_color,
                     body_width,
                     style,
-                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenCapStyle.FlatCap,
                 )
             )
             painter.drawLine(self._project(first), self._project(second))
 
-        width = 3.2 if ghost else 5.0
-        painter.setPen(QPen(link_color, width, style, Qt.PenCapStyle.RoundCap))
+        width = 2.8 if ghost else 4.0
+        painter.setPen(QPen(link_color, width, style, Qt.PenCapStyle.FlatCap))
         for start, end in (("origin", "fixed_root"), ("origin", "moving_pivot")):
             painter.drawLine(self._project(gripper[start]), self._project(gripper[end]))
 
-        finger_width = 2.4 if ghost else 4.0
-        painter.setPen(QPen(link_color, finger_width, style, Qt.PenCapStyle.RoundCap))
+        finger_width = 2.2 if ghost else 3.8
+        painter.setPen(QPen(link_color, finger_width, style, Qt.PenCapStyle.FlatCap))
         painter.drawLine(
             self._project(gripper["fixed_root"]),
             self._project(gripper["fixed_tip"]),
         )
-        jaw_color = _mix(link_color, joint_color, 0.62)
-        painter.setPen(QPen(jaw_color, finger_width, style, Qt.PenCapStyle.RoundCap))
+        jaw_color = link_color
+        if not ghost:
+            jaw_color = (
+                QColor("#17181b")
+                if link_color.lightness() < 128
+                else QColor("#e2e2e5")
+            )
+        jaw_width = 3.0 if ghost else 5.2
+        painter.setPen(QPen(jaw_color, jaw_width, style, Qt.PenCapStyle.FlatCap))
         for start, end in (
             ("moving_pivot", "moving_root"),
             ("moving_root", "moving_tip"),
@@ -321,8 +324,8 @@ class CartesianArmView(QWidget):
             painter.drawLine(self._project(gripper[start]), self._project(gripper[end]))
 
         painter.setBrush(QBrush(joint_color))
-        painter.setPen(QPen(link_color, 1.2))
-        radius = 3.2 if ghost else 5.0
+        painter.setPen(QPen(link_color, 1.0))
+        radius = 2.2 if ghost else 3.2
         for point in joint_points:
             projected = self._project(point)
             painter.drawEllipse(projected, radius, radius)

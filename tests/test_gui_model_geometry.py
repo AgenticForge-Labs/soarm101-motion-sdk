@@ -25,6 +25,16 @@ def test_offline_illustration_uses_neutral_gripper_opening(view):
     assert 0.0 < view._gripper_position < 1.0
 
 
+def test_presentation_body_width_is_restrained_and_bounded():
+    pytest.importorskip("PySide6")
+    from soarm101_motion.gui.cartesian_view import _presentation_body_width
+
+    assert _presentation_body_width(0.035, 500.0, ghost=False) == pytest.approx(10.85)
+    assert _presentation_body_width(0.035, 500.0, ghost=True) == pytest.approx(8.05)
+    assert _presentation_body_width(0.090, 1000.0, ghost=False) == pytest.approx(28.0)
+    assert _presentation_body_width(0.001, 500.0, ghost=False) == pytest.approx(4.0)
+
+
 def test_pose_preview_and_target_updates_keep_fixed_projection(view):
     view.grab()
     scale, center = view._projection_scale, view._projection_center
