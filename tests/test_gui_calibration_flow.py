@@ -36,8 +36,14 @@ def test_gripper_speed_presets_sync_and_send_manual_request(monkeypatch: pytest.
         window.close()
 
 
-def test_setup_connects_selected_arm_without_torque(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_setup_connects_selected_arm_without_torque(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv(
+        "SOARM101_WORKSTATION_CONFIG", str(tmp_path / "workstation.json")
+    )
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
 
