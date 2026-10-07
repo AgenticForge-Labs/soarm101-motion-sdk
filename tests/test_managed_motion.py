@@ -276,6 +276,32 @@ def test_final_target_monitor_rejects_reverse_motion() -> None:
             )
 
 
+def test_recorded_replay_publishes_measured_gripper_feedback() -> None:
+    import threading
+
+    from soarm101_motion.motion.controller import RecordedPlan
+
+    seen: list[float] = []
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.motion.set_tool_feedback_callback(seen.append)
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.01
+
+        arm.motion._execute_recorded(
+            RecordedPlan(
+                command_samples=(start, target),
+                gripper_samples=(0.2, 0.8),
+                duration_s=1.0 / arm.config.command_frequency_hz,
+            ),
+            threading.Event(),
+        )
+
+    assert seen
+    assert seen[-1] == pytest.approx(0.8)
+
+
 def test_recorded_joint_replay_uses_responsive_servo_profile() -> None:
     import threading
 
