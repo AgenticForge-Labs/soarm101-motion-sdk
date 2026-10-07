@@ -36,7 +36,10 @@ Rules:
 - The GUI owns one persistent follower-status sidebar outside the task tabs. Its primary
   kinematic model is always the measured follower state when connected; active workflows
   may add a secondary leader/saved/recorded/program ghost without replacing that primary
-  state.
+  state. Teleoperation may visualize all named camera sessions together and plot rolling
+  joint angles/tracking error, but both views consume measurements already owned by the
+  existing camera/robot workers. Presentation must not add competing camera workers or
+  high-rate servo/register polling merely for visualization.
 - Kinematic GUI previews consume the same `SO101KinematicModel` used by planning; ghost
   overlays are visualization only and never authorize or execute motion. Session state
   supplies the active TCP transform and one joint snapshot for numerical FK and drawing.
