@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
         self._teleop_active = False
         self._teleop_starting = False
         self._latest_teleop_leader_joints_deg: dict[str, float] | None = None
+        self._banner_notice: tuple[str, str] | None = None
         self._gripper_speed_multiplier = 2.0
         self._sequence_library_cache: tuple[str, SequenceLibrary] | None = None
         self._primitive_library_cache: tuple[str, MotionPrimitiveLibrary] | None = None
@@ -687,15 +688,28 @@ class MainWindow(QMainWindow):
         self.follower_connection_panel = self._build_connection_bar(port, robot_id, simulation)
         self.leader_connection_panel = self._build_leader_connection()
 
+        self.status_banner = QWidget()
+        self.status_banner.setObjectName("statusBanner")
+        banner_layout = QHBoxLayout(self.status_banner)
+        banner_layout.setContentsMargins(10, 5, 7, 5)
+        banner_layout.setSpacing(8)
+
         self.alert_label = QLabel()
         self.alert_label.setTextFormat(Qt.TextFormat.PlainText)
         self.alert_label.setWordWrap(True)
-        self.alert_label.setStyleSheet(
-            "font-weight: 700; padding: 9px 11px; border-radius: 9px; "
-            "background: #fee2e2; color: #7f1d1d;"
+        self.alert_label.setStyleSheet("font-weight: 700;")
+        banner_layout.addWidget(self.alert_label, 1)
+
+        self.alert_clear_button = QPushButton("Clear")
+        self.alert_clear_button.setMaximumWidth(72)
+        self.alert_clear_button.setToolTip(
+            "Acknowledge the displayed notice. This does not clear robot faults, "
+            "change torque state, or bypass any safety condition."
         )
-        self.alert_label.hide()
-        layout.addWidget(self.alert_label)
+        self.alert_clear_button.clicked.connect(self._clear_status_banner_notice)
+        banner_layout.addWidget(self.alert_clear_button)
+        layout.addWidget(self.status_banner)
+        self._refresh_status_banner()
 
         self.robot_sidebar = self._build_persistent_robot_sidebar()
         self._follower_status_panels = [self.robot_sidebar]
@@ -748,6 +762,83 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         self._style_action_buttons()
         self._refresh_sidebar_context()
+
+    def _status_banner_base(self) -> tuple[str, str]:
+        """Return the current non-dismissible operating status for the top banner."""
+
+        state = self._latest_state or {}
+        if bool(state.get("faulted")):
+            reason = str(state.get("fault_message") or "unknown motor fault")
+            return (f"FOLLOWER FAULT — {reason}", "error")
+        if self._teleop_active:
+            frequency_hz = float(
+                self.teleop_rate_combo.currentData()
+                or DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+            ) if hasattr(self, "teleop_rate_combo") else DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+            return (
+                f"TELEOP LIVE — leader linked to follower · {frequency_hz:.0f} Hz · "
+                "STOP / HOLD is always available.",
+                "success",
+            )
+        if self._teleop_fault_details is not None:
+            return (
+                "TELEOP STOPPED — follower holding · leader/follower delinked · "
+                "realign or relink to continue.",
+                "warning",
+            )
+
+        moving = bool(state.get("moving")) or self._busy
+        if self._connected and moving:
+            return ("FOLLOWER MOVING — STOP / HOLD is always available.", "warning")
+        if self._connected and self._torque_enabled:
+            return ("FOLLOWER HOLDING — connected · torque enabled.", "success")
+        if self._connected:
+            return ("FOLLOWER READY — connected · torque off.", "neutral")
+        return ("READY — connect a follower in Setup to begin.", "neutral")
+
+    def _refresh_status_banner(self) -> None:
+        if not hasattr(self, "status_banner"):
+            return
+        if self._banner_notice is None:
+            message, level = self._status_banner_base()
+            dismissible = False
+        else:
+            message, level = self._banner_notice
+            dismissible = True
+
+        styles = {
+            "error": ("#fee2e2", "#7f1d1d", "#fecaca"),
+            "warning": ("#fef3c7", "#78350f", "#fde68a"),
+            "success": ("#dcfce7", "#14532d", "#bbf7d0"),
+            "neutral": ("#e8edf2", "#17212f", "#cbd5e1"),
+        }
+        background, foreground, border = styles.get(level, styles["neutral"])
+        self.status_banner.setStyleSheet(
+            "QWidget#statusBanner {"
+            f"background: {background}; color: {foreground}; "
+            f"border: 1px solid {border}; border-radius: 9px;"
+            "}"
+            "QWidget#statusBanner QLabel {"
+            f"color: {foreground}; background: transparent; border: none;"
+            "}"
+            "QWidget#statusBanner QPushButton {"
+            f"color: {foreground}; background: rgba(255, 255, 255, 120); "
+            f"border: 1px solid {border}; border-radius: 7px; "
+            "min-height: 26px; padding: 2px 9px; font-weight: 700;"
+            "}"
+        )
+        self.alert_label.setText(message)
+        self.alert_clear_button.setVisible(dismissible)
+
+    def _set_status_banner_notice(self, message: str, *, level: str = "error") -> None:
+        self._banner_notice = (str(message), str(level))
+        self._refresh_status_banner()
+
+    def _clear_status_banner_notice(self) -> None:
+        """Acknowledge only the transient notice; underlying robot state remains."""
+
+        self._banner_notice = None
+        self._refresh_status_banner()
 
     def _build_persistent_robot_sidebar(self) -> RobotStatusPanel:
         container = QWidget()
@@ -5251,7 +5342,9 @@ class MainWindow(QMainWindow):
             "font-weight: 800; padding: 9px; border-radius: 9px; "
             "background: #fee2e2; color: #7f1d1d;"
         )
-        self.teleop_status.setText(self._teleop_fault_message(values))
+        fault_message = self._teleop_fault_message(values)
+        self.teleop_status.setText(fault_message)
+        self._set_status_banner_notice(fault_message, level="error")
         self.leader_stream_stop_requested.emit()
         self._update_enabled_state()
 
@@ -5281,6 +5374,7 @@ class MainWindow(QMainWindow):
         self._teleop_active = bool(active)
         self._teleop_starting = False
         if active:
+            self._banner_notice = None
             if hasattr(self, "teleop_motion_trace"):
                 self.teleop_motion_trace.clear()
             self._latest_teleop_leader_joints_deg = None
@@ -5309,6 +5403,7 @@ class MainWindow(QMainWindow):
                 self.teleop_status.setText(
                     "Teleoperation stopped normally · follower holding · leader/follower delinked."
                 )
+        self._refresh_status_banner()
         self._update_enabled_state()
 
     def _on_leader_stream_readout_changed(self, active: bool) -> None:
@@ -5666,6 +5761,7 @@ class MainWindow(QMainWindow):
         if values.get("simulation"):
             status += " — simulation"
         self.status_label.setText(status)
+        self._refresh_status_banner()
         self._update_teach_readout()
         self._update_enabled_state()
 
@@ -6088,8 +6184,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_error(self, message: str) -> None:
         self._log(message)
-        self.alert_label.setText(message)
-        self.alert_label.show()
+        self._set_status_banner_notice(message, level="error")
         self.tabs.setTabText(self.tabs.indexOf(self.log_page), "Log •")
         if any(prefix in message.lower() for prefix in (
             "live teleoperation:", "teleop alignment:", "start teleoperation:",
@@ -6106,7 +6201,7 @@ class MainWindow(QMainWindow):
                     "TELEOP STOPPED — follower holding; leader/follower delinked. "
                     + self._teleop_error
                 )
-                self.alert_label.setText(prominent)
+                self._set_status_banner_notice(prominent, level="error")
             self._update_enabled_state()
         self.statusBar().showMessage(self.alert_label.text(), 8000)
         if "calibration:" in message.lower():
