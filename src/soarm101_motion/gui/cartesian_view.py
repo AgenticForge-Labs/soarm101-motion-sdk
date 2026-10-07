@@ -264,26 +264,29 @@ class CartesianArmView(QWidget):
         )
         joint_points = [points[name] for name in joint_names]
         segments = self._model.presentation_link_segments(joints)
+        thicknesses = self._model.presentation_link_thicknesses()
         gripper = self._gripper_geometry_for(joints, gripper_position)
 
         style = Qt.PenStyle.DashLine if ghost else Qt.PenStyle.SolidLine
-        if ghost:
-            painter.setPen(
-                QPen(
-                    link_color,
-                    4.0,
-                    style,
-                    Qt.PenCapStyle.RoundCap,
+        scale = self._projection_scale * self._zoom
+        shadow = QColor(0, 0, 0, 44)
+        for name, (first, second) in segments.items():
+            body_width = max(
+                4.0 if ghost else 6.0,
+                min(
+                    32.0 if ghost else 48.0,
+                    thicknesses[name] * scale * (0.72 if ghost else 1.0),
+                ),
+            )
+            if not ghost:
+                painter.setPen(
+                    QPen(
+                        shadow,
+                        body_width + 4.0,
+                        style,
+                        Qt.PenCapStyle.RoundCap,
+                    )
                 )
-            )
-            for first, second in segments.values():
-                painter.drawLine(self._project(first), self._project(second))
-        else:
-            shadow = QColor(0, 0, 0, 44)
-            painter.setPen(
-                QPen(shadow, 10.0, style, Qt.PenCapStyle.RoundCap)
-            )
-            for first, second in segments.values():
                 painter.drawLine(
                     self._project(first) + QPointF(1.5, 2.5),
                     self._project(second) + QPointF(1.5, 2.5),
@@ -291,13 +294,12 @@ class CartesianArmView(QWidget):
             painter.setPen(
                 QPen(
                     link_color,
-                    7.0,
+                    body_width,
                     style,
                     Qt.PenCapStyle.RoundCap,
                 )
             )
-            for first, second in segments.values():
-                painter.drawLine(self._project(first), self._project(second))
+            painter.drawLine(self._project(first), self._project(second))
 
         width = 3.2 if ghost else 5.0
         painter.setPen(QPen(link_color, width, style, Qt.PenCapStyle.RoundCap))
