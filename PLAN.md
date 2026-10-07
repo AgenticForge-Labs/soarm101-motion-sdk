@@ -40,13 +40,16 @@ transforms. No evidence supports changing those link dimensions by guesswork.
   presentation geometry derived from the packaged URDF visual bodies. FK/URDF parity and
   coarse safety centerlines remain unchanged and separate. The offline illustration now uses
   a neutral 45% jaw opening and visually distinguishes the moving jaw from the fixed finger.
-  Follow-up GUI review now keeps URDF-derived body strokes deliberately thinner and flat-ended,
-  removes the extra shadow, uses smaller pivot markers, and renders the moving jaw neutral dark
-  and slightly heavier. Physical comparison also showed that the simplified shoulder_link and
-  wrist_link visual boxes do not correspond to real arm members, so those two proxy bars are
-  omitted from the GUI presentation. This avoids treating simplified or missing housings as
-  artificial bulk while improving Front/Side/Top readability without claiming full
-  printed-housing or collision fidelity.
+  Follow-up GUI review keeps body strokes deliberately thinner and flat-ended, removes the
+  extra shadow, uses smaller pivot markers, and renders the moving jaw neutral dark and slightly
+  heavier. A full presentation-assumption audit then compared the schematic against the
+  official mesh-based SO-101 URDF at
+  `385e8d7c68e24945df6c60d9bd68837a4b7411ae`. The GUI no longer assumes that a printed
+  arm member starts/ends at each revolute-axis point: upper/lower members retain their official
+  mesh-model Y/Z offsets, while each STS3215 is represented by an oriented 45.23 x 24.73 x
+  35 mm case envelope at its official mesh pose. This makes the shoulder/wrist pivots sit
+  inside actuator bodies where the physical model says they should, without inventing long
+  shoulder/wrist bars. These shapes remain presentation-only and are not collision geometry.
 - [ ] Add optional official CAD meshes with a switchable joint-center overlay. Preserve
   shared FK/tool authority, source revision/license, bounded rendering cost, and small
   window readability. Current schematic/primitive PyBullet visuals do not represent

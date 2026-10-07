@@ -1263,10 +1263,12 @@ behavior, stable scale under pose/ghost/target changes, standard views, and acti
 Local GUI review: open simulation; compare Side/Front/Top/Isometric, drag, zoom,
 double-click reset, Fit, and Auto fit at normal and smaller window sizes. With Auto
 fit off, pose and target changes must not alter ruler length. Confirm link ends are flat and
-no longer form oversized round blobs where short visual primitives overlap; the smaller joint
-markers should remain clearly distinguishable from the link bodies. Confirm there is no
-standalone shoulder proxy bar at the base and no standalone wrist proxy bar before the gripper;
-those simplified URDF boxes are intentionally omitted from presentation. Jaw opening must leave
+no longer form oversized round blobs where visual elements overlap; the smaller joint
+markers should remain clearly distinguishable from the link bodies. Confirm the shoulder,
+elbow, wrist-flex, and wrist-roll pivots appear within the corresponding compact motor-case
+envelopes rather than at forced bar endpoints. The upper and lower printed members may be
+visibly offset from those pivots; that is intentional and should remain stable across
+Side/Front/Top views. Jaw opening must leave
 the fixed finger still and rotate only the moving jaw; in the normal light theme the moving
 jaw should read as neutral dark/black and slightly heavier than the fixed finger. Confirm the
 model Z=0 label and readable toolbar/ruler. No hardware motion is needed for these presentation checks.

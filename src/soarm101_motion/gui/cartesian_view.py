@@ -1,7 +1,7 @@
 """Interactive SO-101 kinematic renderer shared by GUI motion workspaces.
 
 FK and joint markers come from the SDK's native kinematic model. The visible arm bodies use
-presentation-only centerlines derived from the packaged URDF visual primitives; coarse safety
+presentation-only, mesh-informed member offsets and motor-case envelopes; coarse safety
 centerlines remain separate. The renderer is a diagnostic/teaching view, not a physics engine
 or certified collision model.
 """
@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QPainter,
     QPalette,
     QPen,
+    QPolygonF,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
@@ -45,6 +46,38 @@ def _presentation_body_width(thickness_m: float, scale: float, *, ghost: bool) -
     ceiling = 18.0 if ghost else 28.0
     factor = 0.46 if ghost else 0.62
     return max(floor, min(ceiling, float(thickness_m) * float(scale) * factor))
+
+
+def _convex_hull(points: Sequence[QPointF]) -> QPolygonF:
+    """Return the convex screen-space hull for an orthographic projected box."""
+
+    unique = sorted({(round(point.x(), 8), round(point.y(), 8)) for point in points})
+    if len(unique) <= 2:
+        return QPolygonF([QPointF(x, y) for x, y in unique])
+
+    def cross(
+        origin: tuple[float, float],
+        first: tuple[float, float],
+        second: tuple[float, float],
+    ) -> float:
+        return (
+            (first[0] - origin[0]) * (second[1] - origin[1])
+            - (first[1] - origin[1]) * (second[0] - origin[0])
+        )
+
+    lower: list[tuple[float, float]] = []
+    for point in unique:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0.0:
+            lower.pop()
+        lower.append(point)
+
+    upper: list[tuple[float, float]] = []
+    for point in reversed(unique):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0.0:
+            upper.pop()
+        upper.append(point)
+
+    return QPolygonF([QPointF(x, y) for x, y in lower[:-1] + upper[:-1]])
 
 
 def _mix(first: QColor, second: QColor, amount: float) -> QColor:
@@ -81,7 +114,7 @@ class CartesianArmView(QWidget):
         self._last_mouse: QPointF | None = None
         self.setMinimumSize(220, 220)
         self.setToolTip(
-            "Nominal SO-101 URDF-visual and jaw schematic in model/base coordinates. "
+            "Nominal SO-101 mesh-informed motor/member and jaw schematic in model/base coordinates. "
             "The grid is model Z=0, not a measured table. Drag to rotate, wheel to zoom."
         )
         layout = QVBoxLayout(self)
@@ -279,6 +312,7 @@ class CartesianArmView(QWidget):
         joint_points = [points[name] for name in joint_names]
         segments = self._model.presentation_link_segments(joints)
         thicknesses = self._model.presentation_link_thicknesses()
+        motor_boxes = self._model.presentation_box_corners(joints)
         gripper = self._gripper_geometry_for(joints, gripper_position)
 
         style = Qt.PenStyle.DashLine if ghost else Qt.PenStyle.SolidLine
@@ -296,6 +330,16 @@ class CartesianArmView(QWidget):
                 )
             )
             painter.drawLine(self._project(first), self._project(second))
+
+        motor_fill = QColor(link_color)
+        if not ghost:
+            motor_fill = _mix(link_color, QColor("#000000"), 0.08)
+        motor_outline = _mix(motor_fill, joint_color, 0.30)
+        for corners in motor_boxes.values():
+            polygon = _convex_hull([self._project(point) for point in corners])
+            painter.setBrush(QBrush(motor_fill))
+            painter.setPen(QPen(motor_outline, 1.0, style))
+            painter.drawPolygon(polygon)
 
         width = 2.8 if ghost else 4.0
         painter.setPen(QPen(link_color, width, style, Qt.PenCapStyle.FlatCap))
@@ -355,12 +399,14 @@ class CartesianArmView(QWidget):
 
         points = self._model.link_points(self._joints)
         segments = self._model.presentation_link_segments(self._joints)
+        motor_boxes = self._model.presentation_box_corners(self._joints)
         tcp_pose = self._model.forward(self._joints)
         tcp = tcp_pose.position
         gripper = self.gripper_geometry()
         fit_points = [
             *points.values(),
             *(point for segment in segments.values() for point in segment),
+            *(point for corners in motor_boxes.values() for point in corners),
             *gripper.values(),
             np.zeros(3, dtype=float),
             np.array([0.12, 0.0, 0.0]),
@@ -373,6 +419,9 @@ class CartesianArmView(QWidget):
             secondary_segments = self._model.presentation_link_segments(
                 self._secondary_joints
             )
+            secondary_motor_boxes = self._model.presentation_box_corners(
+                self._secondary_joints
+            )
             secondary_gripper = self._gripper_geometry_for(
                 self._secondary_joints,
                 self._secondary_gripper,
@@ -382,6 +431,11 @@ class CartesianArmView(QWidget):
                 point
                 for segment in secondary_segments.values()
                 for point in segment
+            )
+            fit_points.extend(
+                point
+                for corners in secondary_motor_boxes.values()
+                for point in corners
             )
             fit_points.extend(secondary_gripper.values())
         if self._target_position_m is not None:

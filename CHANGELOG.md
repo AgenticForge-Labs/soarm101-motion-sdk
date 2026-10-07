@@ -23,10 +23,14 @@
   the fixed finger, making Front/Side/Top views easier to interpret without changing motion.
   Follow-up GUI review reduced raw URDF-derived stroke thickness, removed rounded body caps and
   the extra body shadow, and shrank joint markers so missing servo housings are not rendered as
-  large artificial blobs. Physical comparison then identified the simplified URDF shoulder
-  and wrist boxes as nonphysical proxy bars, so the GUI no longer draws those two bodies.
-  The moving jaw is now neutral dark and slightly heavier than the fixed finger. These remain
-  presentation-only changes; FK, planning, and safety geometry are unchanged.
+  large artificial blobs. A subsequent assumption audit removed the implicit
+  "printed member ends at the joint center" model: upper/lower arm strokes now retain the
+  official mesh-model lateral/vertical offsets, and the six STS3215 bodies are drawn as
+  oriented manufacturer-sized case envelopes at the official SO-101 mesh poses. This puts
+  shoulder/elbow/wrist pivots inside their actuator bodies where appropriate instead of
+  inventing shoulder/wrist bars or snapping every arm member to a pivot. The moving jaw is
+  neutral dark and slightly heavier than the fixed finger. These remain presentation-only
+  changes; FK, planning, and safety geometry are unchanged.
 - Made the persistent GUI robot view live during commanded motion without adding a competing
   hardware poller. The MotionController and stock gripper publish motion-owned measured
   feedback so the GUI animates measured joints, model-estimated TCP readouts, and jaw aperture

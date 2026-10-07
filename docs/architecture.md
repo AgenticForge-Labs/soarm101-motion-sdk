@@ -40,8 +40,11 @@ Rules:
 - Kinematic GUI previews consume the same `SO101KinematicModel` used by planning; ghost
   overlays are visualization only and never authorize or execute motion. Session state
   supplies the active TCP transform and one joint snapshot for numerical FK and drawing.
-  Joint markers/TCP remain FK-derived. Visible link strokes use presentation-only centerlines
-  derived from the packaged URDF visual primitives, while `link_points()` remains the
+  Joint markers/TCP remain FK-derived. Visible printed-member strokes use presentation-only
+  offsets from the official mesh-based SO-101 model rather than connecting joint centers, and
+  STS3215 bodies use oriented presentation envelopes at the official mesh poses. A revolute
+  pivot may therefore lie inside a motor case while the neighboring printed member is offset
+  from it. None of these display shapes are collision authority: `link_points()` remains the
   separate coarse safety/workspace centerline. Nominal jaw outlines are shared model helpers;
   the offline illustration uses a neutral jaw opening until measured aperture arrives.
   Camera scale/presets are GUI presentation. Model Z=0 is not a measured table or collision
