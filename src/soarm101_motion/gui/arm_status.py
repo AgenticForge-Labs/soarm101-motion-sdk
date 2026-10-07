@@ -222,7 +222,11 @@ class RobotStatusPanel(QWidget):
     def clear_state(self, *, label: str = "OFFLINE") -> None:
         self._set_status_chip(label, "offline")
         self.view.setEnabled(False)
-        self.measurement_label.setText("Last measured pose — disconnected" if self._has_measurement else "Illustration — not live")
+        self.measurement_label.setText(
+            "Last measured pose — disconnected"
+            if self._has_measurement
+            else "Illustration — not live"
+        )
         for value in self.pose_value_labels.values():
             value.setText("—")
         for value in self.joint_value_labels.values():
@@ -247,11 +251,17 @@ class RobotStatusPanel(QWidget):
         self.gripper_bar.setValue(round(gripper * 1000))
         self.gripper_bar.setFormat(f"{gripper:.3f}")
 
-    def update_pose_mm_deg(self, pose_mm_deg: Mapping[str, float] | tuple[float, ...] | list[float]) -> None:
+    def update_pose_mm_deg(
+        self,
+        pose_mm_deg: Mapping[str, float] | tuple[float, ...] | list[float],
+    ) -> None:
         """Refresh the model-estimated TCP readout from live measured joints."""
 
         if isinstance(pose_mm_deg, Mapping):
-            pose = tuple(float(pose_mm_deg[key]) for key in ("x", "y", "z", "roll", "pitch", "yaw"))
+            pose = tuple(
+                float(pose_mm_deg[key])
+                for key in ("x", "y", "z", "roll", "pitch", "yaw")
+            )
         else:
             pose = tuple(float(value) for value in pose_mm_deg)
         if len(pose) != 6:
@@ -262,7 +272,7 @@ class RobotStatusPanel(QWidget):
             self.pose_value_labels[key].setText(f"{value:+.1f} {unit}")
 
     def update_live_measurements(self, values: Mapping[str, Any]) -> None:
-        """Apply any available live visualization measurements without requiring a full state."""
+        """Apply available live measurements without requiring a full state."""
 
         if "tcp_xyz_rpy" in values:
             self.view.set_tcp(Pose.from_xyz_rpy(*values["tcp_xyz_rpy"]))
@@ -280,7 +290,11 @@ class RobotStatusPanel(QWidget):
 
         self.view.setEnabled(True)
         self._has_measurement = True
-        self.measurement_label.setText("Simulated state" if state.get("simulation") else "Measured joints · model-estimated tool pose")
+        self.measurement_label.setText(
+            "Simulated state"
+            if state.get("simulation")
+            else "Measured joints · model-estimated tool pose"
+        )
         joints = {name: float(state["joints_deg"][name]) for name in ARM_JOINTS}
         tcp_values = state.get("tcp_xyz_rpy")
         self.view.set_tcp(
