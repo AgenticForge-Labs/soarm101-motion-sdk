@@ -91,6 +91,7 @@ class RobotWorker(QObject):
         self._active_jog_start: Pose | None = None
         self._active_jog_target: Pose | None = None
         self._active_jog_command: dict[str, Any] | None = None
+        self._live_gripper_with_motion = False
 
     def _install_live_feedback(self, arm: SOARM101) -> None:
         """Bridge existing motion/tool measurements into GUI-only live state."""
@@ -98,22 +99,23 @@ class RobotWorker(QObject):
         def publish_joints(joints: object) -> None:
             values = {name: float(dict(joints)[name]) for name in ARM_JOINTS}
             pose = arm.model.forward(values, tcp=arm.active_tcp).xyz_rpy()
-            self.live_measurements.emit(
-                {
-                    "joints_deg": {
-                        name: degrees(values[name]) for name in ARM_JOINTS
-                    },
-                    "pose_mm_deg": (
-                        pose[0] * 1000.0,
-                        pose[1] * 1000.0,
-                        pose[2] * 1000.0,
-                        degrees(pose[3]),
-                        degrees(pose[4]),
-                        degrees(pose[5]),
-                    ),
-                    "tcp_xyz_rpy": arm.active_tcp.xyz_rpy(),
-                }
-            )
+            payload: dict[str, object] = {
+                "joints_deg": {
+                    name: degrees(values[name]) for name in ARM_JOINTS
+                },
+                "pose_mm_deg": (
+                    pose[0] * 1000.0,
+                    pose[1] * 1000.0,
+                    pose[2] * 1000.0,
+                    degrees(pose[3]),
+                    degrees(pose[4]),
+                    degrees(pose[5]),
+                ),
+                "tcp_xyz_rpy": arm.active_tcp.xyz_rpy(),
+            }
+            if self._live_gripper_with_motion:
+                payload["gripper"] = float(arm.tool.get_position())
+            self.live_measurements.emit(payload)
 
         arm.motion.set_feedback_callback(publish_joints)
 
@@ -339,6 +341,7 @@ class RobotWorker(QObject):
                 self.log_message.emit(f"Completed {label}.")
                 record_session("motion_completed", worker=self._robot_id, label=label)
             if label == "teleop alignment":
+                self._live_gripper_with_motion = False
                 self._record_gripper_snapshot(
                     "joint_alignment_finished" if exception is None else "joint_alignment_failed",
                     leader_gripper=(
@@ -502,6 +505,7 @@ class RobotWorker(QObject):
         arm = self.arm
         self.arm = None
         self._teleop_staging = None
+        self._live_gripper_with_motion = False
         for _label, handle in self._handles:
             handle.cancel()
         self._handles.clear()
@@ -565,6 +569,7 @@ class RobotWorker(QObject):
     def relax(self) -> None:
         try:
             self._teleop_staging = None
+            self._live_gripper_with_motion = False
             for _label, handle in self._handles:
                 handle.cancel()
             arm = self._require_arm()
@@ -584,6 +589,7 @@ class RobotWorker(QObject):
     def stop(self) -> None:
         try:
             self._teleop_staging = None
+            self._live_gripper_with_motion = False
             for _label, handle in self._handles:
                 handle.cancel()
             arm = self._require_arm()
@@ -891,6 +897,7 @@ class RobotWorker(QObject):
                         except BaseException:
                             pass
                         raise
+                    self._live_gripper_with_motion = True
                     self.log_message.emit(
                         f"Opening follower gripper {opening_start:.3f} → "
                         f"{opening_target:.3f} alongside joint alignment."
