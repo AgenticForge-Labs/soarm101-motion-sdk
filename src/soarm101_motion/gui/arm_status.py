@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.gui.cartesian_view import CartesianArmView
+from soarm101_motion.kinematics import DEFAULT_GRIPPER_TCP
+from soarm101_motion.types import Pose
 
 
 class RobotStatusPanel(QWidget):
@@ -246,6 +248,10 @@ class RobotStatusPanel(QWidget):
         self._has_measurement = True
         self.measurement_label.setText("Simulated state" if state.get("simulation") else "Measured joints · model-estimated tool pose")
         joints = {name: float(state["joints_deg"][name]) for name in ARM_JOINTS}
+        tcp_values = state.get("tcp_xyz_rpy")
+        self.view.set_tcp(
+            DEFAULT_GRIPPER_TCP if tcp_values is None else Pose.from_xyz_rpy(*tcp_values)
+        )
         self.view.set_joint_degrees(joints)
         for name, angle in joints.items():
             self.joint_value_labels[name].setText(f"{angle:+.1f}°")

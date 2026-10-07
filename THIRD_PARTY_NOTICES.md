@@ -5,6 +5,9 @@
 License: Apache License 2.0.
 
 The native kinematic model, joint limits, TCP transform, and packaged simplified simulation URDF are derived from the official `Simulation/SO101/so101_new_calib.urdf`. The simplified URDF omits the original meshes and uses primitive visual geometry.
+The nominal GUI jaw outline also uses the official moving-jaw mesh extents and visual
+origin offset from `Simulation/SO101/assets/moving_jaw_so101_v1.stl`. Original mesh
+bytes are not vendored; this is a schematic, not a collision mesh.
 
 ## Hugging Face LeRobot
 

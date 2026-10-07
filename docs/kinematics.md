@@ -19,4 +19,21 @@ Orientation modes:
 
 `move_linear()` interpolates Cartesian position and orientation, solves IK sequentially at the command rate, and rejects discontinuities. For `position_only` paths, a deterministic joint-space filter may be used only to create smoother IK seeds; every interior Cartesian sample is then re-solved at the same hard tolerance, and the refined sequence is kept only when discrete joint jerk is lower. If forward sequential IK still hits a numerical local minimum, the planner may solve the same samples backward from a reachable endpoint solution. A caller-provided endpoint seed is only a boundary-condition hint: the reverse path must satisfy the unchanged hard tolerance at every sample and reconnect continuously to the measured start. Cartesian geometry remains the source of truth.
 
-The Manual GUI's joint-center view is generated from this same native model rather than a second visual-only arm definition. It starts in an orthographic X/Z side view and shows joint axes and the TCP, not the printed link housings or gripper mesh. Dragging rotates the view; double-clicking restores the side view. During a jog, the GUI marks the requested TCP target and logs the requested-versus-achieved Cartesian pose. The physical validation sequence in `TESTING.md` uses those diagnostics to distinguish a GUI/planner axis error from a calibration or physical joint-direction mismatch.
+The GUI's joint-center view uses the same native model. Its fixed finger and rotating
+jaw are a nominal outline derived from the official pivot/travel and mesh extents,
+not a mesh or calibrated jaw-angle display. Normalized opening maps to nominal URDF
+travel; the real actuator retains measured calibration. The TCP marker/axes use the
+active session tool transform. One joint snapshot owns drawing and numerical FK.
+
+The view starts in orthographic X/Z Side view; Front, Top, and Isometric presets
+expose depth relationships. Drag rotates, wheel zooms, double-click resets to Side.
+Scale stays fixed across pose, ghost, and target updates. Fit fits once; Auto fit
+explicitly enables continuous rescaling. Resizing or choosing a standard view fits
+again. The ruler measures distance in the screen plane; segments pointing into the
+screen are foreshortened. The grid is model Z=0, not a measured table. Neither the
+schematic nor primitive PyBullet visuals provide collision geometry.
+
+During a jog, the GUI marks the target and logs requested-versus-achieved Cartesian
+pose. The physical sequence in TESTING.md distinguishes software and physical/model
+direction errors. Mechanical-stop calibration establishes encoder zero/travel, not
+measured physical geometry. Remaining geometry/TCP and shaking work is in PLAN.md.

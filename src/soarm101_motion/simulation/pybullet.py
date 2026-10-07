@@ -9,6 +9,7 @@ from typing import Any
 from soarm101_motion.constants import ARM_JOINTS, STOCK_GRIPPER
 from soarm101_motion.exceptions import MissingDependencyError
 from soarm101_motion.hardware.simulation import SimulationBackend
+from soarm101_motion.kinematics.model import STOCK_JAW_LIMITS
 
 
 class PyBulletSimulationBackend(SimulationBackend):
@@ -79,7 +80,9 @@ class PyBulletSimulationBackend(SimulationBackend):
                 )
         if "gripper" in self._joint_indices:
             normalized = self._tool_positions[STOCK_GRIPPER]
-            angle = -0.174533 + normalized * (1.74533 + 0.174533)
+            angle = STOCK_JAW_LIMITS[0] + normalized * (
+                STOCK_JAW_LIMITS[1] - STOCK_JAW_LIMITS[0]
+            )
             self._p.resetJointState(
                 self._robot,
                 self._joint_indices["gripper"],

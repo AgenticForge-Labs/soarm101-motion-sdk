@@ -22,7 +22,7 @@ from PySide6.QtGui import (
     QPen,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from soarm101_motion.constants import HOME_JOINTS
 from soarm101_motion.kinematics import SO101KinematicModel
@@ -58,12 +58,56 @@ class CartesianArmView(QWidget):
         self._zoom = 1.0
         self._projection_center = (0.0, 0.0)
         self._projection_scale = 1.0
+        self._projection_ready = False
+        self._projection_size = (0, 0)
         self._last_mouse: QPointF | None = None
         self.setMinimumSize(220, 220)
         self.setToolTip(
-            "SO-101 kinematic view. Drag to rotate, use the wheel to zoom, "
-            "or double-click to return to the side view."
+            "Nominal SO-101 joint and jaw schematic in model/base coordinates. "
+            "The grid is model Z=0, not a measured table. Drag to rotate, wheel to zoom."
         )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(5)
+        self.view_combo = QComboBox()
+        self.view_combo.addItems(["Side", "Front", "Top", "Isometric", "Free"])
+        self.view_combo.setToolTip("Standard orthographic model views")
+        self.view_combo.currentTextChanged.connect(self.set_standard_view)
+        toolbar.addWidget(self.view_combo)
+        self.fit_button = QPushButton("Fit")
+        self.fit_button.setToolTip("Fit the current arm, preview, and target once")
+        self.fit_button.clicked.connect(self.fit_view)
+        toolbar.addWidget(self.fit_button)
+        self.auto_fit = QCheckBox("Auto fit")
+        self.auto_fit.setToolTip("Continuously rescale; leave off to compare movement at a fixed scale")
+        self.auto_fit.toggled.connect(lambda _checked: self.update())
+        toolbar.addWidget(self.auto_fit)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        layout.addStretch()
+
+    def set_standard_view(self, name: str) -> None:
+        angles = {
+            "Side": (0.0, 0.0),
+            "Front": (radians(90), 0.0),
+            "Top": (0.0, radians(90)),
+            "Isometric": (radians(-45), radians(30)),
+        }
+        if name not in angles:
+            return
+        self._yaw, self._pitch = angles[name]
+        self.fit_view()
+
+    def fit_view(self) -> None:
+        self._projection_ready = False
+        self._zoom = 1.0
+        self.update()
+
+    def set_tcp(self, tcp: Pose) -> None:
+        """Use the session's tool transform for the TCP marker and axes."""
+        self._model.tcp = tcp
+        self.update()
 
     def sizeHint(self) -> QSize:
         return QSize(360, 340)
@@ -120,24 +164,7 @@ class CartesianArmView(QWidget):
         joints: Mapping[str, float],
         gripper_position: float,
     ) -> dict[str, np.ndarray]:
-        flange = self._model.forward_matrix(joints, tcp=Pose.identity())
-        origin = flange[:3, 3]
-        rotation = flange[:3, :3]
-
-        def world(local: Sequence[float]) -> np.ndarray:
-            return origin + rotation @ np.asarray(local, dtype=float)
-
-        half_gap = 0.006 + 0.018 * float(gripper_position)
-        return {
-            "origin": origin.copy(),
-            "body_end": world((0.0, 0.0, -0.070)),
-            "crossbar_left": world((0.0, -0.028, -0.050)),
-            "crossbar_right": world((0.0, 0.028, -0.050)),
-            "left_root": world((0.0, -half_gap, -0.052)),
-            "left_tip": world((0.0, -half_gap, -0.115)),
-            "right_root": world((0.0, half_gap, -0.052)),
-            "right_tip": world((0.0, half_gap, -0.115)),
-        }
+        return self._model.stock_gripper_points(joints, gripper_position)
 
     def gripper_geometry(self) -> dict[str, np.ndarray]:
         """Return primary schematic gripper points in world coordinates."""
@@ -165,7 +192,7 @@ class CartesianArmView(QWidget):
         scale = self._projection_scale * self._zoom
         return QPointF(
             self.width() * 0.50 + (x - center_x) * scale,
-            self.height() * 0.50 - (z - center_z) * scale,
+            self.height() * 0.50 + 10.0 - (z - center_z) * scale,
         )
 
     def _fit_projection(self, points: Sequence[np.ndarray]) -> None:
@@ -177,8 +204,10 @@ class CartesianArmView(QWidget):
         self._projection_center = ((min_x + max_x) / 2.0, (min_z + max_z) / 2.0)
         self._projection_scale = min(
             max(1, self.width() - 54) / max(0.05, max_x - min_x),
-            max(1, self.height() - 88) / max(0.05, max_z - min_z),
+            max(1, self.height() - 130) / max(0.05, max_z - min_z),
         ) * 0.84
+        self._projection_ready = True
+        self._projection_size = (self.width(), self.height())
 
     def _draw_axis(
         self,
@@ -267,24 +296,16 @@ class CartesianArmView(QWidget):
         width = 3.2 if ghost else 5.0
         style = Qt.PenStyle.DashLine if ghost else Qt.PenStyle.SolidLine
         painter.setPen(QPen(link_color, width, style, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(
-            self._project(gripper["origin"]),
-            self._project(gripper["body_end"]),
-        )
-        painter.drawLine(
-            self._project(gripper["crossbar_left"]),
-            self._project(gripper["crossbar_right"]),
-        )
+        for start, end in (("origin", "fixed_root"), ("origin", "moving_pivot")):
+            painter.drawLine(self._project(gripper[start]), self._project(gripper[end]))
         finger_width = 2.4 if ghost else 4.0
         painter.setPen(QPen(link_color, finger_width, style, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(
-            self._project(gripper["left_root"]),
-            self._project(gripper["left_tip"]),
-        )
-        painter.drawLine(
-            self._project(gripper["right_root"]),
-            self._project(gripper["right_tip"]),
-        )
+        for start, end in (
+            ("fixed_root", "fixed_tip"),
+            ("moving_pivot", "moving_root"),
+            ("moving_root", "moving_tip"),
+        ):
+            painter.drawLine(self._project(gripper[start]), self._project(gripper[end]))
 
         painter.setBrush(QBrush(joint_color))
         painter.setPen(QPen(link_color, 1.2))
@@ -294,7 +315,7 @@ class CartesianArmView(QWidget):
             painter.drawEllipse(projected, radius, radius)
 
         if label and ghost:
-            tip = self._project(gripper["body_end"])
+            tip = self._project(gripper["fixed_tip"])
             painter.setPen(QPen(link_color, 1.0))
             painter.drawText(tip + QPointF(8.0, -8.0), label)
 
@@ -339,7 +360,12 @@ class CartesianArmView(QWidget):
             fit_points.extend(secondary_gripper.values())
         if self._target_position_m is not None:
             fit_points.append(self._target_position_m)
-        self._fit_projection(fit_points)
+        if (
+            not self._projection_ready
+            or self.auto_fit.isChecked()
+            or self._projection_size != (self.width(), self.height())
+        ):
+            self._fit_projection(fit_points)
 
         self._draw_ground_grid(painter, muted)
         origin = np.zeros(3, dtype=float)
@@ -408,22 +434,31 @@ class CartesianArmView(QWidget):
 
         if self._queue_active:
             painter.setPen(QPen(text, 1.0))
-            painter.drawText(12, 22, f"{self._queue_depth} Cartesian jogs queued")
+            painter.drawText(12, 56, f"{self._queue_depth} Cartesian jogs queued")
+
+        # Screen-plane ruler: orthographic scale is uniform; world segments can
+        # still be foreshortened when they point into the screen.
+        ruler_mm = 50 if self._projection_scale * self._zoom * 0.05 < self.width() / 3 else 20
+        length = ruler_mm / 1000.0 * self._projection_scale * self._zoom
+        y = self.height() - 45
+        painter.setPen(QPen(text, 1.3))
+        painter.drawLine(QPointF(12, y), QPointF(12 + length, y))
+        for x in (12, 12 + length):
+            painter.drawLine(QPointF(x, y - 3), QPointF(x, y + 3))
+        painter.drawText(QPointF(12, y - 6), f"{ruler_mm} mm")
 
         painter.setPen(QPen(_mix(muted, text, 0.20), 1.0))
         painter.drawText(
             12,
             self.height() - 11,
-            "Drag rotate  ·  Wheel zoom  ·  Double-click reset",
+            "Model schematic · Grid: model Z=0",
         )
         painter.end()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._yaw = 0.0
-            self._pitch = 0.0
-            self._zoom = 1.0
-            self.update()
+            self.view_combo.setCurrentText("Side")
+            self.set_standard_view("Side")
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
@@ -444,6 +479,7 @@ class CartesianArmView(QWidget):
                 radians(-80.0),
                 min(radians(80.0), self._pitch + float(delta.y()) * 0.008),
             )
+            self.view_combo.setCurrentText("Free")
             self.update()
             event.accept()
             return
