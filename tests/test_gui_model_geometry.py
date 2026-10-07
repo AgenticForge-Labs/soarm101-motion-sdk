@@ -20,6 +20,11 @@ def view(monkeypatch):
     widget.close()
 
 
+def test_offline_illustration_uses_neutral_gripper_opening(view):
+    assert view._gripper_position == pytest.approx(0.45)
+    assert 0.0 < view._gripper_position < 1.0
+
+
 def test_pose_preview_and_target_updates_keep_fixed_projection(view):
     view.grab()
     scale, center = view._projection_scale, view._projection_center
