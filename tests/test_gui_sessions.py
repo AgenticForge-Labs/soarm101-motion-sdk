@@ -446,6 +446,7 @@ def test_status_banner_is_always_present_and_clear_acknowledges_notice(window):
 
 
 def test_clearing_teleop_fault_keeps_non_dismissible_stopped_state(window):
+    window.show()
     window._teleop_active = True
     window._on_teleop_faulted(
         {
