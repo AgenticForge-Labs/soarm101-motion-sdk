@@ -1374,8 +1374,8 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
         arm.enable()
         arm_result = arm.move_joints_from_saved_pose(
             pose.joints,
-            speed=requested_speed * pi / 180.0,
-            acceleration=requested_acceleration * pi / 180.0,
+            speed=8.0 * pi / 180.0,
+            acceleration=25.0 * pi / 180.0,
         )
         gripper_result = arm.tool.move(pose.gripper)
         arm.hold()
@@ -1434,8 +1434,8 @@ def _cmd_agent_joint(args: argparse.Namespace) -> int:
         result = arm.move_joints(
             {args.joint: delta_rad},
             relative=True,
-            speed=8.0 * pi / 180.0,
-            acceleration=25.0 * pi / 180.0,
+            speed=requested_speed * pi / 180.0,
+            acceleration=requested_acceleration * pi / 180.0,
         )
         arm.hold()
         after = dict(arm.get_joint_positions().positions)
