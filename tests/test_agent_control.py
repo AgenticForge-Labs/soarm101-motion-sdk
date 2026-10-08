@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from types import SimpleNamespace
 
 import numpy as np
@@ -143,6 +145,96 @@ def test_agent_cartesian_executes_at_broker_supplied_rates(monkeypatch) -> None:
     assert cli._cmd_agent_jog(args) == 0
     assert captured["speed_mm_s"] == pytest.approx(20)
     assert captured["acceleration_mm_s2"] == pytest.approx(80)
+
+
+def test_agent_jog_trace_records_motion_hold_and_later_feedback(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from soarm101_motion import SOARM101
+    from soarm101_motion.cli import main as cli
+    from soarm101_motion.types import MotionResult
+
+    trace_file = tmp_path / "jog.jsonl"
+    arm = SOARM101.simulated()
+    monkeypatch.setattr(cli, "_arm_from_args", lambda *a, **kw: arm)
+    monkeypatch.setattr(cli, "_agent_require_authority", lambda *a: {"armed": True})
+    monkeypatch.setattr(cli, "_agent_calibration_id", lambda *a, **kw: "sha256:motor")
+    monkeypatch.setattr(
+        cli, "WorkspaceCalibrationStore",
+        lambda *a: SimpleNamespace(load=lambda: object()),
+    )
+    monkeypatch.setattr(
+        cli, "evaluate_agent_jog",
+        lambda *a, **kw: SimpleNamespace(to_payload=lambda: {"maximum_distance_mm": 10}),
+    )
+    move_calls = []
+
+    def fake_jog(arm, **kwargs):
+        move_calls.append(kwargs)
+        joints = dict(arm.get_joint_positions().positions)
+        arm.backend.write_joint_positions(joints)
+        return MotionResult(True, True, final_positions=joints)
+
+    monkeypatch.setattr(cli, "jog_linear_cli_units", fake_jog)
+    args = build_parser().parse_args([
+        "agent", "jog", "--x-mm", "2", "--trace-file", str(trace_file),
+    ])
+    assert cli._cmd_agent_jog(args) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["trace_file"] == str(trace_file)
+    assert output["trace_summary"]["feedback_count"] >= 2
+    assert len(move_calls) == 1
+
+    events = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    markers = [e["marker"] for e in events if e["event"] == "marker"]
+    assert markers == [
+        "preflight", "motion_start", "motion_completed_before_hold",
+        "hold_start", "hold_complete", "post_hold_immediate", "post_hold_2s",
+    ]
+    assert events[0]["action"] == "agent_jog"
+    assert events[0]["calibration_id"] is None  # simulated backend, no fake provenance
+    assert events[0]["delta_model_mm"] == [2.0, 0.0, 0.0]
+    assert any(e["event"] == "command" for e in events)
+    for name in ("motion_completed_before_hold", "post_hold_immediate", "post_hold_2s"):
+        event = next(e for e in events if e.get("marker") == name)
+        assert set(event["joints_rad"]) == {
+            "shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll",
+        }
+        assert len(event["tcp_xyz_mm"]) == 3
+    assert events[-1]["event"] == "trace_end"
+    assert events[-1]["error"] is None
+
+
+def test_agent_jog_trace_persists_execution_failure(monkeypatch, tmp_path) -> None:
+    from soarm101_motion import SOARM101
+    from soarm101_motion.cli import main as cli
+
+    trace_file = tmp_path / "failed-jog.jsonl"
+    arm = SOARM101.simulated()
+    monkeypatch.setattr(cli, "_arm_from_args", lambda *a, **kw: arm)
+    monkeypatch.setattr(cli, "_agent_require_authority", lambda *a: {"armed": True})
+    monkeypatch.setattr(cli, "_agent_calibration_id", lambda *a, **kw: "sha256:motor")
+    monkeypatch.setattr(
+        cli, "WorkspaceCalibrationStore",
+        lambda *a: SimpleNamespace(load=lambda: object()),
+    )
+    monkeypatch.setattr(
+        cli, "evaluate_agent_jog",
+        lambda *a, **kw: SimpleNamespace(to_payload=lambda: {}),
+    )
+    def fail_jog(*a, **kwargs):
+        raise RuntimeError("test: simulated motor fault")
+
+    monkeypatch.setattr(cli, "jog_linear_cli_units", fail_jog)
+    args = build_parser().parse_args([
+        "agent", "jog", "--x-mm", "2", "--trace-file", str(trace_file),
+    ])
+    with pytest.raises(RuntimeError, match="simulated motor fault"):
+        cli._cmd_agent_jog(args)
+    events = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    assert any(e.get("marker") == "motion_start" for e in events)
+    assert not any(e.get("marker") == "hold_complete" for e in events)
+    assert "simulated motor fault" in events[-1]["error"]
 
 
 def test_agent_authority_is_time_bounded_and_identity_bound(tmp_path) -> None:
