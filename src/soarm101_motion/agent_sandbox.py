@@ -1054,7 +1054,7 @@ def run_agent(
     selected_auth = adapter.auth_mode(auth)
     if interface not in {"robotctl", "mcp"}:
         raise AgentSandboxError("interface must be 'robotctl' or 'mcp'")
-    if interface == "mcp" and adapter.name not in {"hermes", "codex"}:
+    if interface == "mcp" and (adapter_manifest is not None or adapter.name not in {"hermes", "codex"}):
         raise AgentSandboxError("MCP currently requires the built-in Hermes or Codex adapter")
     chosen_profile = (
         CapabilityProfile.from_file(capability_profile)
