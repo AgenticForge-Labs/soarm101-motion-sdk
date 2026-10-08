@@ -16,7 +16,7 @@ RUN curl -fsSL https://chatgpt.com/codex/install.sh | sh \
     && codex --version
 
 # MCP runs use an isolated Python environment; robotctl remains independent.
-RUN python3 -m venv /opt/soarm101-mcp \\
+RUN python3 -m venv /opt/soarm101-mcp \
     && /opt/soarm101-mcp/bin/pip install --no-cache-dir 'mcp>=2,<3'
 
 WORKDIR /sandbox
