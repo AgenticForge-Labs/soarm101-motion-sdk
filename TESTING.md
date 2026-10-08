@@ -1,5 +1,23 @@
 # Testing
 
+## GUI test-session lifetime (PR #86 merge gate)
+
+The CI matrix runs Python 3.10 and 3.12 with the optional PySide6 GUI
+installed. GUI tests create numerous `QApplication`-owned widgets and worker
+threads in headless offscreen mode. A previous PR-head run completed 569 Python
+tests and Ruff successfully, then aborted with a native
+`QObject: shared QObject was deleted directly` / `malloc_consolidate` Qt
+teardown failure (exit 134). This is a CI failure despite pytest's pass count.
+
+`tests/conftest.py` keeps a single optional `QApplication` referenced for
+the duration of the session, rather than allowing tests that use
+`QApplication.instance() or QApplication([])` to drop the last application
+reference between tests. This does not change GUI production behavior.
+Verify the **process exit code** and final CI status on both Python matrix
+versions; pytest success alone is not a green gate. If the native abort remains,
+isolate Qt object/worker lifecycle further before merging.
+
+
 
 ## 100/1000 motion-envelope validation — 2026-10-06
 
