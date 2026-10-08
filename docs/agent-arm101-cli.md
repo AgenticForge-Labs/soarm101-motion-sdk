@@ -73,7 +73,10 @@ soarm101 agent joint shoulder_pan --delta-deg 20
 
 Only one named pose joint changes per command, the absolute delta is capped at 30 degrees,
 normal calibrated joint/workspace/path checks remain active, and the follower remains held
-after completion.
+after completion. Optional `--speed-deg-s` and `--acceleration-deg-s2` apply to
+this joint jog (defaults 8 and 25). They must be finite, positive and within
+the active motion envelope. The trusted broker pins these for its subprocess;
+MCP/robotctl clients cannot supply their own rates.
 
 The bounded Cartesian surface is translation-only and may use either the fixed SDK
 base/model frame or the current gripper/TCP frame:
@@ -93,7 +96,11 @@ physical-space policy before the normal SDK jog:
 - target physical height below 10 mm above the calibrated ground plane: rejected.
 
 The displacement limit is the norm of the inverse-mapped requested physical displacement,
-not an independent per-axis allowance or a metrology guarantee. Hardware validation showed
+not an independent per-axis allowance or a metrology guarantee.
+Optional `--speed-mm-s` and `--acceleration-mm-s2` apply to this
+Cartesian jog (defaults 10 and 40), validated against the active maximum
+envelope before hardware access; the trusted broker selects these for
+its internal agent CLI subprocess. Hardware validation showed
 that ordinary joint settle tolerance can leave the achieved workspace position a few
 millimeters from the planned target, so the agent policy reserves a 10 mm ground-plane
 margin. The workspace mapping is used only for this additional safety measurement; actual
