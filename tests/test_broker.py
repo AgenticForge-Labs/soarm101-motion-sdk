@@ -13,6 +13,7 @@ import pytest
 from soarm101_motion import SOARM101Config
 from soarm101_motion.broker import (
     AgentCommandExecutor,
+    AgentMotionRates,
     BrokerCommandError,
     RobotBrokerHTTPServer,
     RobotBrokerService,
@@ -70,6 +71,65 @@ def test_broker_executor_propagates_trusted_motion_envelope(monkeypatch) -> None
     assert "--max-linear-speed-mm-s" not in capture_command
 
 
+def test_broker_pins_agent_motion_rates_and_never_accepts_agent_overrides(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        commands.append(list(command))
+        return Completed()
+
+    monkeypatch.setattr("soarm101_motion.broker.subprocess.run", fake_run)
+    config = SOARM101Config.from_motion_limits(
+        robot_id="so101",
+        max_joint_speed_deg_s=60.0,
+        max_joint_acceleration_deg_s2=300.0,
+        max_linear_speed_mm_s=80.0,
+        max_linear_acceleration_mm_s2=500.0,
+    )
+    rates = AgentMotionRates(
+        joint_speed_deg_s=16.0,
+        joint_acceleration_deg_s2=50.0,
+        cartesian_speed_mm_s=20.0,
+        cartesian_acceleration_mm_s2=80.0,
+    )
+    executor = AgentCommandExecutor(config=config, rates=rates)
+    executor.run(["jog", "--frame", "world", "--x-mm", "5"])
+    command = commands[-1]
+    assert command[command.index("--speed-mm-s") + 1] == "20"
+    assert command[command.index("--acceleration-mm-s2") + 1] == "80"
+    assert command[command.index("--max-linear-speed-mm-s") + 1] == "80"
+
+    executor.run(["joint", "shoulder_pan", "--delta-deg", "3"])
+    command = commands[-1]
+    assert command[command.index("--speed-deg-s") + 1] == "16"
+    assert command[command.index("--acceleration-deg-s2") + 1] == "50"
+    assert command[command.index("--max-joint-speed-deg-s") + 1] == "60"
+
+    executor.run(["capture", "overhead"])
+    assert "--speed-mm-s" not in commands[-1]
+    assert "--speed-deg-s" not in commands[-1]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("joint_speed_deg_s", -1.0),
+    ("joint_speed_deg_s", float("nan")),
+    ("cartesian_speed_mm_s", 0.0),
+    ("cartesian_acceleration_mm_s2", float("inf")),
+    ("cartesian_speed_mm_s", 101.0),
+    ("joint_acceleration_deg_s2", 1001.0),
+])
+def test_broker_rejects_invalid_motion_requests_before_startup(field, value) -> None:
+    rates = AgentMotionRates(**{field: value})
+    with pytest.raises(ValueError, match=field):
+        AgentCommandExecutor(rates=rates)
+
+
 def test_broker_parser_defaults_to_100_1000_motion_envelope() -> None:
     from soarm101_motion.broker import build_parser
 
@@ -80,6 +140,10 @@ def test_broker_parser_defaults_to_100_1000_motion_envelope() -> None:
     assert args.max_linear_acceleration_mm_s2 == pytest.approx(1000.0)
     assert args.max_tool_angular_speed_deg_s == pytest.approx(100.0)
     assert args.max_tool_angular_acceleration_deg_s2 == pytest.approx(1000.0)
+    assert args.agent_joint_speed_deg_s == pytest.approx(8.0)
+    assert args.agent_joint_acceleration_deg_s2 == pytest.approx(25.0)
+    assert args.agent_cartesian_speed_mm_s == pytest.approx(10.0)
+    assert args.agent_cartesian_acceleration_mm_s2 == pytest.approx(40.0)
 
 
 class FakeExecutor:
