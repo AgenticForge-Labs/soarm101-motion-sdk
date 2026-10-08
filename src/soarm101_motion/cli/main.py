@@ -46,6 +46,7 @@ from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
 from soarm101_motion.motion import PassiveBackendTrace
+from soarm101_motion.motion.trace import summarize_agent_jog_trace
 from soarm101_motion.poses import (
     PoseLibrary,
     SavedPose,
@@ -1579,6 +1580,12 @@ def _cmd_agent_jog(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_agent_trace_summary(args: argparse.Namespace) -> int:
+    """Summarize a previously recorded JSONL jog; no hardware access."""
+    print(json.dumps(summarize_agent_jog_trace(args.path), indent=2))
+    return 0
+
+
 def _cmd_agent_gripper(args: argparse.Namespace) -> int:
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
@@ -2232,6 +2239,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="trusted-host JSONL motion trace: command/feedback, HOLD latch and 2s settling",
     )
     agent_jog.set_defaults(func=_cmd_agent_jog)
+
+    agent_trace_summary = agent_sub.add_parser(
+        "trace-summary",
+        help="summarize model trajectory, encoder feedback and raw HOLD goals from a local JSONL trace",
+    )
+    agent_trace_summary.add_argument("path", type=Path)
+    agent_trace_summary.set_defaults(func=_cmd_agent_trace_summary)
 
     agent_gripper = agent_sub.add_parser(
         "gripper",
