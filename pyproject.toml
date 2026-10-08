@@ -31,7 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 simulation = ["pybullet>=3.2.7"]
 camera = ["opencv-python-headless>=4.10,<5"]
-gui = ["PySide6>=6.8,<7", "opencv-python-headless>=4.10,<5"]
+gui = ["PySide6>=6.8,<6.12", "opencv-python-headless>=4.10,<5"]
 mcp = ["mcp>=2,<3"]
 dev = [
   "build>=1.2",
