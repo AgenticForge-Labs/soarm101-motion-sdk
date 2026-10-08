@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "joint-guided",
+  "tools": [
+    "robot_health",
+    "robot_capabilities",
+    "robot_state",
+    "capture_camera",
+    "go_pose",
+    "jog_joint",
+    "move_gripper",
+    "stop"
+  ],
+  "cameras": [
+    "overhead",
+    "wrist"
+  ],
+  "limits": {
+    "max_joint_delta_deg": 5
+  }
+}
