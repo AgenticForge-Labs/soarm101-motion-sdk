@@ -151,6 +151,13 @@ is **not** a hardware emergency stop. A human must explicitly arm through
 arming, disarming, relax, calibration, servo registers, unrestricted joint
 vectors, shell execution, or new motion primitives.
 
+A Cartesian jog may internally replan when its measured joint start
+shifts after path validation; the SDK keeps the strict start check
+and revalidates the full path up to two additional times before
+returning an error. Agents must not force or manually repeat a
+persistent refusal. This is a safety-preserving pre-execution
+recovery, not a guarantee of physical Cartesian accuracy.
+
 ## MCP-first live robot tool selection
 
 At MCP initialization the adapter sends **server instructions** preferring the
