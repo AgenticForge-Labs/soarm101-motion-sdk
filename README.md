@@ -125,7 +125,7 @@ image/provider/direct argv only and cannot broaden robot routes or authority. Se
 [agent-as-code/openshell-adapter.example.json](agent-as-code/openshell-adapter.example.json).
 The unrestricted SDK, serial/camera devices, calibration files, Docker socket, SSH material,
 and unrelated host files remain outside the reasoning sandbox. The narrow transport is
-documented separately in [docs/agent-broker.md](docs/agent-broker.md).
+documented separately in [docs/agent-broker.md](docs/agent-broker.md). An optional **stdio MCP adapter** exposes exactly the same bounded broker routes to MCP-capable agents; see [docs/agent-mcp.md](docs/agent-mcp.md). It does not add robot authority or new motion methods.
 
 ## Get started
 
