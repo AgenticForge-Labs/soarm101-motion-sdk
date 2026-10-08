@@ -1,5 +1,11 @@
 # Changelog
 
+- Advertise MCP-first live robot operation through MCP v2 server initialization
+  instructions and clearer tool descriptions, with matching repository Codex
+  guidance. Live state/camera/pose/motion should use the bounded broker tools,
+  not host camera discovery or untrusted CLI fallbacks. No tool or permission
+  changes; client adoption of instructions remains host-dependent.
+
 - Added opt-in Hermes/Codex OpenShell MCP agent integration with one-run
   client-only Python bundles, operator-pinned broker profiles, dual broker +
   OpenShell read-only enforcement, camera evidence retention and run provenance.
