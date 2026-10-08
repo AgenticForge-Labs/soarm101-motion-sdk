@@ -37,6 +37,7 @@ class PassiveBackendTrace:
         self._events: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._originals: dict[str, Any] = {}
+        self._original_plan_linear: Any | None = None
         self._last_command_raw: dict[str, int] | None = None
         self._command_count = 0
         self._feedback_count = 0
@@ -59,6 +60,13 @@ class PassiveBackendTrace:
         # Recording it is necessary to see whether HOLD changes servo goals.
         self._wrap("_write_raw_positions", self._wrap_write_raw_positions)
         self._wrap("read_joint_positions", self._wrap_read_joint_positions)
+        # Observe the exact accepted trajectory, including any internal
+        # replans after a stale Cartesian start. This wraps the existing
+        # planner without requesting additional hardware I/O.
+        plan_method = getattr(getattr(self.arm, "motion", None), "plan_linear", None)
+        if callable(plan_method):
+            self._original_plan_linear = plan_method
+            self.arm.motion.plan_linear = self._wrap_plan_linear(plan_method)
         self._wrap("get_hardware_state", self._wrap_get_hardware_state)
         self._wrap("write_tool_position", self._wrap_write_tool_position)
         self._wrap("read_tool_position", self._wrap_read_tool_position)
@@ -79,6 +87,9 @@ class PassiveBackendTrace:
             for name, original in self._originals.items():
                 setattr(self.backend, name, original)
             self._originals.clear()
+            if self._original_plan_linear is not None:
+                self.arm.motion.plan_linear = self._original_plan_linear
+                self._original_plan_linear = None
             self._flush()
 
     @property
@@ -208,6 +219,25 @@ class PassiveBackendTrace:
                 call_ms=(time.perf_counter() - started) * 1000.0,
             )
             return result
+
+        return traced
+
+    def _wrap_plan_linear(self, original: Any) -> Any:
+        def traced(*args: Any, **kwargs: Any) -> Any:
+            plan = original(*args, **kwargs)
+            samples = getattr(plan, "command_samples", ())
+            if samples:
+                first = samples[0]
+                last = samples[-1]
+                self._record(
+                    "planned_linear",
+                    command_sample_count=len(samples),
+                    first_joints_rad={name: float(first[name]) for name in ARM_JOINTS},
+                    last_joints_rad={name: float(last[name]) for name in ARM_JOINTS},
+                    first_model_tcp_xyz_mm=self._tcp_xyz_mm(first),
+                    last_model_tcp_xyz_mm=self._tcp_xyz_mm(last),
+                )
+            return plan
 
         return traced
 
@@ -359,6 +389,9 @@ def summarize_agent_jog_trace(path: str | Path) -> dict[str, Any]:
     motion_end = markers.get("motion_completed_before_hold", (None, {}))[1]
     hold_start = markers.get("hold_start", (len(events), {}))[0]
     hold_complete = markers.get("hold_complete", (len(events), {}))[0]
+    planned_paths = [
+        event for event in events[:hold_start] if event.get("event") == "planned_linear"
+    ]
     executed_commands = [
         event for event in events[:hold_start] if event.get("event") == "command"
     ]
@@ -413,6 +446,10 @@ def summarize_agent_jog_trace(path: str | Path) -> dict[str, Any]:
             "target_model_xyz_mm": target_tcp,
         },
         "trajectory": {
+            "preflight_plan_count": len(planned_paths),
+            "last_planned_model_tcp_xyz_mm": (
+                planned_paths[-1].get("last_model_tcp_xyz_mm") if planned_paths else None
+            ),
             "joint_commands": len(executed_commands),
             "joint_feedback_reads": len(feedback),
             "first_command_model_tcp_xyz_mm": first_command,
