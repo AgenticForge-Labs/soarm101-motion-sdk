@@ -102,13 +102,20 @@ guarantee measured distance or object clearance. At a starting height only
 slightly above 100 mm, a 50 mm downward command may cross that threshold;
 plan smaller steps near obstacles or the threshold.
 
-The profile does not control movement speed. Current agent Cartesian jog
-requests are fixed at 10 mm/s with 40 mm/s² acceleration (individual
-joint jogs at 8 degrees/s and 25 degrees/s²). Raising the broker's
-absolute motion envelope alone does not change those per-action requests.
-The supervised speed increase remains deferred pending investigation of
-measured physical-height drift and rejected repeat jogs. Do not interpret
-a successful profile load as physical-motion validation.
+The profile does not control movement speed. The trusted broker can
+now pin requested agent Cartesian and joint jog velocities/accelerations
+at startup with `--agent-cartesian-speed-mm-s`,
+`--agent-cartesian-acceleration-mm-s2`,
+`--agent-joint-speed-deg-s` and
+`--agent-joint-acceleration-deg-s2`. Defaults preserve historical
+10 mm/s, 40 mm/s² and 8 deg/s, 25 deg/s² respectively. The broker
+passes these values into the bounded agent CLI adapter, which validates
+them again against the existing maximum motion envelope before hardware.
+`robot_capabilities` exposes the effective `broker_requested_motion`
+rates. See [agent-broker.md](agent-broker.md) for an example.
+This changes configuration ownership, **not** the default physical
+speed. Increasing it on hardware remains deferred pending investigation
+of measured physical-height drift and rejected repeat jogs.
 
 ## MCP tool surface (initial implementation)
 
