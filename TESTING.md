@@ -53,7 +53,14 @@ local supervised physical validation.
 
 ## MCP guidance contract testing
 
-Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm resources/prompts are readable, preserve calibrated-coordinate and evidence rules, and do not change the active MCP tool allowlist.
+Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm server initialization exposes MCP-first live
+robot instructions, tool descriptions direct camera/state use through the
+broker, resources/prompts preserve calibrated-coordinate and evidence rules,
+and no guidance changes the active MCP tool allowlist. A separate read-only
+Codex workstation check should ask for both cameras **without** saying
+"use MCP" and confirm the agent directly selects `soarm101.capture_camera`
+for each permitted camera instead of host `soarm101 camera` commands. This
+host/model behavior is not established by the deterministic tests.
 
 ## MCP OpenShell integration tests
 
