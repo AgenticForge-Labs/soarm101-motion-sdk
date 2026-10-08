@@ -1299,7 +1299,7 @@ def run_agent(
 
             prompt = (
                 "Read TASK.md and SKILL.md completely before acting. "
-                (
+                + (
                     "Use only the discovered SO-ARM101 MCP tools for robot/camera actions. "
                     "Inspect MCP image pixels rather than guessing; do not use shell robotctl. "
                     if interface == "mcp"
