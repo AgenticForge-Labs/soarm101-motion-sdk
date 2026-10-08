@@ -6,6 +6,7 @@ Dependency direction is strict:
 applications -> SOARM101 -> motion/kinematics/tools -> backend -> Feetech transport
 applications -> CameraCapture -> OpenCV -> local USB/UVC camera
 sandboxed agent -> OpenShell -> robotctl -> agent broker -> bounded agent CLI -> SOARM101/CameraCapture
+MCP-capable agent -> optional stdio MCP adapter -> same agent broker -> same bounded agent CLI
 ```
 
 Rules:
