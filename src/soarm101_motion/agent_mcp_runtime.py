@@ -48,6 +48,9 @@ def config_file(root: Path, *, agent: str, hermes_config: Path | None = None) ->
                 f'    command: "{MCP_PYTHON}"\n'
                 f"    args: {MCP_SERVER_ARGS}\n"
                 "    timeout: 125\n"
+                "    env:\n"
+                "      SOARM101_BROKER_URL: \"${SOARM101_BROKER_URL}\"\n"
+                "      SOARM101_BROKER_TOKEN: \"${SOARM101_BROKER_TOKEN}\"\n"
                 "    supports_parallel_tool_calls: false\n"
                 "    tools:\n"
                 "      resources: true\n"
@@ -61,7 +64,8 @@ def config_file(root: Path, *, agent: str, hermes_config: Path | None = None) ->
             f'command = "{MCP_PYTHON}"\n'
             f"args = {MCP_SERVER_ARGS}\n"
             "startup_timeout_sec = 30\n"
-            "tool_timeout_sec = 125\n",
+            "tool_timeout_sec = 125\n"
+            'env_vars = ["SOARM101_BROKER_URL", "SOARM101_BROKER_TOKEN"]\n',
             encoding="utf-8",
         )
         return path, "/sandbox/.codex/config.toml"
