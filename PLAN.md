@@ -4,6 +4,58 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
+## Follow-on capability-registry migration — planned after PR #86
+
+**Status:** design only; no new registry, dispatcher, or persistent robot broker
+is implemented by PR #86. This work is **dependent** on PR #86's MCP, capability
+profile, tracing and agent integration and must not start from `main` until
+that work is merged and the real-arm validation gate is satisfied.
+
+**Target:** a single typed, deterministic SDK capability registry becomes
+authoritative for supported motion/camera actions, descriptions, units, argument
+schemas, SDK dispatch, and shared CLI/broker introspection. Human CLI and
+broker/MCP are adapters. The broker owns agent allowlists, narrower per-field
+limits, human-issued authority leases, request auditing and exclusive robot
+session ownership. SDK guards remain non-negotiable independently of profiles.
+Registry actions may be designated operator-only and cannot be enabled for a
+remote agent by profile editing.
+
+Implement as **three sequential follow-on PRs**:
+
+1. **Registry and ordinary CLI parity.** Introduce typed action specs and
+   adapters to existing SDK primitives; preserve human CLI syntax/semantics.
+   Register existing read/state, single-joint, Cartesian, saved pose, gripper,
+   camera, STOP and diagnostic operations. Cross-check parameters, units,
+   descriptions and schemas against existing CLI; retain operator-only admin
+   commands. Tests prove dispatch parity with today's SDK and no accidental
+   hardware I/O during introspection. No broker runtime migration here.
+2. **Broker registry dispatch and persistent session.** Broker validates
+   static tool and parameter policies against the registry, performs **dynamic**
+   calibration/physical-workspace/authority prechecks against current measured
+   state, and directly invokes trusted SDK operations through one serialized
+   long-lived device session. Preserve bounded retries, following-error, STOP,
+   fault and cancellation behavior, camera evidence/sha, execution audit and
+   OpenShell isolation; deny unknown arguments rather than forwarding CLI flags.
+   Importantly, profile limits intersect with SDK safety and can only narrow.
+   Test TOCTOU/revalidation, lease expiry, request concurrency, reconnect and
+   failed HOLD, and supervised physical 2 mm jog/tracing versus subprocess
+   baseline before merge.
+3. **Retire agent-only execution wrappers.** Remove duplicate agent motion
+   methods/subprocess execution while retaining human-only arm/disarm, regular
+   operator CLI, generic trace diagnostics and stable MCP/robotctl contracts.
+   Migrate existing profile examples, tests, docs and agent sandbox callers;
+   verify there is no second authority source or motion implementation.
+
+The broker should invoke Python SDK operations directly rather than shelling out
+to unrestricted `soarm101` commands; exposing arbitrary CLI argv would be a
+capability escalation. Generic registry metadata does **not** permit raw servo
+register writes or arbitrary configuration from an agent. Do not widen policy
+based on the unverified model/table geometry or treat model FK as true clearance.
+
+**Precondition for PR 1:** #86 merged, local smoke/trace evidence reviewed,
+and CI exits cleanly on supported Python versions. Current `main` remains
+authoritative until then.
+
 ## Future PR 5 plan — composable agent/perception experiments (design only)
 
 **Status:** intentionally not implemented. Begin experiments after the PR 4 MCP
