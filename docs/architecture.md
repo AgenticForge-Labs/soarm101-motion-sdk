@@ -9,6 +9,7 @@ sandboxed agent -> OpenShell -> robotctl -> agent broker -> bounded agent CLI ->
 MCP-capable agent -> optional stdio MCP adapter -> same agent broker -> same bounded agent CLI
 Trusted-host broker profiles restrict this transport at dispatch and MCP discovery, never at motion-safety authority.
 Static MCP resources/prompts teach the same evidence-first coordinate/joint/vision/recovery semantics as existing skills; they are reasoning context, never an authority source.
+Canonical Hermes/Codex OpenShell runs may use robotctl (default) or the one-run client-only stdio MCP package; both reach the same host broker and deterministic SDK.
 ```
 
 Rules:
