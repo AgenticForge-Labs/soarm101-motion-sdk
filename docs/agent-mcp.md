@@ -75,7 +75,9 @@ including calls not made through MCP. The profile descriptor includes the
 canonical configuration's SHA-256 for experiment provenance.
 
 See the example `mcp-profile-read-only.json`, `mcp-profile-joint.json`,
-and `mcp-profile-coordinate.json` files in `docs/examples/`. A valid
+and `mcp-profile-coordinate.json` files in `docs/examples/`, plus the
+`mcp-profile-supervised-manipulation.json` example for attended workspace
+operation. A valid
 profile names a version-1 schema, lists recognized MCP tool identifiers,
 lists allowed logical cameras, and may declare `max_joint_delta_deg` and
 `max_model_jog_mm`. Unknown capabilities, fields, and limit names fail
@@ -88,6 +90,25 @@ reduce allowed actions. Read-only profiles exclude motion routes; human-only
 arming, physical STOP access, and normal GUI/CLI authority remain outside
 the profile. Local broker health/profile discovery remain available for
 service administration, regardless of the MCP tool subset.
+
+The supervised-manipulation profile exposes overhead and wrist cameras,
+`go_pose`, `sleep`, `jog_cartesian`, `jog_joint` (up to 10 degrees per command),
+`move_gripper`, and STOP/HOLD. It intentionally has **no**
+`max_model_jog_mm` limit: the existing bounded agent CLI instead enforces
+the independent **physical** displacement maximum of 50 mm when the
+calibrated **starting** TCP height is over 100 mm, or 10 mm when at or below
+100 mm. These are *ceilings*, not required movement sizes, and do not
+guarantee measured distance or object clearance. At a starting height only
+slightly above 100 mm, a 50 mm downward command may cross that threshold;
+plan smaller steps near obstacles or the threshold.
+
+The profile does not control movement speed. Current agent Cartesian jog
+requests are fixed at 10 mm/s with 40 mm/s² acceleration (individual
+joint jogs at 8 degrees/s and 25 degrees/s²). Raising the broker's
+absolute motion envelope alone does not change those per-action requests.
+The supervised speed increase remains deferred pending investigation of
+measured physical-height drift and rejected repeat jogs. Do not interpret
+a successful profile load as physical-motion validation.
 
 ## MCP tool surface (initial implementation)
 
