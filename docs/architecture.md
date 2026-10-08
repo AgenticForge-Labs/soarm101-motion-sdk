@@ -20,7 +20,13 @@ Rules:
 - Tools define motion-relevant TCP transforms. Tool/stage camera extrinsics, perception, tracking, OBS, and show-level capture orchestration remain higher-level concerns; this repository only owns the basic camera device session and raw frames.
 - No LeRobot import exists in the runtime package.
 - Hardware and simulation implement the same backend contract.
-- Cartesian paths are validated before execution.
+- Cartesian paths are validated before execution. When the cheap servo encoders
+  shift beyond the narrow cached-plan start tolerance *after* workspace
+  preflight, the SOARM101 facade may discard the stale plan and rebuild the
+  entire plan and workspace validation at most twice. The controller still
+  never executes an unvalidated cached plan; persistent start drift and all
+  other failures still reject before motion. This is not a tolerance increase,
+  hardware-settle bypass, or relaxation of the agent's physical step policy.
 - GUI and CLI features call the same SDK operations and saved libraries; the GUI owns persistent hardware sessions rather than launching CLI subprocesses.
 - The SDK owns one canonical robot-specific OpenShell agent environment. OpenShell owns
   filesystem/process/network isolation; the Motion SDK owns the shared robot policy/broker
