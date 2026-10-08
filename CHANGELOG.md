@@ -1,5 +1,10 @@
 # Changelog
 
+- Temporarily constrain the optional GUI dependency to PySide6 <6.12 while
+  investigating CI-native Qt teardown aborts: green main resolved PySide6
+  6.11.2 whereas the unpinned PR runner resolved 6.12.0. Full matrix exit
+  codes, not Python test-pass counts alone, determine the merge gate.
+
 - Add opt-in trusted-host `agent jog --trace-file` evidence using the
   shared passive backend trace. It captures model-space intent, streamed
   joint commands, encoder feedback, raw Feetech STOP/HOLD goal latching,
