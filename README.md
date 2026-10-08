@@ -125,7 +125,7 @@ image/provider/direct argv only and cannot broaden robot routes or authority. Se
 [agent-as-code/openshell-adapter.example.json](agent-as-code/openshell-adapter.example.json).
 The unrestricted SDK, serial/camera devices, calibration files, Docker socket, SSH material,
 and unrelated host files remain outside the reasoning sandbox. The narrow transport is
-documented separately in [docs/agent-broker.md](docs/agent-broker.md). An optional **stdio MCP adapter** exposes exactly the same bounded broker routes to MCP-capable agents; see [docs/agent-mcp.md](docs/agent-mcp.md). It does not add robot authority or new motion methods. A trusted operator can also select a versioned `soarm101-broker --profile FILE.json` allowlist to vary which existing MCP tools, cameras, and tighter jog bounds an agent can use; that profile is enforced at the broker, not only in MCP discovery.
+documented separately in [docs/agent-broker.md](docs/agent-broker.md). An optional **stdio MCP adapter** exposes exactly the same bounded broker routes to MCP-capable agents; see [docs/agent-mcp.md](docs/agent-mcp.md). It does not add robot authority or new motion methods. The built-in Hermes and Codex OpenShell runners may opt into it with `soarm101 agent sandbox run --interface mcp`; `robotctl` is retained as the default baseline. A trusted operator can also select a versioned `soarm101-broker --profile FILE.json` allowlist to vary which existing MCP tools, cameras, and tighter jog bounds an agent can use; that profile is enforced at the broker, not only in MCP discovery.
 
 ## Get started
 
