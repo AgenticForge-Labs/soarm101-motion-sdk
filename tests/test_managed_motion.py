@@ -1,10 +1,79 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from soarm101_motion import Pose, SOARM101
 from soarm101_motion.exceptions import InvalidCommandError, SafetyViolationError
 
+
+
+
+
+
+def test_motion_feedback_callback_reuses_guarded_joint_measurements() -> None:
+    seen: list[dict[str, float]] = []
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.motion.set_feedback_callback(lambda joints: seen.append(dict(joints)))
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += math.radians(5.0)
+
+        result = arm.move_joints(target, speed=0.4, acceleration=1.0)
+
+    assert result.completed is True
+    assert seen
+    assert seen[-1]["shoulder_pan"] == pytest.approx(target["shoulder_pan"])
+
+
+def test_joint_motion_accepts_80_500_inside_new_envelope() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += math.radians(5.0)
+        result = arm.move_joints(
+            target,
+            speed=math.radians(80.0),
+            acceleration=math.radians(500.0),
+        )
+
+    assert result.completed is True
+
+
+def test_joint_motion_accepts_exact_100_1000_human_unit_boundary() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += math.radians(5.0)
+        result = arm.move_joints(
+            target,
+            speed=math.radians(100.0),
+            acceleration=math.radians(1000.0),
+        )
+
+    assert result.completed is True
+
+
+def test_joint_motion_rejects_requests_above_100_1000_envelope() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += math.radians(5.0)
+
+        with pytest.raises(SafetyViolationError, match="joint speed"):
+            arm.move_joints(
+                target,
+                speed=math.radians(100.1),
+                acceleration=math.radians(500.0),
+            )
+
+        with pytest.raises(SafetyViolationError, match="joint acceleration"):
+            arm.move_joints(
+                target,
+                speed=math.radians(80.0),
+                acceleration=math.radians(1000.1),
+            )
 
 
 def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() -> None:
@@ -55,6 +124,404 @@ def test_calibrated_extensions_follow_measured_range_with_one_degree_margin() ->
     assert np.degrees(limits["wrist_roll"]) == pytest.approx(
         (measured_deg["wrist_roll"][0] + 1.0, measured_deg["wrist_roll"][1] - 1.0)
     )
+
+
+def test_final_target_joint_execution_writes_endpoint_once() -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.20
+        target["elbow_flex"] -= 0.10
+
+        result = arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+            workspace_check="off",
+        )
+
+        history = list(arm.backend.command_history)  # type: ignore[attr-defined]
+
+    assert result.completed is True
+    assert len(history) == 1
+    assert history[0] == pytest.approx({name: target[name] for name in ARM_JOINTS})
+
+
+def test_final_target_uses_synchronized_per_joint_servo_speeds() -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.constants import ARM_JOINTS
+
+    class Motor:
+        radians_limits = (-2.0, 2.0)
+
+        @staticmethod
+        def radians_to_raw(value: float) -> int:
+            return int(round(2000.0 + value * 1000.0))
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: Motor() for name in ARM_JOINTS}
+        )
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        target["elbow_flex"] -= 0.10
+        captured: dict[str, object] = {}
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            captured["speed_raw"] = speed_raw
+            captured["acceleration_raw"] = acceleration_raw
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+            workspace_check="off",
+        )
+
+    speeds = captured["speed_raw"]
+    assert isinstance(speeds, dict)
+    assert set(speeds) == set(ARM_JOINTS)
+    assert all(int(value) >= 1 for value in speeds.values())
+    assert int(speeds["shoulder_pan"]) > int(speeds["elbow_flex"])
+    from soarm101_motion.constants import TELEOP_SERVO_ACCELERATION_RAW
+
+    assert captured["acceleration_raw"] == TELEOP_SERVO_ACCELERATION_RAW
+
+
+def test_final_target_monitors_observed_workspace_path(monkeypatch) -> None:
+    import soarm101_motion.motion.controller as controller_module
+
+    observed: list[tuple[dict[str, float], ...]] = []
+
+    def record_workspace_path(model, samples, *, tcp=None, **kwargs):
+        del model, tcp, kwargs
+        observed.append(tuple(dict(sample) for sample in samples))
+
+    monkeypatch.setattr(
+        controller_module,
+        "validate_workspace_path_from_measured_start",
+        record_workspace_path,
+    )
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.10
+        result = arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+            workspace_check="full",
+        )
+
+    assert result.completed is True
+    assert observed
+    assert len(observed[-1]) == 2
+    assert observed[-1][0]["shoulder_pan"] != observed[-1][1]["shoulder_pan"]
+
+
+def test_final_target_monitor_allows_asynchronous_joint_progress() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.80
+        target["wrist_flex"] -= 0.80
+
+        previous = dict(start)
+        previous["shoulder_pan"] += 0.65
+        previous["wrist_flex"] -= 0.02
+        arm.backend._positions["shoulder_pan"] = start["shoulder_pan"] + 0.75  # type: ignore[attr-defined]
+        arm.backend._positions["wrist_flex"] = start["wrist_flex"] - 0.05  # type: ignore[attr-defined]
+
+        actual = arm.motion._monitor_final_target_motion(  # type: ignore[attr-defined]
+            start,
+            target,
+            previous,
+        )
+
+    assert actual["shoulder_pan"] == pytest.approx(start["shoulder_pan"] + 0.75)
+    assert actual["wrist_flex"] == pytest.approx(start["wrist_flex"] - 0.05)
+
+
+def test_final_target_monitor_rejects_reverse_motion() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.50
+        previous = dict(start)
+        arm.backend._positions["shoulder_pan"] -= 0.10  # type: ignore[attr-defined]
+
+        with pytest.raises(SafetyViolationError, match="opposite the final target"):
+            arm.motion._monitor_final_target_motion(  # type: ignore[attr-defined]
+                start,
+                target,
+                previous,
+            )
+
+
+def test_recorded_replay_publishes_measured_gripper_feedback() -> None:
+    import threading
+
+    from soarm101_motion.motion.controller import RecordedPlan
+
+    seen: list[float] = []
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        arm.motion.set_tool_feedback_callback(seen.append)
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.01
+
+        arm.motion._execute_recorded(
+            RecordedPlan(
+                command_samples=(start, target),
+                gripper_samples=(0.2, 0.8),
+                duration_s=1.0 / arm.config.command_frequency_hz,
+            ),
+            threading.Event(),
+        )
+
+    assert seen
+    assert seen[-1] == pytest.approx(0.8)
+
+
+def test_recorded_joint_replay_uses_responsive_servo_profile() -> None:
+    import threading
+
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
+    from soarm101_motion.motion.controller import RecordedPlan
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.01
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        arm.motion._execute_recorded(
+            RecordedPlan(
+                command_samples=(start, target),
+                gripper_samples=(0.5, 0.5),
+                duration_s=1.0 / arm.config.command_frequency_hz,
+            ),
+            threading.Event(),
+        )
+
+    assert calls
+    assert all(
+        speed == TELEOP_SERVO_SPEED_RAW
+        and acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for speed, acceleration in calls
+    )
+
+
+def test_config_backend_fallback_uses_responsive_servo_profile() -> None:
+    from soarm101_motion import SOARM101Config
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
+
+    config = SOARM101Config()
+    assert config.hardware_speed_raw == TELEOP_SERVO_SPEED_RAW == 0
+    assert config.hardware_acceleration_raw == TELEOP_SERVO_ACCELERATION_RAW == 254
+
+
+def test_streamed_joint_execution_uses_responsive_servo_profile() -> None:
+    from soarm101_motion.constants import (
+        TELEOP_SERVO_ACCELERATION_RAW,
+        TELEOP_SERVO_SPEED_RAW,
+    )
+
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        arm.move_joints(
+            target,
+            speed=0.4,
+            acceleration=1.0,
+            workspace_check="off",
+        )
+
+    assert calls
+    assert all(
+        speed == TELEOP_SERVO_SPEED_RAW
+        and acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for speed, acceleration in calls
+    )
+
+
+def test_streamed_joint_execution_preserves_explicit_servo_profile() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        arm.move_joints(
+            target,
+            speed=0.4,
+            acceleration=1.0,
+            servo_speed_raw=321,
+            servo_acceleration_raw=42,
+            workspace_check="off",
+        )
+
+    assert calls
+    assert all(speed == 321 and acceleration == 42 for speed, acceleration in calls)
+
+
+def test_synchronized_streamed_joint_execution_uses_responsive_acceleration() -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.constants import (
+        ARM_JOINTS,
+        TELEOP_SERVO_ACCELERATION_RAW,
+    )
+
+    class Motor:
+        radians_limits = (-2.0, 2.0)
+
+        @staticmethod
+        def radians_to_raw(value: float) -> int:
+            return int(round(2000.0 + value * 1000.0))
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: Motor() for name in ARM_JOINTS}
+        )
+        arm.enable()
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append((speed_raw, acceleration_raw))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+        target["elbow_flex"] -= 0.10
+        arm.move_joints(
+            target,
+            speed=0.4,
+            acceleration=1.0,
+            synchronize_servo_arrival=True,
+            workspace_check="off",
+        )
+
+    assert calls
+    assert all(isinstance(speed, dict) for speed, _ in calls)
+    assert all(
+        acceleration == TELEOP_SERVO_ACCELERATION_RAW
+        for _, acceleration in calls
+    )
+
+
+def test_streamed_joint_execution_remains_default() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.20
+
+        arm.move_joints(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            workspace_check="off",
+        )
+        history = list(arm.backend.command_history)  # type: ignore[attr-defined]
+
+    assert len(history) > 1
+    assert history[-1]["shoulder_pan"] == pytest.approx(target["shoulder_pan"])
+
+
+def test_invalid_joint_execution_mode_is_rejected() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.05
+        with pytest.raises(InvalidCommandError, match="execution_mode"):
+            arm.move_joints(
+                target,
+                execution_mode="burst",  # type: ignore[arg-type]
+                workspace_check="off",
+            )
+
+
+def test_saved_pose_can_use_final_target_execution() -> None:
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["wrist_roll"] += 0.10
+        result = arm.move_joints_from_saved_pose(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+            execution_mode="final_target",
+        )
+        history = list(arm.backend.command_history)  # type: ignore[attr-defined]
+
+    assert result.completed is True
+    assert len(history) == 1
+    assert history[-1]["wrist_roll"] == pytest.approx(target["wrist_roll"])
 
 
 def test_joint_planner_preserves_exact_validated_endpoint_at_effective_limit() -> None:
@@ -143,8 +610,10 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
     assert np.degrees(sleep["elbow_flex"]) == pytest.approx(
         measured_deg["elbow_flex"][1] - 1.0
     )
+    wrist_lower = measured_deg["wrist_flex"][0] + 1.0
+    wrist_upper = measured_deg["wrist_flex"][1] - 1.0
     assert np.degrees(sleep["wrist_flex"]) == pytest.approx(
-        measured_deg["wrist_flex"][0] + 1.0
+        wrist_lower + 0.75 * (wrist_upper - wrist_lower)
     )
     assert np.degrees(sleep["wrist_roll"]) == pytest.approx(0.0)
     assert sleep_gripper == pytest.approx(0.01)
@@ -158,11 +627,53 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
         )
 
 
+def test_sleep_up_preserves_historical_lower_limit_wrist_fold() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from soarm101_motion.constants import ARM_JOINTS, STOCK_GRIPPER
+
+    measured_deg = {
+        "shoulder_pan": (-121.0, 121.0),
+        "shoulder_lift": (-105.0, 105.0),
+        "elbow_flex": (-97.0, 97.0),
+        "wrist_flex": (-104.0, 104.0),
+        "wrist_roll": (-169.0, 169.0),
+    }
+
+    with SOARM101.simulated() as arm:
+        motors = {
+            name: SimpleNamespace(
+                radians_limits=tuple(np.deg2rad(measured_deg[name]))
+            )
+            for name in ARM_JOINTS
+        }
+        motors[STOCK_GRIPPER] = SimpleNamespace(
+            radians_limits=(0.0, float(np.deg2rad(100.0)))
+        )
+        arm.backend.calibration = SimpleNamespace(motors=motors)
+        sleep_up = arm.get_sleep_up_joint_positions()
+        arm.enable()
+        result = arm.move_sleep_up(speed=0.2, acceleration=0.5)
+        final = dict(arm.get_joint_positions().positions)
+
+    assert np.degrees(sleep_up["wrist_flex"]) == pytest.approx(
+        measured_deg["wrist_flex"][0] + 1.0
+    )
+    assert result.completed is True
+    for name, target in sleep_up.items():
+        assert final[name] == pytest.approx(
+            target,
+            abs=arm.config.joint_position_tolerance_rad,
+        )
+
+
 
 def test_saved_pose_can_monotonically_exit_existing_self_clearance(monkeypatch) -> None:
     from soarm101_motion.constants import ARM_JOINTS
 
-    import soarm101_motion.arm as arm_module
+    import soarm101_motion.safety as safety_module
 
     with SOARM101.simulated() as arm:
         arm.enable()
@@ -170,17 +681,17 @@ def test_saved_pose_can_monotonically_exit_existing_self_clearance(monkeypatch) 
         clearances = iter((0.019, 0.020, 0.022, 0.026))
 
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "minimum_workspace_self_clearance",
             lambda *args, **kwargs: next(clearances, 0.026),
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_configuration",
             lambda *args, **kwargs: None,
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_path",
             lambda *args, **kwargs: None,
         )
@@ -197,19 +708,19 @@ def test_saved_pose_can_monotonically_exit_existing_self_clearance(monkeypatch) 
 def test_saved_pose_rejects_path_that_moves_deeper_into_self_clearance(monkeypatch) -> None:
     from soarm101_motion.constants import ARM_JOINTS
 
-    import soarm101_motion.arm as arm_module
+    import soarm101_motion.safety as safety_module
 
     with SOARM101.simulated() as arm:
         arm.enable()
         arm.move_sleep(speed=0.2, acceleration=0.5)
         clearances = iter((0.019, 0.018, 0.026))
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "minimum_workspace_self_clearance",
             lambda *args, **kwargs: next(clearances, 0.026),
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_configuration",
             lambda *args, **kwargs: None,
         )
@@ -222,31 +733,32 @@ def test_saved_pose_rejects_path_that_moves_deeper_into_self_clearance(monkeypat
             )
 
 
-def test_saved_pose_rejects_path_that_never_clears_self_clearance(monkeypatch) -> None:
+def test_saved_pose_can_remain_inside_nonworsening_self_clearance(monkeypatch) -> None:
     from soarm101_motion.constants import ARM_JOINTS
 
-    import soarm101_motion.arm as arm_module
+    import soarm101_motion.safety as safety_module
 
     with SOARM101.simulated() as arm:
         arm.enable()
         arm.move_sleep(speed=0.2, acceleration=0.5)
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "minimum_workspace_self_clearance",
             lambda *args, **kwargs: 0.020,
         )
         monkeypatch.setattr(
-            arm_module,
+            safety_module,
             "validate_workspace_configuration",
             lambda *args, **kwargs: None,
         )
         target = {name: 0.0 for name in ARM_JOINTS}
-        with pytest.raises(SafetyViolationError, match="never exits"):
-            arm.move_joints_from_saved_pose(
-                target,
-                speed=0.2,
-                acceleration=0.5,
-            )
+        result = arm.move_joints_from_saved_pose(
+            target,
+            speed=0.2,
+            acceleration=0.5,
+        )
+
+    assert result.completed is True
 
 def test_public_ik_uses_executable_calibrated_joint_limits(monkeypatch) -> None:
     from types import SimpleNamespace
@@ -859,6 +1371,72 @@ def test_cartesian_execution_uses_teleop_servo_profile_even_with_calibration() -
         speed == TELEOP_SERVO_SPEED_RAW
         and acceleration == TELEOP_SERVO_ACCELERATION_RAW
         for speed, acceleration in calls
+    )
+
+
+def test_calibrated_motion_skips_redundant_quantized_encoder_targets() -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.constants import ARM_JOINTS
+
+    class FakeMotor:
+        radians_limits = (-3.0, 3.0)
+
+        @staticmethod
+        def radians_to_raw(value):
+            return int(round(2048 + float(value) * 100.0))
+
+    with SOARM101.simulated() as arm:
+        arm.backend.calibration = SimpleNamespace(
+            motors={name: FakeMotor() for name in ARM_JOINTS}
+        )
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.08
+        plan = arm.motion._plan_joint_motion(
+            start,
+            target,
+            speed=0.05,
+            acceleration=0.20,
+            limits=arm.motion._effective_limits(),
+        )
+        planned_keys = [
+            arm.motion._encoder_target_key(sample)
+            for sample in plan.command_samples
+        ]
+        assert any(
+            previous == current
+            for previous, current in zip(planned_keys, planned_keys[1:], strict=False)
+        )
+
+        calls = []
+        original = arm.backend.write_joint_positions
+
+        def recorded(positions, *, speed_raw=None, acceleration_raw=None):
+            calls.append(dict(positions))
+            return original(
+                positions,
+                speed_raw=speed_raw,
+                acceleration_raw=acceleration_raw,
+            )
+
+        arm.backend.write_joint_positions = recorded  # type: ignore[method-assign]
+        result = arm.move_joints(
+            target,
+            speed=0.05,
+            acceleration=0.20,
+            workspace_check="off",
+        )
+
+        call_keys = [arm.motion._encoder_target_key(sample) for sample in calls]
+
+    assert result.completed is True
+    assert len(calls) < len(plan.command_samples) - 1
+    assert calls[-1] == pytest.approx(target)
+    assert all(
+        previous != current
+        for previous, current in zip(call_keys[:-1], call_keys[1:-1], strict=False)
     )
 
 

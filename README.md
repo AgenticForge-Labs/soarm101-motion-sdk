@@ -22,13 +22,48 @@ You can begin visually, learn how the robot actually moves, teach useful positio
 - **Calibration you can see and understand.** Guided mechanical-stop calibration visualizes two complete traversals for every joint and the gripper. Discovery verifies the SO-101 servo bus and uses measured voltage as a clue for distinguishing a typical low-voltage leader from the powered follower, while still requiring the user to confirm the hardware.
 - **Safety and provenance live below the application layer.** Motion requests remain subject to calibration, joint, rate, acceleration, following-error, fault, effort, and other guards. Calibrations are versioned, and saved physical motion artifacts can be bound to the calibration under which they were created so stale motion can fail closed after a hardware or calibration change.
 - **GUI, CLI, and Python share the same foundation.** The desktop application is not a separate toy controller. The interfaces reuse the same SDK operations, saved libraries, and camera settings, making it possible to start visually and transition naturally to scripting and automation.
-- **Named cameras, shared hardware profile.** Follower/leader addressing and named USB cameras are persisted once in the workstation profile. Multiple uniquely named cameras such as `overhead` and `wrist` can stream concurrently; Camera and Teleoperation reuse those sessions, while CLI/agents address the same names. GUI previews use latest-frame delivery, so stale display frames are discarded when rendering falls behind while fresh still captures remain available. Live camera cards show measured capture FPS, preview age, and coalesced-frame counts.
+- **Named cameras, shared hardware profile.** Follower/leader addressing and named USB cameras are persisted once in the workstation profile. Multiple uniquely named cameras such as `overhead` and `wrist` can stream concurrently; Camera and Teleoperation reuse those sessions, while CLI/agents address the same names. Teleoperation shows the named cameras together in a two-column live grid, with Start all / Stop all controls and a separate capture selector. GUI previews use latest-frame delivery, so stale display frames are discarded when rendering falls behind while fresh still captures remain available. Live camera cards show measured capture FPS, preview age, and coalesced-frame counts.
+- **Live teleoperation motion trace.** The Teleoperation tab uses the same high-rate leader samples and measured follower positions already required for control to draw a rolling 10-second joint-angle view, with a switchable follower-minus-leader tracking-error view. The graph adds no extra servo/register polling; current/load remain on the existing effort-diagnostics and recording paths.
+- **Persistent operating-status banner.** The top banner is always present and shows the current robot/teleoperation state when there is no newer notice. Errors and other important notices can be acknowledged with **Clear**; clearing only removes the transient message and immediately reveals the still-authoritative underlying state. Active robot faults, holding/moving state, and a teleoperation-delink condition are therefore not hidden or cleared by the UI.
 - **Useful before AI, ready for AI.** Many automation tasks are deterministic: move to a known position, operate a tool, wait, move somewhere else, and repeat. The SDK makes those reliable capabilities useful on their own while also providing a constrained layer that higher-level AI systems can call.
 - **A small platform for serious robotics concepts.** Calibration, coordinate systems, FK/IK, Cartesian motion, trajectory generation, teleoperation, motion recording, and sequence programming can all be explored on an inexpensive desktop arm. That makes the project useful for education, research prototyping, laboratories, small-business automation, and agentic robotics experiments.
 
 The goal is not to replace ROS or MoveIt. Those ecosystems are valuable when a project needs broader middleware, distributed systems, sophisticated planning, or large sensor/robot integrations. This project is a lower-overhead path for people who want to begin with Python and the motion fundamentals, while leaving room to integrate into larger systems later.
 
 LeRobot helped inspire this project’s approach to SO-ARM101 hardware and operation. Thank you to the LeRobot contributors and community. The approachable developer experience of the UFactory xArm SDK also helped shape the goal of making arm control easier to discover and use. This SDK is an independent implementation: LeRobot is optional and is not imported by the runtime.
+
+## Motion envelope
+
+The SDK separates **requested host motion** from the faster inner servo tracking profile.
+The current absolute host envelope uses one memorable 100 / 1000 convention:
+
+- joints: **100 deg/s** and **1000 deg/s^2**;
+- TCP translation: **100 mm/s** and **1000 mm/s^2**;
+- TCP/tool orientation: **100 deg/s** and **1000 deg/s^2**.
+
+These are ceilings, not ordinary motion defaults. Existing default moves remain slower unless
+the caller explicitly requests more. Cartesian IK-generated joint motion must also remain
+inside the joint envelope.
+
+Inspect the effective settings without opening hardware:
+
+```bash
+soarm101 motion-envelope
+soarm101 motion-envelope --json
+```
+
+The Python API exposes the same values through `SOARM101Config.motion_limits_human` and
+`SOARM101Config.from_motion_limits(...)`. CLI session commands accept matching
+`--max-...-deg-s` / `--max-...-mm-s` options. `move-joints` also accepts the convenient
+`--speed-deg-s` and `--acceleration-deg-s2` request units while retaining the legacy
+rad/s flags.
+
+Host-streamed planned arm motion uses the responsive Feetech tracking profile
+`Goal_Velocity=0`, `Acceleration=254`. That is inner-loop tracking authority, not a
+1000+ deg/s^2 host trajectory request. Calibration, following-error, current/load, hardware
+fault, joint-limit, workspace, timing, STOP/HOLD, and settle checks remain active. The
+100/1000 envelope is an engineering policy under physical characterization, not a claim that
+a loaded arm is safe at the STS3215 no-load actuator limit.
 
 ## Programming model
 
@@ -67,16 +102,30 @@ displacement; at or below 100 mm the request limit is 10 mm; targets must remain
 than metrology guarantees; normal SDK motion guards remain authoritative.
 
 [`docs/agent-arm101-cli.md`](docs/agent-arm101-cli.md) documents the precise technical
-contract. [`cli_use.md`](cli_use.md) is the compact operational reference. The optional
-task-facing robot/camera skill lives under
-[`agent-as-code/skills/robot-camera/SKILL.md`](agent-as-code/skills/robot-camera/SKILL.md);
-it is deliberately outside the neutral SDK CLI contract. Machine-local ports, calibration
-references, and named cameras still come from the shared workstation profile. Agent launchers,
-model selection, and sandbox lifecycle remain outside the Motion SDK. For isolated workers,
-the SDK provides the narrow host-side transport described in
-[docs/agent-broker.md](docs/agent-broker.md): `soarm101-broker` exposes only the bounded
-agent capability allowlist over HTTP/JSON, while the standard-library-only `robotctl` client
-can be copied into a sandbox without exposing the unrestricted SDK, serial device, or cameras.
+contract. [`cli_use.md`](cli_use.md) is the compact operational reference. The direct-host
+task-facing robot/camera skill remains under
+[`agent-as-code/skills/robot-camera/SKILL.md`](agent-as-code/skills/robot-camera/SKILL.md).
+The isolated OpenShell runtime uses packaged harness-specific skills for the built-in Hermes
+and Codex adapters while keeping the robot contract itself harness-neutral. Machine-local
+ports, calibration references, and named cameras still come from the shared workstation
+profile.
+
+The SDK includes one canonical self-contained OpenShell path for agent operation.
+[docs/agent-sandbox.md](docs/agent-sandbox.md) documents
+`soarm101 agent sandbox doctor/setup/run`, including a hard `run --read-only` mode whose
+broker policy exposes state/camera observation but no motion routes. OpenShell supplies
+process/filesystem/network isolation; the SDK owns broker lifecycle, standalone `robotctl`,
+and the adapter contract. Codex can use either an OpenAI Platform API key or the existing
+file-backed login from the user's installed Codex CLI; `--auth installed` copies only
+`${CODEX_HOME:-~/.codex}/auth.json` into the disposable sandbox for that run and never
+mounts or modifies the host Codex home. An optional separate SDK-owned ChatGPT device-login
+mode is also available. Other OpenShell-compatible CLI harnesses can use the same runtime
+through a validated operator-authored JSON adapter manifest; the manifest selects harness
+image/provider/direct argv only and cannot broaden robot routes or authority. See
+[agent-as-code/openshell-adapter.example.json](agent-as-code/openshell-adapter.example.json).
+The unrestricted SDK, serial/camera devices, calibration files, Docker socket, SSH material,
+and unrelated host files remain outside the reasoning sandbox. The narrow transport is
+documented separately in [docs/agent-broker.md](docs/agent-broker.md).
 
 ## Get started
 
@@ -208,25 +257,28 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 | **Setup** | Find and connect the leader and follower, persist their local ports/calibration identities, calibrate either arm, save Home and Rest, and inspect motor status. |
 | **Camera** | Create named cameras such as overhead/wrist, choose stable discovered USB devices, start one or all cameras, and watch compact split/grid previews with transient-frame retry plus bounded automatic USB reconnect. |
 | **Manual** | Read current joint positions, switch between angular and Cartesian arm control, keep the gripper tool visible in either mode, park/release the leader, and hand poses between leader and follower. |
-| **Teleoperation** | Move the leader by hand, align/relink the follower, choose any named live camera view, capture a picture, and transfer to Manual while parking the leader. |
+| **Teleoperation** | Move the leader by hand, align/relink the follower, choose Slow/Medium/Fast tracking response independently of stream rate, choose any named live camera view, capture a picture, and transfer to Manual while parking the leader. |
 | **Teach / Record** | Save named positions from the follower or leader, or record continuous demonstration trajectories for replay/editing and future Robo Puppeteer motion data. |
 | **Edit recordings** | Review and adjust recorded motions with a scrubbed kinematic preview. |
 | **Programs** | Build and run linear programs from saved positions, gripper actions, waits, and optional recorded-motion steps. |
 | **Log** | Review connection, motion, and diagnostic events. |
 
-The follower has five pose joints; the stock gripper is a separate tool actuator. The SDK includes forward kinematics to estimate the tool pose from joint readings, inverse kinematics for finding joint targets, and Cartesian motion planning for linear moves. These calculations use the arm model and calibration, so check the TCP, joint directions, and coordinate frame against your own assembly before relying on Cartesian accuracy. The Manual workspace exposes this explicitly: its joint-center view uses the SDK FK model, renders the gripper from the modeled wrist/gripper-link frame, and keeps the gripper controls visible below both angular and Cartesian modes. Each Cartesian jog reports the requested and achieved TCP so physical/model direction mismatches can be diagnosed rather than hidden.
+The follower has five pose joints; the stock gripper is a separate tool actuator. The SDK includes forward kinematics to estimate the tool pose from joint readings, inverse kinematics for finding joint targets, and Cartesian motion planning for linear moves. These calculations use the arm model and calibration, so check the TCP, joint directions, and coordinate frame against your own assembly before relying on Cartesian accuracy. The Manual workspace exposes this explicitly: its joint markers and TCP use the SDK FK model, while visible geometry is presentation-only and independent of the coarse safety polyline. The upper and lower printed members use the local offsets from the official mesh-based SO-101 model rather than being forced through the joint centers. Each STS3215 is shown as an oriented case envelope at the official mesh pose, so a joint pivot can sit inside a motor body while the adjoining printed member ends beside it instead of at it. Small markers still show the exact kinematic joint pivots. The gripper is rendered from the modeled wrist/gripper-link frame; its moving jaw uses a neutral dark, slightly heavier stroke, and the gripper controls remain visible below both angular and Cartesian modes. Each Cartesian jog reports the requested and achieved TCP so physical/model direction mismatches can be diagnosed rather than hidden.
 
-The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration. A separate **Sleep** operation is derived from each follower's calibration, providing a natural folded posture for demos and power-down preparation without replacing user-saved Home/Rest. Sleep folds the five pose joints first, then closes the stock gripper to a target **1° inside its calibrated closed mechanical stop** by default rather than driving directly into the stop. The gripper target is converted from the saved encoder calibration into the normalized 0=closed / 1=open convention, so reversed motor drive direction is handled by calibration. Because the designed arm fold is closer than the generic coarse 25 mm link-centerline self-clearance heuristic, the dedicated Sleep primitive skips only that coarse arm workspace-geometry check; calibrated joint/tool limits, trajectory, following-error, effort, fault, and completion guards remain active.
+The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration. Teleoperation separately exposes **Tracking response**: Slow uses 0.6 rad/s and 3.0 rad/s², Medium is the previous/current behavior at 1.2 rad/s and 6.0 rad/s² and remains the default, and Fast is wrist-aware: all five joints may use the configured 100 deg/s speed ceiling, the four non-wrist-flex joints may use 1000 deg/s², and `wrist_flex` is capped at 500 deg/s² after hardware testing showed that 1000 deg/s² reversals outran the wrist's braking response. Tracking response limits how quickly the follower closes the leader gap; stream rate remains a separate control. The same per-joint ceilings are enforced by the deterministic stream guard, and the configured absolute motion envelope remains the hard upper bound. Live streaming also permits only a short, non-growing carry-through immediately after a commanded reversal, capped at 0.10 rad total wrong-way travel; ordinary planned motion retains the strict opposite-direction rule. A separate **Sleep** operation is derived from each follower's calibration, providing a stable folded posture for demos and power-down preparation without replacing user-saved Home/Rest. The default Sleep keeps shoulder pan at midpoint, shoulder lift at its lower executable limit, elbow flex at its upper executable limit, wrist roll at midpoint, and places **wrist flex 75% of the way from its lower executable limit to its upper limit** (`upper - 0.25 * (upper - lower)`). Physical testing showed this less wrist-up geometry settles substantially more smoothly than the historical fully folded posture. That original posture remains available as **sleep_up** / `move_sleep_up()`, with wrist flex at its lower executable limit. Both postures close the stock gripper to a target **1° inside its calibrated closed mechanical stop** by default. Sleep does not know whether the gripper is holding an object: a pen held during Sleep triggered the servo's overload protection, so remove held objects or otherwise account for the closing action before invoking Sleep. Because the shoulder/elbow fold is closer than the generic coarse 25 mm link-centerline self-clearance heuristic, these dedicated Sleep-family primitives skip only that coarse arm workspace-geometry check; calibrated joint/tool limits, trajectory, following-error, effort, fault, and completion guards remain active.
 
-The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. A resizable workspace keeps the task tabs on the left and the persistent follower sidebar on the right, including Setup and Log, so robot state never disappears while changing workflows. If vertical space is tight, the model/readout area scrolls while Enable hold, STOP/HOLD, and Relax remain pinned and visible. Programs are stored using the existing `MotionSequence` format, so GUI Programs and SDK/CLI sequence execution share the same guarded runner and provenance rules. See [Programs and saved positions](docs/programs.md) for the simple position-program workflow. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
+The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. During commanded arm or gripper motion, the sidebar now consumes measured feedback from the owning motion/tool thread, so the joint schematic, model-estimated TCP readout, and moving jaw update while the normal slower GUI state poll is intentionally paused. Ordinary arm and gripper moves reuse measurements already required for safety/progress; combined recorded/alignment paths sample the gripper only at the owning controller's existing feedback checkpoints. This adds no independent or competing serial poller and has no authority over motion or safety. A resizable workspace keeps the task tabs on the left and the persistent follower sidebar on the right, including Setup and Log, so robot state never disappears while changing workflows. If vertical space is tight, the model/readout area scrolls while Enable hold, STOP/HOLD, and Relax remain pinned and visible. Programs are stored using the existing `MotionSequence` format, so GUI Programs and SDK/CLI sequence execution share the same guarded runner and provenance rules. See [Programs and saved positions](docs/programs.md) for the simple position-program workflow. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
 
-The sidebar's model schematic now shows a fixed finger and rotating stock jaw. Side,
-Front, Top, and Isometric views help inspect depth; drag rotates and wheel zooms.
-The scale remains fixed while the robot moves. Use Fit to reframe once or enable
-Auto fit for continuous reframing. A screen-plane ruler shows millimeters; the grid
-is model Z=0 rather than the measured table. The TCP marker uses the session's active
-tool transform. This view estimates geometry from measured joints; it does not certify
-physical Cartesian accuracy. See PLAN.md for the remaining measurement and shaking work.
+The sidebar's model schematic shows URDF-visual link-body centerlines, a fixed finger,
+and a rotating stock jaw. Before connection the illustration uses a neutral 45% jaw opening
+rather than the extreme-open limit; once connected it follows measured aperture. Side, Front,
+Top, and Isometric views help inspect depth; drag rotates and wheel zooms. The scale remains
+fixed while the robot moves. Use Fit to reframe once or enable Auto fit for continuous
+reframing. A screen-plane ruler shows millimeters; the grid is model Z=0 rather than the
+measured table. The TCP marker uses the session's active tool transform. Presentation
+geometry is intentionally separate from the coarse safety centerline and does not certify
+printed-housing, collision, or physical Cartesian accuracy. See PLAN.md for the remaining
+measurement and shaking work.
 
 ### CLI examples
 
@@ -258,8 +310,10 @@ soarm101 pose go home --port /dev/ttyACM0 --robot-id so101 --yes
 # Successful pose replay remains torque-held; release only with explicit ENTER confirmation
 soarm101 relax --port /dev/ttyACM0 --robot-id so101
 
-# Move to this follower's calibration-derived natural Sleep posture
+# Move to the smoother calibration-derived default Sleep posture
 soarm101 sleep --port /dev/ttyACM0 --robot-id so101 --yes
+# Historical fully folded wrist-up posture
+soarm101 sleep-up --port /dev/ttyACM0 --robot-id so101 --yes
 
 # Operate the stock gripper
 soarm101 gripper --port /dev/ttyACM0 --robot-id so101 open --yes
@@ -303,11 +357,40 @@ step does not redo mechanical-stop calibration.
 
 Simulation and fake-transport tests cover the motion and hardware interfaces. Physical behavior depends on the specific arm, assembly, calibration, power supply, and payload; test cautiously before relying on a movement or saved trajectory. Leader parking and cross-arm pose matching enable torque and can move a physical arm; treat them as powered-motion operations even though the leader is normally back-drivable with torque off.
 
+Motion-quality debugging can use `scripts/run_motion_quality_study.sh` for the guided teleop-versus-programmed experiment. The runner updates the active diagnostic branch, launches the GUI, marks and extracts the operator's slow teleop reference interval, optionally replays the exact accepted teleop arm-joint commands through guarded streaming, then runs the same saved-pose Sleep/Overhead/Left/Right route automatically at 50 Hz and 20 Hz. It packages the complete evidence under `~/soarm-motion-tests/` for review. `examples/motion_quality_trace.py` remains the lower-level automatic programmed-route tracer. Passive traces record existing command writes, natural feedback reads, raw encoder targets, TCP positions, effective servo speed/acceleration parameters, hardware-state checks, and route markers without adding motion-time hardware polling. Detailed GUI teleoperation logging is enabled by default and writes `teleop_frame` evidence under `~/.local/state/soarm101/gui/`. If the in-run exact replay is skipped because the follower is not close enough to the first captured command, finish the study and run `scripts/run_motion_quality_replay.sh`. The post-study runner selects the latest study by default, uses the normal guarded joint-motion primitive to pre-position to the first recorded arm pose, verifies measured arrival, preflights every recorded stream sample against the active joint/step/speed/acceleration limits, then replays and appends its trace/summary back into the same study archive.
+
 Cartesian `move_linear()` trajectories are parameterized in Cartesian space with
 half-cosine acceleration/deceleration and optional cruise, then solved by sequential IK
 at the host command rate. Position-only paths may then reproject from smoothed joint seeds
 at the same Cartesian tolerance, reducing redundant-joint jitter without altering the
 requested line.
+On calibrated hardware, planned motion also suppresses intermediate host writes whose five
+joint targets quantize to exactly the same encoder counts as the last command. The original
+host deadlines, safety monitoring, and exact final planned sample are preserved; this is
+command de-duplication at actuator resolution, not trajectory retiming or relaxed dynamics.
+
+Joint-space motion now also has an **experimental** execution selector while the low-speed
+shake investigation is active. `execution_mode="streamed"` remains the default and sends
+the validated host trajectory as intermediate targets. Streamed planned joint motion now
+uses the same responsive Feetech tracking profile as teleoperation—Goal_Velocity=0
+(unrestricted/max) and acceleration=254—so the validated host trajectory owns the requested
+speed and acceleration instead of being overlaid with the backend's slower 250/20 profile.
+Joint/rate/acceleration/following-error/fault/effort/timing/settle guards remain active.
+`execution_mode="final_target"`
+builds and validates the same joint plan but writes only the endpoint once, using per-joint
+servo speed limits derived from the validated planned duration so the joints are asked to
+arrive together. The controller then observes guarded progress until settle. The one-shot
+mode retains calibrated limits, validated path/workspace policy, fault handling, cancellation,
+unexpected-direction checks, a per-joint start-to-target corridor/overshoot bound, timeout,
+and final settle; it does not apply endpoint following error or cross-joint phase matching
+during the expected transit because the servos are intentionally executing the endpoint
+internally and may progress at different rates under load. For ordinary full-workspace and
+saved-pose moves, each measured intermediate configuration is rechecked with the same
+measured-start workspace validator, so asynchronous servo progress is not assumed to follow
+the synchronized host plan. Explicit target-only/off workspace modes retain their existing
+semantics, and Sleep retains its existing coarse-workspace exception. Cartesian `move_linear()` remains
+host-streamed because a single joint endpoint cannot guarantee the requested straight TCP
+path. Use `scripts/run_joint_execution_comparison.sh` for the supervised A/B route.
 
 The SDK has a five-joint arm model, a separate stock-gripper tool, joint and Cartesian motion, forward and inverse kinematics, trajectory recording and playback, deterministic sequence programming, simulation, basic local USB-camera capture, and an optional PySide6 GUI. Higher-level perception/tracking, calibrated multi-camera stage systems, ROS integration, and show orchestration remain outside this project. The SDK is intended to provide constrained motion plus a deterministic local observation surface beneath those higher-level systems. See [Architecture](docs/architecture.md) and [Camera](docs/camera.md) for the boundaries.
 

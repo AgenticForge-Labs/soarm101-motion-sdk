@@ -129,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     gripper.add_argument("target", choices=("open", "close"))
 
     sub.add_parser("sleep")
+    sub.add_parser("sleep-up", aliases=["sleep_up"])
     sub.add_parser("stop")
     return parser
 
@@ -183,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "sleep":
             _print_result(_request(method="POST", path="/v1/sleep", payload={}))
+        elif args.command in {"sleep-up", "sleep_up"}:
+            _print_result(_request(method="POST", path="/v1/sleep-up", payload={}))
         elif args.command == "stop":
             _print_result(_request(method="POST", path="/v1/stop", payload={}))
         else:

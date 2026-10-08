@@ -28,20 +28,18 @@ from soarm101_motion.sequences import MotionSequence, SequenceRunner
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 from soarm101_motion.gui.session_log import record as record_session
 from soarm101_motion.gui.teleop_rate import (
+    DEFAULT_TELEOP_TRACKING_PRESET,
     GripperContactLatch,
     TELEOP_GRIPPER_SPEED_PER_S,
     gripper_speed_raw,
     limit_joint_target,
     plan_alignment_target,
     teleop_stale_limit_s,
+    teleop_tracking_preset,
     update_gripper_contact_latch,
 )
 from soarm101_motion.exceptions import CalibrationCancelledError, CalibrationError
 from soarm101_motion.hardware.simulation import SimulationBackend
-
-GUI_TELEOP_MAX_JOINT_SPEED_RAD_S = 1.2
-GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2 = 6.0
-
 
 class RobotWorker(QObject):
     state_changed = Signal(object)
@@ -65,6 +63,7 @@ class RobotWorker(QObject):
     measured_pose_captured = Signal(object)
     teleop_start_pose = Signal(object)
     joint_measurements = Signal(object)
+    live_measurements = Signal(object)
     jog_queue_changed = Signal(object)
     cartesian_jog_diagnostic = Signal(object)
 
@@ -92,6 +91,51 @@ class RobotWorker(QObject):
         self._active_jog_start: Pose | None = None
         self._active_jog_target: Pose | None = None
         self._active_jog_command: dict[str, Any] | None = None
+        self._live_gripper_with_motion = False
+
+    def _install_live_feedback(self, arm: SOARM101) -> None:
+        """Bridge existing motion/tool measurements into GUI-only live state."""
+
+        def publish_joints(joints: object) -> None:
+            values = {name: float(dict(joints)[name]) for name in ARM_JOINTS}
+            pose = arm.model.forward(values, tcp=arm.active_tcp).xyz_rpy()
+            payload: dict[str, object] = {
+                "joints_deg": {
+                    name: degrees(values[name]) for name in ARM_JOINTS
+                },
+                "pose_mm_deg": (
+                    pose[0] * 1000.0,
+                    pose[1] * 1000.0,
+                    pose[2] * 1000.0,
+                    degrees(pose[3]),
+                    degrees(pose[4]),
+                    degrees(pose[5]),
+                ),
+                "tcp_xyz_rpy": arm.active_tcp.xyz_rpy(),
+            }
+            if self._live_gripper_with_motion:
+                payload["gripper"] = float(arm.tool.get_position())
+            self.live_measurements.emit(payload)
+
+        arm.motion.set_feedback_callback(publish_joints)
+
+        def publish_gripper(position: float) -> None:
+            self.live_measurements.emit({"gripper": float(position)})
+
+        arm.motion.set_tool_feedback_callback(publish_gripper)
+        primary_tool = getattr(arm.tool, "primary", arm.tool)
+        set_tool_feedback = getattr(primary_tool, "set_feedback_callback", None)
+        if callable(set_tool_feedback):
+            set_tool_feedback(publish_gripper)
+
+    @staticmethod
+    def _clear_live_feedback(arm: SOARM101) -> None:
+        arm.motion.set_feedback_callback(None)
+        arm.motion.set_tool_feedback_callback(None)
+        primary_tool = getattr(arm.tool, "primary", arm.tool)
+        set_tool_feedback = getattr(primary_tool, "set_feedback_callback", None)
+        if callable(set_tool_feedback):
+            set_tool_feedback(None)
 
     @Slot()
     def start(self) -> None:
@@ -198,6 +242,17 @@ class RobotWorker(QObject):
         if arm.motion.is_streaming:
             raise RuntimeError("stop live teleoperation before commanding this arm")
         return arm
+    @staticmethod
+    def _gripper_default_speed_raw(arm: SOARM101) -> int:
+        """Resolve tool pacing independently from responsive arm servo tracking."""
+
+        tool = arm.tool
+        primary = getattr(tool, "primary", None)
+        for candidate in (tool, primary):
+            default_speed = getattr(candidate, "default_speed_raw", None)
+            if default_speed is not None:
+                return int(default_speed)
+        return 250
 
     @staticmethod
     def _pose_diagnostic_payload(pose: Pose) -> dict[str, tuple[float, ...]]:
@@ -286,6 +341,7 @@ class RobotWorker(QObject):
                 self.log_message.emit(f"Completed {label}.")
                 record_session("motion_completed", worker=self._robot_id, label=label)
             if label == "teleop alignment":
+                self._live_gripper_with_motion = False
                 self._record_gripper_snapshot(
                     "joint_alignment_finished" if exception is None else "joint_alignment_failed",
                     leader_gripper=(
@@ -410,10 +466,7 @@ class RobotWorker(QObject):
             self._robot_id = str(values.get("robot_id") or "so101")
             if self._simulation:
                 self.arm = SOARM101(
-                    SOARM101Config(
-                        teleop_max_joint_speed=GUI_TELEOP_MAX_JOINT_SPEED_RAD_S,
-                        teleop_max_joint_acceleration=GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2,
-                    ),
+                    SOARM101Config(),
                     backend=SimulationBackend(realtime=True),
                 )
             else:
@@ -428,11 +481,10 @@ class RobotWorker(QObject):
                         ),
                         configure_motors_on_connect=False,
                         enable_workspace_checks=False,
-                        teleop_max_joint_speed=GUI_TELEOP_MAX_JOINT_SPEED_RAD_S,
-                        teleop_max_joint_acceleration=GUI_TELEOP_MAX_JOINT_ACCELERATION_RAD_S2,
                     )
                 )
             self.arm.connect()
+            self._install_live_feedback(self.arm)
             self.connected_changed.emit(True)
             self.log_message.emit(
                 "Connected to simulation." if self._simulation else "Connected to SO-ARM101."
@@ -453,6 +505,7 @@ class RobotWorker(QObject):
         arm = self.arm
         self.arm = None
         self._teleop_staging = None
+        self._live_gripper_with_motion = False
         for _label, handle in self._handles:
             handle.cancel()
         self._handles.clear()
@@ -462,6 +515,7 @@ class RobotWorker(QObject):
         self._teleop = None
         self.teleop_changed.emit(False)
         if arm is not None:
+            self._clear_live_feedback(arm)
             try:
                 arm.stop()
             except Exception:
@@ -515,6 +569,7 @@ class RobotWorker(QObject):
     def relax(self) -> None:
         try:
             self._teleop_staging = None
+            self._live_gripper_with_motion = False
             for _label, handle in self._handles:
                 handle.cancel()
             arm = self._require_arm()
@@ -534,6 +589,7 @@ class RobotWorker(QObject):
     def stop(self) -> None:
         try:
             self._teleop_staging = None
+            self._live_gripper_with_motion = False
             for _label, handle in self._handles:
                 handle.cancel()
             arm = self._require_arm()
@@ -699,7 +755,7 @@ class RobotWorker(QObject):
                 raise RuntimeError("wait for active motion to finish before teleoperation")
             values = dict(options)  # type: ignore[arg-type]
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             values["gripper_speed_raw"] = selected_gripper_speed
@@ -715,6 +771,17 @@ class RobotWorker(QObject):
                 raise ValueError(
                     "teleoperation frequency exceeds the configured command-frequency ceiling"
                 )
+            tracking = teleop_tracking_preset(
+                str(values.get("tracking_preset") or DEFAULT_TELEOP_TRACKING_PRESET)
+            )
+            tracking_speed_limits = {
+                name: min(limit, arm.config.stream_joint_speed_limit)
+                for name, limit in tracking.joint_speed_limits_rad_s().items()
+            }
+            tracking_acceleration_limits = {
+                name: min(limit, arm.config.stream_joint_acceleration_limit)
+                for name, limit in tracking.joint_acceleration_limits_rad_s2().items()
+            }
             leader_origin = {
                 name: float(values["leader_joints_rad"][name]) for name in ARM_JOINTS
             }
@@ -830,6 +897,7 @@ class RobotWorker(QObject):
                         except BaseException:
                             pass
                         raise
+                    self._live_gripper_with_motion = True
                     self.log_message.emit(
                         f"Opening follower gripper {opening_start:.3f} → "
                         f"{opening_target:.3f} alongside joint alignment."
@@ -881,23 +949,44 @@ class RobotWorker(QObject):
                 "limited_samples": 0,
                 "frequency_hz": frequency,
                 "period_s": period_s,
+                "tracking_preset": tracking.key,
+                "tracking_label": tracking.label,
+                "max_speed_rad_s": tracking_speed_limits,
+                "max_acceleration_rad_s2": tracking_acceleration_limits,
                 "overruns": 0,
                 "last_processing_s": 0.0,
                 "last_sample_timestamp": None,
                 "last_frame": None,
             }
-            arm.start_joint_stream(frequency_hz=frequency)
+            arm.start_joint_stream(
+                frequency_hz=frequency,
+                max_speed=tracking_speed_limits,
+                max_acceleration=tracking_acceleration_limits,
+            )
             self.teleop_changed.emit(True)
             self.busy_changed.emit(True)
             self.log_message.emit(
-                f"Live teleoperation started in {mode} mapping mode at {frequency:.1f} Hz."
+                f"Live teleoperation started in {mode} mapping mode at {frequency:.1f} Hz "
+                f"with {tracking.label} tracking."
             )
-            record_session("teleop_started", worker=self._robot_id, mode=mode, frequency_hz=frequency)
+            record_session(
+                "teleop_started",
+                worker=self._robot_id,
+                mode=mode,
+                frequency_hz=frequency,
+                tracking_preset=tracking.key,
+            )
             record_session(
                 "teleop_settings",
                 worker=self._robot_id,
-                max_joint_speed_rad_s=arm.config.stream_joint_speed_limit,
-                max_joint_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
+                tracking_preset=tracking.key,
+                tracking_label=tracking.label,
+                max_joint_speed_rad_s=max(tracking_speed_limits.values()),
+                max_joint_acceleration_rad_s2=max(tracking_acceleration_limits.values()),
+                joint_max_speed_rad_s=tracking_speed_limits,
+                joint_max_acceleration_rad_s2=tracking_acceleration_limits,
+                absolute_stream_max_joint_speed_rad_s=arm.config.stream_joint_speed_limit,
+                absolute_stream_max_joint_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
                 gripper_speed_per_s=TELEOP_GRIPPER_SPEED_PER_S,
                 gripper_speed_raw=selected_gripper_speed,
                 max_command_step_rad=arm.config.max_command_step_radians,
@@ -958,8 +1047,8 @@ class RobotWorker(QObject):
                 teleop["last_velocity"],
                 joint_limits=teleop["joint_limits"],
                 period_s=float(teleop["period_s"]),
-                max_speed_rad_s=arm.config.stream_joint_speed_limit,
-                max_acceleration_rad_s2=arm.config.stream_joint_acceleration_limit,
+                max_speed_rad_s=teleop["max_speed_rad_s"],
+                max_acceleration_rad_s2=teleop["max_acceleration_rad_s2"],
                 max_step_rad=arm.config.max_command_step_radians,
             )
             gripper_actual = None
@@ -1038,6 +1127,8 @@ class RobotWorker(QObject):
             self.joint_measurements.emit({
                 name: degrees(float(result.final_positions[name])) for name in ARM_JOINTS
             })
+            if gripper_actual is not None:
+                self.live_measurements.emit({"gripper": float(gripper_actual)})
             teleop["last_sample_timestamp"] = sample_timestamp
             teleop["last_command"] = command
             teleop["last_velocity"] = velocity
@@ -1046,10 +1137,34 @@ class RobotWorker(QObject):
             processing_s = time.perf_counter() - started
             if self._detailed_logging:
                 actual = dict(result.final_positions)
+                backend = getattr(arm, "backend", None)
+                calibration = getattr(backend, "calibration", None)
+                motors = getattr(calibration, "motors", None)
+                command_raw = None
+                actual_raw = None
+                if motors is not None:
+                    try:
+                        command_raw = {
+                            name: int(motors[name].radians_to_raw(float(command[name])))
+                            for name in ARM_JOINTS
+                        }
+                        actual_raw = {
+                            name: int(motors[name].radians_to_raw(float(actual[name])))
+                            for name in ARM_JOINTS
+                        }
+                    except Exception:
+                        command_raw = None
+                        actual_raw = None
                 record_session(
                     "teleop_frame",
                     **frame,
+                    monotonic_s=time.perf_counter(),
                     actual_joints_rad=actual,
+                    command_joints_raw=command_raw,
+                    actual_joints_raw=actual_raw,
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                    frequency_hz=teleop["frequency_hz"],
                     following_error_rad={
                         name: actual[name] - command[name] for name in ARM_JOINTS
                     },
@@ -1073,6 +1188,7 @@ class RobotWorker(QObject):
                         "samples": teleop["samples"],
                         "message": result.message,
                         "frequency_hz": teleop["frequency_hz"],
+                        "tracking_preset": teleop["tracking_preset"],
                         "processing_ms": processing_s * 1000.0,
                         "sample_age_ms": sample_age_s * 1000.0,
                         "overruns": teleop["overruns"],
@@ -1172,7 +1288,7 @@ class RobotWorker(QObject):
                 artifact_label=f"sequence {sequence.name!r}",
             )
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             runner = SequenceRunner(
@@ -1282,7 +1398,7 @@ class RobotWorker(QObject):
                         "saved pose move cancelled before gripper command"
                     )
                 selected_gripper_speed = gripper_speed_raw(
-                    arm.config.hardware_speed_raw,
+                    self._gripper_default_speed_raw(arm),
                     float(values.get("gripper_speed_multiplier", 2.0)),
                 )
                 return (
@@ -1313,7 +1429,7 @@ class RobotWorker(QObject):
                 artifact_label="recorded trajectory",
             )
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             result = arm.play_trajectory(
@@ -1579,7 +1695,7 @@ class RobotWorker(QObject):
             speed = radians(float(values.get("speed_deg_s", 8.0)))
             acceleration = radians(float(values.get("acceleration_deg_s2", 25.0)))
             selected_gripper_speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             source = str(values.get("source") or "other arm")
@@ -1635,7 +1751,7 @@ class RobotWorker(QObject):
             position = float(values["position"])
             arm = self._require_motion_available()
             speed = gripper_speed_raw(
-                arm.config.hardware_speed_raw,
+                self._gripper_default_speed_raw(arm),
                 float(values.get("gripper_speed_multiplier", 2.0)),
             )
             record_session(

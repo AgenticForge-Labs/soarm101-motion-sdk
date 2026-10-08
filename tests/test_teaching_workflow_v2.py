@@ -140,7 +140,7 @@ def test_stream_rate_changes_velocity_validation() -> None:
         arm.stop_joint_stream()
 
         arm.start_joint_stream(frequency_hz=50.0)
-        with pytest.raises(SafetyViolationError, match="streamed joint speed"):
+        with pytest.raises(SafetyViolationError, match="streamed shoulder_pan speed"):
             arm.stream_joint_target(
                 {
                     **target,

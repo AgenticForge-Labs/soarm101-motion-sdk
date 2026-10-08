@@ -7,22 +7,55 @@ import pytest
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.constants import (
+    DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+    DEFAULT_MAX_JOINT_SPEED_RAD_S,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.gui.teleop_rate import (
+    DEFAULT_TELEOP_TRACKING_PRESET,
     GripperContactLatch,
     limit_joint_target,
     plan_alignment_target,
     teleop_stale_limit_s,
+    teleop_tracking_preset,
     update_gripper_contact_latch,
 )
+from soarm101_motion.exceptions import SafetyViolationError
 from soarm101_motion.hardware import SimulationBackend
 
 
 def test_default_teleop_rate_is_smooth_practical_rate() -> None:
     assert DEFAULT_TELEOP_STREAM_FREQUENCY_HZ == 20.0
+
+
+def test_tracking_presets_preserve_current_medium_and_use_wrist_aware_fast() -> None:
+    slow = teleop_tracking_preset("slow")
+    medium = teleop_tracking_preset("medium")
+    fast = teleop_tracking_preset("fast")
+
+    assert DEFAULT_TELEOP_TRACKING_PRESET == "medium"
+    assert slow.max_speed_rad_s == pytest.approx(0.6)
+    assert slow.max_acceleration_rad_s2 == pytest.approx(3.0)
+    assert medium.max_speed_rad_s == pytest.approx(1.2)
+    assert medium.max_acceleration_rad_s2 == pytest.approx(6.0)
+    assert slow.max_speed_rad_s == pytest.approx(medium.max_speed_rad_s / 2.0)
+    assert slow.max_acceleration_rad_s2 == pytest.approx(
+        medium.max_acceleration_rad_s2 / 2.0
+    )
+
+    speed_limits = fast.joint_speed_limits_rad_s()
+    acceleration_limits = fast.joint_acceleration_limits_rad_s2()
+    assert all(
+        value == pytest.approx(DEFAULT_MAX_JOINT_SPEED_RAD_S)
+        for value in speed_limits.values()
+    )
+    assert degrees(acceleration_limits["wrist_flex"]) == pytest.approx(500.0)
+    for name in set(ARM_JOINTS) - {"wrist_flex"}:
+        assert acceleration_limits[name] == pytest.approx(
+            DEFAULT_MAX_JOINT_ACCEL_RAD_S2
+        )
 
 
 def test_backlog_guard_uses_actual_sample_age_not_cycle_duration() -> None:
@@ -32,6 +65,27 @@ def test_backlog_guard_uses_actual_sample_age_not_cycle_duration() -> None:
     # cycle but only ~8 ms of queued sample age. That is not stale playback.
     assert 0.008 < teleop_stale_limit_s(period_s)
     assert 0.200 > teleop_stale_limit_s(period_s)
+
+
+def test_fast_limiter_accelerates_wrist_flex_more_gently_than_other_joints() -> None:
+    fast = teleop_tracking_preset("fast")
+    previous = {name: 0.0 for name in ARM_JOINTS}
+    desired = dict(previous, shoulder_pan=0.3, wrist_flex=0.3)
+    velocity = {name: 0.0 for name in ARM_JOINTS}
+
+    _, new_velocity, limited = limit_joint_target(
+        desired,
+        previous,
+        velocity,
+        period_s=0.05,
+        max_speed_rad_s=fast.joint_speed_limits_rad_s(),
+        max_acceleration_rad_s2=fast.joint_acceleration_limits_rad_s2(),
+        max_step_rad=radians(5.0),
+    )
+
+    assert limited
+    assert degrees(new_velocity["shoulder_pan"]) == pytest.approx(50.0)
+    assert degrees(new_velocity["wrist_flex"]) == pytest.approx(25.0)
 
 
 class RecordingSimulationBackend(SimulationBackend):
@@ -52,6 +106,38 @@ class RecordingSimulationBackend(SimulationBackend):
             speed_raw=speed_raw,
             acceleration_raw=acceleration_raw,
         )
+
+
+class ScriptedFeedbackBackend(SimulationBackend):
+    def __init__(self, wrist_feedback: list[float]) -> None:
+        super().__init__(
+            initial_positions={name: 0.0 for name in ARM_JOINTS},
+            realtime=False,
+        )
+        self._wrist_feedback = list(wrist_feedback)
+        self._pending_feedback = False
+
+    def write_joint_positions(
+        self,
+        positions,
+        *,
+        speed_raw=None,
+        acceleration_raw=None,
+    ) -> None:
+        super().write_joint_positions(
+            positions,
+            speed_raw=speed_raw,
+            acceleration_raw=acceleration_raw,
+        )
+        self._pending_feedback = True
+
+    def read_joint_positions(self) -> dict[str, float]:
+        positions = super().read_joint_positions()
+        if self._pending_feedback and self._wrist_feedback:
+            positions["wrist_flex"] = self._wrist_feedback.pop(0)
+            self._positions["wrist_flex"] = positions["wrist_flex"]
+            self._pending_feedback = False
+        return positions
 
 
 def test_alignment_accepts_recorded_wrist_travel_beyond_model_limit() -> None:
@@ -289,6 +375,174 @@ def test_smoothed_targets_pass_the_stream_guard_in_simulation(frequency_hz: floa
             assert arm.stream_joint_target(command).accepted
             previous = command
         assert abs(previous["shoulder_pan"] - desired["shoulder_pan"]) < 1e-6
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_session_can_enforce_tracking_limits_below_absolute_envelope() -> None:
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    arm = SOARM101(config, backend=SimulationBackend(realtime=False))
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=0.6,
+            max_acceleration=3.0,
+        )
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.04
+        with pytest.raises(SafetyViolationError, match="streamed shoulder_pan speed"):
+            arm.stream_joint_target(target)
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_session_enforces_per_joint_acceleration_limits() -> None:
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    arm = SOARM101(config, backend=SimulationBackend(
+        initial_positions={name: 0.0 for name in ARM_JOINTS},
+        realtime=False,
+    ))
+    arm.connect()
+    arm.enable()
+    speed_limits = {name: radians(100.0) for name in ARM_JOINTS}
+    acceleration_limits = {name: radians(1000.0) for name in ARM_JOINTS}
+    acceleration_limits["wrist_flex"] = radians(500.0)
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=speed_limits,
+            max_acceleration=acceleration_limits,
+        )
+        first = {name: 0.0 for name in ARM_JOINTS}
+        first["shoulder_pan"] = 0.02
+        first["wrist_flex"] = 0.02
+        assert arm.stream_joint_target(first).accepted
+
+        second = dict(first)
+        second["shoulder_pan"] = 0.07
+        second["wrist_flex"] = 0.07
+        with pytest.raises(
+            SafetyViolationError,
+            match="streamed wrist_flex acceleration",
+        ):
+            arm.stream_joint_target(second)
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_reversal_allows_only_brief_non_growing_braking_carry_through() -> None:
+    backend = ScriptedFeedbackBackend([0.02, 0.05, 0.107, 0.147, 0.202])
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=radians(100.0),
+            max_acceleration=radians(1000.0),
+        )
+        for wrist_target in (0.04, 0.0575, 0.0315, -0.0015):
+            target = {name: 0.0 for name in ARM_JOINTS}
+            target["wrist_flex"] = wrist_target
+            assert arm.stream_joint_target(target).accepted
+
+        target = {name: 0.0 for name in ARM_JOINTS}
+        target["wrist_flex"] = -0.0315
+        with pytest.raises(SafetyViolationError, match="opposite the commanded direction"):
+            arm.stream_joint_target(target)
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_reversal_does_not_use_stale_direction_as_braking_grace() -> None:
+    backend = ScriptedFeedbackBackend([0.02, 0.04, 0.04, 0.04, 0.10])
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=radians(100.0),
+            max_acceleration=radians(1000.0),
+        )
+        for wrist_target in (0.04, 0.04, 0.04, 0.04):
+            target = {name: 0.0 for name in ARM_JOINTS}
+            target["wrist_flex"] = wrist_target
+            assert arm.stream_joint_target(target).accepted
+
+        target = {name: 0.0 for name in ARM_JOINTS}
+        with pytest.raises(SafetyViolationError, match="opposite the commanded direction"):
+            arm.stream_joint_target(target)
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_reversal_rejects_growing_wrong_way_motion_during_grace() -> None:
+    backend = ScriptedFeedbackBackend([0.02, 0.05, 0.107, 0.180])
+    config = SOARM101Config(
+        enable_workspace_checks=False,
+        effort_safety_enabled=False,
+        stream_reversal_max_carrythrough_rad=0.20,
+    )
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=radians(100.0),
+            max_acceleration=radians(1000.0),
+        )
+        for wrist_target in (0.04, 0.0575, 0.0315):
+            target = {name: 0.0 for name in ARM_JOINTS}
+            target["wrist_flex"] = wrist_target
+            assert arm.stream_joint_target(target).accepted
+
+        target = {name: 0.0 for name in ARM_JOINTS}
+        target["wrist_flex"] = -0.0015
+        with pytest.raises(
+            SafetyViolationError,
+            match="carry-through grew during reversal braking",
+        ):
+            arm.stream_joint_target(target)
+    finally:
+        arm.stop_joint_stream(hold=True)
+        arm.disconnect()
+
+
+def test_stream_reversal_caps_cumulative_wrong_way_travel() -> None:
+    backend = ScriptedFeedbackBackend([0.02, 0.05, 0.11, 0.16])
+    config = SOARM101Config(enable_workspace_checks=False, effort_safety_enabled=False)
+    arm = SOARM101(config, backend=backend)
+    arm.connect()
+    arm.enable()
+    try:
+        arm.start_joint_stream(
+            frequency_hz=20.0,
+            max_speed=radians(100.0),
+            max_acceleration=radians(1000.0),
+        )
+        for wrist_target in (0.04, 0.0575, 0.0315):
+            target = {name: 0.0 for name in ARM_JOINTS}
+            target["wrist_flex"] = wrist_target
+            assert arm.stream_joint_target(target).accepted
+
+        target = {name: 0.0 for name in ARM_JOINTS}
+        target["wrist_flex"] = -0.0015
+        with pytest.raises(
+            SafetyViolationError,
+            match="cumulative reversal carry-through",
+        ):
+            arm.stream_joint_target(target)
     finally:
         arm.stop_joint_stream(hold=True)
         arm.disconnect()

@@ -1,5 +1,73 @@
 # Testing
 
+
+## 100/1000 motion-envelope validation — 2026-10-06
+
+The original absolute joint ceilings (1.0 rad/s, 5.0 rad/s^2) came from an early safety
+hardening pass and had no documented SO-101/STS3215 hardware derivation. After the
+40 deg/s, 250 deg/s^2 Sleep-vs-`sleep_up` rerun completed cleanly with the responsive
+0/254 servo profile, the host characterization envelope was made explicit and human-facing:
+
+```text
+joint        100 deg/s, 1000 deg/s^2
+TCP linear   100 mm/s, 1000 mm/s^2
+TCP angular  100 deg/s, 1000 deg/s^2
+```
+
+Automated acceptance must prove that 80 deg/s, 500 deg/s^2 joint motion is inside the new
+envelope and >100/>1000 requests are rejected. Broker tests must prove that the trusted-host
+envelope is injected into bounded motion subprocesses while camera capture receives no
+irrelevant motion flags.
+
+The previously rejected **80 deg/s, 500 deg/s²** request was rerun on hardware on
+2026-10-06 and completed successfully. The operator reported that motion was substantially
+better/smoother than the earlier conservative runs. The servo remained on responsive 0/254
+tracking; following-error, effort, fault, calibrated limits, workspace, timing, STOP/HOLD,
+and settle guards remained unchanged.
+
+The first **100 deg/s, 1000 deg/s²** attempt did not command hardware motion. It exposed a
+floating-point boundary bug: `math.radians(1000.0)` differed from the configured
+1000-deg/s² SI ceiling by only a few ULPs, so the strict `resolved > maximum` comparison
+rejected two values that both formatted as 17.4533 rad/s². Regression coverage now requires
+exact advertised 100/1000 values to pass while >100/>1000 requests still fail.
+
+The next supervised characterization point is therefore:
+
+```bash
+bash scripts/run_sleep_posture_comparison.sh 100 1000
+```
+
+Do not describe 100/1000 as physically validated until that run completes cleanly under the
+unchanged runtime guards.
+
+
+## Self-contained agent sandbox
+
+Automated tests remain hardware-free and cover packaged asset availability, OpenShell policy
+allowlists, CLI wiring, human-authority preflight, minimal task/skill/client uploads, auth
+selection, provenance, and sandbox/broker cleanup.
+
+Before any physical autonomous run, validate each selected adapter through its read-only path:
+
+```bash
+soarm101 agent sandbox doctor --agent hermes
+soarm101 agent sandbox run --agent hermes --read-only
+
+soarm101 agent sandbox doctor --agent codex --auth installed
+soarm101 agent sandbox run --agent codex --auth installed --read-only
+```
+
+The packaged read-only task uses only capabilities/state/camera capture. It must work without
+`soarm101 agent arm`; an absent authority lease blocks motion but must not stop read-only
+observation. The effective broker policy must contain no pose/joint/jog/gripper/Sleep/STOP
+routes. The SDK then requires post-handoff broker evidence for capabilities, state, and one
+successful capture of every configured camera, verifies downloaded image SHA-256 values
+against trusted capture events, rejects any broker-observed motion action, and writes
+`read-only-validation.json`. A zero harness exit without that evidence is a failed gate.
+Also verify the sandbox has no Motion SDK checkout, serial/camera devices, calibration files,
+Docker socket, or unrelated host credentials, and that the sandbox is deleted after the run.
+Only after that gate should a supervised motion run begin.
+
 ## Bounded agent CLI
 
 Automated tests cover authority expiry/identity matching, non-interactive arming rejection,
@@ -57,6 +125,387 @@ already green at that head.
   follower.
 - The real arm was deliberately not driven near the floor merely to exercise the floor guard.
   Automated policy tests cover rejection of targets entering the configured margin.
+### Measured folded-start workspace regression — 2026-10-04
+
+Post-study exact replay initially failed before motion while the follower was in its normal
+folded/resting state. The generic centerline model reported 0.021 m self-clearance versus the
+0.025 m heuristic at workspace path sample 0. This was a planning false positive at the already
+occupied measured start, not a newly commanded collision.
+
+The reusable joint-space validator now treats a measured start inside the coarse self-clearance
+envelope as admissible only while the path does not worsen that pre-existing modeled clearance
+(with 0.5 mm numerical tolerance). The motion does not have to fully leave the generic envelope
+to be an improving/neutral move. If the path reaches normal clearance, strict checking resumes
+immediately and re-entry is rejected. Floor, base keep-out, TCP reach, calibrated joint limits,
+rate/acceleration, following-error, effort, fault, communication, and settle protections remain
+unchanged.
+
+Regression tests cover: improving-but-still-inside motion, deeper-fold rejection, strict
+re-entry rejection after clearing the envelope, and preservation of the floor guard.
+
+### Exact teleop replay physical result — 2026-10-04
+
+The post-study exact teleop replay completed successfully on the physical follower after the
+replay was corrected to reuse the original GUI teleop safety settings. The operator could
+clearly recognize the replay as the recorded teleop motion because its speed varied naturally,
+and reported that it felt **less mechanical and smoother** than the generated programmed route.
+
+This is the strongest physical discriminator in the low-speed investigation so far:
+
+- live teleop is smooth enough to serve as the reference behavior;
+- deterministic replay of the exact accepted teleop arm-command sequence also preserves that
+  less-mechanical character;
+- programmed 20 Hz versus 50 Hz motion showed no large subjective difference;
+- the generated route remains especially shaky while folding back into Sleep.
+
+Therefore frequent position streaming and 20 Hz transport are not sufficient explanations for
+the shake. The leading hypothesis is now the **generated joint-command profile itself**:
+per-joint discrete velocity/acceleration structure, long stretches of very small encoder steps,
+stop/start behavior as joints enter low-speed portions of the synchronized path, and how those
+profiles interact with gravity/backlash/static friction in the folded Sleep geometry.
+
+Before another control change, compare the exact replay trace against both programmed traces
+quantitatively: per-joint raw encoder increment distributions, commanded velocity and
+acceleration, zero/near-zero runs, sign changes, command-versus-actual lag, and the approach to
+Sleep. Do not treat cadence tuning as the primary next intervention unless the trace comparison
+reveals a hidden timing effect.
+
+### Exact-replay configuration mismatch — 2026-10-04
+
+The first post-study exact replay preflight rejected original teleop sample 117 as
+343.77 deg/s^2 against a 286.48 deg/s^2 ceiling even though the original live teleop had
+accepted that command. The captured sample numbers were contiguous, ruling out the suspected
+missing-frame explanation.
+
+Root cause: the GUI follower is intentionally constructed with a teleop acceleration ceiling
+of 6.0 rad/s^2 (343.77 deg/s^2), while the standalone replay had constructed a default SDK
+configuration whose stream acceleration ceiling was 5.0 rad/s^2 (286.48 deg/s^2). The replay
+was therefore not reproducing the original control contract.
+
+Exact post-study replay now loads the original copied GUI session's `teleop_settings` event
+and reuses its recorded joint-speed ceiling, joint-acceleration ceiling, maximum command step,
+and following-error limit. The replay does not raise or infer limits: it reproduces the safety
+settings under which the commands were originally accepted. Missing/invalid recorded settings
+fail closed. Regression tests cover settings recovery.
+
+### Sleep versus sleep2 — primary geometry check
+
+The simplest operator-driven geometry experiment is now the preferred next test:
+
+```bash
+bash scripts/run_sleep2_comparison.sh 24 150
+```
+
+Before invoking the script, physically place the arm in the alternate resting pose you want
+to evaluate. The Python program captures the **current measured pose before issuing any arm
+motion or torque-latch command**, validates its calibrated joint coordinates, and persists it
+as the named pose `sleep2` plus an experiment-local `sleep2.json`.
+
+It then runs a direct A/B from the same RIGHT saved pose:
+
+1. **A — canonical Sleep:** RIGHT -> built-in calibration-relative Sleep.
+2. **B — sleep2:** RIGHT -> the recorded operator-selected pose.
+
+The sleep2 route uses the same narrow Sleep-family exception for the generic coarse
+self-clearance heuristic while retaining calibrated joint limits, floor, TCP reach, base
+keepout, and normal streamed runtime guards. This intentionally avoids wrist-specific
+teaching logic or inferred intermediate geometry; the operator chooses the complete alternate
+resting configuration and the test compares that exact configuration against canonical Sleep.
+
+The earlier manual-wrist diagnostic remains available for deeper follow-up, but sleep2 is the
+preferred next test because it isolates the configuration choice with much less machinery.
+
+
+Physical A/B follow-up on 2026-10-05 found the operator-selected `sleep2` configuration
+**substantially smoother** than canonical historical Sleep, confirming a large geometry
+component to the rocking. The chosen wrist orientation was on the opposite side of the
+historical lower-limit wrist fold, motivating a portable calibration-relative default rather
+than persisting one machine's taught coordinates.
+
+The production semantic now defines default Sleep `wrist_flex` as:
+
+```text
+lower + 0.75 * (upper - lower)
+= upper - 0.25 * (upper - lower)
+```
+
+
+Confirm the promoted semantic directly on hardware with:
+
+```bash
+bash scripts/run_sleep_posture_comparison.sh 24 150
+```
+
+This performs only two conditions from the same saved RIGHT pose: A is RIGHT -> default
+Sleep and B is RIGHT -> `sleep_up`. The script prints both derived calibrated wrist-flex
+targets before motion and packages the passive trace and summary for comparison.
+
+
+First confirmation attempt on 2026-10-05 derived default Sleep wrist flex at **+51.46°** and
+historical `sleep_up` at **-102.91°**, while all other Sleep joints were identical. A
+(RIGHT -> default Sleep) completed. The subsequent reset from default Sleep back to RIGHT
+timed out at the normal 5 s settle boundary with a worst `elbow_flex` error of 0.0261 rad
+(~1.50°), just outside the configured 0.025 rad tolerance; hardware reported the elbow
+stationary with no fault. B therefore did not run.
+
+
+A later 40 deg/s, 250 deg/s² attempt exposed a separate actuator-profile mismatch before A:
+the RIGHT reset tripped the normal 0.300 rad following-error guard on `wrist_flex` at
+0.305 rad. The host trajectory had advanced to -0.556 rad while measured wrist flex was
+-0.861 rad, so the physical joint was ~17.5° behind the host target. The cause was that
+ordinary streamed joint moves still used the backend's fixed Feetech profile
+(`speed_raw=250`, `acceleration_raw=20`) even when the host planner was asked to run much
+faster.
+
+The fix does **not** raise or disable following-error. Default streamed planned joint motion
+now uses the same responsive Feetech profile as live teleoperation:
+`speed_raw=0` (unrestricted/max) and `acceleration_raw=254`, unless a low-level caller
+explicitly supplies servo-profile overrides. The validated host trajectory continues to own
+joint speed and acceleration, while calibrated limits, following-error, unexpected-direction,
+effort/fault, timing, STOP/HOLD, and settle checks remain unchanged. Re-run the 40/250
+Sleep-vs-sleep_up comparison to determine whether the faster host trajectory is physically
+smoother when the servos are no longer artificially throttled.
+
+
+Physical rerun on 2026-10-06 at **40 deg/s, 250 deg/s²** completed the full
+Sleep-vs-`sleep_up` comparison with the responsive 0/254 servo profile and no following-error
+trip. This confirms the earlier 40/250 wrist lag was caused by the redundant slow actuator
+profile rather than the requested host dynamics alone.
+
+An earlier **80 deg/s, 500 deg/s²** request was rejected before motion by the then-current
+1.0-rad/s / 5.0-rad/s² host ceiling. That historical rejection motivated the explicit
+100/1000 characterization envelope. After the envelope change, the 80/500 hardware rerun on
+2026-10-06 completed successfully and was judged substantially smoother by the operator.
+
+The A/B harness now retries RIGHT once **only** after a `MotionTimeoutError` whose measured
+worst joint error is within twice the ordinary joint-position tolerance. The retry reissues
+the same fully guarded saved-pose move and must satisfy the normal settle check; no motion
+tolerance or safety acceptance criterion is relaxed.
+
+using the active executable calibrated range. All other Sleep joint selectors remain
+unchanged. The previous fully folded wrist-at-lower-limit posture is retained as
+`sleep_up`. Existing scripts using `move_sleep()` therefore exercise the new default
+automatically; `move_sleep_up()` is the explicit historical override. The local `sleep2`
+capture is evidence for this design decision, not a runtime source of truth.
+
+### Sleep geometry and fold-order comparison
+
+The 24 deg/s runs were subjectively somewhat smoother overall than 8 deg/s, and increasing
+acceleration further did not create a large additional improvement. Severe rocking still
+returned as the arm slowed into canonical Sleep, making folded geometry/load an important
+remaining hypothesis.
+
+The first automatic neutral-wrist experiment proved too indirect: neutralizing wrist flex
+while keeping canonical Sleep shoulder/elbow targets still entered the same 0.021 m coarse
+self-clearance state. The experiment now uses an operator-taught wrist angle instead of
+guessing one.
+
+Run:
+
+```bash
+bash scripts/run_sleep_geometry_comparison.sh streamed 24 150
+```
+
+The supervised workflow is:
+
+1. Move into canonical Sleep and hold.
+2. Relax **only `wrist_flex`** while shoulder pan/lift, elbow, wrist roll, and gripper stay
+   torque-held.
+3. The operator hand-places the wrist and presses ENTER.
+4. The measured wrist angle must lie inside the executable calibrated wrist range, and held
+   non-wrist joints must not have drifted beyond the normal joint-position tolerance.
+5. The backend latches the freshly measured wrist position before re-enabling that motor.
+   The resulting full pose is saved as `motion_test_sleep_wrist` and in the experiment
+   folder as `taught-sleep-wrist.json`.
+6. Compare:
+   - **A direct canonical:** RIGHT -> canonical Sleep.
+   - **B taught wrist:** RIGHT -> canonical folded arm geometry with the taught wrist angle.
+   - **C staged wrist:** RIGHT -> taught-wrist Sleep, then move only wrist flex into canonical
+     Sleep.
+
+B/C reuse the same narrow rationale as canonical Sleep: only the generic coarse
+self-clearance heuristic is omitted. Before powered motion the complete joint path is still
+validated for calibrated joint limits, floor, TCP reach, and base keepout. Runtime
+rate/acceleration/following-error/effort/fault/communication/settle guards remain active.
+This diagnostic is intentionally streamed-only because asynchronous final-target motion would
+require a different measured-path treatment inside the known folded self-clearance state.
+
+The key observation is whether B is calmer than A, and whether rocking appears primarily in
+C's final wrist-only fold. That directly tests wrist orientation/order while keeping the rest
+of the folded geometry constant.
+
+
+Manual-teach attempt on 2026-10-05 successfully relaxed only `wrist_flex` and captured the
+operator-positioned wrist, but stopped before save/retest because the diagnostic computed
+`max(other_drift)` on a dictionary, yielding a joint-name string rather than the largest
+numeric drift. The failure occurred before the taught pose was persisted. The cleanup path
+re-enabled `wrist_flex` and re-held the arm. The diagnostic now uses the shared
+`maximum_joint_drift(..., exclude=("wrist_flex",))` helper, with regression coverage proving
+the taught wrist can move substantially while the numeric maximum drift of the still-held
+joints is evaluated correctly.
+
+### Three-times-speed streamed versus final-target comparison
+
+After the 8 deg/s, 25 deg/s^2 comparison showed substantial rocking in both execution
+strategies, repeat the same route at 3x requested dynamics:
+
+```bash
+bash scripts/run_joint_execution_comparison.sh both 24 75
+```
+
+This keeps the route, saved poses, planning cadence, safety checks, and execution-mode
+comparison unchanged while increasing requested joint speed from 8 to 24 deg/s and requested
+joint acceleration from 25 to 75 deg/s^2. These remain below the configured host-side ceilings
+of approximately 57.3 deg/s and 286.5 deg/s^2. Compare overall rocking and especially the
+deceleration/fold into Sleep. Keep both traces and the generated archive.
+
+### Streamed versus final-target joint execution — experimental
+
+After the exact teleop replay established that deterministic streamed commands can retain the
+less-mechanical teleop character, keep the existing streamed implementation and test a second
+joint-only execution strategy rather than replacing it prematurely.
+
+Run:
+
+```bash
+bash scripts/run_joint_execution_comparison.sh
+```
+
+The runner updates the diagnostic branch and executes the same
+Sleep -> Overhead -> Left -> Right -> Sleep route twice at 8 deg/s and 25 deg/s^2:
+
+1. **streamed** — the existing validated host trajectory sends intermediate joint goals.
+2. **final_target** — the same joint plan is built/validated, then exactly one endpoint is
+   written per leg with per-joint servo speed limits derived from the planned duration.
+
+Both runs produce passive JSONL traces in one timestamped directory. Compare visible shake,
+especially Right -> Sleep, plus command count, effective raw servo speeds, feedback progression,
+joint coordination, and final settle. The final-target run is deliberately joint-space only;
+do not infer anything about Cartesian `move_linear()` from this experiment.
+
+The one-shot implementation remains experimental until supervised hardware validation shows
+whether it improves motion quality without introducing timeout or safety regressions. The
+default API behavior remains `streamed`.
+
+First physical A/B attempt on 2026-10-05: the streamed route completed. In `final_target`,
+the initial Sleep leg completed, but Sleep -> Overhead was stopped/held by the experimental
+cross-joint phase guard when wrist flex differed from median joint progress by 0.308 rad
+against the reused 0.300 rad following-error threshold. That rule was judged invalid for the
+one-shot contract: independent servos can legitimately advance at different rates while still
+moving in the commanded direction and remaining inside their validated start-to-target joint
+corridors. The phase guard was removed; per-joint corridor/overshoot, reverse-motion,
+hardware/effort fault, cancellation, timeout, and final-settle checks remain. Because
+independent servo progress can produce intermediate configurations that differ from the
+synchronized host plan, full-workspace/saved-pose final-target execution now also validates
+the accumulated measured physical path on every monitor cycle using the existing
+measured-start workspace policy. Use
+`bash scripts/run_joint_execution_comparison.sh final_target` to continue the physical test
+without repeating the streamed baseline.
+
+
+Corrected physical rerun on 2026-10-05 completed the entire
+Sleep -> Overhead -> Left -> Right -> Sleep route in `final_target` mode with no safety
+trip, but the operator still observed substantial rocking. This rules out repeated host
+micro-waypoint writes as the primary cause of the motion-quality problem. Keep both
+`streamed` and `final_target` implementations for now: they are useful diagnostic
+execution strategies, but neither is yet demonstrated to solve the low-speed shake.
+
+The strongest remaining contrast is now **teleop-derived command shape versus programmed
+low-speed motion**, not streamed versus one-shot transport. Exact teleop-command replay was
+subjectively less mechanical, while both generated streamed motion and generated final-target
+motion rocked, especially around the folded Sleep configuration. Before another architecture
+change, inspect the recorded teleop and final-target traces for actual per-joint velocity,
+raw goal-speed/profile values, low-speed dwell, load-dependent lag, and the final approach to
+Sleep.
+
+### Teleop versus programmed-motion trace protocol
+
+Before changing PID, command cadence, or trajectory shape again, run the guided comparison
+from the exact diagnostic branch/commit:
+
+```bash
+bash scripts/run_motion_quality_study.sh
+```
+
+The runner walks the operator through four conditions while preserving the normal hardware
+guards:
+
+1. **Live teleop reference.** The runner launches the GUI. Link the leader/follower, place
+   the follower at the folded Sleep-like start, then mark the interval in the terminal and
+   teleoperate slowly through Sleep -> Overhead -> Left -> Right -> Sleep. Stop teleoperation
+   before marking the end. The runner copies the GUI session log and extracts only the marked
+   `teleop_frame` interval.
+2. **Exact accepted teleop-command replay.** Unless explicitly skipped, the runner replays the
+   marked arm-joint command sequence through the existing guarded joint-stream primitive at
+   the recorded nominal cadence/timing. If the follower is too far from the first recorded
+   sample for a legal stream start, replay is skipped rather than bypassing the step guard.
+   The gripper is intentionally omitted so this condition isolates arm-joint behavior.
+3. **Programmed 50 Hz route.** The saved-pose route runs automatically at 8 deg/s and
+   25 deg/s^2 using the current planned-motion 50 Hz cadence. There are no per-leg prompts.
+4. **Programmed 20 Hz route.** The identical route, speed, and acceleration run automatically
+   at a teleop-like 20 Hz cadence.
+
+The passive program/replay tracer wraps only backend calls the SDK already makes; it does
+not add motion-time hardware reads. Detailed GUI teleop logging records leader joints,
+desired/limited command, command velocity, follower actual joints, following error, sample
+interval/age, processing time, raw encoder command/actual values, and the effective 0/254
+teleop servo profile. The program traces record outgoing joint commands, raw encoder goals,
+effective servo parameters, natural feedback reads, TCP positions, hardware-state checks,
+and route markers.
+
+Compare command intervals, raw encoder increments, command-versus-feedback lag, repeated
+raw targets, low-speed/deceleration regions, and folded versus extended geometry. The
+experiment distinguishes:
+
+- live teleop smoothness versus deterministic replay of the same accepted commands;
+- teleop-derived commands versus minimum-jerk generated commands; and
+- 20 Hz versus 50 Hz host cadence for the same generated route.
+
+Treat current/load as a second-pass diagnostic if the kinematic/timing evidence is
+insufficient, because extra effort polling can itself perturb serial timing. If the guided run's exact replay is skipped because the current follower pose is too far from the first captured command, finish conditions C/D and then run `bash scripts/run_motion_quality_replay.sh`. The post-study replay pre-positions to the first captured arm pose using ordinary guarded joint motion with full workspace checks, verifies measured arrival, preflights every captured command against active joint/step/speed/acceleration limits, and only then starts guarded exact streaming. Its trace, summary, and safety-refusal outcome are appended to the same study folder/archive.
+
+A
+single-final-target joint move remains a later discriminator for saved-pose motion; do not
+generalize that experiment to Cartesian `move_linear()`, where a single joint endpoint
+cannot guarantee the requested straight TCP path.
+
+### 20 Hz versus 50 Hz physical comparison — 2026-10-04
+
+On the physical follower, the same 8 deg/s saved-pose route did **not** show a large
+subjective smoothness difference between 50 Hz and 20 Hz host command cadence. The dominant
+visible failure remained strong shake/jitter while folding back into Sleep. This weakens
+host update frequency by itself as the primary cause.
+
+The configuration dependence is now the stronger clue: folded/Sleep motion is consistently
+worse than the more extended overhead/left/right portions. Prior tests also showed faster
+motion is better overall, but shake returns during deceleration. The remaining hypotheses
+should therefore emphasize joint-specific low-speed behavior under changing gravity/load,
+backlash/static friction near the folded configuration, and whether the host planner gives
+some joints very small/stop-start discrete motions while another joint sets the overall
+trajectory duration.
+
+The next discriminator is the post-study exact teleop-command replay. If the exact accepted
+teleop sequence remains smooth through the same return-to-Sleep fold, the hardware stream
+path is capable of that motion and the generated planned trajectory/coordination is implicated.
+If exact replay also becomes shaky in the fold, inspect load/configuration-dependent servo
+behavior and live-teleop-specific differences before changing the planner.
+
+### Slow-speed motion diagnostic record — 2026-10-04
+
+A supervised saved-pose A/B/C comparison on current `main` used the same host-planned joint
+path with three servo write strategies: the ordinary `250/20` profile, `0/254`, and
+`Goal_Position`-only writes. All three looked smoother through the main transit than the
+previously troublesome motion, but visible roughness concentrated as the arm slowed near
+the endpoint. The `Goal_Position`-only condition later tripped the existing wrist-flex
+following-error guard at 0.332 rad against the 0.300 rad limit during return, so it is not
+adopted as a production transport change.
+
+This points the next experiment at actuator-resolution behavior rather than another IK or
+PID change. On the quantized-target branch, repeat the same safe saved-pose motion and compare
+slow-tail smoothness against `main`. Confirm that intermediate writes with unchanged encoder
+targets are suppressed, the host cadence/deadlines continue unchanged, the exact final
+planned sample is still written, and following-error/fault/effort/settle behavior is unchanged.
+Record whether the visible roughness improves specifically during deceleration.
 
 ## Testing roadmap
 
@@ -183,8 +632,9 @@ because the arm is already inside the coarse self-clearance envelope. The path m
 any non-self-clearance workspace guard fails, if minimum self-clearance decreases while
 exiting, if the path never reaches the configured clearance threshold, or if ordinary
 self-clearance becomes invalid again after the path has cleared it. Sleep is derived from the active executable limits: shoulder pan
-midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
-wrist roll midpoint. On a calibrated physical follower those endpoints are already 1°
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex at 75% of its
+executable range, and wrist roll midpoint. On a calibrated physical follower the selected
+limit-derived endpoints are already 1°
 inside the measured mechanical stops. Sleep retains calibrated joint limits plus trajectory, rate/acceleration, following-error,
 effort, fault, communication, and completion guards, but intentionally skips the generic
 coarse workspace-geometry check. The designed folded posture places link centerlines closer
@@ -192,9 +642,11 @@ than the generic 25 mm self-clearance heuristic on this arm, so that heuristic p
 known false positive for Sleep. This exception is specific to the calibration-derived Sleep
 primitive; ordinary joint motion continues to use the coarse workspace check. After the arm
 fold completes, Sleep closes the stock gripper to a target 1° inside its calibrated closed
-mechanical stop by default. Verify `soarm101 limits --json` reports the derived normalized
-and raw gripper target before the physical test, then confirm the gripper stops short of the
-mechanical endpoint without an effort/fault trip. Sleep is never automatic.
+mechanical stop. The 2026-10-06 overload event was later explained by a pen already being
+held in the gripper, so it is not evidence that the calibration-derived 1° inset is unsafe.
+It is evidence that Sleep is not object-aware: before physical or agent-triggered Sleep,
+confirm that closing the gripper is appropriate for the current grasp. Verify
+`soarm101 limits --json` reports the derived normalized/raw target. Sleep is never automatic.
 
 The replay-only
 `--height-sweep-only` diagnostic must keep torque disabled while it searches for the
@@ -606,7 +1058,7 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
 1. Connect follower simulation and leader simulation.
 2. Leave the follower connected with torque off; starting teleoperation should latch its measured pose, enable hold, and run the alignment step.
 3. In Teleoperation choose **Relative / clutch-safe** and leave Mirror gripper enabled.
-4. Confirm **20 Hz — default** is selected, then click **Align follower and start**. Confirm the status reports alignment before live following and ordinary follower jog/sequence controls are disabled while teleop is active.
+4. Confirm **20 Hz — default** and **Medium · current** Tracking response are selected, then click **Align follower and start**. Confirm the status reports alignment before live following and ordinary follower jog/sequence controls are disabled while teleop is active.
 5. Stop live teleoperation and confirm the follower returns to holding state.
 6. Start it again and press the global **STOP / HOLD**. Confirm teleop ends.
 7. Disconnect the leader while teleop is active. Confirm follower teleop terminates and
@@ -625,6 +1077,15 @@ mainly a lifecycle/UI check because the simulated leader has no physical hand in
 13. Exercise Slow, Normal, and Fast gripper presets through a manual move, a Program
     gripper step, and recorded-trajectory replay; inspect simulator/backend tests for the
     raw speed propagation because simulation itself has no motor-speed dynamics.
+14. Exercise **Slow · gentle**, **Medium · current**, and **Fast · wrist-aware** Tracking
+    response in simulation and confirm the stream rate does not change when only the response
+    preset changes. Medium must preserve the historical 1.2 rad/s / 6.0 rad/s² limiter.
+    Fast must expose 100 deg/s to every joint, 1000 deg/s² to the four non-wrist-flex joints,
+    and 500 deg/s² to wrist_flex in both the GUI limiter and MotionController stream state.
+15. Exercise the stream reversal regression: strict opposite-direction motion still fails,
+    but a recent genuine command reversal may accept at most 100 ms of non-growing physical
+    carry-through, never more than 0.10 rad cumulative wrong-way travel, before the ordinary
+    direction fault resumes.
 
 ### 15. Physical Program / radial-pattern execution — DO LATER
 
@@ -650,7 +1111,14 @@ Only continue after the Batch 1 and Batch 2 physical checks pass.
 
 ### 16. Physical relative leader → follower teleoperation — DO LATER
 
-This is a new continuous-control path and has not yet been physically validated.
+This path now has partial physical validation on the user's follower. On 2026-10-06,
+20 Hz Medium tracking completed cleanly and felt substantially better than the earlier
+conservative response. A subsequent 20 Hz Fast run improved general tracking but exposed a
+wrist-flex-specific reversal limit: with the former 1000 deg/s² Fast wrist response, the
+controller observed +0.057 rad of wrist motion in the previous physical direction after a
+commanded reversal and correctly stopped. The next hardware gate uses Fast · wrist-aware
+(100 deg/s, 500 deg/s² on wrist_flex) plus the bounded stream-only reversal braking grace.
+Run it with no payload and gripper mirroring disabled first.
 
 1. Complete calibration, joint-direction, FK, low-speed joint, and STOP checks first.
 2. Secure both bases, clear the follower workspace, remove payloads, and keep physical
@@ -682,12 +1150,24 @@ This is a new continuous-control path and has not yet been physically validated.
     stop receiving stream targets and hold.
 14. Re-enable gripper mirroring and test a small leader gripper delta.
 15. After 5 Hz is repeatable, run the same checks at 10 Hz (100 ms period).
-16. Validate 20 Hz (50 ms period) next even though it is the current software default, then treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely because motion looks smooth; record cycle time, queued sample age, overruns, communication errors, STOP response, following errors, and effort trips as described in `docs/teleoperation.md`.
-17. If follower processing exceeds the selected period repeatedly or queued sample age
+16. At 20 Hz, verify **Medium · current** still reproduces the previously successful
+    behavior, then select **Fast · wrist-aware** with gripper mirroring disabled. Sweep
+    wrist_flex alone through several reversals and inspect `teleop_frame` leader, desired,
+    command, command velocity, actual, and following-error fields. Confirm wrist command
+    acceleration does not exceed 500 deg/s² and that any opposite-direction carry-through
+    after reversal is brief/non-growing rather than a persistent drift.
+17. Repeat coordinated five-joint Fast motion only after the isolated wrist test passes.
+    Then re-enable gripper mirroring at Normal gripper speed; keep object contact tests
+    separate from wrist-response testing.
+18. Treat 50 Hz (20 ms period) as a separate experimental stage. Do not increase merely
+    because motion looks smooth; record cycle time, queued sample age, overruns,
+    communication errors, STOP response, following errors, and effort trips as described
+    in `docs/teleoperation.md`.
+19. If follower processing exceeds the selected period repeatedly or queued sample age
     grows, the software should terminate teleop and hold. Reduce the rate before retrying.
-18. Deliberately move the leader faster only enough to verify configured step/speed/
+20. Deliberately move the leader faster only enough to verify configured step/speed/
     acceleration guards reject unsafe streaming rather than following it.
-19. Do not treat software STOP as an emergency stop; physical power remains the ultimate
+21. Do not treat software STOP as an emergency stop; physical power remains the ultimate
     intervention during these tests.
 
 ### 17. Physical absolute teleoperation — DO LATER, AFTER RELATIVE PASSES
@@ -718,6 +1198,24 @@ is physical validation and future optional capabilities such as Cartesian veloci
 streaming, richer mesh collision models, and show-level orchestration in the appropriate
 Robo Puppeteer/Director repositories.
 
+
+## Live GUI motion visualization
+
+Automated coverage verifies that MotionController and the stock gripper publish motion-owned
+feedback during guarded execution, and that partial GUI live updates animate the arm joints,
+model-estimated TCP readout, and jaw aperture while preserving the latest full-state snapshot.
+Recorded/alignment paths may add a gripper sample at an existing controller feedback checkpoint,
+but must never start an independent hardware polling loop.
+
+Local GUI acceptance:
+1. connect the follower and leave the sidebar visible;
+2. command a small joint move and confirm the arm schematic and TCP readout move during transit;
+3. command gripper open/close and confirm both the jaw schematic and numeric aperture move
+   continuously rather than only jumping after completion;
+4. run 20 Hz teleoperation and confirm measured joints and mirrored gripper remain live;
+5. confirm no new communication errors or timing misses appear from visualization activity.
+
+The live-display path must not add a second serial poller while a motion handle owns feedback.
 
 ## Guided Setup GUI validation
 
@@ -753,6 +1251,33 @@ recalibrate a working arm solely for a cosmetic smoke test.
 7. Hover/focus several controls and confirm the state change is obvious without changing
    layout size.
 
+## Persistent operating-status banner
+
+The top status banner must remain visible in normal operation, including when no error is
+active. Verify the neutral/green/amber base text follows follower connection, holding/moving,
+and teleoperation linked/delinked state. Trigger a synthetic GUI error and confirm **Clear**
+appears; pressing it must remove only the transient notice and leave the banner visible.
+For a teleoperation stale-sample stop, clearing the red notice must fall back to the amber
+TELEOP STOPPED / follower holding / relink-required state. For an active robot fault, clearing
+any prior notice must still show the non-dismissible fault state. The complete event remains
+in Log regardless of banner acknowledgement.
+
+## Teleoperation workspace layout and live diagnostics
+
+Software/offscreen checks should confirm the persistent right sidebar is 430–520 px wide,
+the follower model has a larger minimum viewport, the coordination and teleoperation-setting
+groups share the top row, and two configured named cameras occupy the first row side by side.
+Teleoperation must provide Start all / Stop all camera controls without creating duplicate
+camera workers. Feed synthetic leader stream samples and follower joint measurements and
+confirm the 10-second Motion trace accepts samples in both Joint angles and Tracking error
+modes. The trace must not initiate motor/register reads.
+
+Local GUI review with two configured cameras: open Teleoperation at the normal desktop size,
+confirm both camera cards are visible simultaneously, Start all starts both existing sessions,
+and the lower trace remains readable while the right robot model is visibly larger. Current/load
+diagnostics remain in the existing effort/recording workflows rather than being added as a
+new high-rate GUI poller.
+
 ## GUI model geometry and scale
 
 ```bash
@@ -764,9 +1289,16 @@ behavior, stable scale under pose/ghost/target changes, standard views, and acti
 
 Local GUI review: open simulation; compare Side/Front/Top/Isometric, drag, zoom,
 double-click reset, Fit, and Auto fit at normal and smaller window sizes. With Auto
-fit off, pose and target changes must not alter ruler length. Jaw opening must leave
-the fixed finger still and rotate only the moving jaw. Confirm the model Z=0 label
-and readable toolbar/ruler. No hardware motion is needed for these presentation checks.
+fit off, pose and target changes must not alter ruler length. Confirm link ends are flat and
+no longer form oversized round blobs where visual elements overlap; the smaller joint
+markers should remain clearly distinguishable from the link bodies. Confirm the shoulder,
+elbow, wrist-flex, and wrist-roll pivots appear within the corresponding compact motor-case
+envelopes rather than at forced bar endpoints. The upper and lower printed members may be
+visibly offset from those pivots; that is intentional and should remain stable across
+Side/Front/Top views. Jaw opening must leave
+the fixed finger still and rotate only the moving jaw; in the normal light theme the moving
+jaw should read as neutral dark/black and slightly heavier than the fixed finger. Confirm the
+model Z=0 label and readable toolbar/ruler. No hardware motion is needed for these presentation checks.
 Physical TCP/geometry and shaking validation remain separate tasks in PLAN.md.
 
 ## Camera stream rate and lifecycle — workstation / hardware
@@ -935,3 +1467,17 @@ Cartesian targets and the SDK uses `move_linear(..., workspace_check="target_onl
 the generic model envelope. This retains a generic destination check without allowing the
 known-invalid model table floor to veto the measured paper frame. The full joint/IK/
 dynamic/following-error/effort/fault/communication/timing safety stack remains active.
+
+
+### 100/1000 envelope and responsive fallback regression
+
+The host envelope is 100 deg/s / 1000 deg/s² for joints, 100 mm/s / 1000 mm/s²
+for TCP translation, and 100 deg/s / 1000 deg/s² for tool orientation. The arm
+backend fallback itself is now 0/254, matching streamed/teleop tracking, so direct
+guarded arm writes cannot regress to the historical 250/20 throttle. The stock
+gripper independently preserves 250/20 default pacing.
+
+Automated coverage must verify the backend fallback, explicit streamed 0/254 behavior,
+human-unit CLI envelope reporting/overrides, broker propagation, and gripper independence.
+Physical validation now has a successful 80 deg/s / 500 deg/s² Sleep-vs-sleep_up run; the remaining full-envelope gate is the supervised 100 deg/s / 1000 deg/s² Sleep-vs-sleep_up
+rerun on the exact branch head.

@@ -59,7 +59,7 @@ def test_teleop_records_per_sample_target_and_measured_pose(monkeypatch) -> None
         def get_joint_limits(self):
             return {name: (-2.0, 2.0) for name in ARM_JOINTS}
 
-        def start_joint_stream(self, *, frequency_hz):
+        def start_joint_stream(self, *, frequency_hz, max_speed=None, max_acceleration=None):
             assert frequency_hz == 10.0
 
         def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
@@ -211,7 +211,7 @@ def test_teleop_gripper_contact_latch_does_not_stop_arm_stream(monkeypatch) -> N
         def get_joint_limits(self):
             return {name: (-2.0, 2.0) for name in ARM_JOINTS}
 
-        def start_joint_stream(self, *, frequency_hz):
+        def start_joint_stream(self, *, frequency_hz, max_speed=None, max_acceleration=None):
             assert frequency_hz == 10.0
 
         def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
@@ -302,7 +302,7 @@ def test_teleop_stages_opening_and_guards_closing(
             handle.start()
             return handle
 
-        def start_joint_stream(self, *, frequency_hz):
+        def start_joint_stream(self, *, frequency_hz, max_speed=None, max_acceleration=None):
             self.motion.is_streaming = True
 
         def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
@@ -364,7 +364,7 @@ def test_gripper_mirrors_absolute_leader_value_when_joint_mapping_is_relative(mo
         def get_joint_limits(self):
             return {name: (-2.0, 2.0) for name in ARM_JOINTS}
 
-        def start_joint_stream(self, *, frequency_hz):
+        def start_joint_stream(self, *, frequency_hz, max_speed=None, max_acceleration=None):
             pass
 
         def stream_joint_target(self, command, *, gripper, gripper_speed_raw=None):
@@ -451,7 +451,7 @@ def test_teleop_overrun_is_diagnostic_but_stale_sample_holds_and_delinks(
         def get_joint_limits(self):
             return {name: (-2.0, 2.0) for name in ARM_JOINTS}
 
-        def start_joint_stream(self, *, frequency_hz):
+        def start_joint_stream(self, *, frequency_hz, max_speed=None, max_acceleration=None):
             assert frequency_hz == 20.0
             self.motion.is_streaming = True
 

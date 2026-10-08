@@ -5,7 +5,7 @@ Dependency direction is strict:
 ```text
 applications -> SOARM101 -> motion/kinematics/tools -> backend -> Feetech transport
 applications -> CameraCapture -> OpenCV -> local USB/UVC camera
-sandboxed agent -> robotctl -> agent broker -> bounded agent CLI -> SOARM101/CameraCapture
+sandboxed agent -> OpenShell -> robotctl -> agent broker -> bounded agent CLI -> SOARM101/CameraCapture
 ```
 
 Rules:
@@ -17,23 +17,44 @@ Rules:
 - Hardware and simulation implement the same backend contract.
 - Cartesian paths are validated before execution.
 - GUI and CLI features call the same SDK operations and saved libraries; the GUI owns persistent hardware sessions rather than launching CLI subprocesses.
-- Sandboxed agents may use the optional host-side agent broker. The broker is transport-only:
-  it serializes an explicit HTTP/JSON allowlist and delegates to the bounded agent CLI rather
-  than reimplementing motion policy. It exposes no remote arm/disarm/relax, raw servo,
-  arbitrary-command, calibration, or configuration endpoint. The sandbox-side client contains
-  no robot SDK and does not receive serial or camera devices.
+- The SDK owns one canonical robot-specific OpenShell agent environment. OpenShell owns
+  filesystem/process/network isolation; the Motion SDK owns the shared robot policy/broker
+  lifecycle/standalone client plus a small agent-adapter contract. Hermes and Codex are
+  first-class packaged adapters. Other OpenShell-compatible CLI harnesses may use a validated
+  operator-authored manifest that selects an existing image/provider and direct argv without
+  adding robot code. Adapter configuration may change harness launch/runtime state but cannot
+  change broker routes, authority, broker credentials, or deterministic motion safety. This
+  is product/runtime support, not benchmark orchestration.
+- The host-side agent broker remains transport-only: it serializes an explicit HTTP/JSON
+  allowlist and delegates to the bounded agent CLI rather than reimplementing motion policy.
+  It exposes no remote arm/disarm/relax, raw servo, arbitrary-command, calibration, or
+  configuration endpoint. The sandbox receives no robot SDK, serial/camera devices,
+  calibration files, Docker socket, SSH material, or unrelated host files.
 - The GUI term **Program** is a presentation layer over the persisted `MotionSequence`
   model and `SequenceRunner`. Saved-position programs therefore do not introduce a
   second execution engine or bypass sequence provenance/safety checks.
 - The GUI owns one persistent follower-status sidebar outside the task tabs. Its primary
   kinematic model is always the measured follower state when connected; active workflows
   may add a secondary leader/saved/recorded/program ghost without replacing that primary
-  state.
+  state. The top operating-status banner is also presentation-only: it may acknowledge and
+  dismiss transient notices, but its fallback state is derived from authoritative follower /
+  teleoperation state and it cannot clear a hardware fault, torque condition, delink state,
+  or other safety authority. Teleoperation may visualize all named camera sessions together
+  and plot rolling joint angles/tracking error, but both views consume measurements already
+  owned by the existing camera/robot workers. Presentation must not add competing camera
+  workers or high-rate servo/register polling merely for visualization.
 - Kinematic GUI previews consume the same `SO101KinematicModel` used by planning; ghost
-  overlays are visualization only and never authorize or execute motion.
-  Session state supplies the active TCP transform and one joint snapshot for numerical
-  FK and drawing. Nominal jaw outlines are shared model helpers; camera scale/presets
-  are GUI presentation. Model Z=0 is not a measured table or collision authority.
+  overlays are visualization only and never authorize or execute motion. Session state
+  supplies the active TCP transform and one joint snapshot for numerical FK and drawing.
+  Joint markers/TCP remain FK-derived. Visible printed-member strokes use presentation-only
+  offsets from the official mesh-based SO-101 model rather than connecting joint centers, and
+  STS3215 bodies use oriented presentation envelopes at the official mesh poses. A revolute
+  pivot may therefore lie inside a motor case while the neighboring printed member is offset
+  from it. None of these display shapes are collision authority: `link_points()` remains the
+  separate coarse safety/workspace centerline. Nominal jaw outlines are shared model helpers;
+  the offline illustration uses a neutral jaw opening until measured aperture arrives.
+  Camera scale/presets are GUI presentation. Model Z=0 is not a measured table or collision
+  authority.
 - Physical motion artifacts carry calibration provenance and must fail closed on missing or mismatched target calibration during real-arm replay.
 - Motor calibration and workspace calibration are separate authorities. Motor calibration maps encoder state to joint coordinates; machine-local workspace calibration records measured physical-workspace correspondences tied to one motor-calibration ID.
 - Executable pose-joint limits are resolved once in the motion safety layer. The official
@@ -44,8 +65,81 @@ Rules:
   live streaming, and limit reporting share this resolver. Read-only diagnostics may test
   alternate margins but do not bypass the saved calibration.
 - A workspace calibration is measurement evidence until physical motion validation succeeds. The supervised paper traversal is a narrow validation exception that uses one manually measured D_UP correspondence to define the local physical workspace Z coordinate. For each replay endpoint, deterministic code preserves the endpoint's inverse-mapped workspace X/Y and replaces only workspace Z with the measured reference height, then requires read-only IK preflight before motion. Startup consists of one preflighted calibrated-workspace-Z clearance move of 20 mm by default; the measured physical/workspace rise must be at least 10 mm before paper travel. Replay then enters at A_UP and proceeds A_UP→B_UP→C_UP→D_UP→CENTER_UP. D_UP remains calibration evidence rather than an obligatory first target. The supervised elevated paper workflow is specifically a Cartesian linear-motion validation. Software levels A_UP/B_UP/C_UP/D_UP/CENTER_UP to one calibrated workspace Z, then connects those endpoints with the SDK's `move_linear()` primitive and position-only sequential IK at a 20 Hz paper-validation cadence. Because the workspace mapping is affine, the requested line between equal-workspace-Z endpoints remains constant height in calibrated workspace coordinates. Planned Cartesian execution uses the same responsive Feetech tracking profile as live teleoperation (speed_raw=0, acceleration_raw=254); deterministic host-side trajectory generation owns speed and acceleration rather than adding a second servo-side pacing trajectory. The generic model-frame floor is known to disagree with the measured table, so the separately preflighted startup lift uses calibrated workspace authority and paper segments may use the documented generic destination-only sanity check. Runtime joint/IK/dynamic/following-error/effort/fault/communication/settle/timing guards remain active. This validation is evidence for the `move_linear()` primitive on the measured setup; it does not by itself authorize broader autonomous Cartesian motion.
-- Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated.
+- A physically measured joint-space starting state is accepted as the authoritative starting
+  condition for the coarse centerline self-clearance heuristic. If that measured state is
+  already inside the generic self-clearance envelope, ordinary joint-space motion may proceed
+  only while minimum modeled self-clearance does not worsen (within the small numerical
+  tolerance); the path does not have to fully exit the envelope to be useful. If it does exit,
+  strict self-clearance validation resumes immediately and re-entry is rejected. This exception
+  does not weaken calibrated joint limits, model floor, TCP reach, base keep-out, command
+  dynamics, following-error, effort, fault, communication, or settle checks.
+- Planned calibrated motion may omit an intermediate hardware write only when the complete
+  five-joint command resolves to the same encoder targets as the last sent command. The host
+  schedule and monitoring clock continue unchanged, and the exact final planned sample is
+  always written. This actuator-resolution de-duplication does not authorize path retiming,
+  larger steps, or weaker speed/acceleration/following-error/fault/effort guards.
+- Joint-space plans may be executed in either `streamed` mode (the default host-sampled
+  trajectory) or the experimental `final_target` mode. Both modes build the same validated
+  joint plan. `final_target` writes the endpoint once with per-joint servo speed limits
+  derived from the validated duration, then observes the hardware until settle. During that
+  transit, endpoint lag is expected and therefore is not treated as ordinary following error;
+  deterministic monitoring instead enforces calibrated/path authority, fault/cancellation,
+  unexpected-direction, per-joint start-to-target corridor/overshoot bounds, timeout, and
+  final settle. Cross-joint phase matching is intentionally not a transit guard: independent
+  servos may progress at different rates under gravity/load even when their speed limits are
+  chosen for similar arrival time. For full-workspace and saved-pose execution, the measured
+  intermediate joint configurations are appended to an observed path and validated through
+  the same measured-start workspace policy on every monitor cycle. This prevents the endpoint
+  mode from treating the synchronized host plan as evidence for an asynchronous physical path.
+  Explicit target-only/off modes preserve their existing scope, including Sleep's deliberate
+  coarse-workspace exception. This is a different execution primitive, not a bypass around
+  planning or safety.
+  Cartesian `move_linear()` remains host-streamed because its straight TCP path is part of
+  the command contract and cannot be preserved by sending only the final joint solution.
+- Planned host-streamed joint motion and live streaming share the responsive Feetech
+  tracking profile: the host trajectory owns speed/acceleration shaping while the servo is
+  not given a second slower velocity/acceleration cap. Default streamed joint writes therefore
+  use Goal_Velocity=0 (unrestricted/max) and acceleration=254 unless a low-level caller
+  explicitly overrides that profile. This does not relax host-side joint speed/acceleration,
+  following-error, fault, effort, timing, or settle guards.
+- Planned motion and live streaming share the core joint/rate/following-error/fault/effort safety stack, while live-stream workspace checks remain opt-in until the table frame and tool geometry are calibrated. GUI teleoperation adds named Slow/Medium/Fast response presets: Medium preserves the historical 1.2 rad/s / 6.0 rad/s² behavior, Slow halves it, and Fast is per-joint—100 deg/s is available to all five joints, the four non-wrist-flex joints may use 1000 deg/s², and `wrist_flex` is capped at 500 deg/s² based on physical reversal evidence. The GUI target limiter shapes the command toward the leader, and the same selected per-joint ceilings are passed into the deterministic MotionController stream state. Those session ceilings are themselves bounded by the configured absolute stream envelope, so a preset can narrow but never widen the hardware contract. Live-stream direction monitoring owns one additional bounded state: immediately after a recent commanded reversal it may tolerate up to 100 ms of non-growing residual motion in the prior physical direction, capped at 0.10 rad cumulative wrong-way travel. This is a streaming/braking distinction, not a relaxation of planned-motion direction validation, following-error, fault, effort, or endpoint authority.
+Unprofiled guarded arm writes use the same responsive fallback (`speed_raw=0`,
+`acceleration_raw=254`) so no lower layer can silently reintroduce the historical
+`250/20` throttle. Tool actuators are separate contracts; the stock gripper preserves
+its gentler `250/20` default pacing because contact-tool behavior is not arm-trajectory
+tracking.
 
+
+
+## Motion-envelope ownership
+
+The Motion SDK owns one deterministic host-side motion envelope. Its current absolute
+characterization ceilings are deliberately easy to reason about:
+
+```text
+joint velocity             100 deg/s
+joint acceleration        1000 deg/s^2
+TCP linear velocity        100 mm/s
+TCP linear acceleration   1000 mm/s^2
+TCP angular velocity       100 deg/s
+TCP angular acceleration  1000 deg/s^2
+```
+
+Internal planner math remains SI (`rad/s`, `rad/s^2`, `m/s`, `m/s^2`). These values
+are ceilings rather than default motion requests. Cartesian planning may request translation
+and orientation rates independently, but every IK-generated joint trajectory must also fit
+the joint envelope.
+
+Planned streamed arm motion gives the STS3215 controller a deliberately more responsive
+inner tracking profile (`Goal_Velocity=0`, `Acceleration=254`). The servo profile is not
+a second authored trajectory and must not become a competing source of timing truth. Host
+planning owns the intended trajectory; calibrated limits, following-error, effort/fault,
+workspace, timing, and settle validation own acceptance.
+
+The bounded agent broker does not define another motion envelope. The trusted broker process
+selects an `SOARM101Config` envelope and injects those exact limits into every bounded
+motion subprocess. Sandbox-side `robotctl` has no option or endpoint that can widen the
+trusted-host envelope.
 
 ## Workstation and camera session boundary
 
@@ -72,6 +166,18 @@ worker and save a freshly acquired observation.
 The camera layer deliberately stops at raw observation: it does not identify objects, infer
 task state, plan motion, or bypass motion safety. Agent reasoning remains above the same
 constrained SDK primitives used manually.
+
+## Live desktop visualization
+
+The GUI does not open a second hardware-feedback loop while motion is active. Planned
+motion, live streaming, and the stock gripper own their feedback loops for safety, settling,
+or progress. Those same owning threads publish best-effort observational copies to the GUI,
+which updates measured joint angles, model-estimated TCP state, and gripper aperture. When a
+combined recorded/alignment path needs live jaw state, the owner may sample the gripper at an
+existing controller feedback checkpoint rather than creating a second timer or polling thread.
+Display callbacks cannot command hardware and their failures are isolated from deterministic
+motion execution. The slower full-state GUI poll remains suspended while a motion handle owns
+the transport.
 
 ## Desktop setup presentation
 
@@ -138,3 +244,16 @@ optional joint-space moves. This avoids layering a second, quantized servo-speed
 on top of 20/50 Hz host setpoints. The resulting joint samples remain subject to deterministic joint, step,
 velocity, acceleration, workspace, following-error, effort, fault, and timing validation
 before and during execution.
+
+### Calibration-relative Sleep semantics
+
+Resting postures remain deterministic SDK-owned primitives rather than machine-local taught
+poses. `Sleep` is derived from the active executable calibration with shoulder pan and wrist
+roll at midpoint, shoulder lift at lower, elbow flex at upper, and wrist flex at 75% of its
+range. `sleep_up` preserves the historical wrist-at-lower-limit fold. After the arm fold,
+the stock gripper closes to its calibration-derived target 1° inside the measured mechanical
+stop. This action is not object-aware; a held pen caused the gripper servo to enter overload
+protection during physical testing. Higher-level
+scripts, agents, and broker clients call these semantic primitives; they do not own copied joint
+coordinates.
+

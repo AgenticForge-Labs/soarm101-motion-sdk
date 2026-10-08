@@ -1,6 +1,6 @@
 # Changelog
 
-## Guided desktop setup (pending local workstation validation)
+## Guided desktop setup (locally validated)
 
 - Compact arm readiness cards; calibration and diagnostics open on demand inside Setup.
 - Optional remembered guidance, readable light/dark colors, responsive calibration gauges, and explicit offline model labeling.
@@ -16,7 +16,140 @@
   shaking investigations in PLAN.md; motion/calibration policy is unchanged.
 
 ## Unreleased
-
+- Replaced the sticky error-only strip with an always-visible operating-status banner. The
+  banner shows current follower/teleoperation state, surfaces important errors as dismissible
+  notices, and provides Clear as an acknowledgement only: clearing a notice never clears a
+  robot fault or safety state and falls back to the current underlying status.
+- Rebalanced the Teleoperation workspace around live operation: widened the shared follower
+  sidebar and model view, placed leader/follower coordination beside teleop settings, replaced
+  the duplicate bottom joint-value table with a rolling 10-second measured joint-angle /
+  tracking-error trace, and show all named cameras together with Start all / Stop all controls.
+  The trace consumes the existing leader stream and follower measurements only; it adds no
+  high-rate current/load or servo-register polling.
+- Reworked the desktop robot schematic so physical presentation no longer reuses the coarse
+  joint-origin safety polyline. Link strokes now follow the packaged URDF visual-body axes,
+  while FK/joint markers and safety geometry keep their existing authoritative roles.
+  Offline views use a neutral 45% gripper opening and render the moving jaw distinctly from
+  the fixed finger, making Front/Side/Top views easier to interpret without changing motion.
+  Follow-up GUI review reduced raw URDF-derived stroke thickness, removed rounded body caps and
+  the extra body shadow, and shrank joint markers so missing servo housings are not rendered as
+  large artificial blobs. A subsequent assumption audit removed the implicit
+  "printed member ends at the joint center" model: upper/lower arm strokes now retain the
+  official mesh-model lateral/vertical offsets, and the six STS3215 bodies are drawn as
+  oriented manufacturer-sized case envelopes at the official SO-101 mesh poses. This puts
+  shoulder/elbow/wrist pivots inside their actuator bodies where appropriate instead of
+  inventing shoulder/wrist bars or snapping every arm member to a pivot. The moving jaw is
+  neutral dark and slightly heavier than the fixed finger. These remain presentation-only
+  changes; FK, planning, and safety geometry are unchanged.
+- Made the persistent GUI robot view live during commanded motion without adding a competing
+  hardware poller. The MotionController and stock gripper publish motion-owned measured
+  feedback so the GUI animates measured joints, model-estimated TCP readouts, and jaw aperture
+  while normal full-state polling is paused. Combined recorded/alignment paths sample gripper
+  state only at existing controller feedback checkpoints. Visualization callbacks are
+  observational and cannot affect motion.
+- Added a pluggable self-contained `soarm101 agent sandbox` workflow for constrained
+  autonomous robot operation without Forge-Bench or another harness. Hermes/OpenRouter and
+  Codex are first-class adapters behind the same OpenShell, `robotctl`, broker, authority,
+  and Motion SDK safety boundary. Codex supports OpenAI Platform API-key mode
+  (`OPENAI_API_KEY`), `--auth installed` to reuse a one-run copy of the host's existing
+  file-backed ChatGPT Codex login without mounting or modifying the host Codex home, and an
+  optional separate SDK-owned `--auth chatgpt` device-login mode. `sandbox doctor` checks
+  readiness, `sandbox setup` builds/updates adapter assets, and `sandbox run --read-only`
+  provides a hard no-motion validation path that does not require a motion-authority lease.
+  Read-only validation now fails unless post-handoff broker evidence shows capabilities/state
+  inspection plus a SHA-verified retained capture for every configured camera, with no motion
+  action reaching the broker. OpenShell-compatible CLI harnesses beyond the packaged adapters
+  use a harness-neutral validation task and can use a strict JSON manifest selecting an
+  existing image/provider and direct argv without changing the robot execution path. Full
+  runs require pre-existing human authority; the unrestricted SDK, serial/camera devices,
+  calibration files, Docker socket, SSH material, and unrelated host files are not exposed to
+  the reasoning sandbox.
+- Added GUI **Tracking response** presets for leader→follower teleoperation while keeping
+  stream cadence independent: Slow is 0.6 rad/s and 3.0 rad/s², Medium preserves the
+  previous 1.2 rad/s and 6.0 rad/s² behavior and remains the default, and Fast is
+  wrist-aware. Fast allows 100 deg/s on all five joints and 1000 deg/s² on the four
+  non-wrist-flex joints, while wrist_flex is capped at 500 deg/s² after a physical Fast run
+  showed +0.057 rad of residual motion in the prior direction during a 1000 deg/s² reversal.
+  The GUI limiter and deterministic MotionController both enforce the same per-joint limits.
+  Live streams additionally distinguish a recent genuine commanded reversal from runaway
+  motion: at most 100 ms of non-growing carry-through is permitted while the servo brakes,
+  capped at 0.10 rad cumulative wrong-way travel; stale, growing, persistent, or over-cap
+  wrong-way motion still stops the stream. Planned motion keeps the strict direction rule.
+- Fixed exact human-unit envelope values such as 100 deg/s / 1000 deg/s² being rejected
+  by a few floating-point ULPs after conversion to SI. Boundary-equivalent values now clamp
+  to the configured ceiling while genuinely larger requests remain rejected.
+- Investigated an STS3215 gripper overload observed after Sleep. Follow-up showed the
+  gripper was holding a pen, so the overload is evidence that Sleep's commanded close is
+  not object-aware rather than evidence against the calibration-derived 1° stop inset.
+  Sleep therefore retains the calibration-derived target; operator/agent documentation now
+  warns that the gripper close is a consequential tool action when an object is already held.
+- Replaced the original undocumented host motion ceilings with an explicit human-facing
+  100/1000 envelope: joints 100 deg/s and 1000 deg/s^2, TCP translation 100 mm/s and
+  1000 mm/s^2, and TCP/tool orientation 100 deg/s and 1000 deg/s^2. Ordinary motion
+  defaults remain conservative. Added SDK human-unit construction/reporting, a
+  `soarm101 motion-envelope` command, degree-based `move-joints` dynamics flags, and
+  matching CLI envelope overrides. The broker owns the trusted host envelope and propagates
+  it to bounded agent subprocesses; `robotctl` cannot widen it. Cartesian IK-generated
+  joint trajectories are now validated against the absolute joint envelope rather than the
+  slower ordinary defaults.
+- Removed the hidden slow Feetech profile from default host-streamed joint plans.
+  Planned joint/saved-pose/Sleep trajectories now use the teleoperation-style responsive
+  actuator profile (Goal_Velocity=0, acceleration=254) unless explicitly overridden, so the
+  validated host trajectory owns requested speed/acceleration. This fixes a 40 deg/s,
+  250 deg/s² hardware case where wrist_flex lagged the host by 0.305 rad and correctly
+  tripped the unchanged 0.300 rad following-error guard. Recorded arm trajectory replay now
+  uses the same 0/254 tracking profile, and experimental final-target execution keeps its
+  synchronized per-joint speed calculation while defaulting servo acceleration to 254.
+- Changed the calibration-relative default Sleep wrist geometry after physical A/B testing:
+  `wrist_flex` now targets 75% of its executable range
+  (`upper - 0.25 * (upper - lower)`). The historical wrist-at-lower-limit fold is preserved
+  as `sleep_up` / `move_sleep_up()`, with operator CLI, bounded-agent CLI, broker, and
+  `robotctl` access. Existing `sleep` callers automatically use the smoother posture.
+- Added a simple `sleep2` hardware diagnostic: capture the current measured arm pose before
+  any commanded motion, save it as the named pose `sleep2`, then compare RIGHT -> canonical
+  Sleep against RIGHT -> sleep2 at identical dynamics. The test uses the same narrow
+  Sleep-family coarse-self-clearance exception while retaining other workspace preflight and
+  normal streamed runtime guards.
+- Added a supervised Sleep-geometry diagnostic that now teaches the experimental wrist
+  position physically: canonical Sleep holds the arm, only wrist_flex is relaxed for manual
+  placement, the measured wrist is range/drift checked and safely relatched, and the pose is
+  saved locally. The retest compares direct canonical Sleep, direct taught-wrist Sleep, and a
+  staged wrist-only final fold from the same RIGHT pose. The Sleep-family diagnostic omits
+  only the known coarse self-clearance heuristic while preserving floor/reach/base preflight
+  and normal runtime guards.
+- Added an experimental `final_target` execution mode for validated joint-space moves
+  alongside the existing default `streamed` mode. Both modes build the same joint plan;
+  final-target writes one synchronized endpoint command per leg and monitors guarded progress
+  to settle rather than sending host micro-waypoints. Cartesian linear motion is unchanged.
+  Added `scripts/run_joint_execution_comparison.sh` for a supervised same-route A/B test.
+- Corrected the experimental final-target monitor after the first physical run showed that
+  cross-joint phase matching falsely rejected normal asynchronous servo progress. Final-target
+  now keeps fault/effort, reverse-motion, per-joint corridor/overshoot, timeout/cancellation,
+  and settle guards without requiring joints to remain synchronized in phase. Full-workspace
+  and saved-pose one-shot moves also validate the accumulated measured intermediate path with
+  the measured-start workspace policy, so asynchronous physical motion is not assumed to
+  follow the synchronized host plan. The comparison runner accepts `final_target` as a
+  single-mode rerun.
+- Added a guided teleop-versus-programmed motion-quality study for the low-speed shake
+  investigation. It marks/extracts a slow GUI teleop reference, can replay the exact accepted
+  arm-joint command sequence through guarded streaming, runs the same saved-pose route at 50 Hz
+  and 20 Hz without per-leg prompts, and packages the evidence for review. The reusable passive
+  backend tracer records existing joint commands, raw encoder goals, natural feedback reads,
+  TCP positions, effective servo parameters, hardware-state checks, and route markers without
+  adding motion-time bus polling; detailed teleop frames now include raw encoder targets and
+  monotonic timing.
+- Added a safe post-study exact-teleop replay runner. When the guided run ends too far from
+  the first recorded teleop command for immediate streaming, the runner performs a normal
+  guarded pre-positioning move with full workspace checks, verifies measured arrival, then
+  reuses the original GUI session's recorded teleop speed, acceleration, command-step, and
+  following-error limits to preflight and replay the exact captured sequence. Missing or
+  invalid recorded settings fail closed. Success or safety-refusal evidence is appended to
+  the same study archive.
+- Planned calibrated motion now suppresses redundant intermediate servo writes when adjacent
+  continuous joint samples resolve to the exact same five encoder targets. Host timing,
+  monitoring, speed/acceleration validation, and the exact final sample are unchanged. This
+  targets low-speed quantization chatter without introducing a new PID or servo-profile
+  heuristic; physical smoothness validation remains pending.
 - Added a narrow host-side HTTP/JSON broker for isolated reasoning agents. The broker
   serializes an explicit allowlist of bounded agent actions, delegates to the existing
   `soarm101 agent` CLI, requires a bearer token, records JSONL request evidence, and
@@ -59,12 +192,13 @@
   target, motivating the 10 mm ground-plane margin rather than weakening motion guards.
 - Added an opt-in object-to-container robot/camera skill with a fresh-overhead-image
   completion contract under `agent-as-code/skills/robot-camera/`.
-- Saved joint-pose replay can now leave a measured starting pose that is already inside the
-  coarse centerline self-clearance envelope without rejecting solely at path sample 0. The
-  exception is property-based rather than pose-name-based: all non-self-clearance workspace
-  guards must pass at every sample, minimum self-clearance may not decrease while inside the
-  envelope, the path must eventually clear the configured threshold, and ordinary full
-  workspace validation resumes immediately afterward.
+- Joint-space motion now accepts the physically measured starting state as the starting
+  authority for the coarse centerline self-clearance heuristic. If the arm is already inside
+  that generic envelope, motion may proceed only while modeled self-clearance does not worsen;
+  it no longer has to fully exit the envelope merely to make a valid improving move. Once
+  normal clearance is reached, strict self-clearance validation resumes and re-entry is
+  rejected. Other workspace and runtime motion guards remain unchanged. This fixes normal
+  folded/resting poses being rejected at workspace path sample 0 during replay pre-positioning.
 - Physical `pose go` now preserves torque hold after the CLI disconnects instead of
   automatically relaxing at command exit. `soarm101 relax` requires explicit ENTER
   confirmation. Sleep likewise holds after reaching the folded posture and only relaxes after
@@ -109,7 +243,7 @@
   remains authoritative. This gives the current arm nearly all of its measured travel,
   including wrist flex to about ±102.91°. Endpoint IK, joint motion, Cartesian planning,
   live streaming, and the limits CLI share this resolver.
-- Sleep now closes the stock gripper after the arm fold completes. The close target is
+- Sleep closes the stock gripper after the arm fold completes. The close target is
   derived from the active gripper calibration and defaults to 1° inside the calibrated
   closed mechanical stop rather than normalized 0.0 at the stop itself. The conversion is
   drive-direction independent, and `soarm101 limits --json` reports the normalized/raw

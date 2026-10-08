@@ -15,6 +15,21 @@ from soarm101_motion.constants import (
     DEFAULT_LINEAR_ACCEL_M_S2,
     DEFAULT_LINEAR_SPEED_M_S,
     DEFAULT_MAX_COMMAND_STEP_RAD,
+    DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
+    DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+    DEFAULT_MAX_JOINT_SPEED_DEG_S,
+    DEFAULT_MAX_JOINT_SPEED_RAD_S,
+    DEFAULT_MAX_LINEAR_ACCEL_M_S2,
+    DEFAULT_MAX_LINEAR_ACCEL_MM_S2,
+    DEFAULT_MAX_LINEAR_SPEED_M_S,
+    DEFAULT_MAX_LINEAR_SPEED_MM_S,
+    DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
+    DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2,
+    DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
+    DEFAULT_MAX_TOOL_ANGULAR_SPEED_RAD_S,
+    STS3215_MAX_POSITION_SPEED_RAW,
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.exceptions import ConfigurationError
 
@@ -35,17 +50,17 @@ class SOARM101Config:
     default_angular_speed: float = 0.8
     default_angular_acceleration: float = 2.0
 
-    # Absolute host-side safety ceilings. Per-command overrides may be lower,
-    # but may never exceed these values.
-    max_joint_speed: float = 1.0
-    max_joint_acceleration: float = 5.0
+    # Absolute host-side motion envelope. Public/CLI presentation uses degrees
+    # and millimeters; deterministic internals remain SI.
+    max_joint_speed: float = DEFAULT_MAX_JOINT_SPEED_RAD_S
+    max_joint_acceleration: float = DEFAULT_MAX_JOINT_ACCEL_RAD_S2
     # Optional live-stream ceilings. None keeps the planned-motion ceiling.
     teleop_max_joint_speed: float | None = None
     teleop_max_joint_acceleration: float | None = None
-    max_linear_speed: float = 0.06
-    max_linear_acceleration: float = 0.20
-    max_angular_speed: float = 1.0
-    max_angular_acceleration: float = 2.5
+    max_linear_speed: float = DEFAULT_MAX_LINEAR_SPEED_M_S
+    max_linear_acceleration: float = DEFAULT_MAX_LINEAR_ACCEL_M_S2
+    max_angular_speed: float = DEFAULT_MAX_TOOL_ANGULAR_SPEED_RAD_S
+    max_angular_acceleration: float = DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2
 
     max_command_step_radians: float = DEFAULT_MAX_COMMAND_STEP_RAD
     max_ik_waypoint_jump_radians: float = 0.50
@@ -60,6 +75,12 @@ class SOARM101Config:
     joint_position_tolerance_rad: float = 0.025
     following_error_limit_rad: float = 0.30
     unexpected_direction_threshold_rad: float = 0.05
+    # Live streams may reverse faster than a physical servo can brake. Permit
+    # only a short, bounded carry-through after a commanded reversal; ordinary
+    # planned motion keeps the strict unexpected-direction rule.
+    stream_reversal_grace_s: float = 0.10
+    stream_reversal_decay_tolerance_rad: float = math.radians(0.5)
+    stream_reversal_max_carrythrough_rad: float = 0.10
     trajectory_feedback_interval_s: float = 0.10
     feedback_poll_interval_s: float = 0.02
     settle_time_s: float = 0.08
@@ -102,13 +123,57 @@ class SOARM101Config:
     # ``soarm101 configure`` command for one-time recommended motor settings.
     configure_motors_on_connect: bool = False
 
-    hardware_speed_raw: int = 250
-    hardware_acceleration_raw: int = 20
+    # Low-level arm position-write fallback. Keep the inner servo tracker more
+    # responsive than the host trajectory so it follows host-planned motion
+    # instead of becoming a slower competing trajectory generator.
+    hardware_speed_raw: int = TELEOP_SERVO_SPEED_RAW
+    hardware_acceleration_raw: int = TELEOP_SERVO_ACCELERATION_RAW
     # STS3215 factory position P gain. P=16 has been observed to leave a
     # several-degree static/gravity deadband on SO-family follower arms.
     position_p_coefficient: int = 32
     position_i_coefficient: int = 0
     position_d_coefficient: int = 32
+
+    @classmethod
+    def from_motion_limits(
+        cls,
+        *,
+        max_joint_speed_deg_s: float = DEFAULT_MAX_JOINT_SPEED_DEG_S,
+        max_joint_acceleration_deg_s2: float = DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
+        max_linear_speed_mm_s: float = DEFAULT_MAX_LINEAR_SPEED_MM_S,
+        max_linear_acceleration_mm_s2: float = DEFAULT_MAX_LINEAR_ACCEL_MM_S2,
+        max_tool_angular_speed_deg_s: float = DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
+        max_tool_angular_acceleration_deg_s2: float = DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
+        **kwargs: object,
+    ) -> "SOARM101Config":
+        """Build a config using human-friendly motion-envelope units."""
+
+        return cls(
+            **kwargs,
+            max_joint_speed=math.radians(float(max_joint_speed_deg_s)),
+            max_joint_acceleration=math.radians(float(max_joint_acceleration_deg_s2)),
+            max_linear_speed=float(max_linear_speed_mm_s) / 1000.0,
+            max_linear_acceleration=float(max_linear_acceleration_mm_s2) / 1000.0,
+            max_angular_speed=math.radians(float(max_tool_angular_speed_deg_s)),
+            max_angular_acceleration=math.radians(
+                float(max_tool_angular_acceleration_deg_s2)
+            ),
+        )
+
+    @property
+    def motion_limits_human(self) -> dict[str, float]:
+        """Return the configured absolute motion envelope in CLI-facing units."""
+
+        return {
+            "max_joint_speed_deg_s": math.degrees(self.max_joint_speed),
+            "max_joint_acceleration_deg_s2": math.degrees(self.max_joint_acceleration),
+            "max_linear_speed_mm_s": self.max_linear_speed * 1000.0,
+            "max_linear_acceleration_mm_s2": self.max_linear_acceleration * 1000.0,
+            "max_tool_angular_speed_deg_s": math.degrees(self.max_angular_speed),
+            "max_tool_angular_acceleration_deg_s2": math.degrees(
+                self.max_angular_acceleration
+            ),
+        }
 
     @property
     def stream_joint_speed_limit(self) -> float:
@@ -143,6 +208,9 @@ class SOARM101Config:
             "joint_position_tolerance_rad": self.joint_position_tolerance_rad,
             "following_error_limit_rad": self.following_error_limit_rad,
             "unexpected_direction_threshold_rad": self.unexpected_direction_threshold_rad,
+            "stream_reversal_grace_s": self.stream_reversal_grace_s,
+            "stream_reversal_decay_tolerance_rad": self.stream_reversal_decay_tolerance_rad,
+            "stream_reversal_max_carrythrough_rad": self.stream_reversal_max_carrythrough_rad,
             "trajectory_feedback_interval_s": self.trajectory_feedback_interval_s,
             "feedback_poll_interval_s": self.feedback_poll_interval_s,
             "settle_time_s": self.settle_time_s,
@@ -185,10 +253,13 @@ class SOARM101Config:
             if value > maximum:
                 raise ConfigurationError(f"{name} must not exceed its configured maximum {maximum}")
 
-        if not 1 <= self.hardware_speed_raw <= 4095:
-            raise ConfigurationError("hardware_speed_raw must be in [1, 4095]")
-        if not 1 <= self.hardware_acceleration_raw <= 254:
-            raise ConfigurationError("hardware_acceleration_raw must be in [1, 254]")
+        if not 0 <= self.hardware_speed_raw <= STS3215_MAX_POSITION_SPEED_RAW:
+            raise ConfigurationError(
+                "hardware_speed_raw must be in "
+                f"[0, {STS3215_MAX_POSITION_SPEED_RAW}]"
+            )
+        if not 0 <= self.hardware_acceleration_raw <= 254:
+            raise ConfigurationError("hardware_acceleration_raw must be in [0, 254]")
 
         if self.effort_current_trip_raw is not None and self.effort_current_trip_raw <= 0:
             raise ConfigurationError("effort_current_trip_raw must be positive or None")

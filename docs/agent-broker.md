@@ -33,6 +33,32 @@ soarm101 agent arm --minutes 30
 The broker intentionally exposes no remote arm, disarm, relax, calibration, configuration,
 raw-joint-vector, servo-register, or arbitrary-shell endpoint.
 
+## Trusted motion envelope
+
+The broker inherits no motion policy from the sandbox. At startup, the trusted host selects
+the Motion SDK envelope. Defaults use the shared 100/1000 convention:
+
+```text
+joint:        100 deg/s, 1000 deg/s^2
+TCP linear:   100 mm/s, 1000 mm/s^2
+TCP angular:  100 deg/s, 1000 deg/s^2
+```
+
+The broker injects those exact limits into every bounded `soarm101 agent` motion
+subprocess. `GET /v1/capabilities` reports the effective envelope. `robotctl` intentionally
+has no request fields or CLI options that can widen it.
+
+An operator can choose a lower trusted-host envelope when starting the broker, for example:
+
+```bash
+soarm101-broker \
+  --max-joint-speed-deg-s 80 \
+  --max-joint-acceleration-deg-s2 500
+```
+
+The remaining linear/tool-angular values stay at their broker defaults unless explicitly
+set by the trusted host.
+
 ## Start the broker
 
 Generate a per-run token and start the host service:
@@ -104,6 +130,7 @@ POST /v1/joint
 POST /v1/jog
 POST /v1/gripper
 POST /v1/sleep
+POST /v1/sleep-up
 POST /v1/stop
 ```
 
@@ -146,6 +173,8 @@ robotctl joint shoulder_pan --delta-deg 5
 robotctl jog --frame world --x-mm 0 --y-mm 5 --z-mm 0
 robotctl jog --frame tool --x-mm 0 --y-mm 0 --z-mm 2
 robotctl gripper close
+robotctl sleep
+robotctl sleep-up
 robotctl stop
 ```
 

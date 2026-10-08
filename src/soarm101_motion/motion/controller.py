@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
@@ -37,11 +37,13 @@ from soarm101_motion.safety import (
     validate_command_step,
     validate_joint_targets,
     validate_workspace_path,
+    validate_workspace_path_from_measured_start,
 )
 from soarm101_motion.trajectories import Trajectory
 from soarm101_motion.types import MotionResult, Pose
 
 T = TypeVar("T")
+JointExecutionMode = Literal["streamed", "final_target"]
 
 
 class MotionHandle(Generic[T]):
@@ -122,12 +124,25 @@ class RecordedPlan:
 
 
 @dataclass
+class StreamReversalGrace:
+    expires_sample: int
+    previous_wrong_way_delta_abs: float
+    cumulative_wrong_way_delta_abs: float
+
+
+@dataclass
 class JointStreamState:
     last_command: dict[str, float]
     last_velocity: dict[str, float] | None
     previous_actual: dict[str, float]
     frequency_hz: float
     limits: dict[str, tuple[float, float]]
+    speed_limits: dict[str, float]
+    acceleration_limits: dict[str, float]
+    sample_index: int
+    last_nonzero_command_direction: dict[str, int]
+    last_nonzero_command_sample: dict[str, int]
+    reversal_grace: dict[str, StreamReversalGrace]
     tcp: Pose | None = None
 
 
@@ -145,6 +160,45 @@ class MotionController:
         self._state_lock = threading.RLock()
         self._active_handle: MotionHandle[MotionResult] | None = None
         self._joint_stream: JointStreamState | None = None
+        self._feedback_callback: Callable[[Mapping[str, float]], None] | None = None
+        self._tool_feedback_callback: Callable[[float], None] | None = None
+
+    def set_feedback_callback(
+        self,
+        callback: Callable[[Mapping[str, float]], None] | None,
+    ) -> None:
+        """Install an observational measured-joint callback.
+
+        The callback receives copies of measurements the controller already reads for
+        safety/settling. It must never become motion authority or add hardware polling.
+        Callback failures are deliberately isolated from deterministic motion execution.
+        """
+        with self._state_lock:
+            self._feedback_callback = callback
+
+    def _publish_feedback(self, actual: Mapping[str, float]) -> None:
+        callback = self._feedback_callback
+        if callback is None:
+            return
+        try:
+            callback(dict(actual))
+        except Exception:
+            # Visualization/telemetry is observational and must not change motion safety.
+            pass
+
+    def set_tool_feedback_callback(self, callback: Callable[[float], None] | None) -> None:
+        """Install a best-effort observer for tool feedback owned by this controller."""
+        with self._state_lock:
+            self._tool_feedback_callback = callback
+
+    def _publish_tool_feedback(self, position: float) -> None:
+        callback = self._tool_feedback_callback
+        if callback is None:
+            return
+        try:
+            callback(float(position))
+        except Exception:
+            pass
 
     @property
     def is_moving(self) -> bool:
@@ -305,11 +359,39 @@ class MotionController:
 
     def _bounded(self, value: float | None, default: float, maximum: float, name: str) -> float:
         resolved = self._positive(default if value is None else value, name)
-        if resolved > maximum:
+        # Human-unit CLI/API values are converted to SI at the boundary. Exact
+        # advertised ceilings such as 1000 deg/s^2 can differ from the stored
+        # SI ceiling by a few floating-point ULPs depending on conversion order.
+        if resolved > maximum and not math.isclose(
+            resolved,
+            maximum,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
             raise SafetyViolationError(
                 f"{name} {resolved:.4f} exceeds configured safety maximum {maximum:.4f}"
             )
-        return resolved
+        return min(resolved, maximum)
+
+    def _resolve_stream_joint_limits(
+        self,
+        value: float | Mapping[str, float] | None,
+        *,
+        default: float,
+        maximum: float,
+        name: str,
+    ) -> dict[str, float]:
+        if isinstance(value, Mapping):
+            if set(value) != set(ARM_JOINTS):
+                raise InvalidCommandError(
+                    f"{name} must provide exactly the five canonical arm joints"
+                )
+            return {
+                joint: self._bounded(float(value[joint]), default, maximum, f"{name} {joint}")
+                for joint in ARM_JOINTS
+            }
+        resolved = self._bounded(value, default, maximum, name)
+        return {joint: resolved for joint in ARM_JOINTS}
 
     def _sleep_until(self, deadline: float) -> float:
         if not getattr(self.backend, "realtime", True):
@@ -821,19 +903,19 @@ class MotionController:
             max_speed, max_acceleration, max_step = self._trajectory_metrics(samples)
             scale = max(
                 1.0,
-                max_speed / self.config.default_joint_speed
-                if self.config.default_joint_speed
+                max_speed / self.config.max_joint_speed
+                if self.config.max_joint_speed
                 else 1.0,
-                math.sqrt(max_acceleration / self.config.default_joint_acceleration)
-                if max_acceleration and self.config.default_joint_acceleration
+                math.sqrt(max_acceleration / self.config.max_joint_acceleration)
+                if max_acceleration and self.config.max_joint_acceleration
                 else 1.0,
                 max_step / self.config.max_command_step_radians if max_step else 1.0,
             )
             if scale <= 1.001:
                 self._validate_samples(
                     samples,
-                    speed_limit=self.config.default_joint_speed,
-                    acceleration_limit=self.config.default_joint_acceleration,
+                    speed_limit=self.config.max_joint_speed,
+                    acceleration_limit=self.config.max_joint_acceleration,
                     limits=limits,
                 )
                 actual_duration = (len(samples) - 1) / self.config.command_frequency_hz
@@ -987,6 +1069,33 @@ class MotionController:
             )
         return speeds
 
+    def _encoder_target_key(
+        self,
+        positions: Mapping[str, float],
+    ) -> tuple[int, ...] | None:
+        """Return the calibrated raw encoder target for one arm command.
+
+        Planned host trajectories are continuous in radians, but calibrated Feetech
+        execution ultimately resolves each joint to an integer encoder target. Near
+        zero velocity, many adjacent host samples can therefore address the exact
+        same hardware position. Returning None keeps non-calibrated/simulation
+        backends on the existing write-per-sample behavior.
+        """
+
+        calibration = getattr(self.backend, "calibration", None)
+        motors = getattr(calibration, "motors", None)
+        if motors is None:
+            return None
+
+        raw: list[int] = []
+        for name in ARM_JOINTS:
+            motor = motors.get(name)
+            converter = getattr(motor, "radians_to_raw", None)
+            if not callable(converter):
+                return None
+            raw.append(int(converter(float(positions[name]))))
+        return tuple(raw)
+
     def _workspace_kwargs(self) -> dict[str, float]:
         return {
             "minimum_z_m": self.config.minimum_workspace_z_m,
@@ -1064,16 +1173,15 @@ class MotionController:
         if cancel_event.is_set():
             raise MotionCancelledError(message)
 
-    def _monitor_motion(
+    def _read_guarded_actual(
         self,
         command: Mapping[str, float],
-        previous_command: Mapping[str, float],
-        previous_actual: Mapping[str, float],
     ) -> dict[str, float]:
         state = self.backend.get_hardware_state()
         if state.faulted:
             raise HardwareFaultError(state.fault_message or "robot faulted during motion")
         actual = self.backend.read_joint_positions()
+        self._publish_feedback(actual)
         worst_joint = max(ARM_JOINTS, key=lambda name: abs(actual[name] - command[name]))
         following_error = abs(actual[worst_joint] - command[worst_joint])
         if following_error > self.config.following_error_limit_rad:
@@ -1082,6 +1190,15 @@ class MotionController:
                 f"{self.config.following_error_limit_rad:.3f} rad "
                 f"(target {command[worst_joint]:.3f}, measured {actual[worst_joint]:.3f})"
             )
+        return actual
+
+    def _monitor_motion(
+        self,
+        command: Mapping[str, float],
+        previous_command: Mapping[str, float],
+        previous_actual: Mapping[str, float],
+    ) -> dict[str, float]:
+        actual = self._read_guarded_actual(command)
         for name in ARM_JOINTS:
             command_delta = command[name] - previous_command[name]
             actual_delta = actual[name] - previous_actual[name]
@@ -1095,6 +1212,226 @@ class MotionController:
                 )
         return actual
 
+    def _monitor_stream_motion(
+        self,
+        command: Mapping[str, float],
+        previous_command: Mapping[str, float],
+        stream_state: JointStreamState,
+    ) -> dict[str, float]:
+        """Monitor a live stream while distinguishing braking lag from runaway motion."""
+        actual = self._read_guarded_actual(command)
+        current_sample = stream_state.sample_index + 1
+        total_grace_samples = max(
+            1,
+            math.ceil(
+                self.config.stream_reversal_grace_s
+                * stream_state.frequency_hz
+            ),
+        )
+        for name in ARM_JOINTS:
+            command_delta = command[name] - previous_command[name]
+            actual_delta = actual[name] - stream_state.previous_actual[name]
+            grace = stream_state.reversal_grace.get(name)
+            if grace is not None and current_sample > grace.expires_sample:
+                stream_state.reversal_grace.pop(name, None)
+                grace = None
+
+            if abs(command_delta) < self.config.joint_position_tolerance_rad:
+                continue
+            if abs(actual_delta) < self.config.unexpected_direction_threshold_rad:
+                stream_state.reversal_grace.pop(name, None)
+                continue
+            if command_delta * actual_delta >= 0.0:
+                stream_state.reversal_grace.pop(name, None)
+                continue
+
+            current_direction = 1 if command_delta > 0.0 else -1
+            previous_direction = stream_state.last_nonzero_command_direction[name]
+            previous_direction_sample = stream_state.last_nonzero_command_sample[name]
+            recent_reversal = (
+                previous_direction != 0
+                and current_direction != previous_direction
+                and current_sample - previous_direction_sample <= total_grace_samples
+            )
+            if recent_reversal:
+                carrythrough = abs(actual_delta)
+                if carrythrough > self.config.stream_reversal_max_carrythrough_rad:
+                    raise SafetyViolationError(
+                        f"{name} reversal carry-through {carrythrough:.3f} rad exceeds "
+                        f"{self.config.stream_reversal_max_carrythrough_rad:.3f} rad"
+                    )
+                stream_state.reversal_grace[name] = StreamReversalGrace(
+                    expires_sample=current_sample + total_grace_samples - 1,
+                    previous_wrong_way_delta_abs=carrythrough,
+                    cumulative_wrong_way_delta_abs=carrythrough,
+                )
+                continue
+
+            if grace is not None:
+                carrythrough = abs(actual_delta)
+                cumulative = grace.cumulative_wrong_way_delta_abs + carrythrough
+                if cumulative > self.config.stream_reversal_max_carrythrough_rad:
+                    raise SafetyViolationError(
+                        f"{name} cumulative reversal carry-through {cumulative:.3f} rad "
+                        f"exceeds {self.config.stream_reversal_max_carrythrough_rad:.3f} rad"
+                    )
+                if (
+                    carrythrough
+                    <= grace.previous_wrong_way_delta_abs
+                    + self.config.stream_reversal_decay_tolerance_rad
+                ):
+                    grace.previous_wrong_way_delta_abs = carrythrough
+                    grace.cumulative_wrong_way_delta_abs = cumulative
+                    continue
+                raise SafetyViolationError(
+                    f"{name} opposite-direction carry-through grew during reversal braking "
+                    f"({actual_delta:+.3f} rad)"
+                )
+
+            raise SafetyViolationError(
+                f"{name} moved {actual_delta:+.3f} rad opposite the commanded direction"
+            )
+        return actual
+
+    def _monitor_final_target_motion(
+        self,
+        start: Mapping[str, float],
+        target: Mapping[str, float],
+        previous_actual: Mapping[str, float],
+    ) -> dict[str, float]:
+        """Monitor one-shot joint motion without treating expected target lag as failure.
+
+        A final-target command intentionally asks each servo to traverse the whole
+        move internally, so ordinary endpoint following error and cross-joint phase
+        matching are not valid transit guards. Keep each joint inside a bounded
+        start-to-target corridor while preserving fault and unexpected-direction checks.
+        """
+        state = self.backend.get_hardware_state()
+        if state.faulted:
+            raise HardwareFaultError(state.fault_message or "robot faulted during motion")
+        actual = self.backend.read_joint_positions()
+        self._publish_feedback(actual)
+
+        for name in ARM_JOINTS:
+            delta = float(target[name] - start[name])
+            actual_delta = float(actual[name] - previous_actual[name])
+            lower = min(float(start[name]), float(target[name])) - self.config.following_error_limit_rad
+            upper = max(float(start[name]), float(target[name])) + self.config.following_error_limit_rad
+            if actual[name] < lower or actual[name] > upper:
+                raise SafetyViolationError(
+                    f"{name} left final-target motion corridor: measured {actual[name]:.3f} rad "
+                    f"outside {lower:.3f}..{upper:.3f} rad"
+                )
+            if abs(delta) >= self.config.joint_position_tolerance_rad:
+                if (
+                    abs(actual_delta) >= self.config.unexpected_direction_threshold_rad
+                    and actual_delta * delta < 0.0
+                ):
+                    raise SafetyViolationError(
+                        f"{name} moved {actual_delta:+.3f} rad opposite the final target"
+                    )
+            elif abs(float(actual[name]) - float(start[name])) > self.config.following_error_limit_rad:
+                raise SafetyViolationError(
+                    f"{name} drifted {abs(float(actual[name]) - float(start[name])):.3f} rad "
+                    "during final-target motion"
+                )
+        return actual
+
+    def _execute_final_target_plan(
+        self,
+        plan: PlannedPath,
+        cancel_event: threading.Event,
+        *,
+        cancellation_message: str,
+        servo_speed_raw: int | Mapping[str, int] | None = None,
+        servo_acceleration_raw: int | None = None,
+        monitor_workspace: bool = False,
+        tcp: Pose | None = None,
+    ) -> MotionResult:
+        """Execute a validated joint plan with exactly one endpoint command.
+
+        The existing host plan still owns endpoint/path validation and timing. The
+        actuator command strategy differs only at execution: one synchronized final
+        target is written, then the controller observes guarded progress until settle.
+        """
+        samples = plan.command_samples
+        start = samples[0]
+        target = samples[-1]
+        try:
+            if len(samples) <= 1:
+                return self._wait_for_settle(target, cancel_event)
+
+            self._check_cancelled(cancel_event, cancellation_message)
+            previous_actual = self.backend.read_joint_positions()
+            self._publish_feedback(previous_actual)
+            command_speed_raw = servo_speed_raw
+            if command_speed_raw is None:
+                command_speed_raw = self._synchronized_servo_speed_raw(
+                    start,
+                    target,
+                    interval_s=max(
+                        plan.duration_s,
+                        1.0 / self.config.command_frequency_hz,
+                    ),
+                )
+            command_acceleration_raw = (
+                servo_acceleration_raw
+                if servo_acceleration_raw is not None
+                else TELEOP_SERVO_ACCELERATION_RAW
+            )
+            self.backend.write_joint_positions(
+                target,
+                speed_raw=command_speed_raw,
+                acceleration_raw=command_acceleration_raw,
+            )
+
+            deadline = (
+                time.monotonic()
+                + plan.duration_s
+                + self.config.motion_completion_timeout_s
+            )
+            # Workspace escape semantics are anchored to the fresh measured
+            # configuration immediately before the endpoint write, not the earlier
+            # planner snapshot.
+            observed_path: list[Mapping[str, float]] = [dict(previous_actual)]
+            while True:
+                self._check_cancelled(cancel_event, cancellation_message)
+                actual = self._monitor_final_target_motion(
+                    start,
+                    target,
+                    previous_actual,
+                )
+                if monitor_workspace:
+                    observed_path.append(dict(actual))
+                    validate_workspace_path_from_measured_start(
+                        self.model,
+                        observed_path,
+                        tcp=tcp,
+                        **self._workspace_kwargs(),
+                    )
+                error = max(abs(float(actual[name]) - float(target[name])) for name in ARM_JOINTS)
+                if error <= self.config.joint_position_tolerance_rad:
+                    return self._wait_for_settle(target, cancel_event)
+                if time.monotonic() >= deadline:
+                    errors = {
+                        name: float(target[name] - actual[name])
+                        for name in ARM_JOINTS
+                    }
+                    worst_joint = max(ARM_JOINTS, key=lambda name: abs(errors[name]))
+                    raise MotionTimeoutError(
+                        "final-target motion did not reach the destination within "
+                        f"{plan.duration_s + self.config.motion_completion_timeout_s:.2f}s; "
+                        f"worst={worst_joint} error={abs(errors[worst_joint]):.4f} rad"
+                    )
+                previous_actual = actual
+                time.sleep(self.config.trajectory_feedback_interval_s)
+        except BaseException:
+            try:
+                self.backend.stop()
+            except Exception:
+                pass
+            raise
+
     def _wait_for_settle(
         self,
         target: Mapping[str, float],
@@ -1105,6 +1442,7 @@ class MotionController:
         while True:
             self._check_cancelled(cancel_event, "motion cancelled while settling")
             actual = self.backend.read_joint_positions()
+            self._publish_feedback(actual)
             error = max(abs(actual[name] - target[name]) for name in ARM_JOINTS)
             state = self.backend.get_hardware_state()
             if state.faulted:
@@ -1180,7 +1518,9 @@ class MotionController:
             )
             previous_command = samples[0]
             previous_actual = self.backend.read_joint_positions()
+            self._publish_feedback(previous_actual)
             last_command_sent = samples[0]
+            last_encoder_target = self._encoder_target_key(samples[0])
             for index, command in enumerate(samples[1:], start=1):
                 self._check_cancelled(cancel_event, cancellation_message)
                 lateness = self._sleep_until(started + index / frequency)
@@ -1189,29 +1529,40 @@ class MotionController:
                         f"motion command deadline missed by {lateness:.3f}s"
                     )
                 self._check_cancelled(cancel_event, cancellation_message)
-                command_speed_raw = servo_speed_raw
-                if synchronize_servo_arrival:
-                    command_speed_raw = self._synchronized_servo_speed_raw(
-                        last_command_sent,
-                        command,
-                        interval_s=interval_s,
-                    )
-                if command_speed_raw is None and servo_acceleration_raw is None:
-                    self.backend.write_joint_positions(command)
-                else:
-                    self.backend.write_joint_positions(
-                        command,
-                        speed_raw=command_speed_raw,
-                        acceleration_raw=servo_acceleration_raw,
-                    )
-                last_command_sent = command
-                if index % monitor_every == 0 or index == len(samples) - 1:
+
+                command_encoder_target = self._encoder_target_key(command)
+                is_final_sample = index == len(samples) - 1
+                duplicate_encoder_target = (
+                    not is_final_sample
+                    and command_encoder_target is not None
+                    and command_encoder_target == last_encoder_target
+                )
+                if not duplicate_encoder_target:
+                    command_speed_raw = servo_speed_raw
+                    if synchronize_servo_arrival:
+                        command_speed_raw = self._synchronized_servo_speed_raw(
+                            last_command_sent,
+                            command,
+                            interval_s=interval_s,
+                        )
+                    if command_speed_raw is None and servo_acceleration_raw is None:
+                        self.backend.write_joint_positions(command)
+                    else:
+                        self.backend.write_joint_positions(
+                            command,
+                            speed_raw=command_speed_raw,
+                            acceleration_raw=servo_acceleration_raw,
+                        )
+                    last_command_sent = command
+                    last_encoder_target = command_encoder_target
+
+                if index % monitor_every == 0 or is_final_sample:
                     previous_actual = self._monitor_motion(
-                        command,
+                        last_command_sent,
                         previous_command,
                         previous_actual,
                     )
-                    previous_command = command
+                    previous_command = last_command_sent
             return self._wait_for_settle(samples[-1], cancel_event)
         except BaseException:
             try:
@@ -1241,6 +1592,8 @@ class MotionController:
                     plan.pre_roll,
                     cancel_event,
                     cancellation_message="recorded trajectory pre-roll cancelled",
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
                 )
 
             frequency = self.config.command_frequency_hz
@@ -1251,6 +1604,7 @@ class MotionController:
             )
             previous_command = samples[0]
             previous_actual = self.backend.read_joint_positions()
+            self._publish_feedback(previous_actual)
             for index, command in enumerate(samples[1:], start=1):
                 self._check_cancelled(cancel_event, "recorded trajectory cancelled")
                 lateness = self._sleep_until(started + index / frequency)
@@ -1259,7 +1613,11 @@ class MotionController:
                         f"recorded trajectory command deadline missed by {lateness:.3f}s"
                     )
                 self._check_cancelled(cancel_event, "recorded trajectory cancelled")
-                self.backend.write_joint_positions(command)
+                self.backend.write_joint_positions(
+                    command,
+                    speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                )
                 self.backend.write_tool_position(
                     STOCK_GRIPPER,
                     gripper_samples[index],
@@ -1271,10 +1629,13 @@ class MotionController:
                         previous_command,
                         previous_actual,
                     )
+                    actual_gripper = self.backend.read_tool_position(STOCK_GRIPPER)
+                    self._publish_tool_feedback(actual_gripper)
                     previous_command = command
 
             settled = self._wait_for_settle(samples[-1], cancel_event)
             actual_gripper = self.backend.read_tool_position(STOCK_GRIPPER)
+            self._publish_tool_feedback(actual_gripper)
             if abs(actual_gripper - gripper_samples[-1]) > 0.05:
                 raise MotionTimeoutError(
                     "recorded trajectory joints settled but gripper did not reach "
@@ -1313,7 +1674,14 @@ class MotionController:
         servo_speed_raw: int | None = None,
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
+        execution_mode: JointExecutionMode = "streamed",
+        monitor_workspace: bool = False,
+        tcp: Pose | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
+        if execution_mode not in {"streamed", "final_target"}:
+            raise InvalidCommandError(
+                "execution_mode must be 'streamed' or 'final_target'"
+            )
         if synchronize_servo_arrival and servo_speed_raw is not None:
             raise InvalidCommandError(
                 "servo_speed_raw cannot be combined with synchronize_servo_arrival"
@@ -1365,16 +1733,43 @@ class MotionController:
                 acceleration=joint_acceleration,
                 limits=limits,
             )
-            handle = self._start_locked(
-                lambda event: self._execute_plan(
-                    plan,
-                    event,
-                    cancellation_message="joint motion cancelled",
-                    servo_speed_raw=servo_speed_raw,
-                    servo_acceleration_raw=servo_acceleration_raw,
-                    synchronize_servo_arrival=synchronize_servo_arrival,
+            if execution_mode == "final_target":
+                handle = self._start_locked(
+                    lambda event: self._execute_final_target_plan(
+                        plan,
+                        event,
+                        cancellation_message="joint motion cancelled",
+                        servo_speed_raw=servo_speed_raw,
+                        servo_acceleration_raw=servo_acceleration_raw,
+                        monitor_workspace=monitor_workspace,
+                        tcp=tcp,
+                    )
                 )
-            )
+            else:
+                # Host-streamed planned motion owns the requested joint speed and
+                # acceleration profile. Do not impose the backend's much slower
+                # default Feetech Goal_Velocity/Acceleration profile on top of that
+                # trajectory: it can make a perfectly valid fast host plan outrun
+                # the servos and create artificial following-error trips. Match the
+                # responsive profile already used by live teleoperation.
+                streamed_speed_raw = servo_speed_raw
+                if streamed_speed_raw is None and not synchronize_servo_arrival:
+                    streamed_speed_raw = TELEOP_SERVO_SPEED_RAW
+                streamed_acceleration_raw = (
+                    servo_acceleration_raw
+                    if servo_acceleration_raw is not None
+                    else TELEOP_SERVO_ACCELERATION_RAW
+                )
+                handle = self._start_locked(
+                    lambda event: self._execute_plan(
+                        plan,
+                        event,
+                        cancellation_message="joint motion cancelled",
+                        servo_speed_raw=streamed_speed_raw,
+                        servo_acceleration_raw=streamed_acceleration_raw,
+                        synchronize_servo_arrival=synchronize_servo_arrival,
+                    )
+                )
         return handle.wait() if wait else handle
 
     def move_linear(
@@ -1419,6 +1814,8 @@ class MotionController:
         self,
         *,
         frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+        max_speed: float | Mapping[str, float] | None = None,
+        max_acceleration: float | Mapping[str, float] | None = None,
         tcp: Pose | None = None,
     ) -> None:
         """Begin guarded continuous joint streaming from the current measured pose.
@@ -1428,6 +1825,18 @@ class MotionController:
         synchronous feedback/fault/effort checks on every accepted sample.
         """
         frequency = self._positive(frequency_hz, "stream frequency")
+        speed_limits = self._resolve_stream_joint_limits(
+            max_speed,
+            default=self.config.stream_joint_speed_limit,
+            maximum=self.config.stream_joint_speed_limit,
+            name="stream joint speed",
+        )
+        acceleration_limits = self._resolve_stream_joint_limits(
+            max_acceleration,
+            default=self.config.stream_joint_acceleration_limit,
+            maximum=self.config.stream_joint_acceleration_limit,
+            name="stream joint acceleration",
+        )
         if frequency > self.config.command_frequency_hz:
             raise SafetyViolationError(
                 f"stream frequency {frequency:.1f} Hz exceeds configured command "
@@ -1459,6 +1868,12 @@ class MotionController:
                 previous_actual=present.copy(),
                 frequency_hz=frequency,
                 limits=stream_limits,
+                speed_limits=speed_limits,
+                acceleration_limits=acceleration_limits,
+                sample_index=0,
+                last_nonzero_command_direction={name: 0 for name in ARM_JOINTS},
+                last_nonzero_command_sample={name: 0 for name in ARM_JOINTS},
+                reversal_grace={},
                 tcp=tcp,
             )
 
@@ -1495,23 +1910,23 @@ class MotionController:
                 name: (target[name] - state.last_command[name]) / dt
                 for name in ARM_JOINTS
             }
-            max_speed = max(abs(value) for value in velocity.values())
-            if max_speed > self.config.stream_joint_speed_limit * 1.001:
-                raise SafetyViolationError(
-                    f"streamed joint speed {max_speed:.4f} rad/s exceeds "
-                    f"{self.config.stream_joint_speed_limit:.4f} rad/s"
-                )
+            for name, value in velocity.items():
+                if abs(value) > state.speed_limits[name] * 1.001:
+                    raise SafetyViolationError(
+                        f"streamed {name} speed {abs(value):.4f} rad/s exceeds "
+                        f"{state.speed_limits[name]:.4f} rad/s"
+                    )
             if state.last_velocity is not None:
                 acceleration = {
                     name: (velocity[name] - state.last_velocity[name]) / dt
                     for name in ARM_JOINTS
                 }
-                max_acceleration = max(abs(value) for value in acceleration.values())
-                if max_acceleration > self.config.stream_joint_acceleration_limit * 1.001:
-                    raise SafetyViolationError(
-                        f"streamed joint acceleration {max_acceleration:.4f} rad/s² exceeds "
-                        f"{self.config.stream_joint_acceleration_limit:.4f} rad/s²"
-                    )
+                for name, value in acceleration.items():
+                    if abs(value) > state.acceleration_limits[name] * 1.001:
+                        raise SafetyViolationError(
+                            f"streamed {name} acceleration {abs(value):.4f} rad/s² exceeds "
+                            f"{state.acceleration_limits[name]:.4f} rad/s²"
+                        )
 
             if self.config.enable_workspace_checks and self.config.teleop_workspace_checks:
                 max_delta = max(
@@ -1571,10 +1986,10 @@ class MotionController:
                         self.backend.write_tool_position(
                             STOCK_GRIPPER, gripper_value, speed_raw=gripper_speed_raw
                         )
-                actual = self._monitor_motion(
+                actual = self._monitor_stream_motion(
                     target,
                     state.last_command,
-                    state.previous_actual,
+                    state,
                 )
             except BaseException:
                 self._joint_stream = None
@@ -1584,6 +1999,12 @@ class MotionController:
                     pass
                 raise
 
+            state.sample_index += 1
+            for name, value in velocity.items():
+                command_delta = target[name] - state.last_command[name]
+                if abs(command_delta) >= self.config.joint_position_tolerance_rad:
+                    state.last_nonzero_command_direction[name] = 1 if value > 0.0 else -1
+                    state.last_nonzero_command_sample[name] = state.sample_index
             state.last_command = dict(target)
             state.last_velocity = velocity
             state.previous_actual = dict(actual)

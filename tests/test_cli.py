@@ -1,9 +1,117 @@
 import json
+import math
 
 import pytest
 
+from soarm101_motion import SOARM101Config
 from soarm101_motion.cli.main import _arm_from_args, build_parser, main
 from soarm101_motion.sequences import MotionSequence, SequenceLibrary, SequenceStep
+
+
+
+
+
+def test_motion_envelope_defaults_are_human_friendly() -> None:
+    limits = SOARM101Config().motion_limits_human
+    assert limits == pytest.approx(
+        {
+            "max_joint_speed_deg_s": 100.0,
+            "max_joint_acceleration_deg_s2": 1000.0,
+            "max_linear_speed_mm_s": 100.0,
+            "max_linear_acceleration_mm_s2": 1000.0,
+            "max_tool_angular_speed_deg_s": 100.0,
+            "max_tool_angular_acceleration_deg_s2": 1000.0,
+        }
+    )
+
+
+def test_motion_envelope_sdk_human_units_convert_to_si() -> None:
+    config = SOARM101Config.from_motion_limits(
+        max_joint_speed_deg_s=80.0,
+        max_joint_acceleration_deg_s2=500.0,
+        max_linear_speed_mm_s=90.0,
+        max_linear_acceleration_mm_s2=900.0,
+        max_tool_angular_speed_deg_s=70.0,
+        max_tool_angular_acceleration_deg_s2=700.0,
+    )
+    assert config.max_joint_speed == pytest.approx(math.radians(80.0))
+    assert config.max_joint_acceleration == pytest.approx(math.radians(500.0))
+    assert config.max_linear_speed == pytest.approx(0.090)
+    assert config.max_linear_acceleration == pytest.approx(0.900)
+    assert config.max_angular_speed == pytest.approx(math.radians(70.0))
+    assert config.max_angular_acceleration == pytest.approx(math.radians(700.0))
+
+
+def test_cli_motion_envelope_overrides_apply_to_simulation() -> None:
+    args = build_parser().parse_args(
+        [
+            "read",
+            "--simulation",
+            "--max-joint-speed-deg-s",
+            "80",
+            "--max-joint-acceleration-deg-s2",
+            "500",
+            "--max-linear-speed-mm-s",
+            "90",
+            "--max-linear-acceleration-mm-s2",
+            "900",
+            "--max-tool-angular-speed-deg-s",
+            "70",
+            "--max-tool-angular-acceleration-deg-s2",
+            "700",
+        ]
+    )
+    arm = _arm_from_args(args)
+    assert arm.config.motion_limits_human == pytest.approx(
+        {
+            "max_joint_speed_deg_s": 80.0,
+            "max_joint_acceleration_deg_s2": 500.0,
+            "max_linear_speed_mm_s": 90.0,
+            "max_linear_acceleration_mm_s2": 900.0,
+            "max_tool_angular_speed_deg_s": 70.0,
+            "max_tool_angular_acceleration_deg_s2": 700.0,
+        }
+    )
+
+
+
+
+
+def test_motion_envelope_cli_reports_100_1000_defaults(capsys) -> None:
+    assert main(["motion-envelope", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["host_envelope"] == pytest.approx(
+        {
+            "max_joint_speed_deg_s": 100.0,
+            "max_joint_acceleration_deg_s2": 1000.0,
+            "max_linear_speed_mm_s": 100.0,
+            "max_linear_acceleration_mm_s2": 1000.0,
+            "max_tool_angular_speed_deg_s": 100.0,
+            "max_tool_angular_acceleration_deg_s2": 1000.0,
+        }
+    )
+    assert payload["servo_tracking"]["goal_velocity_raw"] == 0
+    assert payload["servo_tracking"]["acceleration_raw"] == 254
+
+
+def test_move_joints_parser_accepts_human_degree_dynamics() -> None:
+    args = build_parser().parse_args(
+        [
+            "move-joints",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "--simulation",
+            "--speed-deg-s",
+            "80",
+            "--acceleration-deg-s2",
+            "500",
+        ]
+    )
+    assert args.speed_deg_s == pytest.approx(80.0)
+    assert args.acceleration_deg_s2 == pytest.approx(500.0)
 
 
 def test_info(capsys) -> None:
@@ -209,6 +317,8 @@ def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     assert capabilities["authority"]["armed"] is True
     assert capabilities["poses"] == ["agent_start_overhead"]
     assert capabilities["actions"]["gripper"] == ["open", "close"]
+    assert capabilities["actions"]["sleep"] is True
+    assert capabilities["actions"]["sleep_up"] is True
     assert capabilities["jog_policy"]["physical_height_threshold_mm"] == pytest.approx(100.0)
     assert capabilities["jog_policy"]["minimum_target_height_mm"] == pytest.approx(10.0)
 
@@ -245,6 +355,13 @@ def test_agent_cli_arm_capabilities_and_motion_in_simulation(
     sleep = json.loads(capsys.readouterr().out)
     assert sleep["completed"] is True
     assert sleep["holding"] is True
+    assert sleep["action"] == "sleep"
+
+    assert main(["agent", "sleep-up", "--simulation"]) == 0
+    sleep_up = json.loads(capsys.readouterr().out)
+    assert sleep_up["completed"] is True
+    assert sleep_up["holding"] is True
+    assert sleep_up["action"] == "sleep_up"
 
     assert main(["agent", "disarm"]) == 0
     disarmed = json.loads(capsys.readouterr().out)
@@ -524,12 +641,49 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     assert sleep["elbow_flex"] == pytest.approx(
         payload["joints"]["elbow_flex"]["effective_deg"][1]
     )
+    wrist_lower = payload["joints"]["wrist_flex"]["effective_deg"][0]
+    wrist_upper = payload["joints"]["wrist_flex"]["effective_deg"][1]
     assert sleep["wrist_flex"] == pytest.approx(
-        payload["joints"]["wrist_flex"]["effective_deg"][0]
+        wrist_lower + 0.75 * (wrist_upper - wrist_lower)
     )
     assert sleep["wrist_roll"] == pytest.approx(0.0)
 
+    sleep_up = payload["sleep_up_pose_deg"]
+    assert sleep_up["shoulder_pan"] == pytest.approx(0.0)
+    assert sleep_up["shoulder_lift"] == pytest.approx(
+        payload["joints"]["shoulder_lift"]["effective_deg"][0]
+    )
+    assert sleep_up["elbow_flex"] == pytest.approx(
+        payload["joints"]["elbow_flex"]["effective_deg"][1]
+    )
+    assert sleep_up["wrist_flex"] == pytest.approx(wrist_lower)
+    assert sleep_up["wrist_roll"] == pytest.approx(0.0)
+
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
+
+
+def test_sleep_up_cli_aliases_run_in_simulation(capsys, monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda *args, **kwargs: "")
+
+    for command in ("sleep-up", "sleep_up"):
+        assert (
+            main(
+                [
+                    command,
+                    "--simulation",
+                    "--speed-deg-s",
+                    "8",
+                    "--acceleration-deg-s2",
+                    "25",
+                    "--json",
+                    "--yes",
+                ]
+            )
+            == 0
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["accepted"] is True
+        assert payload["completed"] is True
 
 
 def test_sleep_cli_requires_confirmation_and_runs_in_simulation(

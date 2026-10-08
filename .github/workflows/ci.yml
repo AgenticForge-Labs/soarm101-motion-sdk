@@ -22,10 +22,36 @@ jobs:
       - run: uv run python -m compileall -q src
       - run: uv run pytest
       - run: uv build
+      - name: Verify packaged agent sandbox assets
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          with zipfile.ZipFile(wheel) as zf:
+              names = set(zf.namelist())
+          required = {
+              "soarm101_motion/agent_assets/Dockerfile.hermes",
+              "soarm101_motion/agent_assets/Dockerfile.codex",
+              "soarm101_motion/agent_assets/hermes-openrouter-provider.yaml",
+              "soarm101_motion/agent_assets/codex-openai-provider.yaml",
+              "soarm101_motion/agent_assets/robot-camera-hermes-skill.md",
+              "soarm101_motion/agent_assets/robot-camera-codex-skill.md",
+              "soarm101_motion/agent_assets/robot-camera-generic-skill.md",
+              "soarm101_motion/agent_assets/TASK.read-only.md",
+          }
+          missing = required - names
+          assert not missing, f"missing packaged agent assets: {sorted(missing)}"
+          PY
       - run: uv run soarm101 info
       - run: uv run soarm101-setup --help
       - run: uv run soarm101-broker --help
       - run: uv run robotctl --help
+      - run: uv run soarm101 agent sandbox --help
+      - run: uv run soarm101 agent sandbox agents --help
+      - run: uv run soarm101 agent sandbox agents --json
+      - run: uv run soarm101 agent sandbox doctor --help
+      - run: uv run soarm101 agent sandbox setup --help
+      - run: uv run soarm101 agent sandbox run --help
       - run: uv run soarm101 gui --help
       - run: QT_QPA_PLATFORM=offscreen uv run soarm101-gui --simulation --smoke-test
       - run: uv run soarm101 sim-demo

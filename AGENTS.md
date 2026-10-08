@@ -32,6 +32,17 @@ changes require development discipline; robot use requires conservative hardware
 11. Preserve the distinction between planned motion and live-streaming safety. Do not weaken
     joint, step, rate, acceleration, following-error, fault, effort, calibration, or
     provenance checks merely to make a new workflow pass.
+    Host-streamed planned joint motion uses the responsive Feetech tracking profile
+    shared with teleoperation (Goal_Velocity=0 / acceleration=254) so the validated host
+    trajectory owns speed/acceleration shaping. Do not reintroduce a slower hidden
+    servo-side profile that can make a valid host plan outrun the actuator and trigger
+    artificial following error. The current absolute host motion envelope is intentionally
+    expressed as 100/1000 in human units: 100 deg/s and 1000 deg/s^2 for joints and tool
+    orientation, and 100 mm/s and 1000 mm/s^2 for TCP translation. Treat these as
+    characterization ceilings, not ordinary defaults or proof of loaded-arm capability.
+    Do not raise them from actuator no-load specifications alone; require supervised physical
+    evidence while preserving following-error, effort/fault, limit, workspace, STOP/HOLD,
+    and settle guards.
 12. When user-visible behavior, UI names, defaults, calibration rules, CLI behavior, or safety
     gates change, update `README.md`, `CHANGELOG.md`, `TESTING.md`, and the relevant
     files under `docs/` in the same change.
@@ -97,13 +108,29 @@ changes require development discipline; robot use requires conservative hardware
     Cartesian use remains unvalidated until the hardware evidence is reviewed.
 12. Keep `docs/agent-arm101-cli.md` and `cli_use.md` technical and policy-neutral. They
     document the CLI contract, common commands, units, coordinate semantics, outputs, and
-    enforced safety behavior. Agent task strategies, observe/action loops, model/provider
-    instructions, and benchmark policy belong outside the SDK-facing CLI documentation.
+    enforced safety behavior. Task-solving strategy and benchmark policy remain outside
+    those neutral references. Robot-specific agent runtime/security setup belongs in
+    `docs/agent-sandbox.md`; higher-level benchmark design and scoring remain outside the SDK.
+13. The canonical OpenShell path must never mount the Motion SDK checkout, serial devices,
+    camera devices, calibration files, Docker socket, SSH credentials, or unrelated host
+    files into the reasoning sandbox. The only physical action path is
+    OpenShell -> robotctl -> authenticated broker -> bounded agent CLI -> SDK.
+14. Human `agent arm` authority remains outside the sandbox. Sandbox setup/run code may
+    verify authority but must never create, extend, or bypass it.
+15. Keep agent-harness differences behind `agent_adapters.py`. Hermes and Codex are
+    first-class packaged adapters. An OpenShell-compatible external harness may instead use
+    the validated JSON adapter-manifest contract for image/provider/direct-argv/runtime
+    details. Neither Python adapters nor manifests may add a second robot API, second broker,
+    override broker URL/token ownership, create authority, or introduce agent-specific motion
+    semantics. Every harness must share the same
+    `robotctl -> broker -> bounded agent CLI -> SDK` physical path.
 
 ## Repository boundary
 
 This SDK owns SO-ARM101 motion, calibration, kinematics, tooling/TCP definitions,
-diagnostics, teaching/replay primitives, their safety/provenance rules, and basic local USB
-camera capture used to observe the arm workspace. Higher-level perception/tracking, calibrated
+diagnostics, teaching/replay primitives, their safety/provenance rules, basic local USB
+camera capture used to observe the arm workspace, and the canonical constrained agent
+execution boundary for this device (bounded CLI, broker/client, and robot-specific OpenShell
+environment). Higher-level perception/tracking, calibrated
 multi-camera stage systems, show control, and cross-robot orchestration belong in their
 respective AgenticForge repositories.

@@ -226,6 +226,131 @@ def validate_workspace_configuration(
                 )
 
 
+def validate_workspace_path_from_measured_start(
+    model: "SO101KinematicModel",
+    samples: Sequence[Mapping[str, float]],
+    *,
+    tcp: "Pose | None" = None,
+    minimum_z_m: float = 0.0,
+    maximum_tcp_reach_m: float = 0.50,
+    minimum_self_clearance_m: float = 0.025,
+    base_keepout_radius_m: float = 0.055,
+    base_keepout_height_m: float = 0.11,
+    self_clearance_monotonic_tolerance_m: float = 0.0005,
+) -> None:
+    """Validate a path while permitting escape from a measured coarse fold.
+
+    A physically measured starting configuration is authoritative evidence that the
+    arm is already occupying that state. If sample 0 violates only the coarse
+    centerline self-clearance heuristic, the path may remain inside that heuristic
+    envelope only while clearance does not worsen. Once normal self-clearance is
+    reached, strict workspace validation resumes.
+
+    Floor, reach, base keep-out, joint, fault, effort, following-error, and other
+    guards are not relaxed by this function.
+    """
+    if not samples:
+        return
+
+    if (
+        not math.isfinite(self_clearance_monotonic_tolerance_m)
+        or self_clearance_monotonic_tolerance_m < 0.0
+    ):
+        raise ValueError(
+            "self_clearance_monotonic_tolerance_m must be non-negative and finite"
+        )
+
+    workspace_without_self = {
+        "minimum_z_m": minimum_z_m,
+        "maximum_tcp_reach_m": maximum_tcp_reach_m,
+        "minimum_self_clearance_m": 0.0,
+        "base_keepout_radius_m": base_keepout_radius_m,
+        "base_keepout_height_m": base_keepout_height_m,
+    }
+    for index, joints in enumerate(samples):
+        try:
+            validate_workspace_configuration(
+                model,
+                joints,
+                tcp=tcp,
+                **workspace_without_self,
+            )
+        except SafetyViolationError as exc:
+            raise SafetyViolationError(
+                f"workspace path sample {index}: {exc}"
+            ) from exc
+
+    required_clearance = float(minimum_self_clearance_m)
+    clearances = tuple(
+        minimum_workspace_self_clearance(model, joints, tcp=tcp)
+        for joints in samples
+    )
+    if clearances[0] >= required_clearance:
+        validate_workspace_path(
+            model,
+            samples,
+            tcp=tcp,
+            minimum_z_m=minimum_z_m,
+            maximum_tcp_reach_m=maximum_tcp_reach_m,
+            minimum_self_clearance_m=minimum_self_clearance_m,
+            base_keepout_radius_m=base_keepout_radius_m,
+            base_keepout_height_m=base_keepout_height_m,
+        )
+        return
+
+    best_clearance = clearances[0]
+    for index, clearance in enumerate(clearances[1:], start=1):
+        if clearance >= required_clearance:
+            validate_workspace_path(
+                model,
+                samples[index:],
+                tcp=tcp,
+                minimum_z_m=minimum_z_m,
+                maximum_tcp_reach_m=maximum_tcp_reach_m,
+                minimum_self_clearance_m=minimum_self_clearance_m,
+                base_keepout_radius_m=base_keepout_radius_m,
+                base_keepout_height_m=base_keepout_height_m,
+            )
+            return
+        if clearance + self_clearance_monotonic_tolerance_m < best_clearance:
+            raise SafetyViolationError(
+                "workspace path starts inside coarse self-clearance but moves "
+                f"deeper at sample {index}: {clearance:.3f} m after "
+                f"{best_clearance:.3f} m"
+            )
+        best_clearance = max(best_clearance, clearance)
+
+
+def validate_sleep_family_workspace_path(
+    model: "SO101KinematicModel",
+    samples: Sequence[Mapping[str, float]],
+    *,
+    tcp: "Pose | None" = None,
+    minimum_z_m: float = 0.0,
+    maximum_tcp_reach_m: float = 0.50,
+    minimum_self_clearance_m: float = 0.025,
+    base_keepout_radius_m: float = 0.055,
+    base_keepout_height_m: float = 0.11,
+) -> None:
+    """Validate a Sleep-family path while omitting only coarse self-clearance.
+
+    Canonical Sleep deliberately folds closer than the generic centerline
+    self-clearance heuristic. Sleep-family diagnostics may share that narrow
+    exception, but floor, TCP reach, and base keepout remain authoritative.
+    """
+    del minimum_self_clearance_m
+    validate_workspace_path(
+        model,
+        samples,
+        tcp=tcp,
+        minimum_z_m=minimum_z_m,
+        maximum_tcp_reach_m=maximum_tcp_reach_m,
+        minimum_self_clearance_m=0.0,
+        base_keepout_radius_m=base_keepout_radius_m,
+        base_keepout_height_m=base_keepout_height_m,
+    )
+
+
 def validate_workspace_path(
     model: "SO101KinematicModel",
     samples: Sequence[Mapping[str, float]],

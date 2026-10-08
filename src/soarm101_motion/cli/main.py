@@ -38,11 +38,18 @@ from soarm101_motion.constants import (
     JOINT_LIMITS,
     MOTOR_IDS,
     STOCK_GRIPPER,
+    TELEOP_SERVO_ACCELERATION_RAW,
+    TELEOP_SERVO_SPEED_RAW,
 )
 from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
-from soarm101_motion.poses import PoseLibrary, SavedPose, sleep_joint_positions
+from soarm101_motion.poses import (
+    PoseLibrary,
+    SavedPose,
+    sleep_joint_positions,
+    sleep_up_joint_positions,
+)
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.safety import resolve_effective_joint_limits
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
@@ -57,6 +64,31 @@ from soarm101_motion.workstation import (
 )
 
 
+def _motion_limit_overrides(args: argparse.Namespace) -> dict[str, float]:
+    """Resolve optional CLI motion-envelope overrides into internal SI units."""
+
+    values: dict[str, float] = {}
+    conversions = {
+        "max_joint_speed_deg_s": ("max_joint_speed", pi / 180.0),
+        "max_joint_acceleration_deg_s2": ("max_joint_acceleration", pi / 180.0),
+        "max_linear_speed_mm_s": ("max_linear_speed", 1.0 / 1000.0),
+        "max_linear_acceleration_mm_s2": (
+            "max_linear_acceleration",
+            1.0 / 1000.0,
+        ),
+        "max_tool_angular_speed_deg_s": ("max_angular_speed", pi / 180.0),
+        "max_tool_angular_acceleration_deg_s2": (
+            "max_angular_acceleration",
+            pi / 180.0,
+        ),
+    }
+    for cli_name, (config_name, scale) in conversions.items():
+        raw = getattr(args, cli_name, None)
+        if raw is not None:
+            values[config_name] = float(raw) * scale
+    return values
+
+
 def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101Config:
     values: dict[str, object] = {
         "port": args.port,
@@ -66,6 +98,7 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
     calibration = getattr(args, "calibration", None)
     if calibration:
         values["calibration_path"] = Path(calibration)
+    values.update(_motion_limit_overrides(args))
     values.update(overrides)
     return SOARM101Config(**values)
 
@@ -75,7 +108,10 @@ def _arm_from_args(
     **config_overrides: object,
 ) -> SOARM101:
     if getattr(args, "simulation", False):
-        return SOARM101.simulated(realtime=True)
+        return SOARM101.simulated(
+            realtime=True,
+            config=_hardware_config(args, **config_overrides),
+        )
     if args.port:
         return SOARM101(_hardware_config(args, **config_overrides))
 
@@ -232,6 +268,60 @@ def _cmd_read(args: argparse.Namespace) -> int:
 
 
 
+def _cmd_motion_envelope(args: argparse.Namespace) -> int:
+    """Report the effective host motion envelope without requiring calibration."""
+
+    config = SOARM101Config(
+        robot_id=str(args.robot_id),
+        **_motion_limit_overrides(args),
+    )
+    human = config.motion_limits_human
+    payload = {
+        "robot_id": config.robot_id,
+        "host_envelope": human,
+        "host_envelope_si": {
+            "max_joint_speed_rad_s": config.max_joint_speed,
+            "max_joint_acceleration_rad_s2": config.max_joint_acceleration,
+            "max_linear_speed_m_s": config.max_linear_speed,
+            "max_linear_acceleration_m_s2": config.max_linear_acceleration,
+            "max_tool_angular_speed_rad_s": config.max_angular_speed,
+            "max_tool_angular_acceleration_rad_s2": config.max_angular_acceleration,
+        },
+        "servo_tracking": {
+            "goal_velocity_raw": TELEOP_SERVO_SPEED_RAW,
+            "acceleration_raw": TELEOP_SERVO_ACCELERATION_RAW,
+            "ownership": (
+                "responsive inner-loop tracking; host trajectory remains the commanded "
+                "speed/acceleration authority"
+            ),
+        },
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(
+            "joint: "
+            f"{human['max_joint_speed_deg_s']:g} deg/s, "
+            f"{human['max_joint_acceleration_deg_s2']:g} deg/s^2"
+        )
+        print(
+            "TCP linear: "
+            f"{human['max_linear_speed_mm_s']:g} mm/s, "
+            f"{human['max_linear_acceleration_mm_s2']:g} mm/s^2"
+        )
+        print(
+            "TCP angular: "
+            f"{human['max_tool_angular_speed_deg_s']:g} deg/s, "
+            f"{human['max_tool_angular_acceleration_deg_s2']:g} deg/s^2"
+        )
+        print(
+            "servo tracking: Goal_Velocity raw "
+            f"{TELEOP_SERVO_SPEED_RAW}, acceleration raw "
+            f"{TELEOP_SERVO_ACCELERATION_RAW}"
+        )
+    return 0
+
+
 def _cmd_limits(args: argparse.Namespace) -> int:
     """Report model, calibration, and effective joint/workspace limits without hardware."""
 
@@ -246,7 +336,10 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             calibration_path = default_calibration_path(robot_id)
 
     calibration = SO101Calibration.load(calibration_path)
-    config = SOARM101Config(robot_id=robot_id)
+    config = SOARM101Config(
+        robot_id=robot_id,
+        **_motion_limit_overrides(args),
+    )
     calibrated_limits = {
         name: calibration.motors[name].radians_limits
         for name in ARM_JOINTS
@@ -300,6 +393,11 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             name: float(value * 180.0 / pi)
             for name, value in sleep_joint_positions(effective_limits).items()
         },
+        "sleep_up_pose_rad": sleep_up_joint_positions(effective_limits),
+        "sleep_up_pose_deg": {
+            name: float(value * 180.0 / pi)
+            for name, value in sleep_up_joint_positions(effective_limits).items()
+        },
         "sleep_gripper": {
             "normalized": float(sleep_gripper_position),
             "raw": int(sleep_gripper_raw),
@@ -308,6 +406,14 @@ def _cmd_limits(args: argparse.Namespace) -> int:
                 int(gripper_motor.range_min),
                 int(gripper_motor.range_max),
             ],
+        },
+        "motion_envelope": {
+            **config.motion_limits_human,
+            "servo_tracking": {
+                "goal_velocity_raw": TELEOP_SERVO_SPEED_RAW,
+                "acceleration_raw": TELEOP_SERVO_ACCELERATION_RAW,
+                "note": "responsive inner servo tracking; host trajectory owns speed/acceleration",
+            },
         },
         "coarse_cartesian_envelope_mm": {
             "minimum_model_z": float(config.minimum_workspace_z_m * 1000.0),
@@ -319,7 +425,8 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         "notes": [
             "URDF/model joint limits are the generic fallback/reference; calibrated real arms use measured pose-joint travel with the configured stop margin",
             "calibration remains the physical authority if a measured range is narrower than the model range",
-            "Sleep closes the stock gripper to the calibrated closed stop inset by the configured gripper margin",
+            "Sleep uses wrist_flex at 75% of its executable calibrated range; sleep_up preserves the historical wrist-at-lower-limit posture",
+            "Sleep and sleep_up close the stock gripper to the calibrated closed stop inset by the configured gripper margin",
             "maximum_tcp_reach is a coarse radial envelope, not a guarantee that every XYZ point is reachable",
             "normal Cartesian CLI coordinates are in the soarm101/base model frame",
         ],
@@ -352,6 +459,16 @@ def _cmd_limits(args: argparse.Namespace) -> int:
                 f"{model[0]:7.1f}..{model[1]:7.1f}  "
                 f"{effective[0]:7.1f}..{effective[1]:7.1f}"
             )
+        envelope = config.motion_limits_human
+        print(
+            "motion envelope: "
+            f"joint {envelope['max_joint_speed_deg_s']:g} deg/s / "
+            f"{envelope['max_joint_acceleration_deg_s2']:g} deg/s^2; "
+            f"TCP {envelope['max_linear_speed_mm_s']:g} mm/s / "
+            f"{envelope['max_linear_acceleration_mm_s2']:g} mm/s^2; "
+            f"tool angular {envelope['max_tool_angular_speed_deg_s']:g} deg/s / "
+            f"{envelope['max_tool_angular_acceleration_deg_s2']:g} deg/s^2"
+        )
         print(
             "coarse TCP reach: "
             f"{payload['coarse_cartesian_envelope_mm']['maximum_tcp_reach']:.1f} mm"
@@ -452,9 +569,19 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
     values = [value * pi / 180.0 if args.degrees else value for value in args.joints]
+    speed = (
+        args.speed_deg_s * pi / 180.0
+        if args.speed_deg_s is not None
+        else args.speed
+    )
+    acceleration = (
+        args.acceleration_deg_s2 * pi / 180.0
+        if args.acceleration_deg_s2 is not None
+        else args.acceleration
+    )
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
-        result = arm.move_joints(values, speed=args.speed, acceleration=args.acceleration)
+        result = arm.move_joints(values, speed=speed, acceleration=acceleration)
         arm.hold()
         _print_motion_result(result, as_json=args.json)
         print("Joint move complete; follower remains torque-held.", file=sys.stderr)
@@ -474,6 +601,26 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         _print_motion_result(result, as_json=args.json)
         print(
             "Sleep complete and holding. Press ENTER to relax the arm.",
+            file=sys.stderr,
+        )
+        input()
+        arm.relax()
+    return 0
+
+
+def _cmd_sleep_up(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Refusing to move without --yes.", file=sys.stderr)
+        return 2
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        arm.enable()
+        result = arm.move_sleep_up(
+            speed=args.speed_deg_s * pi / 180.0,
+            acceleration=args.acceleration_deg_s2 * pi / 180.0,
+        )
+        _print_motion_result(result, as_json=args.json)
+        print(
+            "sleep_up complete and holding. Press ENTER to relax the arm.",
             file=sys.stderr,
         )
         input()
@@ -1017,8 +1164,13 @@ def _agent_world_direction_payload(robot_id: str) -> dict[str, object]:
     }
 
 
-def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
+def _agent_capabilities_payload(
+    robot_id: str,
+    *,
+    config: SOARM101Config | None = None,
+) -> dict[str, object]:
     profile = WorkstationProfileStore().load()
+    config = config or SOARM101Config(robot_id=robot_id)
     return {
         "authority": AgentAuthorityStore().status(),
         "poses": _agent_pose_names(robot_id),
@@ -1041,7 +1193,16 @@ def _agent_capabilities_payload(robot_id: str) -> dict[str, object]:
             },
             "gripper": ["open", "close"],
             "sleep": True,
+            "sleep_up": True,
             "stop": "always_available",
+        },
+        "motion_envelope": {
+            **config.motion_limits_human,
+            "servo_tracking": {
+                "goal_velocity_raw": TELEOP_SERVO_SPEED_RAW,
+                "acceleration_raw": TELEOP_SERVO_ACCELERATION_RAW,
+            },
+            "ownership": "trusted host / Motion SDK; broker clients cannot widen it",
         },
         "jog_policy": {
             "physical_height_threshold_mm": AGENT_JOG_HEIGHT_THRESHOLD_M * 1000.0,
@@ -1108,7 +1269,16 @@ def _cmd_agent_disarm(_: argparse.Namespace) -> int:
 
 
 def _cmd_agent_capabilities(args: argparse.Namespace) -> int:
-    print(json.dumps(_agent_capabilities_payload(args.robot_id), indent=2))
+    config = SOARM101Config(
+        robot_id=args.robot_id,
+        **_motion_limit_overrides(args),
+    )
+    print(
+        json.dumps(
+            _agent_capabilities_payload(args.robot_id, config=config),
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -1368,6 +1538,27 @@ def _cmd_agent_sleep(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_agent_sleep_up(args: argparse.Namespace) -> int:
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        authority = _agent_require_authority(args, arm)
+        arm.enable()
+        result = arm.move_sleep_up(
+            speed=8.0 * pi / 180.0,
+            acceleration=25.0 * pi / 180.0,
+        )
+        arm.hold()
+    payload = asdict(result)
+    payload.update(
+        {
+            "action": "sleep_up",
+            "holding": True,
+            "authority": authority,
+        }
+    )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def _cmd_agent_stop(args: argparse.Namespace) -> int:
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
@@ -1465,6 +1656,115 @@ def _cmd_gui(args: argparse.Namespace) -> int:
     return run_gui(argv)
 
 
+def _cmd_agent_sandbox_agents(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_adapters import agent_catalog
+
+    payload = {"agents": agent_catalog()}
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for item in payload["agents"]:
+            model = item["default_model"] or "<agent default>"
+            auth_summary = "; ".join(
+                (
+                    f"{mode['name']} -> "
+                    f"{mode['provider'] or '<native-login>'} "
+                    f"({', '.join(mode['credential_env_vars']) or ('login state' if mode['uses_login_state'] else 'no credential')})"
+                )
+                for mode in item["auth_modes"]
+            )
+            print(
+                f"{item['name']}: model={model} default_auth={item['default_auth']} "
+                f"auth=[{auth_summary}]"
+            )
+    return 0
+
+
+def _cmd_agent_sandbox_doctor(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_sandbox import doctor
+
+    manifest = Path(args.adapter_manifest) if args.adapter_manifest else None
+    result = doctor(
+        agent=args.agent,
+        auth=args.auth,
+        image=args.image,
+        provider=args.provider,
+        adapter_manifest=manifest,
+    )
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        state = "READY" if result.ready else "NOT READY"
+        print(f"SO-ARM101 {result.agent} agent sandbox: {state}")
+        for key in ("openshell", "gateway", "docker", "image", "provider"):
+            print(f"  {key:10s} {'ok' if payload[key] else 'missing'}")
+        if result.details:
+            print("Details:")
+            for key, value in result.details.items():
+                if value:
+                    print(f"  {key}: {value}")
+    return 0 if result.ready else 2
+
+
+def _cmd_agent_sandbox_setup(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_adapters import resolve_agent_adapter
+    from soarm101_motion.agent_sandbox import setup
+
+    manifest = Path(args.adapter_manifest) if args.adapter_manifest else None
+    adapter = resolve_agent_adapter(args.agent, manifest)
+    setup(
+        agent=adapter.name,
+        auth=args.auth,
+        image=args.image,
+        provider=args.provider,
+        reauth=args.reauth,
+        adapter_manifest=manifest,
+    )
+    auth_suffix = f" --auth {args.auth}" if args.auth else ""
+    manifest_suffix = (
+        f" --adapter-manifest {args.adapter_manifest}" if args.adapter_manifest else ""
+    )
+    print(
+        f"SO-ARM101 {adapter.name} agent sandbox setup complete. "
+        f"Run 'soarm101 agent sandbox doctor --agent {adapter.name}{auth_suffix}"
+        f"{manifest_suffix}' to verify readiness."
+    )
+    return 0
+
+
+def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
+    from soarm101_motion.agent_adapters import resolve_agent_adapter
+    from soarm101_motion.agent_sandbox import run_agent
+
+    manifest = Path(args.adapter_manifest) if args.adapter_manifest else None
+    adapter = resolve_agent_adapter(args.agent, manifest)
+    output_dir = (
+        Path(args.output)
+        if args.output
+        else Path("soarm101-agent-runs")
+        / f"{time.strftime('%Y%m%d-%H%M%S')}-{adapter.name}"
+    )
+    task = Path(args.task) if args.task else None
+    result = run_agent(
+        agent=adapter.name,
+        auth=args.auth,
+        task=task,
+        output_dir=output_dir,
+        model=args.model,
+        image=args.image,
+        provider=args.provider,
+        broker_port=args.broker_port,
+        max_turns=args.max_turns,
+        timeout=args.timeout,
+        read_only=args.read_only,
+        adapter_manifest=manifest,
+    )
+    payload = result.as_dict()
+    print(json.dumps(payload, indent=2))
+    return 0 if result.exit_code == 0 else result.exit_code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soarm101", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1476,6 +1776,39 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("ports", nargs="*")
     discover.add_argument("--json", action="store_true")
     discover.set_defaults(func=_cmd_discover)
+
+    def add_motion_limit_options(command: argparse.ArgumentParser) -> None:
+        group = command.add_argument_group("motion envelope")
+        group.add_argument(
+            "--max-joint-speed-deg-s",
+            type=float,
+            help="absolute joint-speed ceiling in deg/s (SDK default: 100)",
+        )
+        group.add_argument(
+            "--max-joint-acceleration-deg-s2",
+            type=float,
+            help="absolute joint-acceleration ceiling in deg/s^2 (SDK default: 1000)",
+        )
+        group.add_argument(
+            "--max-linear-speed-mm-s",
+            type=float,
+            help="absolute TCP linear-speed ceiling in mm/s (SDK default: 100)",
+        )
+        group.add_argument(
+            "--max-linear-acceleration-mm-s2",
+            type=float,
+            help="absolute TCP linear-acceleration ceiling in mm/s^2 (SDK default: 1000)",
+        )
+        group.add_argument(
+            "--max-tool-angular-speed-deg-s",
+            type=float,
+            help="absolute TCP orientation-speed ceiling in deg/s (SDK default: 100)",
+        )
+        group.add_argument(
+            "--max-tool-angular-acceleration-deg-s2",
+            type=float,
+            help="absolute TCP orientation-acceleration ceiling in deg/s^2 (SDK default: 1000)",
+        )
 
     def add_hardware_options(command: argparse.ArgumentParser) -> None:
         command.add_argument("--port", required=True, help="serial port, for example /dev/ttyACM0")
@@ -1490,6 +1823,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--robot-id", default="so101")
         command.add_argument("--calibration")
         command.add_argument("--simulation", action="store_true")
+        add_motion_limit_options(command)
 
     def add_linear_options(command: argparse.ArgumentParser) -> None:
         command.add_argument("--orientation-mode", choices=("compatible", "position_only", "exact"), default="compatible")
@@ -1517,12 +1851,23 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--json", action="store_true")
     read.set_defaults(func=_cmd_read)
 
+    motion_envelope = sub.add_parser(
+        "motion-envelope",
+        aliases=["motion_settings", "motion-settings"],
+        help="show or evaluate the host motion envelope in human-friendly units",
+    )
+    motion_envelope.add_argument("--robot-id", default="so101")
+    add_motion_limit_options(motion_envelope)
+    motion_envelope.add_argument("--json", action="store_true")
+    motion_envelope.set_defaults(func=_cmd_motion_envelope)
+
     limits = sub.add_parser(
         "limits",
         help="show saved calibrated, model, and effective joint/workspace limits",
     )
     limits.add_argument("--robot-id", default="so101")
     limits.add_argument("--calibration")
+    add_motion_limit_options(limits)
     limits.add_argument("--json", action="store_true")
     limits.set_defaults(func=_cmd_limits)
 
@@ -1549,15 +1894,35 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_options(move)
     move.add_argument("joints", nargs=5, type=float)
     move.add_argument("--degrees", action="store_true")
-    move.add_argument("--speed", type=float)
-    move.add_argument("--acceleration", type=float)
+    move_speed = move.add_mutually_exclusive_group()
+    move_speed.add_argument(
+        "--speed",
+        type=float,
+        help="legacy joint speed in rad/s",
+    )
+    move_speed.add_argument(
+        "--speed-deg-s",
+        type=float,
+        help="joint speed in deg/s",
+    )
+    move_acceleration = move.add_mutually_exclusive_group()
+    move_acceleration.add_argument(
+        "--acceleration",
+        type=float,
+        help="legacy joint acceleration in rad/s^2",
+    )
+    move_acceleration.add_argument(
+        "--acceleration-deg-s2",
+        type=float,
+        help="joint acceleration in deg/s^2",
+    )
     move.add_argument("--yes", action="store_true")
     move.add_argument("--json", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
 
     sleep = sub.add_parser(
         "sleep",
-        help="move to the calibration-derived natural Sleep posture through normal safety guards",
+        help="move to the calibration-derived smoother default Sleep posture",
     )
     add_session_options(sleep)
     sleep.add_argument("--speed-deg-s", type=float, default=8.0)
@@ -1565,6 +1930,18 @@ def build_parser() -> argparse.ArgumentParser:
     sleep.add_argument("--yes", action="store_true")
     sleep.add_argument("--json", action="store_true")
     sleep.set_defaults(func=_cmd_sleep)
+
+    sleep_up = sub.add_parser(
+        "sleep-up",
+        aliases=["sleep_up"],
+        help="move to the historical fully folded wrist-up Sleep posture",
+    )
+    add_session_options(sleep_up)
+    sleep_up.add_argument("--speed-deg-s", type=float, default=8.0)
+    sleep_up.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    sleep_up.add_argument("--yes", action="store_true")
+    sleep_up.add_argument("--json", action="store_true")
+    sleep_up.set_defaults(func=_cmd_sleep_up)
 
     jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
     add_session_options(jog)
@@ -1703,6 +2080,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="show the bounded actions, named poses/cameras, and authority state",
     )
     agent_capabilities.add_argument("--robot-id", default="so101")
+    add_motion_limit_options(agent_capabilities)
     agent_capabilities.set_defaults(func=_cmd_agent_capabilities)
 
     agent_state = agent_sub.add_parser("state", help="read robot state without commanding motion")
@@ -1765,10 +2143,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_sleep = agent_sub.add_parser(
         "sleep",
-        help="move to calibrated Sleep and remain holding",
+        help="move to calibrated default Sleep and remain holding",
     )
     add_session_options(agent_sleep)
     agent_sleep.set_defaults(func=_cmd_agent_sleep)
+
+    agent_sleep_up = agent_sub.add_parser(
+        "sleep-up",
+        aliases=["sleep_up"],
+        help="move to the historical calibrated wrist-up Sleep and remain holding",
+    )
+    add_session_options(agent_sleep_up)
+    agent_sleep_up.set_defaults(func=_cmd_agent_sleep_up)
 
     agent_stop = agent_sub.add_parser(
         "stop",
@@ -1776,6 +2162,146 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_session_options(agent_stop)
     agent_stop.set_defaults(func=_cmd_agent_stop)
+
+    agent_sandbox = agent_sub.add_parser(
+        "sandbox",
+        help="self-contained OpenShell environment for reasoning agents",
+    )
+    agent_sandbox_sub = agent_sandbox.add_subparsers(
+        dest="agent_sandbox_command",
+        required=True,
+    )
+
+    agent_sandbox_agents = agent_sandbox_sub.add_parser(
+        "agents",
+        help="list packaged agent adapters and their default provider/model requirements",
+    )
+    agent_sandbox_agents.add_argument("--json", action="store_true")
+    agent_sandbox_agents.set_defaults(func=_cmd_agent_sandbox_agents)
+
+    agent_sandbox_doctor = agent_sandbox_sub.add_parser(
+        "doctor",
+        help="check OpenShell, Docker, image, and provider readiness for one agent",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--agent",
+        default="hermes",
+        help="built-in agent name or the name declared by --adapter-manifest",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--auth",
+        help="agent authentication mode; defaults to the selected adapter's default",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--adapter-manifest",
+        help="JSON manifest for an external OpenShell-compatible CLI agent",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--image",
+        help="override the selected agent's canonical sandbox image",
+    )
+    agent_sandbox_doctor.add_argument(
+        "--provider",
+        help="override the selected agent's canonical OpenShell provider",
+    )
+    agent_sandbox_doctor.add_argument("--json", action="store_true")
+    agent_sandbox_doctor.set_defaults(func=_cmd_agent_sandbox_doctor)
+
+    agent_sandbox_setup = agent_sandbox_sub.add_parser(
+        "setup",
+        help="build one agent image and install/update its provider",
+    )
+    agent_sandbox_setup.add_argument(
+        "--agent",
+        default="hermes",
+        help="built-in agent name or the name declared by --adapter-manifest",
+    )
+    agent_sandbox_setup.add_argument(
+        "--auth",
+        help=(
+            "agent authentication mode; normal Codex choices are api-key or installed; "
+            "chatgpt is an advanced separate device-login mode; external manifests default "
+            "to external"
+        ),
+    )
+    agent_sandbox_setup.add_argument(
+        "--adapter-manifest",
+        help="JSON manifest for an external OpenShell-compatible CLI agent",
+    )
+    agent_sandbox_setup.add_argument("--image")
+    agent_sandbox_setup.add_argument("--provider")
+    agent_sandbox_setup.add_argument(
+        "--reauth",
+        action="store_true",
+        help=(
+            "force a fresh dedicated Codex ChatGPT device login; not used by api-key "
+            "or installed modes"
+        ),
+    )
+    agent_sandbox_setup.set_defaults(func=_cmd_agent_sandbox_setup)
+
+    agent_sandbox_run = agent_sandbox_sub.add_parser(
+        "run",
+        help="run a supported agent in OpenShell through the bounded robot/camera broker",
+    )
+    agent_sandbox_run.add_argument(
+        "--agent",
+        default="hermes",
+        help="built-in agent name or the name declared by --adapter-manifest",
+    )
+    agent_sandbox_run.add_argument(
+        "--auth",
+        help=(
+            "agent authentication mode; normal Codex choices are api-key or installed; "
+            "chatgpt is an advanced separate device-login mode; external manifests default "
+            "to external"
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--adapter-manifest",
+        help="JSON manifest for an external OpenShell-compatible CLI agent",
+    )
+    agent_sandbox_run.add_argument(
+        "--task",
+        help=(
+            "task markdown; required for full-control runs. "
+            "Read-only runs use the packaged validation task when omitted."
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--output",
+        help=(
+            "new or empty host directory for traces/captures/evidence; "
+            "default: soarm101-agent-runs/<timestamp>"
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--model",
+        help=(
+            "agent model override; Hermes defaults to its packaged OpenRouter model, "
+            "Codex uses its CLI default when omitted"
+        ),
+    )
+    agent_sandbox_run.add_argument(
+        "--image",
+        help="override the selected agent's canonical sandbox image",
+    )
+    agent_sandbox_run.add_argument(
+        "--provider",
+        help="override the selected agent's canonical OpenShell provider",
+    )
+    agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
+    agent_sandbox_run.add_argument("--max-turns", type=int, default=100)
+    agent_sandbox_run.add_argument("--timeout", type=int, default=1800)
+    agent_sandbox_run.add_argument(
+        "--read-only",
+        action="store_true",
+        help=(
+            "omit all motion/gripper/STOP routes from the OpenShell broker policy "
+            "and do not require human motion authority"
+        ),
+    )
+    agent_sandbox_run.set_defaults(func=_cmd_agent_sandbox_run)
 
     camera = sub.add_parser("camera", help="discover, configure, and capture named USB cameras")
     camera_sub = camera.add_subparsers(dest="camera_command", required=True)
@@ -1864,6 +2390,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     smoke = sub.add_parser("smoke-test", help="perform a tiny supervised relative one-joint test")
     add_hardware_options(smoke)
+    add_motion_limit_options(smoke)
     smoke.add_argument("--joint", choices=ARM_JOINTS, required=True)
     smoke.add_argument("--degrees", type=float, default=2.0)
     smoke.add_argument("--speed", type=float, default=0.05)

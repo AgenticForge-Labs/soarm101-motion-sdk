@@ -54,12 +54,13 @@ soarm101 agent gripper open
 soarm101 agent gripper close
 soarm101 agent jog --x-mm 5 --y-mm 0 --z-mm 0
 soarm101 agent sleep
+soarm101 agent sleep-up
 soarm101 agent stop
 ```
 
 Agent motion authority is time-limited and bound to robot/calibration identity. Only
 `agent_*` saved poses, logical `overhead`/`wrist` cameras, open/close gripper,
-Sleep, STOP/HOLD, and translation-only jogs are exposed.
+Sleep, the historical `sleep_up` override, STOP/HOLD, and translation-only jogs are exposed.
 
 Agent jog uses the matching measured workspace transform to enforce requested physical
 displacement limits of 50 mm when current physical height is above 100 mm and 10 mm when at
@@ -75,6 +76,38 @@ soarm101 relax
 ```
 
 `relax` always requires explicit ENTER confirmation.
+
+## Motion envelope
+
+Inspect the effective host motion envelope without opening hardware:
+
+```bash
+soarm101 motion-envelope
+soarm101 motion-envelope --json
+```
+
+The default absolute ceilings use a 100/1000 convention:
+
+```text
+joints        100 deg/s       1000 deg/s^2
+TCP linear    100 mm/s        1000 mm/s^2
+TCP angular   100 deg/s       1000 deg/s^2
+```
+
+Ordinary move defaults remain lower. These are maximum requested host dynamics, not servo
+no-load ratings. Planned streamed arm motion uses the separate responsive Feetech tracking
+profile `Goal_Velocity=0`, `Acceleration=254`.
+
+For an explicit joint request in human units:
+
+```bash
+soarm101 move-joints J1 J2 J3 J4 J5 --degrees \
+  --speed-deg-s 80 --acceleration-deg-s2 500 --yes
+```
+
+All session-capable commands also accept `--max-joint-...`, `--max-linear-...`, and
+`--max-tool-angular-...` envelope overrides. When using `robotctl`, those values are
+owned by the trusted broker and cannot be widened from the sandbox.
 
 ## Read-only commands
 
@@ -189,20 +222,24 @@ joint limits rather than hard-coded angles:
 shoulder_pan   midpoint
 shoulder_lift  lower limit
 elbow_flex     upper limit
-wrist_flex     lower limit
+wrist_flex     lower + 0.75 * (upper - lower)
 wrist_roll     midpoint
 ```
 
-The lower/upper limits already include the configured 1° inset from measured stops.
+Equivalently, the default wrist target is `upper - 0.25 * (upper - lower)`. The
+historical fully folded wrist-up posture remains available as `sleep_up`, with
+`wrist_flex` at the lower executable limit. The lower/upper limits already include the
+configured 1° inset from measured stops.
 
 ```bash
 soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
+soarm101 sleep-up --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 ```
 
-`soarm101 limits --robot-id so101 --json` reports the exact derived
-`sleep_pose_deg` without moving hardware. Sleep is a normal guarded joint-space move and
-is never commanded automatically on connect or torque enable. After Sleep finishes, the CLI
-holds the arm and waits for ENTER before disabling torque.
+`soarm101 limits --robot-id so101 --json` reports both `sleep_pose_deg` and
+`sleep_up_pose_deg` without moving hardware. These are normal guarded joint-space moves
+and are never commanded automatically on connect or torque enable. After either operator
+CLI move finishes, the CLI holds the arm and waits for ENTER before disabling torque.
 
 ## Relative Cartesian jog
 

@@ -119,8 +119,8 @@ class RobotStatusPanel(QWidget):
         layout.addWidget(self.measurement_label)
         self._has_measurement = False
         self.view = CartesianArmView()
-        self.view.setMinimumSize(270, 270)
-        self.view.setMaximumHeight(370 if not compact else 300)
+        self.view.setMinimumSize(310 if not compact else 270, 310 if not compact else 270)
+        self.view.setMaximumHeight(430 if not compact else 300)
         layout.addWidget(self.view, 1)
 
         pose_title = QLabel("ESTIMATED TOOL POSE · MODEL FRAME")
@@ -222,7 +222,11 @@ class RobotStatusPanel(QWidget):
     def clear_state(self, *, label: str = "OFFLINE") -> None:
         self._set_status_chip(label, "offline")
         self.view.setEnabled(False)
-        self.measurement_label.setText("Last measured pose — disconnected" if self._has_measurement else "Illustration — not live")
+        self.measurement_label.setText(
+            "Last measured pose — disconnected"
+            if self._has_measurement
+            else "Illustration — not live"
+        )
         for value in self.pose_value_labels.values():
             value.setText("—")
         for value in self.joint_value_labels.values():
@@ -239,6 +243,46 @@ class RobotStatusPanel(QWidget):
         for name, angle in joints.items():
             self.joint_value_labels[name].setText(f"{angle:+.1f}°")
 
+    def update_gripper_position(self, position: float) -> None:
+        """Refresh the live jaw schematic and aperture readout."""
+
+        gripper = max(0.0, min(1.0, float(position)))
+        self.view.set_gripper_position(gripper)
+        self.gripper_bar.setValue(round(gripper * 1000))
+        self.gripper_bar.setFormat(f"{gripper:.3f}")
+
+    def update_pose_mm_deg(
+        self,
+        pose_mm_deg: Mapping[str, float] | tuple[float, ...] | list[float],
+    ) -> None:
+        """Refresh the model-estimated TCP readout from live measured joints."""
+
+        if isinstance(pose_mm_deg, Mapping):
+            pose = tuple(
+                float(pose_mm_deg[key])
+                for key in ("x", "y", "z", "roll", "pitch", "yaw")
+            )
+        else:
+            pose = tuple(float(value) for value in pose_mm_deg)
+        if len(pose) != 6:
+            raise ValueError("pose_mm_deg must contain six values")
+        keys = ("x", "y", "z", "roll", "pitch", "yaw")
+        units = ("mm", "mm", "mm", "°", "°", "°")
+        for key, value, unit in zip(keys, pose, units, strict=True):
+            self.pose_value_labels[key].setText(f"{value:+.1f} {unit}")
+
+    def update_live_measurements(self, values: Mapping[str, Any]) -> None:
+        """Apply available live measurements without requiring a full state."""
+
+        if "tcp_xyz_rpy" in values:
+            self.view.set_tcp(Pose.from_xyz_rpy(*values["tcp_xyz_rpy"]))
+        if "joints_deg" in values:
+            self.update_joint_degrees(values["joints_deg"])
+        if "pose_mm_deg" in values:
+            self.update_pose_mm_deg(values["pose_mm_deg"])
+        if "gripper" in values:
+            self.update_gripper_position(float(values["gripper"]))
+
     def update_state(self, state: Mapping[str, Any] | None) -> None:
         if not state:
             self.clear_state()
@@ -246,26 +290,19 @@ class RobotStatusPanel(QWidget):
 
         self.view.setEnabled(True)
         self._has_measurement = True
-        self.measurement_label.setText("Simulated state" if state.get("simulation") else "Measured joints · model-estimated tool pose")
+        self.measurement_label.setText(
+            "Simulated state"
+            if state.get("simulation")
+            else "Measured joints · model-estimated tool pose"
+        )
         joints = {name: float(state["joints_deg"][name]) for name in ARM_JOINTS}
         tcp_values = state.get("tcp_xyz_rpy")
         self.view.set_tcp(
             DEFAULT_GRIPPER_TCP if tcp_values is None else Pose.from_xyz_rpy(*tcp_values)
         )
-        self.view.set_joint_degrees(joints)
-        for name, angle in joints.items():
-            self.joint_value_labels[name].setText(f"{angle:+.1f}°")
-
-        gripper = float(state["gripper"])
-        self.view.set_gripper_position(gripper)
-        self.gripper_bar.setValue(round(max(0.0, min(1.0, gripper)) * 1000))
-        self.gripper_bar.setFormat(f"{gripper:.3f}")
-
-        pose = tuple(float(value) for value in state["pose_mm_deg"])
-        keys = ("x", "y", "z", "roll", "pitch", "yaw")
-        units = ("mm", "mm", "mm", "°", "°", "°")
-        for key, value, unit in zip(keys, pose, units, strict=True):
-            self.pose_value_labels[key].setText(f"{value:+.1f} {unit}")
+        self.update_joint_degrees(joints)
+        self.update_gripper_position(float(state["gripper"]))
+        self.update_pose_mm_deg(state["pose_mm_deg"])
 
         if bool(state.get("faulted")):
             chip, status_state = "FAULT", "fault"

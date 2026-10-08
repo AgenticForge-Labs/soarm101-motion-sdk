@@ -1,5 +1,4 @@
 from math import radians
-
 import numpy as np
 import pytest
 
@@ -53,6 +52,47 @@ def test_calibrated_gripper_closed_target_is_one_degree_inside_either_drive_dire
             abs=1.0,
         )
         assert (target_raw - closed_raw) * (open_raw - closed_raw) > 0
+
+
+def test_gripper_feedback_callback_reuses_existing_progress_reads() -> None:
+    backend = SimulationBackend()
+    backend.connect()
+    backend.enable_torque()
+    gripper = SO101Gripper(backend=backend)
+    seen: list[float] = []
+    gripper.set_feedback_callback(seen.append)
+
+    result = gripper.move(0.8)
+
+    assert result.completed
+    assert seen
+    assert seen[-1] == pytest.approx(0.8)
+    backend.disconnect()
+
+
+def test_gripper_default_pacing_stays_independent_of_arm_tracking() -> None:
+    backend = SimulationBackend()
+    backend.connect()
+    backend.enable_torque()
+    calls: list[tuple[int | None, int | None]] = []
+    original = backend.write_tool_position
+
+    def recorded(actuator, position, *, speed_raw=None, acceleration_raw=None):
+        calls.append((speed_raw, acceleration_raw))
+        return original(
+            actuator,
+            position,
+            speed_raw=speed_raw,
+            acceleration_raw=acceleration_raw,
+        )
+
+    backend.write_tool_position = recorded  # type: ignore[method-assign]
+    gripper = SO101Gripper(backend=backend)
+    gripper.move(0.8)
+
+    assert calls
+    assert calls[0] == (250, 20)
+    backend.disconnect()
 
 
 def test_gripper_begin_opening_sends_goal_without_starting_polling() -> None:

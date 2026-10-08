@@ -17,6 +17,32 @@ FloatArray = NDArray[np.float64]
 
 
 @dataclass(frozen=True)
+class PresentationLinkDefinition:
+    """Simplified visual-link body derived from the packaged URDF visual."""
+
+    name: str
+    frame: str
+    start_local: tuple[float, float, float]
+    end_local: tuple[float, float, float]
+    thickness_m: float
+
+
+@dataclass(frozen=True)
+class PresentationBoxDefinition:
+    """Presentation-only oriented box tied to one kinematic link frame."""
+
+    name: str
+    frame: str
+    center_local: tuple[float, float, float]
+    rpy_local: tuple[float, float, float]
+    size_local: tuple[float, float, float]
+
+    @property
+    def local_transform(self) -> FloatArray:
+        return transform_from_xyz_rpy(self.center_local, self.rpy_local)
+
+
+@dataclass(frozen=True)
 class JointDefinition:
     name: str
     origin_xyz: tuple[float, float, float]
@@ -72,6 +98,90 @@ STOCK_JAW_JOINT = JointDefinition(
 )
 STOCK_JAW_LIMITS = (-0.174533, 1.74533)
 
+# Presentation is deliberately separate from kinematic/safety geometry. The detailed
+# official SO-101 model contains offset printed members plus one STS3215 mesh at each
+# actuator; a joint axis is not generally the end or centerline of the adjacent printed
+# arm. Use those mesh origins for the schematic rather than forcing every visible member
+# to connect joint-center to joint-center.
+#
+# Source reference: TheRobotStudio/SO-ARM100,
+# Simulation/SO101/so101_new_calib.urdf at
+# 385e8d7c68e24945df6c60d9bd68837a4b7411ae.
+SO101_PRESENTATION_LINKS: tuple[PresentationLinkDefinition, ...] = (
+    PresentationLinkDefinition(
+        "base",
+        "base_link",
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.06),
+        0.090,
+    ),
+    PresentationLinkDefinition(
+        "upper_arm",
+        "upper_arm_link",
+        (-0.130085, 0.012, 0.0182),
+        (-0.000085, 0.012, 0.0182),
+        0.026,
+    ),
+    PresentationLinkDefinition(
+        "lower_arm",
+        "lower_arm_link",
+        (-0.129700, -0.032, 0.0182),
+        (0.0, -0.032, 0.0182),
+        0.026,
+    ),
+)
+
+# Feetech specifies the STS3215 case as 45.23 x 24.73 x 35 mm. The official SO-101
+# mesh coordinate system uses the case height/width/length ordering below; combined
+# with each mesh origin/RPY this places the driven joint axis inside the motor case
+# instead of pretending the adjoining printed members terminate at the pivot.
+STS3215_PRESENTATION_SIZE = (0.035, 0.02473, 0.04523)
+
+SO101_PRESENTATION_BOXES: tuple[PresentationBoxDefinition, ...] = (
+    PresentationBoxDefinition(
+        "shoulder_pan_motor",
+        "base_link",
+        (0.0263353, -8.97657e-09, 0.0437),
+        (0.0, 0.0, 0.0),
+        STS3215_PRESENTATION_SIZE,
+    ),
+    PresentationBoxDefinition(
+        "shoulder_lift_motor",
+        "shoulder_link",
+        (-0.0303992, 0.000422241, -0.0417),
+        (pi / 2, pi / 2, 0.0),
+        STS3215_PRESENTATION_SIZE,
+    ),
+    PresentationBoxDefinition(
+        "elbow_flex_motor",
+        "upper_arm_link",
+        (-0.11257, -0.0155, 0.0187),
+        (-pi, 0.0, -pi / 2),
+        STS3215_PRESENTATION_SIZE,
+    ),
+    PresentationBoxDefinition(
+        "wrist_flex_motor",
+        "lower_arm_link",
+        (-0.1224, 0.0052, 0.0187),
+        (-pi, 0.0, -pi),
+        STS3215_PRESENTATION_SIZE,
+    ),
+    PresentationBoxDefinition(
+        "wrist_roll_motor",
+        "wrist_link",
+        (0.0, -0.0424, 0.0306),
+        (pi / 2, pi / 2, 0.0),
+        STS3215_PRESENTATION_SIZE,
+    ),
+    PresentationBoxDefinition(
+        "gripper_motor",
+        "gripper_link",
+        (0.0077, 0.0001, -0.0234),
+        (-pi / 2, 0.0, 0.0),
+        STS3215_PRESENTATION_SIZE,
+    ),
+)
+
 
 class SO101KinematicModel:
     """Small native kinematic model independent of ROS or URDF parsers."""
@@ -113,6 +223,96 @@ class SO101KinematicModel:
                 np.asarray(definition.axis, dtype=float), float(angle)
             )
         return transform, points
+
+    def link_frames(
+        self,
+        joints: Mapping[str, float] | FloatArray,
+    ) -> dict[str, FloatArray]:
+        """Return child-link frames after applying each joint rotation."""
+
+        q = self.vector(joints)
+        transform = np.eye(4)
+        frames: dict[str, FloatArray] = {"base_link": transform.copy()}
+        child_links = (
+            "shoulder_link",
+            "upper_arm_link",
+            "lower_arm_link",
+            "wrist_link",
+            "gripper_link",
+        )
+        for definition, child_link, angle in zip(
+            SO101_JOINT_DEFINITIONS,
+            child_links,
+            q,
+            strict=True,
+        ):
+            transform = transform @ definition.origin_transform
+            transform = transform @ rotation_about_axis(
+                np.asarray(definition.axis, dtype=float), float(angle)
+            )
+            frames[child_link] = transform.copy()
+        return frames
+
+    def presentation_link_segments(
+        self,
+        joints: Mapping[str, float] | FloatArray,
+    ) -> dict[str, tuple[FloatArray, FloatArray]]:
+        """Return presentation-only visual-body centerlines in world coordinates.
+
+        Unlike link_points(), these segments follow the packaged URDF visual bodies
+        rather than connecting joint origins. They are for drawing only and must not
+        be used for collision, workspace, planning, or hardware safety decisions.
+        """
+
+        frames = self.link_frames(joints)
+        segments: dict[str, tuple[FloatArray, FloatArray]] = {}
+        for definition in SO101_PRESENTATION_LINKS:
+            frame = frames[definition.frame]
+
+            def world(local: tuple[float, float, float]) -> FloatArray:
+                vector = np.asarray(local, dtype=float)
+                return frame[:3, 3] + frame[:3, :3] @ vector
+
+            segments[definition.name] = (
+                world(definition.start_local),
+                world(definition.end_local),
+            )
+        return segments
+
+    def presentation_link_thicknesses(self) -> dict[str, float]:
+        """Return nominal visual-body thicknesses for GUI rendering only."""
+
+        return {
+            definition.name: float(definition.thickness_m)
+            for definition in SO101_PRESENTATION_LINKS
+        }
+
+    def presentation_box_corners(
+        self,
+        joints: Mapping[str, float] | FloatArray,
+    ) -> dict[str, tuple[FloatArray, ...]]:
+        """Return mesh-informed motor-case envelope corners for GUI presentation only.
+
+        These envelopes are not collision geometry and never participate in planning or
+        safety. They make the physical distinction explicit: printed members can be
+        offset from a joint axis, while the actuator body contains that axis.
+        """
+
+        frames = self.link_frames(joints)
+        boxes: dict[str, tuple[FloatArray, ...]] = {}
+        for definition in SO101_PRESENTATION_BOXES:
+            transform = frames[definition.frame] @ definition.local_transform
+            half = np.asarray(definition.size_local, dtype=float) / 2.0
+            corners: list[FloatArray] = []
+            for sx in (-1.0, 1.0):
+                for sy in (-1.0, 1.0):
+                    for sz in (-1.0, 1.0):
+                        local = half * np.array([sx, sy, sz], dtype=float)
+                        corners.append(
+                            transform[:3, 3] + transform[:3, :3] @ local
+                        )
+            boxes[definition.name] = tuple(corners)
+        return boxes
 
     def link_points(
         self,

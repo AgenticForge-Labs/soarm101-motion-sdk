@@ -32,6 +32,24 @@ transforms. No evidence supports changing those link dimensions by guesswork.
   as the drawing. Label the grid as model Z=0, not a measured table.
 - [x] Add native/bundled-URDF parity, fixed-pivot, stable-scale, and active-TCP regression
   coverage. These checks establish software consistency, not physical accuracy.
+- [x] Feed the persistent GUI model from measurements already owned by active motion/tool
+  threads so commanded joint motion, model-estimated TCP readout, and gripper aperture remain
+  live while the slower full-state poll is intentionally suspended. This adds no competing
+  serial polling and no visualization authority over motion.
+- [x] Replace the visual arm skeleton's coarse safety/joint-frame polyline with dedicated
+  presentation geometry derived from the packaged URDF visual bodies. FK/URDF parity and
+  coarse safety centerlines remain unchanged and separate. The offline illustration now uses
+  a neutral 45% jaw opening and visually distinguishes the moving jaw from the fixed finger.
+  Follow-up GUI review keeps body strokes deliberately thinner and flat-ended, removes the
+  extra shadow, uses smaller pivot markers, and renders the moving jaw neutral dark and slightly
+  heavier. A full presentation-assumption audit then compared the schematic against the
+  official mesh-based SO-101 URDF at
+  `385e8d7c68e24945df6c60d9bd68837a4b7411ae`. The GUI no longer assumes that a printed
+  arm member starts/ends at each revolute-axis point: upper/lower members retain their official
+  mesh-model Y/Z offsets, while each STS3215 is represented by an oriented 45.23 x 24.73 x
+  35 mm case envelope at its official mesh pose. This makes the shoulder/wrist pivots sit
+  inside actuator bodies where the physical model says they should, without inventing long
+  shoulder/wrist bars. These shapes remain presentation-only and are not collision geometry.
 - [ ] Add optional official CAD meshes with a switchable joint-center overlay. Preserve
   shared FK/tool authority, source revision/license, bounded rendering cost, and small
   window readability. Current schematic/primitive PyBullet visuals do not represent
@@ -175,6 +193,15 @@ its own persistent connection for live controls; it must not launch CLI subproce
 
 ## Physical validation gate
 
+- [ ] Complete physical characterization of the explicit 100/1000 host motion envelope.
+  The previously host-rejected **80 deg/s, 500 deg/s²** Sleep-vs-`sleep_up` comparison
+  completed successfully on 2026-10-06 with responsive 0/254 tracking and was judged much
+  smoother by the operator. The first **100/1000** attempt never moved because SI conversion
+  differed from the exact configured ceiling by a few floating-point ULPs; that software
+  boundary bug is now fixed. Re-run 100/1000 under the unchanged following-error,
+  effort/fault, calibrated-limit, workspace, STOP/HOLD, and settle safeguards before
+  marking the full characterization gate complete.
+
 - [ ] Run port discovery and six-motor model check on the user's arm.
 - [ ] Import or perform calibration and verify all directions.
 - [ ] Run the conservative 2° CLI smoke test on each joint with no payload and verify
@@ -212,10 +239,63 @@ its own persistent connection for live controls; it must not launch CLI subproce
   unresolved issue; after planning is feasible, inspect planned
   joint derivatives, encoder quantization, following error, and cycle timing before changing
   motor tuning.
+- [ ] Complete the guided teleop-versus-programmed motion-quality study on the physical
+  follower. Capture a marked slow teleop reference, guarded replay of its exact accepted
+  arm-joint commands, and the same 8 deg/s saved-pose route at both 50 Hz and 20 Hz. Compare
+  raw encoder-step distributions, command-versus-feedback lag, deceleration behavior, and
+  folded/Sleep geometry before selecting the next control change. Physical 20 Hz versus 50 Hz
+  comparison showed no large smoothness difference, while exact deterministic replay of the
+  recorded teleop command sequence completed successfully and retained the visibly less-
+  mechanical/smoother character of teleop. This makes generated joint-command structure the
+  leading hypothesis, especially during the folded return to Sleep. Quantized-target
+  coalescing has looked at most marginally better and is not merge-ready on that evidence alone.
+  Keep both joint execution strategies available while testing: the existing `streamed`
+  host trajectory and the experimental `final_target` one-write endpoint mode. Run the
+  supervised same-route comparison, with special attention to Right -> Sleep, before choosing
+  a production default or removing either implementation. The first final-target physical
+  attempt completed Sleep but was stopped on Sleep -> Overhead by an invalid cross-joint
+  phase-coupling guard (0.308 rad vs 0.300 rad). That guard has been removed while preserving
+  per-joint corridor/overshoot, reverse-motion, effort/fault, cancellation, timeout, and
+  settle checks. Because the one-shot servos may trace an asynchronous joint combination
+  rather than the synchronized host plan, full-workspace/saved-pose execution now validates
+  the accumulated measured intermediate path on every monitor cycle using the measured-start
+  workspace policy. The corrected final-target-only rerun completed the full route but still
+  rocked substantially, so repeated host micro-waypoints are not the primary cause. Retain
+  both execution modes for diagnosis. Faster requested speed is somewhat smoother overall
+  and higher acceleration adds little beyond that, while severe rocking returns during the
+  final slowdown into canonical Sleep. Before deeper servo tuning, isolate wrist
+  orientation/fold order with a physically taught wrist angle: hold canonical Sleep, relax
+  only wrist_flex, hand-place it, relatch/save the measured pose, then compare direct canonical
+  Sleep, direct taught-wrist Sleep, and a staged final wrist-only fold from RIGHT. Return to
+  teleop-derived command shape versus programmed low-speed servo behavior after that result.
+  The operator-defined `sleep2` A/B showed substantially smoother settling than the
+  historical Sleep pose, confirming a large geometry component. Promote that result into a
+  portable calibration-relative semantic: default Sleep uses wrist_flex at 75% of its
+  executable range, while `sleep_up` preserves the historical lower-limit wrist fold.
+  Re-run the standard route with the new default Sleep on hardware before merging. A 40
+  deg/s, 250 deg/s² attempt showed that the old backend 250/20 Feetech profile could no longer
+  track the faster validated host trajectory and tripped following-error before the A/B.
+  Default streamed planned joint motion now uses the same responsive 0/254 tracking profile
+  as teleoperation while retaining the host speed/acceleration ceilings and safety guards.
+  The 40/250 Sleep-vs-sleep_up rerun completed cleanly after removing the hidden servo
+  throttle, and 80/500 subsequently completed with a large subjective smoothness improvement.
+  GUI teleoperation then isolated a different wrist-specific issue: 20 Hz Medium tracking
+  works, while the former Fast 1000 deg/s² wrist-flex response could command a reversal
+  faster than the physical wrist braked, producing +0.057 rad of carry-through and a strict
+  opposite-direction stop. Fast is now per-joint: wrist_flex retains 100 deg/s speed but uses
+  500 deg/s² acceleration, while the other joints retain 100/1000. Live-stream direction
+  monitoring also permits only a 100 ms non-growing braking carry-through immediately after
+  a recent genuine command reversal, capped at 0.10 rad cumulative wrong-way travel;
+  planned motion remains strict. Validate isolated wrist
+  reversals at 20 Hz with no payload/gripper mirroring before considering this motion-quality
+  branch merge-ready.
 - [ ] Resolve any remaining physical/model Cartesian-direction mismatch before broader
   low-speed linear paths/tolerance validation.
-- [ ] Validate guarded leader-to-follower streaming at low speed, including STOP,
-  leader-readout loss, gripper mirroring, and stream safety trips.
+- [ ] Finish guarded leader-to-follower streaming validation. Medium at 20 Hz has passed
+  supervised use; next validate Fast · wrist-aware wrist reversals, STOP, leader-readout
+  loss, and stream safety trips with gripper mirroring disabled, then separately validate
+  gripper mirroring/contact at Normal gripper speed. The pen overload showed that gripper
+  object state must not be conflated with arm-stream dynamics.
 - [ ] Validate sequence execution and edited motion primitives on hardware.
 - [ ] Validate the selected USB camera on the target workstation, confirm negotiated
   resolution/FPS/FourCC, live GUI preview in Camera and Teleoperation, and still capture.

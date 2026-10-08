@@ -59,6 +59,7 @@ packages = ["src/soarm101_motion"]
 include = [
   "src/soarm101_motion/**/*.py",
   "src/soarm101_motion/models/*.urdf",
+  "src/soarm101_motion/agent_assets/*",
 ]
 
 [tool.ruff]

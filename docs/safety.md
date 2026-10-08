@@ -1,5 +1,34 @@
 # Safety
 
+
+## Motion-rate envelope
+
+The current absolute host characterization envelope is:
+
+- joint velocity: **100 deg/s**;
+- joint acceleration: **1000 deg/s^2**;
+- TCP linear velocity: **100 mm/s**;
+- TCP linear acceleration: **1000 mm/s^2**;
+- TCP/tool angular velocity: **100 deg/s**;
+- TCP/tool angular acceleration: **1000 deg/s^2**.
+
+These are software ceilings, not the ordinary defaults and not a manufacturer whole-arm
+rating. A move requesting less remains governed by its requested/default dynamics. A
+Cartesian request is also constrained by the joint-rate envelope after IK.
+
+The STS3215 arm servos use `Goal_Velocity=0` and `Acceleration=254` for planned streamed
+tracking. This intentionally gives the inner position controller more authority than the
+host trajectory so it can follow rather than throttle that trajectory. Do not interpret
+`254` as a host request to accelerate the loaded robot at the nominal raw-register
+equivalent. Conversely, do not lower the hidden servo profile below the host trajectory and
+then compensate by weakening following-error.
+
+Raising the host envelope in the future requires supervised physical characterization.
+Published no-load servo speed alone is insufficient. Calibration, joint limits,
+following-error, unexpected-direction, current/load, hardware fault, workspace, timing,
+STOP/HOLD, and settle checks remain independent safeguards.
+
+
 This is experimental software for a low-cost hobby/educational robot arm, not a certified industrial controller.
 
 - Clear the workspace and remove payloads during initial tests.
@@ -68,6 +97,13 @@ world/tool-frame jogs, gripper actions, and Sleep end holding. Single-joint agen
 are relative, affect exactly one named arm joint, and are limited to 30 degrees per command. STOP/HOLD remains available even without an active lease. Torque release remains a
 human action through `soarm101 relax`, which requires ENTER confirmation.
 
+The canonical `soarm101 agent sandbox` runtime preserves the same authority boundary.
+OpenShell isolates the reasoning process; the sandbox receives no unrestricted SDK,
+serial/camera device, calibration file, Docker socket, SSH material, or unrelated host files.
+Login-backed Codex runs receive only a per-run copy of the selected Codex `auth.json`.
+The only physical-action path is the authenticated bounded broker. Sandbox setup/run may
+verify existing authority but may never create, extend, relax, or bypass it.
+
 Agent Cartesian jogs are deliberately narrower than the general CLI: translation only,
 normal guarded SDK execution, and an additional physical-height policy derived from the
 matching measured workspace calibration. Above 100 mm physical height, requested physical
@@ -100,14 +136,20 @@ leaves the arm holding rather than dropping it.
 - Feetech transport and synchronized writes use one reentrant lock.
 - Joint and Cartesian trajectories are preplanned and checked before motion.
 - Overrides cannot exceed absolute host-side speed/acceleration ceilings.
-- Active trajectories monitor faults, following error, unexpected direction, and deadline overruns.
+- Active trajectories monitor faults, following error, unexpected direction, and deadline overruns. Live joint streaming treats a recent just-commanded reversal specially: it may accept no more than 100 ms of non-growing residual motion in the previous physical direction while the servo brakes, with cumulative wrong-way travel capped at 0.10 rad. The ordinary planned-motion direction guard remains strict, and any stale, growing, persistent, or over-cap wrong-way motion—or following-error/fault/effort violation—still stops the stream.
+- Host-streamed planned joint trajectories use the responsive servo tracking profile
+  (Goal_Velocity=0, acceleration=254) by default, matching teleoperation. Requested host
+  speed/acceleration remain the motion ceilings; this removes a redundant slower actuator
+  throttle rather than weakening the following-error/fault/effort safety stack.
 - Motion failures issue a best-effort hold.
 - `wait=True` verifies measured completion.
 - Stock-gripper moves participate in the arm-level stop lifecycle.
 - Sleep folds the arm first and then closes the stock gripper to a calibration-derived
-  target 1° inside the measured closed mechanical stop by default. It does not intentionally
-  drive the gripper into the calibrated endpoint; the saved gripper range and drive mode
-  remain authoritative.
+  target 1° inside the measured closed mechanical stop by default. The 2026-10-06 overload
+  event was subsequently traced to a pen being held in the gripper, not evidence that the
+  calibrated 1° inset itself was invalid. Sleep is not object-aware: remove held objects or
+  otherwise account for the commanded close before invoking it. Saved gripper calibration
+  and drive mode remain authoritative.
 - Calibration snapshots and restores motor EEPROM on failure when possible.
 - Torque enable rolls back motors already energized when a later enable fails.
 
@@ -158,6 +200,33 @@ The current default thresholds are starting guardrails rather than validated phy
 limits. Characterize the exact arm at low speed/no payload before interpreting them as
 appropriate operating values. See `TESTING.md`.
 
+## Experimental final-target joint execution
+
+Ordinary joint motion defaults to the host-streamed validated trajectory. During the current
+motion-quality investigation, the SDK also exposes `execution_mode="final_target"` for
+supervised joint-space testing. The same endpoint and host joint path are planned and validated
+first, but the hardware receives one synchronized endpoint command rather than a series of
+intermediate goals.
+
+This changes what "following error" can mean during transit: the measured arm is expected to
+be far from the final endpoint immediately after that endpoint is issued. The one-shot mode
+therefore does **not** weaken the endpoint or calibrated path authority; instead it monitors
+fault state, unexpected/reverse motion, departure outside each joint's start-to-target
+corridor plus the configured overshoot bound, cancellation, timeout, and final settling.
+It does not require joints to remain phase-locked during transit because that would turn
+normal load-dependent servo lag into a false safety trip. When the caller requested full
+workspace checking, the controller also validates the accumulated measured intermediate
+configurations with the existing measured-start workspace policy at each monitor cycle.
+Therefore the precomputed synchronized host path is not treated as proof that an asynchronous
+one-shot physical path is safe. Target-only/off requests keep their documented narrower
+workspace semantics; Sleep keeps its deliberate coarse-workspace exception. Any failure
+requests STOP/HOLD. Physical power must remain immediately
+accessible during testing.
+
+The final-target mode is joint-space only. Do not use it as a shortcut for Cartesian
+`move_linear()`; a single final joint command cannot prove or preserve the requested TCP
+line between endpoints.
+
 ## Coarse geometry envelope
 
 The SDK checks every requested joint path against a conservative centerline model:
@@ -182,3 +251,35 @@ robot-specific table frame and tool geometry are calibrated. Other joint, step, 
 acceleration, following-error, fault, and effort checks remain active.
 
 The API uses `stop()` and `software_stop()`. It intentionally does not expose `emergency_stop()` because a Python command cannot replace a physical power or enable circuit.
+
+### Sleep posture geometry
+
+The default calibration-relative Sleep posture intentionally uses `wrist_flex` at 75% of
+its executable range, equivalent to `upper - 0.25 * (upper - lower)`. Physical A/B testing
+on the development follower showed substantially less rocking than the historical
+wrist-at-lower-limit fold. That historical posture remains available explicitly as
+`sleep_up`.
+
+Both postures retain the same narrow exception for the generic coarse folded-arm
+self-clearance heuristic. This semantic change does **not** relax calibrated joint limits,
+trajectory/rate checks, following-error monitoring, effort/fault handling, communication
+checks, or completion/settle validation.
+
+
+
+### Host motion envelope versus servo tracking authority
+
+The default absolute host envelope is **100 deg/s / 1000 deg/s²** for each joint,
+**100 mm/s / 1000 mm/s²** for TCP translation, and **100 deg/s / 1000 deg/s²**
+for TCP orientation. These are ceilings, not ordinary motion defaults.
+
+Arm position commands use responsive STS3215 tracking (`Goal_Velocity=0`,
+`Acceleration=254`). The backend fallback for guarded arm position writes is also
+`0/254`; this is deliberate so the inner servo profile remains faster than the validated
+host trajectory instead of imposing a second slower trajectory. The stock gripper remains
+separately paced at `250/20` by default.
+
+Raising the host envelope and removing the hidden arm-side throttle does **not** remove
+calibrated joint limits, maximum command-step checks, following-error, unexpected-direction,
+effort/current, hardware-fault, workspace, timing, STOP/HOLD, or settle validation.
+Broker clients inherit the trusted host envelope and cannot widen it remotely.

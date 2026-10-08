@@ -99,12 +99,18 @@ millimeters from the planned target, so the agent policy reserves a 10 mm ground
 margin. The workspace mapping is used only for this additional safety measurement; actual
 motion still executes through the normal model-frame guarded jog and its SDK safety checks.
 
-Sleep and STOP/HOLD are:
+Sleep, the historical wrist-up override, and STOP/HOLD are:
 
 ```bash
 soarm101 agent sleep
+soarm101 agent sleep-up
 soarm101 agent stop
 ```
+
+Default `sleep` is calibration-relative and places `wrist_flex` 75% of the way from
+its effective lower limit to its effective upper limit. `sleep-up` (alias
+`sleep_up`) preserves the historical fully folded posture with `wrist_flex` at the
+effective lower limit.
 
 Successful agent motion remains torque-held at the reached pose. `agent stop` is available
 even without active motion authority. Relax is intentionally not exposed to the agent.
@@ -119,6 +125,99 @@ soarm101 agent disarm
 
 The optional task-specific robot/camera skill under `agent-as-code/` is outside this
 technical contract.
+
+The direct-host skill remains under `agent-as-code/skills/robot-camera/`. The built-in
+OpenShell adapters package harness-specific `robotctl.py` skills for Hermes and Codex so
+sandbox instructions never refer to the unavailable host `soarm101` executable.
+
+## Self-contained agent sandbox commands
+
+The SDK includes robot-specific OpenShell orchestration without making OpenShell a Python
+runtime dependency:
+
+```bash
+soarm101 agent sandbox doctor --agent hermes
+soarm101 agent sandbox setup --agent hermes
+soarm101 agent sandbox run --agent hermes --task TASK.md
+
+# Reuse the already-installed/login-authenticated Codex CLI state.
+soarm101 agent sandbox doctor --agent codex --auth installed
+soarm101 agent sandbox run --agent codex --auth installed --task TASK.md
+
+# Or use OpenAI Platform billing/API credentials.
+soarm101 agent sandbox setup --agent codex --auth api-key
+soarm101 agent sandbox run --agent codex --auth api-key --task TASK.md
+
+# Optional separate SDK-owned ChatGPT device login.
+soarm101 agent sandbox setup --agent codex --auth chatgpt
+soarm101 agent sandbox run --agent codex --auth chatgpt --task TASK.md
+```
+
+`doctor` is read-only with respect to the robot. `setup` builds/updates the selected
+built-in adapter image and provider/login requirements. Codex `--auth installed` reads the
+host Codex auth state only long enough to make a per-run copy inside the disposable sandbox;
+it does not execute the host Codex binary as the reasoning process and does not mount or
+modify the host Codex home.
+
+`run --read-only` does not require or create robot authority. Its generated broker policy
+exposes only health/capabilities/state and camera capture; pose, joint, Cartesian, gripper,
+Sleep, and STOP routes are absent. Full `run` also cannot create authority: a human must
+already have run `soarm101 agent arm`. The runtime starts the authenticated broker, verifies
+authority when motion is requested, creates a fresh OpenShell sandbox, uploads only the
+task/skill/standalone client plus minimal adapter-specific state, runs the selected harness,
+collects evidence, confirms sandbox deletion, and stops the broker.
+
+For another CLI harness already usable by OpenShell, provide an explicit adapter manifest:
+
+```bash
+soarm101 agent sandbox doctor \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json
+
+soarm101 agent sandbox run \
+  --agent my-agent \
+  --adapter-manifest agent-as-code/openshell-adapter.example.json \
+  --read-only
+```
+
+The manifest controls only harness image/provider/direct argv/runtime paths. It cannot alter
+the broker route allowlist, broker token/URL, human authority, or Motion SDK safety checks.
+
+See `docs/agent-sandbox.md` for the complete runtime/security contract.
+
+
+## Motion envelope
+
+The CLI reports the current absolute Motion SDK envelope in human units:
+
+```bash
+soarm101 motion-envelope
+soarm101 motion-envelope --json
+```
+
+Current defaults are 100 deg/s and 1000 deg/s^2 for joints, 100 mm/s and
+1000 mm/s^2 for TCP translation, and 100 deg/s and 1000 deg/s^2 for TCP/tool
+orientation. These are ceilings, not ordinary requested speeds.
+
+Session-capable commands accept trusted/operator overrides:
+
+```text
+--max-joint-speed-deg-s
+--max-joint-acceleration-deg-s2
+--max-linear-speed-mm-s
+--max-linear-acceleration-mm-s2
+--max-tool-angular-speed-deg-s
+--max-tool-angular-acceleration-deg-s2
+```
+
+For direct joint motion, prefer human units when convenient:
+
+```bash
+soarm101 move-joints ... --degrees --speed-deg-s 80 --acceleration-deg-s2 500
+```
+
+The bounded broker owns these settings for sandboxed agents. `agent capabilities` reports
+the effective envelope, and `robotctl` cannot widen it.
 
 ## Session selection
 
@@ -218,8 +317,9 @@ For each pose joint it reports:
 The URDF/model limits are the generic fallback/reference. For a calibrated real arm,
 normal executable pose-joint authority follows the saved mechanical-stop calibration with
 a 1° inset from each measured stop by default. `calibrated_joint_stop_margin_deg`
-reports that policy. The same output includes `sleep_pose_rad` and `sleep_pose_deg`,
-derived from those executable limits, plus `sleep_gripper` and
+reports that policy. The same output includes `sleep_pose_rad` / `sleep_pose_deg`
+for the smoother default and `sleep_up_pose_rad` / `sleep_up_pose_deg` for the
+historical wrist-up posture, plus `sleep_gripper` and
 `calibrated_gripper_stop_margin_deg`. The gripper Sleep target is the calibrated closed
 mechanical stop inset 1° toward open by default and is reported in both normalized and raw
 encoder coordinates. Calibration remains the physical authority if a measured range is
@@ -289,12 +389,18 @@ soarm101 sleep --speed-deg-s 8 --acceleration-deg-s2 25 --yes
 ```
 
 Sleep is computed from the active follower's executable joint limits: shoulder pan
-midpoint, shoulder lift lower limit, elbow flex upper limit, wrist flex lower limit, and
-wrist roll midpoint. On a calibrated arm the endpoint limits are already inset 1° from the
-measured mechanical stops. After the arm reaches that fold, the stock gripper closes to a
-target 1° inside its calibrated closed mechanical stop by default. The target is derived
-from the saved gripper encoder range and normalized so calibration handles either motor
-drive direction. Sleep is never triggered automatically by connection or torque enable. After the commanded
+midpoint, shoulder lift lower limit, elbow flex upper limit, wrist roll midpoint, and
+wrist flex at `lower + 0.75 * (upper - lower)`, equivalently
+`upper - 0.25 * (upper - lower)`. The historical fully folded wrist-up posture is
+available as `soarm101 sleep-up` / `soarm101 sleep_up`, which keeps wrist flex at
+the lower executable limit. On a calibrated arm the endpoint limits are already inset 1°
+from the measured mechanical stops. After either posture is reached, the stock gripper closes
+to a target 1° inside its calibrated closed mechanical stop by default. The target is derived
+from the saved gripper encoder range and normalized so calibration handles either motor drive
+direction. Sleep does not detect whether an object is already being held; a pen held during
+physical testing triggered gripper overload protection. Treat the close as a consequential
+tool action and ensure it is appropriate for the current grasp before issuing Sleep. Sleep is
+never triggered automatically by connection or torque enable. After the commanded
 Sleep move completes, the CLI keeps torque enabled and waits for the operator to press ENTER
 before it relaxes the arm.
 

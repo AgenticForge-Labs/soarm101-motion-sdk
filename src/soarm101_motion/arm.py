@@ -14,10 +14,12 @@ from typing import Literal
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from soarm101_motion.calibration import CALIBRATED_ENDPOINT_TOLERANCE_TICKS
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    ENCODER_MAX,
     HOME_JOINTS,
 )
 from soarm101_motion.exceptions import (
@@ -30,15 +32,15 @@ from soarm101_motion.exceptions import (
 )
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
-from soarm101_motion.motion import MotionController, MotionHandle
-from soarm101_motion.poses import sleep_joint_positions
+from soarm101_motion.motion import JointExecutionMode, MotionController, MotionHandle
+from soarm101_motion.poses import sleep_joint_positions, sleep_up_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
-    minimum_workspace_self_clearance,
     resolve_effective_joint_limits,
     validate_joint_targets,
     validate_workspace_configuration,
     validate_workspace_path,
+    validate_workspace_path_from_measured_start,
 )
 from soarm101_motion.tools import RobotTool, SO101Gripper
 from soarm101_motion.trajectories import Trajectory
@@ -96,8 +98,9 @@ class SOARM101:
         realtime: bool = False,
         initial_positions: Mapping[str, float] | None = None,
         tool: RobotTool | None = None,
+        config: SOARM101Config | None = None,
     ) -> "SOARM101":
-        config = SOARM101Config(auto_enable_torque=False)
+        config = config or SOARM101Config(auto_enable_torque=False)
         if gui:
             from soarm101_motion.simulation.pybullet import PyBulletSimulationBackend
 
@@ -226,15 +229,12 @@ class SOARM101:
         current: Mapping[str, float],
         target: Mapping[str, float],
     ) -> None:
-        """Allow a saved-pose path to leave an already-present coarse self-clearance state.
-
-        If the measured starting configuration already violates only the generic
-        centerline self-clearance heuristic, the path may proceed only while minimum
-        self-clearance is nondecreasing and until it reaches the normal configured
-        clearance threshold. Other workspace guards remain authoritative throughout.
-        """
+        """Validate a saved-pose path from the physically measured start."""
         max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
-        steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
+        steps = max(
+            2,
+            int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1,
+        )
         samples = tuple(
             {
                 name: current[name] + (target[name] - current[name]) * fraction
@@ -242,67 +242,9 @@ class SOARM101:
             }
             for fraction in np.linspace(0.0, 1.0, steps)
         )
-
-        workspace_without_self = {
-            **self._workspace_kwargs(),
-            "minimum_self_clearance_m": 0.0,
-        }
-        for index, joints in enumerate(samples):
-            try:
-                validate_workspace_configuration(
-                    self.model,
-                    joints,
-                    tcp=self.active_tcp,
-                    **workspace_without_self,
-                )
-            except SafetyViolationError as exc:
-                raise SafetyViolationError(
-                    f"workspace path sample {index}: {exc}"
-                ) from exc
-
-        required_clearance = float(self.config.minimum_self_clearance_m)
-        clearances = tuple(
-            minimum_workspace_self_clearance(
-                self.model,
-                joints,
-                tcp=self.active_tcp,
-            )
-            for joints in samples
-        )
-        if clearances[0] >= required_clearance:
-            validate_workspace_path(
-                self.model,
-                samples,
-                tcp=self.active_tcp,
-                **self._workspace_kwargs(),
-            )
-            return
-
-        monotonic_tolerance_m = 0.0005
-        previous = clearances[0]
-        cleared_index = None
-        for index, clearance in enumerate(clearances[1:], start=1):
-            if clearance + monotonic_tolerance_m < previous:
-                raise SafetyViolationError(
-                    "saved-pose path starts inside coarse self-clearance but moves "
-                    f"deeper at sample {index}: {clearance:.3f} m after "
-                    f"{previous:.3f} m"
-                )
-            previous = max(previous, clearance)
-            if clearance >= required_clearance:
-                cleared_index = index
-                break
-
-        if cleared_index is None:
-            raise SafetyViolationError(
-                "saved-pose path starts inside coarse self-clearance and never exits "
-                f"the {required_clearance:.3f} m envelope; target clearance is "
-                f"{clearances[-1]:.3f} m"
-            )
-
-        validate_workspace_path(
+        validate_workspace_path_from_measured_start(
             self.model,
-            samples[cleared_index:],
+            samples,
             tcp=self.active_tcp,
             **self._workspace_kwargs(),
         )
@@ -338,7 +280,7 @@ class SOARM101:
             }
             for fraction in np.linspace(0.0, 1.0, steps)
         )
-        validate_workspace_path(
+        validate_workspace_path_from_measured_start(
             self.model,
             samples,
             tcp=self.active_tcp,
@@ -459,6 +401,68 @@ class SOARM101:
     def get_position(self, *, tcp: Pose | None = None) -> Pose:
         return self.model.forward(self.backend.read_joint_positions(), tcp=tcp or self.active_tcp)
 
+    def _canonicalize_saved_pose_target(
+        self,
+        positions: Mapping[str, float] | Sequence[float],
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        """Project a measured saved pose onto the active executable calibration.
+
+        Saved poses are measured artifacts. A measured endpoint can legitimately sit
+        at a calibrated stop, or a few encoder counts beyond it because of backlash/
+        quantization already tolerated by torque latching. Replaying that measurement
+        must never command the stop itself: targets inside the measured endpoint band
+        are projected inward to the current executable stop margin. A target farther
+        outside the measured calibration than the endpoint tolerance remains invalid.
+        """
+
+        current = self.backend.read_joint_positions()
+        if isinstance(positions, Mapping):
+            provided = {}
+            for name, value in positions.items():
+                if name not in ARM_JOINTS:
+                    raise InvalidJointError(f"unknown arm joint: {name}")
+                numeric = float(value)
+                if not math.isfinite(numeric):
+                    raise InvalidCommandError(f"joint {name} target must be finite")
+                provided[name] = numeric
+        else:
+            values = tuple(float(value) for value in positions)
+            if len(values) != len(ARM_JOINTS):
+                raise InvalidCommandError(f"expected {len(ARM_JOINTS)} joint values")
+            if not all(math.isfinite(value) for value in values):
+                raise InvalidCommandError("all joint targets must be finite")
+            provided = dict(zip(ARM_JOINTS, values, strict=True))
+
+        effective_limits = self.get_joint_limits()
+        calibration = getattr(self.backend, "calibration", None)
+        endpoint_tolerance_rad = (
+            CALIBRATED_ENDPOINT_TOLERANCE_TICKS * 2.0 * pi / ENCODER_MAX
+        )
+        canonical = dict(provided)
+
+        for name, value in provided.items():
+            if calibration is not None and name in calibration.motors:
+                motor = calibration.motors[name]
+                mechanical_lower, mechanical_upper = motor.radians_limits
+                if (
+                    value < mechanical_lower - endpoint_tolerance_rad
+                    or value > mechanical_upper + endpoint_tolerance_rad
+                ):
+                    raise SafetyViolationError(
+                        f"saved pose joint {name} target {value:.6f} rad is outside "
+                        f"the calibrated mechanical range "
+                        f"[{mechanical_lower:.6f}, {mechanical_upper:.6f}] beyond the "
+                        f"{CALIBRATED_ENDPOINT_TOLERANCE_TICKS}-tick endpoint tolerance"
+                    )
+
+                lower, upper = effective_limits[name]
+                canonical[name] = min(upper, max(lower, value))
+
+        validate_joint_targets(canonical, limits=effective_limits)
+        target = dict(current)
+        target.update(canonical)
+        return current, target, canonical
+
     def move_joints_from_saved_pose(
         self,
         positions: Mapping[str, float] | Sequence[float],
@@ -466,17 +470,21 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to saved joint coordinates with a bounded exit from an existing fold."""
-        current, target = self._resolve_joint_target(positions, relative=False)
+        """Move a measured saved pose through the active executable calibration."""
+        current, target, canonical = self._canonicalize_saved_pose_target(positions)
         if self.config.enable_workspace_checks:
             self._validate_saved_pose_exit_workspace_path(current, target)
         return self.motion.move_joints(
-            positions,
+            canonical,
             speed=speed,
             acceleration=acceleration,
             relative=False,
             wait=wait,
+            execution_mode=execution_mode,
+            monitor_workspace=self.config.enable_workspace_checks,
+            tcp=self.active_tcp,
         )
 
     def move_joints(
@@ -490,6 +498,7 @@ class SOARM101:
         servo_speed_raw: int | None = None,
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
+        execution_mode: JointExecutionMode = "streamed",
         workspace_check: Literal["full", "target_only", "off"] = "full",
     ) -> MotionResult | MotionHandle[MotionResult]:
         self._validate_joint_workspace_path(
@@ -506,6 +515,11 @@ class SOARM101:
             servo_speed_raw=servo_speed_raw,
             servo_acceleration_raw=servo_acceleration_raw,
             synchronize_servo_arrival=synchronize_servo_arrival,
+            execution_mode=execution_mode,
+            monitor_workspace=(
+                self.config.enable_workspace_checks and workspace_check == "full"
+            ),
+            tcp=self.active_tcp,
         )
 
     def move_home(
@@ -514,19 +528,25 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
         return self.move_joints(
             HOME_JOINTS,
             speed=speed,
             acceleration=acceleration,
             wait=wait,
+            execution_mode=execution_mode,
         )
 
     move_gohome = move_home
 
     def get_sleep_joint_positions(self) -> dict[str, float]:
-        """Return this arm's natural Sleep pose from its executable limits."""
+        """Return this arm's default smoother Sleep pose from executable limits."""
         return sleep_joint_positions(self.get_joint_limits())
+
+    def get_sleep_up_joint_positions(self) -> dict[str, float]:
+        """Return the historical fully folded wrist-up Sleep posture."""
+        return sleep_up_joint_positions(self.get_joint_limits())
 
     def _sleep_gripper(self) -> SO101Gripper | None:
         if isinstance(self.tool, SO101Gripper):
@@ -554,25 +574,29 @@ class SOARM101:
             time.sleep(0.01)
         return handle.wait()
 
-    def _execute_sleep(
+    def _execute_sleep_target(
         self,
         cancel_event: threading.Event,
+        target: Mapping[str, float],
         *,
         speed: float | None,
         acceleration: float | None,
+        execution_mode: JointExecutionMode,
+        label: str,
     ) -> MotionResult:
         arm_handle = self.move_joints(
-            self.get_sleep_joint_positions(),
+            target,
             speed=speed,
             acceleration=acceleration,
             wait=False,
+            execution_mode=execution_mode,
             workspace_check="off",
         )
         assert isinstance(arm_handle, MotionHandle)
         arm_result = self._wait_sleep_child(arm_handle, cancel_event)
         final_positions = dict(arm_result.final_positions)
         if cancel_event.is_set():
-            raise MotionCancelledError("Sleep motion cancelled before gripper close")
+            raise MotionCancelledError(f"{label} motion cancelled before gripper close")
 
         gripper = self._sleep_gripper()
         gripper_target = self.get_sleep_gripper_position()
@@ -589,31 +613,94 @@ class SOARM101:
             final_positions=final_positions,
         )
 
+    def _execute_sleep(
+        self,
+        cancel_event: threading.Event,
+        *,
+        speed: float | None,
+        acceleration: float | None,
+        execution_mode: JointExecutionMode,
+    ) -> MotionResult:
+        return self._execute_sleep_target(
+            cancel_event,
+            self.get_sleep_joint_positions(),
+            speed=speed,
+            acceleration=acceleration,
+            execution_mode=execution_mode,
+            label="Sleep",
+        )
+
+    def _execute_sleep_up(
+        self,
+        cancel_event: threading.Event,
+        *,
+        speed: float | None,
+        acceleration: float | None,
+        execution_mode: JointExecutionMode,
+    ) -> MotionResult:
+        return self._execute_sleep_target(
+            cancel_event,
+            self.get_sleep_up_joint_positions(),
+            speed=speed,
+            acceleration=acceleration,
+            execution_mode=execution_mode,
+            label="sleep_up",
+        )
+
     def move_sleep(
         self,
         *,
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Fold the arm into Sleep, then close the stock gripper safely.
+        """Move to the default calibration-relative Sleep pose and close the gripper.
 
-        If the stock gripper is present, Sleep closes it to a target inset from
-        the calibrated closed mechanical stop by the configured gripper stop
-        margin (1 degree by default).
+        Sleep keeps the historical shoulder/elbow fold but places wrist_flex
+        three-quarters of the way from its executable lower limit to upper limit.
+        Physical testing found this orientation substantially smoother than the
+        historical fully folded wrist-up posture, which remains available through
+        :meth:`move_sleep_up`.
 
-        Sleep intentionally bypasses only the generic coarse arm workspace
-        geometry check. The calibrated folded posture places non-neighboring link
-        centerlines closer than the generic 25 mm self-clearance heuristic even
-        though the physical arm is designed to fold there. Calibrated joint/tool
-        limits, trajectory/rate/acceleration checks, following-error, effort,
-        fault, communication, and completion guards remain active.
+        Sleep intentionally bypasses only the generic coarse arm workspace geometry
+        check because the folded shoulder/elbow configuration is closer than the
+        generic 25 mm centerline self-clearance heuristic. Calibrated joint/tool
+        limits, planned dynamics, active progress guards, effort, fault,
+        communication, and completion checks remain active.
         """
         handle = MotionHandle(
             lambda event: self._execute_sleep(
                 event,
                 speed=speed,
                 acceleration=acceleration,
+                execution_mode=execution_mode,
+            )
+        )
+        handle.start()
+        return handle.wait() if wait else handle
+
+    def move_sleep_up(
+        self,
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
+    ) -> MotionResult | MotionHandle[MotionResult]:
+        """Move to the historical fully folded wrist-up Sleep posture.
+
+        This preserves the pre-sleep2 calibration-relative pose as an explicit
+        override while default :meth:`move_sleep` uses the smoother wrist geometry.
+        The same narrow folded-posture workspace exception and all other runtime
+        safety guards apply.
+        """
+        handle = MotionHandle(
+            lambda event: self._execute_sleep_up(
+                event,
+                speed=speed,
+                acceleration=acceleration,
+                execution_mode=execution_mode,
             )
         )
         handle.start()
@@ -667,6 +754,7 @@ class SOARM101:
         speed: float | None = None,
         acceleration: float | None = None,
         wait: bool = True,
+        execution_mode: JointExecutionMode = "streamed",
     ) -> MotionResult | MotionHandle[MotionResult]:
         solution = self.solve_ik(
             target,
@@ -682,6 +770,7 @@ class SOARM101:
             speed=speed,
             acceleration=acceleration,
             wait=wait,
+            execution_mode=execution_mode,
         )
 
     def move_linear(
@@ -834,12 +923,16 @@ class SOARM101:
         self,
         *,
         frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+        max_speed: float | Mapping[str, float] | None = None,
+        max_acceleration: float | Mapping[str, float] | None = None,
     ) -> None:
         """Start guarded continuous joint streaming for teleoperation."""
         if self.tool.is_moving:
             self._stop_tool(wait=True)
         self.motion.start_joint_stream(
             frequency_hz=frequency_hz,
+            max_speed=max_speed,
+            max_acceleration=max_acceleration,
             tcp=self.active_tcp,
         )
 

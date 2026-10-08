@@ -56,7 +56,12 @@ from soarm101_motion.gui.camera_manager import CameraSessionManager
 from soarm101_motion.gui.latest_frame import PreviewFrame
 from soarm101_motion.gui.timeline import TrajectoryTimeline
 from soarm101_motion.gui.worker import RobotWorker
-from soarm101_motion.gui.teleop_rate import GRIPPER_SPEED_PRESETS
+from soarm101_motion.gui.telemetry_plot import TeleopMotionTrace
+from soarm101_motion.gui.teleop_rate import (
+    DEFAULT_TELEOP_TRACKING_PRESET,
+    GRIPPER_SPEED_PRESETS,
+    TELEOP_TRACKING_PRESETS,
+)
 from soarm101_motion.hardware import FeetechBackend
 from soarm101_motion.poses import HOME_POSE_NAME, REST_POSE_NAME, PoseLibrary, SavedPose
 from soarm101_motion.primitives import MotionPrimitive, MotionPrimitiveLibrary
@@ -168,6 +173,8 @@ class MainWindow(QMainWindow):
         self._pending_recording_name: str | None = None
         self._teleop_active = False
         self._teleop_starting = False
+        self._latest_teleop_leader_joints_deg: dict[str, float] | None = None
+        self._banner_notice: tuple[str, str] | None = None
         self._gripper_speed_multiplier = 2.0
         self._sequence_library_cache: tuple[str, SequenceLibrary] | None = None
         self._primitive_library_cache: tuple[str, MotionPrimitiveLibrary] | None = None
@@ -230,6 +237,7 @@ class MainWindow(QMainWindow):
 
         self._worker.state_changed.connect(self._on_state)
         self._worker.joint_measurements.connect(self._on_follower_joint_measurements)
+        self._worker.live_measurements.connect(self._on_follower_live_measurements)
         self._worker.connected_changed.connect(self._on_connected)
         self._worker.busy_changed.connect(self._on_busy)
         self._worker.log_message.connect(self._log)
@@ -269,6 +277,7 @@ class MainWindow(QMainWindow):
         self.capture_leader_pose_requested.connect(self._leader_worker.capture_measured_pose)
         self._leader_worker.teleop_start_pose.connect(self._on_leader_teleop_start_pose)
         self._leader_worker.stream_sample.connect(self._worker.apply_teleop_sample)
+        self._leader_worker.stream_sample.connect(self._on_leader_stream_sample)
         self._leader_worker.stream_readout_changed.connect(
             self._on_leader_stream_readout_changed
         )
@@ -666,6 +675,8 @@ class MainWindow(QMainWindow):
             if target and combo.findText(target) >= 0:
                 combo.setCurrentText(target)
             combo.blockSignals(False)
+        if hasattr(self, "teleop_camera_grid"):
+            self._rebuild_teleop_camera_grid()
 
     def _build_ui(self, *, port: str | None, robot_id: str, simulation: bool) -> None:
         self._apply_modern_style()
@@ -677,15 +688,28 @@ class MainWindow(QMainWindow):
         self.follower_connection_panel = self._build_connection_bar(port, robot_id, simulation)
         self.leader_connection_panel = self._build_leader_connection()
 
+        self.status_banner = QWidget()
+        self.status_banner.setObjectName("statusBanner")
+        banner_layout = QHBoxLayout(self.status_banner)
+        banner_layout.setContentsMargins(10, 5, 7, 5)
+        banner_layout.setSpacing(8)
+
         self.alert_label = QLabel()
         self.alert_label.setTextFormat(Qt.TextFormat.PlainText)
         self.alert_label.setWordWrap(True)
-        self.alert_label.setStyleSheet(
-            "font-weight: 700; padding: 9px 11px; border-radius: 9px; "
-            "background: #fee2e2; color: #7f1d1d;"
+        self.alert_label.setStyleSheet("font-weight: 700;")
+        banner_layout.addWidget(self.alert_label, 1)
+
+        self.alert_clear_button = QPushButton("Clear")
+        self.alert_clear_button.setMaximumWidth(72)
+        self.alert_clear_button.setToolTip(
+            "Acknowledge the displayed notice. This does not clear robot faults, "
+            "change torque state, or bypass any safety condition."
         )
-        self.alert_label.hide()
-        layout.addWidget(self.alert_label)
+        self.alert_clear_button.clicked.connect(self._clear_status_banner_notice)
+        banner_layout.addWidget(self.alert_clear_button)
+        layout.addWidget(self.status_banner)
+        self._refresh_status_banner()
 
         self.robot_sidebar = self._build_persistent_robot_sidebar()
         self._follower_status_panels = [self.robot_sidebar]
@@ -725,7 +749,7 @@ class MainWindow(QMainWindow):
         workspace.addWidget(self.robot_sidebar_container)
         workspace.setStretchFactor(0, 1)
         workspace.setStretchFactor(1, 0)
-        workspace.setSizes([1000, 400])
+        workspace.setSizes([920, 500])
         layout.addWidget(workspace, 1)
         self.workspace_splitter = workspace
 
@@ -739,11 +763,88 @@ class MainWindow(QMainWindow):
         self._style_action_buttons()
         self._refresh_sidebar_context()
 
+    def _status_banner_base(self) -> tuple[str, str]:
+        """Return the current non-dismissible operating status for the top banner."""
+
+        state = self._latest_state or {}
+        if bool(state.get("faulted")):
+            reason = str(state.get("fault_message") or "unknown motor fault")
+            return (f"FOLLOWER FAULT — {reason}", "error")
+        if self._teleop_active:
+            frequency_hz = float(
+                self.teleop_rate_combo.currentData()
+                or DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+            ) if hasattr(self, "teleop_rate_combo") else DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
+            return (
+                f"TELEOP LIVE — leader linked to follower · {frequency_hz:.0f} Hz · "
+                "STOP / HOLD is always available.",
+                "success",
+            )
+        if self._teleop_fault_details is not None:
+            return (
+                "TELEOP STOPPED — follower holding · leader/follower delinked · "
+                "realign or relink to continue.",
+                "warning",
+            )
+
+        moving = bool(state.get("moving")) or self._busy
+        if self._connected and moving:
+            return ("FOLLOWER MOVING — STOP / HOLD is always available.", "warning")
+        if self._connected and self._torque_enabled:
+            return ("FOLLOWER HOLDING — connected · torque enabled.", "success")
+        if self._connected:
+            return ("FOLLOWER READY — connected · torque off.", "neutral")
+        return ("READY — connect a follower in Setup to begin.", "neutral")
+
+    def _refresh_status_banner(self) -> None:
+        if not hasattr(self, "status_banner"):
+            return
+        if self._banner_notice is None:
+            message, level = self._status_banner_base()
+            dismissible = False
+        else:
+            message, level = self._banner_notice
+            dismissible = True
+
+        styles = {
+            "error": ("#fee2e2", "#7f1d1d", "#fecaca"),
+            "warning": ("#fef3c7", "#78350f", "#fde68a"),
+            "success": ("#dcfce7", "#14532d", "#bbf7d0"),
+            "neutral": ("#e8edf2", "#17212f", "#cbd5e1"),
+        }
+        background, foreground, border = styles.get(level, styles["neutral"])
+        self.status_banner.setStyleSheet(
+            "QWidget#statusBanner {"
+            f"background: {background}; color: {foreground}; "
+            f"border: 1px solid {border}; border-radius: 9px;"
+            "}"
+            "QWidget#statusBanner QLabel {"
+            f"color: {foreground}; background: transparent; border: none;"
+            "}"
+            "QWidget#statusBanner QPushButton {"
+            f"color: {foreground}; background: rgba(255, 255, 255, 120); "
+            f"border: 1px solid {border}; border-radius: 7px; "
+            "min-height: 26px; padding: 2px 9px; font-weight: 700;"
+            "}"
+        )
+        self.alert_label.setText(message)
+        self.alert_clear_button.setVisible(dismissible)
+
+    def _set_status_banner_notice(self, message: str, *, level: str = "error") -> None:
+        self._banner_notice = (str(message), str(level))
+        self._refresh_status_banner()
+
+    def _clear_status_banner_notice(self) -> None:
+        """Acknowledge only the transient notice; underlying robot state remains."""
+
+        self._banner_notice = None
+        self._refresh_status_banner()
+
     def _build_persistent_robot_sidebar(self) -> RobotStatusPanel:
         container = QWidget()
         container.setObjectName("robotSidebarContainer")
-        container.setMinimumWidth(380)
-        container.setMaximumWidth(430)
+        container.setMinimumWidth(430)
+        container.setMaximumWidth(520)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(4, 2, 4, 4)
         layout.setSpacing(9)
@@ -1298,6 +1399,8 @@ class MainWindow(QMainWindow):
     def _build_coordination_panel(self) -> QGroupBox:
         box = QGroupBox("Leader / follower coordination")
         grid = QGridLayout(box)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         leader_status = QLabel("Leader: disconnected")
         leader_status.setStyleSheet("font-weight: 700;")
@@ -1305,8 +1408,8 @@ class MainWindow(QMainWindow):
         relation_status.setWordWrap(True)
         self._coordination_leader_labels.append(leader_status)
         self._coordination_relation_labels.append(relation_status)
-        grid.addWidget(leader_status, 0, 0, 1, 2)
-        grid.addWidget(relation_status, 0, 2, 1, 4)
+        grid.addWidget(leader_status, 0, 0)
+        grid.addWidget(relation_status, 0, 1)
 
         park = QPushButton("Park leader here")
         park.clicked.connect(self._toggle_leader_park)
@@ -1332,9 +1435,9 @@ class MainWindow(QMainWindow):
         self._coordination_relink_buttons.append(relink)
 
         grid.addWidget(park, 1, 0)
-        grid.addWidget(move_leader, 1, 1, 1, 2)
-        grid.addWidget(move_follower, 1, 3, 1, 2)
-        grid.addWidget(relink, 1, 5)
+        grid.addWidget(relink, 1, 1)
+        grid.addWidget(move_leader, 2, 0)
+        grid.addWidget(move_follower, 2, 1)
 
         include_gripper = QCheckBox("Include gripper when matching poses")
         include_gripper.setChecked(self._sync_include_gripper)
@@ -1344,15 +1447,14 @@ class MainWindow(QMainWindow):
             )
         )
         self._coordination_gripper_checks.append(include_gripper)
-        grid.addWidget(include_gripper, 2, 0, 1, 3)
+        grid.addWidget(include_gripper, 3, 0)
 
         hint = QLabel(
-            "Park latches the leader exactly where it is. Matching moves only the "
-            "selected destination arm. Relink preserves both current poses and starts "
-            "relative leader control without an alignment move."
+            "Park holds the leader. Match moves one arm. Relink keeps both poses and "
+            "restarts relative control without an alignment move."
         )
         hint.setWordWrap(True)
-        grid.addWidget(hint, 2, 3, 1, 3)
+        grid.addWidget(hint, 3, 1)
         return box
 
     def _build_named_pose_controls(self) -> QGroupBox:
@@ -1776,6 +1878,77 @@ class MainWindow(QMainWindow):
         self.camera_preview = selected_preview or self._new_camera_preview_label()
 
 
+    def _refresh_teleop_camera_card(self, name: str) -> None:
+        card = getattr(self, "teleop_camera_cards", {}).get(name)
+        status = getattr(self, "teleop_camera_status_labels", {}).get(name)
+        if card is None or status is None:
+            return
+        values = self._camera_status_by_name.get(name, {})
+        state = (
+            "WAITING"
+            if bool(values.get("recovering")) and bool(values.get("device_missing"))
+            else "RECOVERING"
+            if bool(values.get("recovering"))
+            else "LIVE"
+            if self._camera_is_connected(name)
+            else "STOPPED"
+        )
+        card.setTitle(f"{name} · {state}")
+        status.setText(self._camera_card_status(name))
+
+    def _rebuild_teleop_camera_grid(self) -> None:
+        if not hasattr(self, "teleop_camera_grid"):
+            return
+        self._clear_layout(self.teleop_camera_grid)
+        self.teleop_camera_previews = {}
+        self.teleop_camera_cards = {}
+        self.teleop_camera_status_labels = {}
+
+        names = list(self._workstation_profile.cameras)
+        columns = 1 if len(names) <= 1 else 2
+        minimum_height, maximum_height = (
+            (220, 300) if len(names) <= 2 else (150, 210)
+        )
+        for index, name in enumerate(names):
+            card = QGroupBox(name)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(6, 8, 6, 6)
+            card_layout.setSpacing(4)
+            preview = self._new_camera_preview_label(minimum_height=minimum_height)
+            preview.setMaximumHeight(maximum_height)
+            status = QLabel(self._camera_card_status(name))
+            status.setWordWrap(False)
+            status.setStyleSheet(
+                "font-size: 10px; color: palette(text); padding: 1px 3px;"
+            )
+            card_layout.addWidget(preview)
+            card_layout.addWidget(status)
+            row, column = divmod(index, columns)
+            self.teleop_camera_grid.addWidget(card, row, column)
+            self.teleop_camera_grid.setColumnStretch(column, 1)
+            self.teleop_camera_previews[name] = preview
+            self.teleop_camera_cards[name] = card
+            self.teleop_camera_status_labels[name] = status
+            cached = self._camera_latest_images.get(name)
+            if cached is not None:
+                self._set_preview_image(preview, cached)
+            self._refresh_teleop_camera_card(name)
+
+        selected = self._teleop_camera_name() if names else ""
+        selected_preview = self.teleop_camera_previews.get(selected)
+        if selected_preview is None and self.teleop_camera_previews:
+            selected_preview = next(iter(self.teleop_camera_previews.values()))
+        self.teleop_camera_preview = (
+            selected_preview or self._new_camera_preview_label(minimum_height=220)
+        )
+
+    def _start_all_teleop_cameras(self) -> None:
+        """Start configured camera sessions without rewriting Camera-tab settings."""
+        self._camera_manager.start_all()
+        for name, status in self.teleop_camera_status_labels.items():
+            if not self._camera_is_running(name):
+                status.setText(f"Opening · {name}…")
+
     def _load_camera_profile_controls(self, name: str) -> None:
         if name not in self._workstation_profile.cameras:
             return
@@ -2012,11 +2185,8 @@ class MainWindow(QMainWindow):
             self.camera_toggle_button.setText(
                 "Stop selected" if self._camera_is_running(name) else "Start selected"
             )
-        if hasattr(self, "teleop_camera_status") and name == self._teleop_camera_name():
-            self.teleop_camera_status.setText(self._camera_status_text(name))
-            self.teleop_camera_toggle_button.setText(
-                "Stop camera" if self._camera_is_running(name) else "Start camera"
-            )
+        if hasattr(self, "teleop_camera_cards") and name in self.teleop_camera_cards:
+            self._refresh_teleop_camera_card(name)
         if hasattr(self, "camera_preview_cards") and name in self.camera_preview_cards:
             self._refresh_camera_preview_card(name)
 
@@ -2029,14 +2199,6 @@ class MainWindow(QMainWindow):
         name = self._camera_name()
         self._camera_manager.start(name)
         self.camera_status.setText(f"Opening {name}…")
-
-    def _toggle_teleop_camera_stream(self) -> None:
-        name = self._teleop_camera_name()
-        if self._camera_is_running(name):
-            self._camera_manager.stop(name)
-        else:
-            self._camera_manager.start(name)
-            self.teleop_camera_status.setText(f"Opening {name}…")
 
     def _start_all_cameras(self) -> None:
         self._apply_camera_settings()
@@ -2081,8 +2243,9 @@ class MainWindow(QMainWindow):
         preview = getattr(self, "camera_preview_labels", {}).get(name)
         if preview is not None:
             self._set_preview_image(preview, image)
-        if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
-            self._set_preview_image(self.teleop_camera_preview, image)
+        teleop_preview = getattr(self, "teleop_camera_previews", {}).get(name)
+        if teleop_preview is not None:
+            self._set_preview_image(teleop_preview, image)
         age_ms = max(0.0, (time.monotonic_ns() - acquired_ns) / 1_000_000)
         values = self._camera_status_by_name.setdefault(name, {})
         values["preview_age_ms"] = age_ms
@@ -2104,9 +2267,10 @@ class MainWindow(QMainWindow):
             if preview is not None:
                 preview.clear()
                 preview.setText("Camera stopped")
-            if hasattr(self, "teleop_camera_preview") and name == self._teleop_camera_name():
-                self.teleop_camera_preview.clear()
-                self.teleop_camera_preview.setText("Camera stopped")
+            teleop_preview = getattr(self, "teleop_camera_previews", {}).get(name)
+            if teleop_preview is not None:
+                teleop_preview.clear()
+                teleop_preview.setText("Camera stopped")
 
     @Slot(str, str)
     def _on_camera_error(self, name: str, message: str) -> None:
@@ -2134,10 +2298,9 @@ class MainWindow(QMainWindow):
         name = str(name).strip()
         if not name:
             return
-        self.teleop_camera_preview.clear()
-        self.teleop_camera_preview.setText(
-            "Live frames appear here when this camera is running."
-        )
+        preview = getattr(self, "teleop_camera_previews", {}).get(name)
+        if preview is not None:
+            self.teleop_camera_preview = preview
         self._refresh_camera_display(name)
 
     def _build_teleop_tab(self) -> QWidget:
@@ -2149,10 +2312,19 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(self._build_coordination_panel())
+        left_layout.setSpacing(9)
+
+        top_controls = QHBoxLayout()
+        top_controls.setSpacing(9)
+        self.teleop_coordination_box = self._build_coordination_panel()
+        top_controls.addWidget(self.teleop_coordination_box, 1)
 
         teleop = QGroupBox("Live leader → follower teleoperation")
+        self.teleop_settings_box = teleop
         teleop_grid = QGridLayout(teleop)
+        teleop_grid.setColumnStretch(1, 1)
+        teleop_grid.setColumnStretch(3, 1)
+
         teleop_grid.addWidget(QLabel("Mapping"), 0, 0)
         self.teleop_mode_combo = QComboBox()
         self.teleop_mode_combo.addItem("Relative / clutch-safe", "relative")
@@ -2173,38 +2345,58 @@ class MainWindow(QMainWindow):
             self.teleop_rate_combo.setCurrentIndex(default_rate_index)
         teleop_grid.addWidget(self.teleop_rate_combo, 0, 3)
 
+        teleop_grid.addWidget(QLabel("Gripper speed"), 1, 0)
+        self.teleop_gripper_speed_combo = self._new_gripper_speed_combo()
+        teleop_grid.addWidget(self.teleop_gripper_speed_combo, 1, 1)
+
+        teleop_grid.addWidget(QLabel("Tracking response"), 1, 2)
+        self.teleop_tracking_combo = QComboBox()
+        for preset in TELEOP_TRACKING_PRESETS:
+            self.teleop_tracking_combo.addItem(preset.label, preset.key)
+        tracking_index = self.teleop_tracking_combo.findData(
+            DEFAULT_TELEOP_TRACKING_PRESET
+        )
+        if tracking_index >= 0:
+            self.teleop_tracking_combo.setCurrentIndex(tracking_index)
+        self.teleop_tracking_combo.setToolTip(
+            "Controls how aggressively the follower closes the gap to the leader. "
+            "The stream rate and lower-level safety envelope remain separate."
+        )
+        teleop_grid.addWidget(self.teleop_tracking_combo, 1, 3)
+
         self.teleop_gripper_check = QCheckBox("Mirror gripper; hold at contact")
         self.teleop_gripper_check.setChecked(True)
         self.teleop_gripper_check.setToolTip(
             "The follower closes gradually. If its gripper stops against an object, "
             "it holds that opening until you open the leader gripper."
         )
-        teleop_grid.addWidget(self.teleop_gripper_check, 0, 4)
-        teleop_grid.addWidget(QLabel("Gripper speed"), 1, 0)
-        self.teleop_gripper_speed_combo = self._new_gripper_speed_combo()
-        teleop_grid.addWidget(self.teleop_gripper_speed_combo, 1, 1)
+        teleop_grid.addWidget(self.teleop_gripper_check, 2, 0, 1, 2)
+
         self.teleop_button = QPushButton("Align follower and start")
         self.teleop_button.clicked.connect(self._toggle_teleop)
-        teleop_grid.addWidget(self.teleop_button, 0, 5)
+        teleop_grid.addWidget(self.teleop_button, 2, 2)
+
         self.transfer_manual_button = QPushButton("Stop → Manual + park leader")
         self.transfer_manual_button.setToolTip(
             "Stop following, hold the follower, park the leader at its current pose, "
             "and open Manual for fine adjustment."
         )
         self.transfer_manual_button.clicked.connect(self._transfer_to_manual_and_park)
-        teleop_grid.addWidget(self.transfer_manual_button, 1, 4, 1, 2)
+        teleop_grid.addWidget(self.transfer_manual_button, 2, 3)
+
         self.teleop_status = QLabel(
             "Connect both arms in Setup. Starting teleoperation reads the leader, "
             "holds the follower at its current pose, aligns its five joints, then follows live."
         )
         self.teleop_status.setWordWrap(True)
-        teleop_grid.addWidget(self.teleop_status, 2, 0, 1, 6)
-        left_layout.addWidget(teleop)
+        teleop_grid.addWidget(self.teleop_status, 3, 0, 1, 4)
+        top_controls.addWidget(teleop, 1)
+        left_layout.addLayout(top_controls)
 
-        camera_box = QGroupBox("Live camera")
+        camera_box = QGroupBox("Live cameras")
         camera_layout = QVBoxLayout(camera_box)
-        camera_selector = QHBoxLayout()
-        camera_selector.addWidget(QLabel("View"))
+        camera_toolbar = QHBoxLayout()
+        camera_toolbar.addWidget(QLabel("Capture from"))
         self.teleop_camera_combo = QComboBox()
         self.teleop_camera_combo.addItems(list(self._workstation_profile.cameras))
         if self._workstation_profile.selected_camera:
@@ -2214,44 +2406,74 @@ class MainWindow(QMainWindow):
         self.teleop_camera_combo.currentTextChanged.connect(
             self._on_teleop_camera_changed
         )
-        camera_selector.addWidget(self.teleop_camera_combo, 1)
-        camera_selector.addWidget(
+        camera_toolbar.addWidget(self.teleop_camera_combo, 1)
+
+        self.teleop_start_all_cameras_button = QPushButton("Start all")
+        self.teleop_start_all_cameras_button.clicked.connect(
+            self._start_all_teleop_cameras
+        )
+        camera_toolbar.addWidget(self.teleop_start_all_cameras_button)
+
+        self.teleop_stop_all_cameras_button = QPushButton("Stop all")
+        self.teleop_stop_all_cameras_button.clicked.connect(self._stop_all_cameras)
+        camera_toolbar.addWidget(self.teleop_stop_all_cameras_button)
+
+        teleop_capture_button = QPushButton("Capture selected")
+        teleop_capture_button.clicked.connect(self._capture_teleop_camera_frame)
+        camera_toolbar.addWidget(teleop_capture_button)
+        camera_toolbar.addWidget(
             self._help_button(
-                "Teleoperation camera",
-                "Select any saved camera by name. Cameras are configured in the Camera "
-                "tab. More than one named camera may be streaming at the same time; this "
-                "selector only chooses which stream is shown here.",
+                "Teleoperation cameras",
+                "All configured named cameras are shown together and reuse the same "
+                "CameraSessionManager workers as the Camera tab. Start all opens every "
+                "configured stream; Capture selected uses the camera chosen at left.",
             )
         )
-        camera_layout.addLayout(camera_selector)
+        camera_layout.addLayout(camera_toolbar)
 
-        self.teleop_camera_preview = self._new_camera_preview_label(minimum_height=260)
-        camera_layout.addWidget(self.teleop_camera_preview)
-        camera_controls = QHBoxLayout()
-        self.teleop_camera_status = QLabel(
-            self._camera_status_text(self._teleop_camera_name())
-        )
-        self.teleop_camera_status.setWordWrap(True)
-        camera_controls.addWidget(self.teleop_camera_status, 1)
-        self.teleop_camera_toggle_button = QPushButton("Start camera")
-        self.teleop_camera_toggle_button.clicked.connect(
-            self._toggle_teleop_camera_stream
-        )
-        camera_controls.addWidget(self.teleop_camera_toggle_button)
-        teleop_capture_button = QPushButton("Capture picture")
-        teleop_capture_button.clicked.connect(self._capture_teleop_camera_frame)
-        camera_controls.addWidget(teleop_capture_button)
-        camera_layout.addLayout(camera_controls)
-        left_layout.addWidget(camera_box)
+        self.teleop_camera_grid = QGridLayout()
+        self.teleop_camera_grid.setHorizontalSpacing(8)
+        self.teleop_camera_grid.setVerticalSpacing(6)
+        camera_layout.addLayout(self.teleop_camera_grid)
+        self.teleop_camera_previews: dict[str, QLabel] = {}
+        self.teleop_camera_cards: dict[str, QGroupBox] = {}
+        self.teleop_camera_status_labels: dict[str, QLabel] = {}
+        self._rebuild_teleop_camera_grid()
+        left_layout.addWidget(camera_box, 1)
 
-        self.teleop_readout = QLabel("Connect both arms to see live measurements.")
-        self.teleop_readout.setTextFormat(Qt.TextFormat.PlainText)
-        self.teleop_readout.setStyleSheet(
-            "font-family: monospace; padding: 12px; border-radius: 10px; "
-            "background: palette(alternate-base);"
+        trace_box = QGroupBox("Motion trace")
+        trace_layout = QVBoxLayout(trace_box)
+        trace_toolbar = QHBoxLayout()
+        trace_toolbar.addWidget(QLabel("View"))
+        self.teleop_trace_mode_combo = QComboBox()
+        self.teleop_trace_mode_combo.addItem("Joint angles", "angles")
+        self.teleop_trace_mode_combo.addItem("Tracking error", "error")
+        trace_toolbar.addWidget(self.teleop_trace_mode_combo)
+        trace_note = QLabel(
+            "Measured follower vs leader · 10 s history · no extra motor polling"
         )
-        self.teleop_readout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        left_layout.addWidget(self.teleop_readout, 1)
+        trace_note.setWordWrap(True)
+        trace_toolbar.addWidget(trace_note, 1)
+        trace_toolbar.addWidget(
+            self._help_button(
+                "Motion trace",
+                "Joint angles are the most useful default movement view because they use "
+                "the same high-rate leader samples and measured follower positions already "
+                "needed for teleoperation. Tracking error shows follower minus leader. "
+                "Motor current/load are intentionally not polled at teleop rate merely for "
+                "the graph; use the existing effort diagnostics/recording path for those signals.",
+            )
+        )
+        trace_layout.addLayout(trace_toolbar)
+        self.teleop_motion_trace = TeleopMotionTrace()
+        self.teleop_trace_mode_combo.currentIndexChanged.connect(
+            lambda _index: self.teleop_motion_trace.set_mode(
+                str(self.teleop_trace_mode_combo.currentData())
+            )
+        )
+        trace_layout.addWidget(self.teleop_motion_trace)
+        left_layout.addWidget(trace_box)
+
         layout.addWidget(left, 1)
         self.teleop_arm_panel = self.robot_sidebar
         return page
@@ -5038,6 +5260,10 @@ class MainWindow(QMainWindow):
         self._teleop_start_options = {
             "mode": mode,
             "frequency_hz": frequency_hz,
+            "tracking_preset": str(
+                self.teleop_tracking_combo.currentData()
+                or DEFAULT_TELEOP_TRACKING_PRESET
+            ),
             "mirror_gripper": self.teleop_gripper_check.isChecked(),
             "gripper_speed_multiplier": self._gripper_speed_multiplier,
             "align_follower": align_follower,
@@ -5116,7 +5342,9 @@ class MainWindow(QMainWindow):
             "font-weight: 800; padding: 9px; border-radius: 9px; "
             "background: #fee2e2; color: #7f1d1d;"
         )
-        self.teleop_status.setText(self._teleop_fault_message(values))
+        fault_message = self._teleop_fault_message(values)
+        self.teleop_status.setText(fault_message)
+        self._set_status_banner_notice(fault_message, level="error")
         self.leader_stream_stop_requested.emit()
         self._update_enabled_state()
 
@@ -5146,6 +5374,10 @@ class MainWindow(QMainWindow):
         self._teleop_active = bool(active)
         self._teleop_starting = False
         if active:
+            self._banner_notice = None
+            if hasattr(self, "teleop_motion_trace"):
+                self.teleop_motion_trace.clear()
+            self._latest_teleop_leader_joints_deg = None
             frequency_hz = float(
                 self.teleop_rate_combo.currentData()
                 or DEFAULT_TELEOP_STREAM_FREQUENCY_HZ
@@ -5159,7 +5391,7 @@ class MainWindow(QMainWindow):
             self.teleop_button.setText("Stop live teleop")
             self.teleop_status.setText(
                 f"LIVE / LINKED — {self.teleop_mode_combo.currentText()} "
-                f"at {frequency_hz:.0f} Hz. "
+                f"at {frequency_hz:.0f} Hz · {self.teleop_tracking_combo.currentText()} tracking. "
                 f"{self._teleop_alignment_note or ''}"
             )
             self.leader_stream_start_requested.emit(frequency_hz)
@@ -5171,6 +5403,7 @@ class MainWindow(QMainWindow):
                 self.teleop_status.setText(
                     "Teleoperation stopped normally · follower holding · leader/follower delinked."
                 )
+        self._refresh_status_banner()
         self._update_enabled_state()
 
     def _on_leader_stream_readout_changed(self, active: bool) -> None:
@@ -5217,33 +5450,6 @@ class MainWindow(QMainWindow):
         self._update_enabled_state()
 
     def _update_teach_readout(self) -> None:
-        if hasattr(self, "teleop_readout"):
-            lines = [f"{'Joint':<20} {'Follower':>12} {'Leader':>12}"]
-            for name in ARM_JOINTS:
-                measured = []
-                for state in (
-                    self._latest_state if self._connected else None,
-                    self._latest_leader_state if self._leader_connected else None,
-                ):
-                    measured.append(
-                        f"{float(state['joints_deg'][name]):.1f}°" if state else "—"
-                    )
-                lines.append(
-                    f"{name.replace('_', ' ').title():<20} "
-                    f"{measured[0]:>12} {measured[1]:>12}"
-                )
-            follower_gripper = (
-                f"{float(self._latest_state['gripper']):.3f}"
-                if self._connected and self._latest_state else "—"
-            )
-            leader_gripper = (
-                f"{float(self._latest_leader_state['gripper']):.3f}"
-                if self._leader_connected and self._latest_leader_state else "—"
-            )
-            lines.append(
-                f"{'Gripper':<20} {follower_gripper:>12} {leader_gripper:>12}"
-            )
-            self.teleop_readout.setText("\n".join(lines))
         if not hasattr(self, "teaching_source_combo"):
             return
         source = str(self.teaching_source_combo.currentData())
@@ -5419,6 +5625,7 @@ class MainWindow(QMainWindow):
         self._refresh_named_pose_status()
         self._refresh_point_list()
         self._refresh_sidebar_context()
+        self._refresh_status_banner()
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
@@ -5436,19 +5643,74 @@ class MainWindow(QMainWindow):
             self._sequence_paused = False
             if hasattr(self, "pause_sequence_button"):
                 self.pause_sequence_button.setText("Pause after current step")
+        self._refresh_status_banner()
         self._update_enabled_state()
 
     @Slot(object)
     def _on_follower_joint_measurements(self, joints: object) -> None:
         measured = {name: float(value) for name, value in dict(joints).items()}
-        if self._latest_state is not None:
-            self._latest_state["joints_deg"] = measured
-        for name in ARM_JOINTS:
-            self.joint_actual_labels[name].setText(f"{measured[name]:.1f}°")
-            if not self.edit_joint_targets_check.isChecked():
-                self.joint_spins[name].setValue(measured[name])
+        self._on_follower_live_measurements({"joints_deg": measured})
+        if self._teleop_active and hasattr(self, "teleop_motion_trace"):
+            self.teleop_motion_trace.add_follower_sample(measured)
+
+    @Slot(object)
+    def _on_leader_stream_sample(self, sample: object) -> None:
+        values = dict(sample)  # type: ignore[arg-type]
+        joints_rad = dict(values.get("joints_rad") or {})
+        if not all(name in joints_rad for name in ARM_JOINTS):
+            return
+        measured = {
+            name: degrees(float(joints_rad[name])) for name in ARM_JOINTS
+        }
+        self._latest_teleop_leader_joints_deg = measured
+        if hasattr(self, "teleop_motion_trace"):
+            self.teleop_motion_trace.set_leader_sample(
+                measured,
+                timestamp=float(values.get("timestamp", time.perf_counter())),
+            )
+
+    @Slot(object)
+    def _on_follower_live_measurements(self, measurements: object) -> None:
+        """Refresh the follower visualization from motion-owned feedback."""
+
+        values = dict(measurements)  # type: ignore[arg-type]
+        joints = values.get("joints_deg")
+        if joints is not None:
+            measured = {name: float(value) for name, value in dict(joints).items()}
+            values["joints_deg"] = measured
+            if self._latest_state is not None:
+                self._latest_state["joints_deg"] = measured
+            for name in ARM_JOINTS:
+                self.joint_actual_labels[name].setText(f"{measured[name]:.1f}°")
+                if not self.edit_joint_targets_check.isChecked():
+                    self.joint_spins[name].setValue(measured[name])
+
+        pose_values = values.get("pose_mm_deg")
+        if pose_values is not None:
+            pose = tuple(float(value) for value in pose_values)
+            values["pose_mm_deg"] = pose
+            if self._latest_state is not None:
+                self._latest_state["pose_mm_deg"] = pose
+            for label, value in zip(self.pose_value_labels, pose, strict=True):
+                label.setText(f"{value:.2f}")
+            self.pose_summary.setText(
+                f"TCP: X {pose[0]:.1f}  Y {pose[1]:.1f}  Z {pose[2]:.1f} mm"
+            )
+
+        if "gripper" in values:
+            gripper = float(values["gripper"])
+            values["gripper"] = gripper
+            if self._latest_state is not None:
+                self._latest_state["gripper"] = gripper
+            self.gripper_measured.setText(f"Measured: {gripper:.3f}")
+
+        if self._latest_state is not None and "tcp_xyz_rpy" in values:
+            self._latest_state["tcp_xyz_rpy"] = tuple(
+                float(value) for value in values["tcp_xyz_rpy"]
+            )
+
         if hasattr(self, "robot_sidebar"):
-            self.robot_sidebar.update_joint_degrees(measured)
+            self.robot_sidebar.update_live_measurements(values)
         self._update_teach_readout()
 
     def _on_state(self, state: object) -> None:
@@ -5501,6 +5763,7 @@ class MainWindow(QMainWindow):
         if values.get("simulation"):
             status += " — simulation"
         self.status_label.setText(status)
+        self._refresh_status_banner()
         self._update_teach_readout()
         self._update_enabled_state()
 
@@ -5833,6 +6096,9 @@ class MainWindow(QMainWindow):
         )
         self.teleop_mode_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
         self.teleop_rate_combo.setEnabled(not self._teleop_active and not self._teleop_starting)
+        self.teleop_tracking_combo.setEnabled(
+            not self._teleop_active and not self._teleop_starting
+        )
         self.teleop_gripper_check.setEnabled(not self._teleop_active and not self._teleop_starting)
         for combo in (
             self.teleop_gripper_speed_combo,
@@ -5920,8 +6186,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_error(self, message: str) -> None:
         self._log(message)
-        self.alert_label.setText(message)
-        self.alert_label.show()
+        self._set_status_banner_notice(message, level="error")
         self.tabs.setTabText(self.tabs.indexOf(self.log_page), "Log •")
         if any(prefix in message.lower() for prefix in (
             "live teleoperation:", "teleop alignment:", "start teleoperation:",
@@ -5938,7 +6203,7 @@ class MainWindow(QMainWindow):
                     "TELEOP STOPPED — follower holding; leader/follower delinked. "
                     + self._teleop_error
                 )
-                self.alert_label.setText(prominent)
+                self._set_status_banner_notice(prominent, level="error")
             self._update_enabled_state()
         self.statusBar().showMessage(self.alert_label.text(), 8000)
         if "calibration:" in message.lower():

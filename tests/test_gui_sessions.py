@@ -3,10 +3,23 @@ import pytest
 
 
 @pytest.fixture
-def window(monkeypatch):
+def window(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv(
+        "SOARM101_WORKSTATION_CONFIG", str(tmp_path / "workstation.json")
+    )
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
+    import soarm101_motion.workstation as workstation_module
+
+    # GUI unit tests must not migrate or depend on the operator's real legacy
+    # camera settings. Keep both workstation and legacy camera persistence inside
+    # pytest's temporary directory so camera-card counts/layouts are deterministic.
+    monkeypatch.setattr(
+        workstation_module,
+        "DEFAULT_CAMERA_CONFIG_PATH",
+        tmp_path / "camera.json",
+    )
     from soarm101_motion.gui.window import MainWindow
     app = QApplication.instance() or QApplication([])
     gui = MainWindow(simulation=True)
@@ -25,6 +38,7 @@ def test_roles_are_in_setup_tab(window):
     assert window.camera_page.isAncestorOf(window.camera_device_combo)
     assert window.teleop_page.isAncestorOf(window.teleop_button)
     assert window.teleop_page.isAncestorOf(window.teleop_camera_preview)
+    assert window.teleop_page.isAncestorOf(window.teleop_motion_trace)
     assert window.record_page.isAncestorOf(window.save_point_button)
     assert window.record_page.isAncestorOf(window.record_button)
 
@@ -42,6 +56,9 @@ def test_persistent_robot_sidebar_is_outside_tabs_and_shared(window):
     assert window.program_arm_panel is window.robot_sidebar
     assert window.cartesian_view is window.robot_sidebar.view
     assert window._follower_status_panels == [window.robot_sidebar]
+    assert window.robot_sidebar_container.minimumWidth() == 430
+    assert window.robot_sidebar_container.maximumWidth() == 520
+    assert window.cartesian_view.minimumWidth() >= 310
 
     for page in (
         window.calibration_page,
@@ -194,6 +211,15 @@ def test_manual_workspace_keeps_gripper_visible_across_arm_modes(window):
     assert len(window._coordination_relink_buttons) == 2
 
 
+def test_teleop_tracking_response_defaults_to_medium(window):
+    assert window.teleop_tracking_combo.count() == 3
+    assert window.teleop_tracking_combo.currentData() == "medium"
+    assert [
+        window.teleop_tracking_combo.itemData(index)
+        for index in range(window.teleop_tracking_combo.count())
+    ] == ["slow", "medium", "fast"]
+
+
 def test_gripper_speed_preset_is_shared_by_manual_teleop_edit_and_run(window):
     fast_index = window.manual_gripper_speed_combo.findData(5.0)
     assert fast_index >= 0
@@ -235,6 +261,11 @@ def test_manual_kinematic_view_draws_all_links_and_gripper_in_frame(window, capf
         projected = view._project(point)
         assert 0 < projected.x() < view.width()
         assert 0 < projected.y() < view.height()
+    for segment in view._model.presentation_link_segments(joints).values():
+        for point in segment:
+            projected = view._project(point)
+            assert 0 < projected.x() < view.width()
+            assert 0 < projected.y() < view.height()
     for point in view.gripper_geometry().values():
         projected = view._project(point)
         assert 0 < projected.x() < view.width()
@@ -272,6 +303,56 @@ def test_kinematic_view_gripper_uses_wrist_frame_and_changes_aperture(window):
     closed_gap = np.linalg.norm(closed["fixed_tip"] - closed["moving_tip"])
     open_gap = np.linalg.norm(opened["fixed_tip"] - opened["moving_tip"])
     assert open_gap > closed_gap
+
+
+def test_live_measurements_animate_joints_tcp_and_gripper(window):
+    import numpy as np
+
+    state = {
+        "connected": True,
+        "torque_enabled": True,
+        "moving": True,
+        "faulted": False,
+        "simulation": True,
+        "joints_deg": {
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 0.0,
+            "elbow_flex": 0.0,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+        },
+        "pose_mm_deg": (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        "gripper": 0.0,
+        "joint_limits_deg": {},
+    }
+    window._on_state(state)
+    closed = window.cartesian_view.gripper_geometry()
+    closed_gap = np.linalg.norm(closed["fixed_tip"] - closed["moving_tip"])
+
+    window._on_follower_live_measurements(
+        {
+            "joints_deg": {
+                "shoulder_pan": 5.0,
+                "shoulder_lift": -10.0,
+                "elbow_flex": 15.0,
+                "wrist_flex": -20.0,
+                "wrist_roll": 25.0,
+            },
+            "pose_mm_deg": (101.0, 22.0, 133.0, 1.0, 2.0, 3.0),
+            "gripper": 1.0,
+        }
+    )
+
+    opened = window.cartesian_view.gripper_geometry()
+    open_gap = np.linalg.norm(opened["fixed_tip"] - opened["moving_tip"])
+    assert open_gap > closed_gap
+    assert window.robot_sidebar.gripper_bar.format() == "1.000"
+    assert window.gripper_measured.text() == "Measured: 1.000"
+    assert window.robot_sidebar.joint_value_labels["wrist_roll"].text() == "+25.0°"
+    assert window.robot_sidebar.pose_value_labels["x"].text() == "+101.0 mm"
+    assert "X 101.0" in window.pose_summary.text()
+    assert window._latest_state["gripper"] == pytest.approx(1.0)
+    assert window._latest_state["joints_deg"]["shoulder_pan"] == pytest.approx(5.0)
 
 
 def test_leader_park_release_and_sync_capture_are_explicit(window):
@@ -341,8 +422,62 @@ def test_error_marks_log_tab_and_teleop_status(window):
     window.show()
     window._on_error("live teleoperation: streamed joint acceleration exceeded limit")
     assert window.tabs.tabText(window.tabs.indexOf(window.log_page)) == "Log •"
+    assert window.status_banner.isVisible()
     assert window.alert_label.isVisible()
+    assert window.alert_clear_button.isVisible()
     assert "acceleration exceeded" in window.teleop_status.text()
+
+
+def test_status_banner_is_always_present_and_clear_acknowledges_notice(window):
+    window.show()
+    assert window.status_banner.isVisible()
+    assert "READY" in window.alert_label.text()
+    assert not window.alert_clear_button.isVisible()
+
+    window._on_error("temporary diagnostic notice")
+    assert "temporary diagnostic notice" in window.alert_label.text()
+    assert window.alert_clear_button.isVisible()
+
+    window.alert_clear_button.click()
+    assert window.status_banner.isVisible()
+    assert "temporary diagnostic notice" not in window.alert_label.text()
+    assert "READY" in window.alert_label.text()
+    assert not window.alert_clear_button.isVisible()
+
+
+def test_clearing_teleop_fault_keeps_non_dismissible_stopped_state(window):
+    window.show()
+    window._teleop_active = True
+    window._on_teleop_faulted(
+        {
+            "reason": "leader sample is 206 ms old; teleop stale limit is 150 ms",
+            "frequency_hz": 20.0,
+            "processing_ms": 52.0,
+            "requires_relink": True,
+            "follower_holding": True,
+        }
+    )
+    assert window.alert_clear_button.isVisible()
+    assert "206 ms old" in window.alert_label.text()
+
+    window.alert_clear_button.click()
+    assert not window.alert_clear_button.isVisible()
+    assert "TELEOP STOPPED" in window.alert_label.text()
+    assert "realign or relink" in window.alert_label.text()
+
+
+def test_clearing_notice_does_not_hide_active_robot_fault(window):
+    window._banner_notice = ("old notice", "error")
+    window._connected = True
+    window._latest_state = {
+        "faulted": True,
+        "fault_message": "motor overload",
+    }
+    window._clear_status_banner_notice()
+
+    assert "FOLLOWER FAULT" in window.alert_label.text()
+    assert "motor overload" in window.alert_label.text()
+    assert not window.alert_clear_button.isVisible()
 
 
 
@@ -428,6 +563,98 @@ def test_camera_preview_grid_splits_two_named_cameras_side_by_side(window):
     second_row, second_col, _, _ = window.camera_preview_grid.getItemPosition(second_index)
     assert (first_row, first_col) == (0, 0)
     assert (second_row, second_col) == (0, 1)
+
+
+def test_teleop_camera_grid_shows_two_named_cameras_side_by_side(window):
+    from soarm101_motion.camera import CameraSettings
+
+    existing_names = list(window._workstation_profile.cameras)
+    assert existing_names
+    second_name = "wrist" if "wrist" not in existing_names else "side"
+    window._workstation_profile = window._workstation_profile.with_camera(
+        second_name,
+        CameraSettings(device="/dev/video96", width=640, height=480),
+        select=False,
+    )
+    window._refresh_camera_profile_choices()
+    window._rebuild_teleop_camera_grid()
+
+    names = list(window._workstation_profile.cameras)
+    assert set(window.teleop_camera_previews) == set(names)
+    first_index = window.teleop_camera_grid.indexOf(
+        window.teleop_camera_cards[names[0]]
+    )
+    second_index = window.teleop_camera_grid.indexOf(
+        window.teleop_camera_cards[second_name]
+    )
+    first_row, first_col, _, _ = window.teleop_camera_grid.getItemPosition(first_index)
+    second_row, second_col, _, _ = window.teleop_camera_grid.getItemPosition(second_index)
+    assert (first_row, first_col) == (0, 0)
+    assert (second_row, second_col) == (0, 1)
+
+
+def test_camera_frame_routes_to_all_named_teleop_previews(window):
+    from PySide6.QtGui import QImage
+    from soarm101_motion.camera import CameraSettings
+
+    second_name = "wrist"
+    if second_name in window._workstation_profile.cameras:
+        second_name = "side"
+    window._workstation_profile = window._workstation_profile.with_camera(
+        second_name,
+        CameraSettings(device="/dev/video95", width=320, height=240),
+        select=False,
+    )
+    window._refresh_camera_profile_choices()
+    window._rebuild_teleop_camera_grid()
+
+    image = QImage(320, 240, QImage.Format.Format_RGB32)
+    image.fill(0xFF224466)
+    window._on_camera_frame(second_name, image)
+
+    preview = window.teleop_camera_previews[second_name]
+    assert preview.pixmap() is not None
+    assert not preview.pixmap().isNull()
+
+
+def test_teleop_start_all_uses_existing_camera_sessions(window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(window._camera_manager, "start_all", lambda: calls.append("start"))
+    window._start_all_teleop_cameras()
+    assert calls == ["start"]
+
+
+def test_teleop_motion_trace_uses_existing_stream_measurements(window):
+    from math import radians
+
+    leader = {
+        "timestamp": 10.0,
+        "joints_rad": {
+            "shoulder_pan": radians(1.0),
+            "shoulder_lift": radians(2.0),
+            "elbow_flex": radians(3.0),
+            "wrist_flex": radians(4.0),
+            "wrist_roll": radians(5.0),
+        },
+        "gripper": 0.5,
+    }
+    follower = {
+        "shoulder_pan": 1.2,
+        "shoulder_lift": 2.2,
+        "elbow_flex": 3.2,
+        "wrist_flex": 4.2,
+        "wrist_roll": 5.2,
+    }
+
+    window._teleop_active = True
+    window._on_leader_stream_sample(leader)
+    window._on_follower_joint_measurements(follower)
+    assert window.teleop_motion_trace.sample_count == 1
+
+    window.teleop_trace_mode_combo.setCurrentIndex(
+        window.teleop_trace_mode_combo.findData("error")
+    )
+    assert window.teleop_motion_trace.mode == "error"
 
 
 def test_camera_frame_routes_to_its_named_preview_card(window):

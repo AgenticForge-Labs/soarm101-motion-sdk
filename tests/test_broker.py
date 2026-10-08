@@ -10,11 +10,76 @@ from pathlib import Path
 
 import pytest
 
+from soarm101_motion import SOARM101Config
 from soarm101_motion.broker import (
+    AgentCommandExecutor,
     BrokerCommandError,
     RobotBrokerHTTPServer,
     RobotBrokerService,
 )
+
+
+
+
+
+def test_broker_executor_propagates_trusted_motion_envelope(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        commands.append(list(command))
+        return Completed()
+
+    monkeypatch.setattr("soarm101_motion.broker.subprocess.run", fake_run)
+    config = SOARM101Config.from_motion_limits(
+        robot_id="so101",
+        max_joint_speed_deg_s=80.0,
+        max_joint_acceleration_deg_s2=500.0,
+        max_linear_speed_mm_s=90.0,
+        max_linear_acceleration_mm_s2=900.0,
+        max_tool_angular_speed_deg_s=70.0,
+        max_tool_angular_acceleration_deg_s2=700.0,
+    )
+    executor = AgentCommandExecutor(config=config)
+
+    executor.run(["state", "--robot-id", "so101"])
+    motion_command = commands[-1]
+    assert motion_command[-12:] == [
+        "--max-joint-speed-deg-s",
+        "80",
+        "--max-joint-acceleration-deg-s2",
+        "500",
+        "--max-linear-speed-mm-s",
+        "90",
+        "--max-linear-acceleration-mm-s2",
+        "900",
+        "--max-tool-angular-speed-deg-s",
+        "70",
+        "--max-tool-angular-acceleration-deg-s2",
+        "700",
+    ]
+
+    executor.run(["capture", "overhead"])
+    capture_command = commands[-1]
+    assert "--max-joint-speed-deg-s" not in capture_command
+    assert "--max-linear-speed-mm-s" not in capture_command
+
+
+def test_broker_parser_defaults_to_100_1000_motion_envelope() -> None:
+    from soarm101_motion.broker import build_parser
+
+    args = build_parser().parse_args([])
+    assert args.max_joint_speed_deg_s == pytest.approx(100.0)
+    assert args.max_joint_acceleration_deg_s2 == pytest.approx(1000.0)
+    assert args.max_linear_speed_mm_s == pytest.approx(100.0)
+    assert args.max_linear_acceleration_mm_s2 == pytest.approx(1000.0)
+    assert args.max_tool_angular_speed_deg_s == pytest.approx(100.0)
+    assert args.max_tool_angular_acceleration_deg_s2 == pytest.approx(1000.0)
 
 
 class FakeExecutor:
@@ -235,3 +300,17 @@ def test_http_server_enforces_token_and_routes_health(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+def test_broker_translates_sleep_up_to_bounded_cli(tmp_path: Path) -> None:
+    expected = ("sleep-up", "--robot-id", "so101")
+    executor = FakeExecutor({expected: {"completed": True, "holding": True}})
+    service = RobotBrokerService(
+        executor=executor,  # type: ignore[arg-type]
+        token="secret",
+        event_path=tmp_path / "events.jsonl",
+    )
+
+    response = service.dispatch("POST", "/v1/sleep-up", {})
+
+    assert response.status == 200
+    assert executor.calls == [expected]

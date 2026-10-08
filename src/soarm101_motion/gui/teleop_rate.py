@@ -6,10 +6,58 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.constants import (
+    ARM_JOINTS,
+    DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED,
+    DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+    DEFAULT_MAX_JOINT_SPEED_RAD_S,
+)
 
 TELEOP_GRIPPER_SPEED_PER_S = 1.2
 GRIPPER_SPEED_PRESETS = (("Slow · original", 1.0), ("Normal · 2×", 2.0), ("Fast · 5×", 5.0))
+
+
+@dataclass(frozen=True)
+class TeleopTrackingPreset:
+    key: str
+    label: str
+    max_speed_rad_s: float
+    max_acceleration_rad_s2: float
+    joint_speed_overrides_rad_s: tuple[tuple[str, float], ...] = ()
+    joint_acceleration_overrides_rad_s2: tuple[tuple[str, float], ...] = ()
+
+    def joint_speed_limits_rad_s(self) -> dict[str, float]:
+        limits = {name: self.max_speed_rad_s for name in ARM_JOINTS}
+        limits.update(dict(self.joint_speed_overrides_rad_s))
+        return limits
+
+    def joint_acceleration_limits_rad_s2(self) -> dict[str, float]:
+        limits = {name: self.max_acceleration_rad_s2 for name in ARM_JOINTS}
+        limits.update(dict(self.joint_acceleration_overrides_rad_s2))
+        return limits
+
+
+TELEOP_TRACKING_PRESETS = (
+    TeleopTrackingPreset("slow", "Slow · gentle", 0.6, 3.0),
+    TeleopTrackingPreset("medium", "Medium · current", 1.2, 6.0),
+    TeleopTrackingPreset(
+        "fast",
+        "Fast · wrist-aware",
+        DEFAULT_MAX_JOINT_SPEED_RAD_S,
+        DEFAULT_MAX_JOINT_ACCEL_RAD_S2,
+        joint_acceleration_overrides_rad_s2=(
+            ("wrist_flex", math.radians(500.0)),
+        ),
+    ),
+)
+DEFAULT_TELEOP_TRACKING_PRESET = "medium"
+
+
+def teleop_tracking_preset(key: str) -> TeleopTrackingPreset:
+    for preset in TELEOP_TRACKING_PRESETS:
+        if preset.key == key:
+            return preset
+    raise ValueError(f"unknown teleop tracking preset: {key}")
 
 
 def teleop_stale_limit_s(period_s: float) -> float:
@@ -77,6 +125,22 @@ def _braking_distance(speed: float, acceleration_step: float, period_s: float) -
     )
 
 
+def _per_joint_limit(
+    value: float | Mapping[str, float],
+    *,
+    label: str,
+) -> dict[str, float]:
+    if isinstance(value, Mapping):
+        if set(value) != set(ARM_JOINTS):
+            raise ValueError(f"{label} must provide exactly the five canonical arm joints")
+        limits = {name: float(value[name]) for name in ARM_JOINTS}
+    else:
+        limits = {name: float(value) for name in ARM_JOINTS}
+    if any(not math.isfinite(limit) or limit <= 0.0 for limit in limits.values()):
+        raise ValueError(f"{label} values must be positive and finite")
+    return limits
+
+
 def limit_joint_target(
     desired: Mapping[str, float],
     previous: Mapping[str, float],
@@ -84,16 +148,22 @@ def limit_joint_target(
     *,
     joint_limits: Mapping[str, tuple[float, float]] | None = None,
     period_s: float,
-    max_speed_rad_s: float,
-    max_acceleration_rad_s2: float,
+    max_speed_rad_s: float | Mapping[str, float],
+    max_acceleration_rad_s2: float | Mapping[str, float],
     max_step_rad: float,
 ) -> tuple[dict[str, float], dict[str, float], bool]:
     """Return a target whose step, speed, and acceleration fit one stream period."""
-    speed_ceiling = min(max_speed_rad_s, max_step_rad / period_s)
+    speed_limits = _per_joint_limit(max_speed_rad_s, label="joint speed limit")
+    acceleration_limits = _per_joint_limit(
+        max_acceleration_rad_s2,
+        label="joint acceleration limit",
+    )
     command: dict[str, float] = {}
     velocity: dict[str, float] = {}
     limited = False
     for name in ARM_JOINTS:
+        speed_ceiling = min(speed_limits[name], max_step_rad / period_s)
+        acceleration_limit = acceleration_limits[name]
         wanted_position = desired[name]
         if joint_limits is not None:
             lower, upper = joint_limits[name]
@@ -112,7 +182,7 @@ def limit_joint_target(
             for _ in range(32):
                 candidate = (low + high) / 2
                 travel = candidate * period_s + _braking_distance(
-                    candidate, max_acceleration_rad_s2 * period_s, period_s
+                    candidate, acceleration_limit * period_s, period_s
                 )
                 if travel <= abs(error):
                     low = candidate
@@ -120,7 +190,7 @@ def limit_joint_target(
                     high = candidate
             wanted = math.copysign(low, error)
         last_velocity = previous_velocity[name]
-        acceleration_step = max_acceleration_rad_s2 * period_s
+        acceleration_step = acceleration_limit * period_s
         bounded = max(last_velocity - acceleration_step, min(last_velocity + acceleration_step, wanted))
         bounded = max(-speed_ceiling, min(speed_ceiling, bounded))
         command[name] = previous[name] + bounded * period_s
@@ -155,7 +225,7 @@ def update_gripper_contact_latch(
     movement_epsilon: float = 0.01,
     stalled_samples_required: int = 6,
     release_margin: float = 0.04,
-    minimum_opening: float = 0.025,
+    minimum_opening: float = DEFAULT_GRIPPER_SAFE_CLOSED_NORMALIZED,
     contact_relief: float = 0.005,
 ) -> tuple[float, bool, bool, bool]:
     """Rate-limit closing and ease open slightly after contact.

@@ -125,10 +125,18 @@ and height through the saved physical workspace calibration:
 The SDK's normal joint, Cartesian path, following-error, effort, fault, calibration, and
 completion guards remain authoritative.
 
-Move to the built-in calibrated Sleep posture:
+Move to the built-in calibrated default Sleep posture:
 
 ```bash
 soarm101 agent sleep
+```
+
+The default uses the smoother calibration-relative wrist position at 75% of the executable
+wrist-flex range. Use the historical fully folded wrist-up override only when explicitly
+needed:
+
+```bash
+soarm101 agent sleep-up
 ```
 
 STOP/HOLD is always available:
