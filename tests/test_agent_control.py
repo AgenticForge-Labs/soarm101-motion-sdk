@@ -192,7 +192,7 @@ def test_agent_jog_trace_records_motion_hold_and_later_feedback(
         "hold_start", "hold_complete", "post_hold_immediate", "post_hold_2s",
     ]
     assert events[0]["action"] == "agent_jog"
-    assert events[0]["calibration_id"] is None  # simulated backend, no fake provenance
+    assert "calibration_id" in events[0]  # trace uses runtime identity, not a supplied ID
     assert events[0]["delta_model_mm"] == [2.0, 0.0, 0.0]
     assert any(e["event"] == "command" for e in events)
     for name in ("motion_completed_before_hold", "post_hold_immediate", "post_hold_2s"):
