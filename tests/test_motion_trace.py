@@ -168,7 +168,9 @@ def test_offline_jog_summary_separates_command_feedback_and_hold(tmp_path) -> No
     assert summary["request"]["target_model_xyz_mm"] == [197.0, 0.0, 100.0]
     assert summary["trajectory"]["joint_commands"] == 2
     assert summary["trajectory"]["commanded_model_z_change_mm"] == 0.0
+    assert summary["trajectory"]["commanded_model_z_range_mm"] == [100.0, 100.0]
     assert summary["trajectory"]["observed_model_z_change_mm"] == -3.0
+    assert summary["trajectory"]["observed_model_z_range_mm"] == [97.0, 100.0]
     assert summary["hold"]["hold_goal_delta_ticks"] == {"shoulder_lift": -10}
     assert summary["hold"]["model_z_change_over_2s_after_hold_mm"] == -0.5
     assert "not direct measurements" in summary["coordinate_warning"]
