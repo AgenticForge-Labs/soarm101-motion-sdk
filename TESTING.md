@@ -4,18 +4,34 @@
 
 The CI matrix runs Python 3.10 and 3.12 with the optional PySide6 GUI
 installed. GUI tests create numerous `QApplication`-owned widgets and worker
-threads in headless offscreen mode. A previous PR-head run completed 569 Python
-tests and Ruff successfully, then aborted with a native
-`QObject: shared QObject was deleted directly` / `malloc_consolidate` Qt
-teardown failure (exit 134). This is a CI failure despite pytest's pass count.
+threads in headless offscreen mode. PR #86's Python 3.10 run completed 569
+tests and Ruff successfully (80.71% coverage), then aborted with
+`QObject: shared QObject was deleted directly` / `malloc_consolidate`
+(exit 134). This is a CI failure despite pytest's pass count.
 
-`tests/conftest.py` keeps a single optional `QApplication` referenced for
-the duration of the session, rather than allowing tests that use
-`QApplication.instance() or QApplication([])` to drop the last application
-reference between tests. This does not change GUI production behavior.
-Verify the **process exit code** and final CI status on both Python matrix
-versions; pytest success alone is not a green gate. If the native abort remains,
-isolate Qt object/worker lifecycle further before merging.
+A test-only, session-scoped `QApplication` lifetime fixture was tried on
+commit `14150c30b98ca7b9e50d871276a612a5fb9feb64`. It **did not fix**
+the crash: 569 tests again passed before the same exit-134 failure. The
+fixture was reverted; do not assume that Qt lifetime alone is the cause.
+
+Before another speculative fix, local Codex should isolate GUI teardown
+without changing the test definitions or ignoring process exit codes:
+
+```bash
+export QT_QPA_PLATFORM=offscreen
+uv run pytest --no-cov tests/test_gui_*.py tests/test_camera_worker.py \
+  tests/test_optional_gui_import.py
+uv run pytest --no-cov tests/test_agent_control.py tests/test_motion_trace.py \
+  tests/test_validated_linear_plan.py
+uv run pytest
+```
+
+If GUI-only crashes, bisect GUI test modules and inspect native QObject
+ownership/Qt thread cleanup. If only full suite crashes, identify its
+cross-test interaction/order and compare environment/dependencies with
+green `main`. A genuine fix must make the entire CI **process exit 0**
+on 3.10 and 3.12. Do not suppress the abort or mark the affected tests
+xfail merely to green the build.
 
 
 
