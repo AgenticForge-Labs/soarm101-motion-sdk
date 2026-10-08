@@ -1019,6 +1019,7 @@ class RunResult:
     agent: str = DEFAULT_AGENT
     auth: str | None = None
     model: str | None = None
+    interface: str = "robotctl"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -1026,6 +1027,7 @@ class RunResult:
             "agent": self.agent,
             "auth": self.auth,
             "model": self.model,
+            "interface": self.interface,
             "exit_code": self.exit_code,
             "output_dir": str(self.output_dir),
             "capabilities": self.capabilities,
@@ -1424,6 +1426,7 @@ def run_agent(
                 agent=adapter.name,
                 auth=selected_auth.name,
                 model=selected_model,
+                interface=interface,
             )
         finally:
             active_error = sys.exc_info()[1]
