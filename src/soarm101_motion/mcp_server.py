@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Literal
 
 from soarm101_motion.capability_profile import TOOL_ROUTES
+from soarm101_motion.mcp_guidance import GUIDANCE_RESOURCES, task_prompt
 from soarm101_motion.robotctl import _request
 
 BrokerRequest = Callable[..., dict[str, object]]
@@ -188,6 +189,28 @@ def create_server(
     def stop() -> dict[str, object]:
         """Request bounded STOP/HOLD. Available without a motion lease; not a hardware E-stop."""
         return call("POST", "/v1/stop", {})
+
+    for guidance_name, guidance_text in GUIDANCE_RESOURCES.items():
+        def register_resource(name: str, text: str) -> None:
+            @mcp.resource(
+                f"soarm101://guidance/{name}",
+                name=f"soarm101-guidance-{name}",
+                title=f"SO-ARM101 {name} guidance",
+                description="Static semantic guidance; never robot authority or dynamic state.",
+                mime_type="text/markdown",
+            )
+            def guidance_resource() -> str:
+                return text
+
+        register_resource(guidance_name, guidance_text)
+
+    @mcp.prompt(
+        name="operate_robot_task",
+        title="Operate bounded SO-ARM101 task",
+        description="Start a task with the broker's evidence-first observe/action loop.",
+    )
+    def operate_robot_task(task: str, strategy: str = "auto") -> str:
+        return task_prompt(task, strategy)
 
     if allowed_tools is not None:
         enabled = frozenset(allowed_tools)
