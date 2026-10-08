@@ -14,6 +14,17 @@ commit `14150c30b98ca7b9e50d871276a612a5fb9feb64`. It **did not fix**
 the crash: 569 tests again passed before the same exit-134 failure. The
 fixture was reverted; do not assume that Qt lifetime alone is the cause.
 
+**Dependency regression lead:** comparing the last green `main` CI job
+(Python 3.10, `113139291306`) with the failing PR job
+(`113582596764`) shows that identical `uv sync --extra dev --extra gui`
+resolved PySide6/Shiboken **6.11.2** versus **6.12.0**, respectively.
+The failing run also downloaded new PySide6 WebEngine/PDF wheels.
+Because `pyproject.toml` previously allowed `<7`, the resolution drifted
+without a source code change. As a bounded experiment, `gui` now requires
+`PySide6>=6.8,<6.12`. This is not proof of causality until the whole
+CI process exits zero. Keep the cap only while evidence supports it;
+a later controlled PySide upgrade requires independent GUI test coverage.
+
 Before another speculative fix, local Codex should isolate GUI teardown
 without changing the test definitions or ignoring process exit codes:
 
