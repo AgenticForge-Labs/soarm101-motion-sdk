@@ -87,3 +87,33 @@ def test_passive_backend_trace_records_existing_motion_io(tmp_path) -> None:
     assert set(feedback["joints_rad"]) == set(ARM_JOINTS)
     assert set(feedback["joints_raw"]) == set(ARM_JOINTS)
     assert feedback["tcp_xyz_mm"] is not None
+
+
+
+def test_passive_trace_captures_raw_hold_latch_without_extra_reads(tmp_path) -> None:
+    """Feetech STOP writes raw goals; passive trace must see them."""
+    path = tmp_path / "raw-hold.jsonl"
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        received = []
+
+        def fake_raw_write(positions, *, speed_raw, acceleration_raw):
+            received.append((dict(positions), speed_raw, acceleration_raw))
+
+        arm.backend._write_raw_positions = fake_raw_write
+        raw = {name: 2048 + i for i, name in enumerate(ARM_JOINTS)}
+        with PassiveBackendTrace(arm, path) as trace:
+            trace.mark("hold_start")
+            arm.backend._write_raw_positions(raw, speed_raw=1, acceleration_raw=1)
+            trace.mark("hold_complete")
+
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    markers = [e["marker"] for e in events if e["event"] == "marker"]
+    writes = [e for e in events if e["event"] == "raw_command"]
+    assert markers == ["hold_start", "hold_complete"]
+    assert received == [(raw, 1, 1)]
+    assert len(writes) == 1
+    assert writes[0]["joints_raw"] == raw
+    assert writes[0]["speed_raw"] == 1
+    assert writes[0]["acceleration_raw"] == 1
+    assert not any(e["event"] == "feedback" for e in events)
