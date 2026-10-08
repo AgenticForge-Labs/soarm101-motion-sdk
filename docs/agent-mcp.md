@@ -123,6 +123,22 @@ is **not** a hardware emergency stop. A human must explicitly arm through
 arming, disarming, relax, calibration, servo registers, unrestricted joint
 vectors, shell execution, or new motion primitives.
 
+## MCP-first live robot tool selection
+
+At MCP initialization the adapter sends **server instructions** preferring the
+connected `soarm101` tools for live robot state, permitted camera images, saved
+poses, Sleep and bounded movement, without requiring the operator to say
+"use MCP". Live camera requests should use `capture_camera`, not host camera
+CLI/device discovery; an unavailable camera or tool must not prompt a shell
+fallback around broker permissions. Tool descriptions reinforce this selection.
+
+Server instructions are **hints**: MCP hosts can choose whether to present or
+follow them. The repository's `AGENTS.md` gives the same MCP-first rule to
+Codex operating within this checkout. Direct-host Codex launched elsewhere
+may need an equivalent entry in `~/.codex/AGENTS.md`. This preference applies
+to live robot operations, not code development or operator diagnostics;
+it cannot grant authority or make the host's shell tools safe.
+
 ## MCP guidance resources and task prompt
 
 The MCP server also publishes static, harness-neutral guidance. These resources
@@ -170,7 +186,7 @@ Validate the MCP `tools/list`, `robot_health`, `robot_capabilities`,
 `robot_state`, and `capture_camera` responses before any motion trial.
 No hardware motion is required for the automated tests.
 
-This PR intentionally does **not** implement per-agent capability profiles,
-MCP skills/resources/prompts, specialist perception models, OpenShell packaging,
-or Forge Bench orchestration. Those are separate, dependent PRs. Do not assume
-an MCP host can bypass the broker by discovering a different tool.
+MCP resources and prompts are optional agent guidance; they do not supply
+dynamic robot state or enforce motion policy. Specialist perception models and
+Forge Bench orchestration remain separate work. An MCP host cannot bypass
+the trusted broker by discovering another tool.
