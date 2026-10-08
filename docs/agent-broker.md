@@ -63,6 +63,40 @@ soarm101-broker \
 The remaining linear/tool-angular values stay at their broker defaults unless explicitly
 set by the trusted host.
 
+## Requested agent motion rates (trusted broker configuration)
+
+The envelope above is an absolute ceiling; the **requested** rate of an
+individual agent action is a separate choice. By default the bounded
+agent CLI jogs at 10 mm/s, 40 mm/s² (Cartesian) and 8 deg/s,
+25 deg/s² (single joint). The trusted broker can now pin different
+requested rates at startup and inject them into its internal
+`soarm101 agent jog` and `soarm101 agent joint` subprocess calls:
+
+```bash
+soarm101-broker --host 127.0.0.1 --port 8765 \
+  --profile docs/examples/mcp-profile-supervised-manipulation.json \
+  --agent-cartesian-speed-mm-s 20 \
+  --agent-cartesian-acceleration-mm-s2 80 \
+  --agent-joint-speed-deg-s 16 \
+  --agent-joint-acceleration-deg-s2 50
+```
+
+These numbers are configuration examples, **not hardware-validated speed
+recommendations**. In particular, measured Cartesian height drift and repeat
+jog rejections have not been resolved; do not deploy a higher-rate profile
+to hardware before supervised characterization. The broker validates every
+rate against its trusted motion envelope at startup; the bounded CLI repeats
+that check before hardware access and the SDK retains motion/path/fault/
+following-error/settle guards. Agents have no RPC parameters to raise
+requested rates, which apply only to joint/Cartesian jog actions and do
+not alter saved pose, Sleep or gripper-specific pacing.
+
+`GET /v1/capabilities` reports `broker_requested_motion` for the
+four pinned requested rates as well as the maximum motion envelope.
+The broker capability profile remains the owner of *which tools are
+allowed*, not a second motion-speed policy. Changing requested rates
+requires restarting the broker; it cannot be changed by a sandbox agent.
+
 ## Start the broker
 
 Generate a per-run token and start the host service:
