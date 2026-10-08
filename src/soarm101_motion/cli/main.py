@@ -1374,8 +1374,8 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
         arm.enable()
         arm_result = arm.move_joints_from_saved_pose(
             pose.joints,
-            speed=8.0 * pi / 180.0,
-            acceleration=25.0 * pi / 180.0,
+            speed=requested_speed * pi / 180.0,
+            acceleration=requested_acceleration * pi / 180.0,
         )
         gripper_result = arm.tool.move(pose.gripper)
         arm.hold()
@@ -1397,6 +1397,16 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _agent_requested_rate(value: float, name: str, ceiling: float) -> float:
+    """Reject unsafe requested rates before opening hardware."""
+    speed = float(value)
+    if not np.isfinite(speed) or speed <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    if speed > ceiling:
+        raise ValueError(f"{name} exceeds the configured motion envelope ({ceiling:g})")
+    return speed
+
+
 def _cmd_agent_joint(args: argparse.Namespace) -> int:
     delta_deg = float(args.delta_deg)
     if not np.isfinite(delta_deg) or abs(delta_deg) <= 1e-9:
@@ -1407,6 +1417,16 @@ def _cmd_agent_joint(args: argparse.Namespace) -> int:
             f"{AGENT_JOINT_MAX_DELTA_DEG:.1f} deg per-command limit"
         )
     delta_rad = delta_deg * pi / 180.0
+    limits = SOARM101Config(
+        robot_id=args.robot_id, **_motion_limit_overrides(args)
+    ).motion_limits_human
+    requested_speed = _agent_requested_rate(
+        args.speed_deg_s, "joint speed deg/s", limits["max_joint_speed_deg_s"]
+    )
+    requested_acceleration = _agent_requested_rate(
+        args.acceleration_deg_s2, "joint acceleration deg/s^2",
+        limits["max_joint_acceleration_deg_s2"],
+    )
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         before = dict(arm.get_joint_positions().positions)
@@ -1438,6 +1458,16 @@ def _cmd_agent_jog(args: argparse.Namespace) -> int:
     delta_mm = np.asarray([args.x_mm, args.y_mm, args.z_mm], dtype=float)
     if not np.all(np.isfinite(delta_mm)):
         raise ValueError("agent jog deltas must be finite")
+    limits = SOARM101Config(
+        robot_id=args.robot_id, **_motion_limit_overrides(args)
+    ).motion_limits_human
+    requested_speed = _agent_requested_rate(
+        args.speed_mm_s, "Cartesian speed mm/s", limits["max_linear_speed_mm_s"]
+    )
+    requested_acceleration = _agent_requested_rate(
+        args.acceleration_mm_s2, "Cartesian acceleration mm/s^2",
+        limits["max_linear_acceleration_mm_s2"],
+    )
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         calibration_id = _agent_calibration_id(
@@ -1468,8 +1498,8 @@ def _cmd_agent_jog(args: argparse.Namespace) -> int:
             translation_mm=tuple(float(value) for value in delta_mm),
             rotation_rpy_deg=(0.0, 0.0, 0.0),
             orientation_mode="compatible",
-            speed_mm_s=10.0,
-            acceleration_mm_s2=40.0,
+            speed_mm_s=requested_speed,
+            acceleration_mm_s2=requested_acceleration,
         )
         arm.hold()
     print(
@@ -2122,6 +2152,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_options(agent_joint)
     agent_joint.add_argument("joint", choices=ARM_JOINTS)
     agent_joint.add_argument("--delta-deg", type=float, required=True)
+    agent_joint.add_argument("--speed-deg-s", type=float, default=8.0)
+    agent_joint.add_argument("--acceleration-deg-s2", type=float, default=25.0)
     agent_joint.set_defaults(func=_cmd_agent_joint)
 
     agent_jog = agent_sub.add_parser(
@@ -2133,6 +2165,8 @@ def build_parser() -> argparse.ArgumentParser:
     agent_jog.add_argument("--x-mm", type=float, default=0.0)
     agent_jog.add_argument("--y-mm", type=float, default=0.0)
     agent_jog.add_argument("--z-mm", type=float, default=0.0)
+    agent_jog.add_argument("--speed-mm-s", type=float, default=10.0)
+    agent_jog.add_argument("--acceleration-mm-s2", type=float, default=40.0)
     agent_jog.set_defaults(func=_cmd_agent_jog)
 
     agent_gripper = agent_sub.add_parser(
