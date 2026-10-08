@@ -132,6 +132,11 @@ changes require development discipline; robot use requires conservative hardware
     tools MCP advertises, including alternate endpoint spellings, camera access,
     and stricter per-call limits. An agent or sandbox manifest must not choose,
     widen, or hot-reload the broker's trusted-host profile.
+17. MCP resources/prompts and harness skills may explain how to use the bounded
+    interface, but they are semantic context only. Dynamic state, calibrated
+    directions, cameras, profile permissions, and authority must be read from
+    the broker/SDK rather than copied into static guidance. Keep harness-specific
+    perception instructions out of the shared MCP guidance.
 
 ## Repository boundary
 
