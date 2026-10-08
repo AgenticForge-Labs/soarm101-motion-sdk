@@ -205,6 +205,20 @@ optional persisted presentation preference in Qt settings. Calibration authority
 in the existing files and SDK resolver, not in Qt settings or widget visibility.
 `setup_backup.py` owns deterministic validated setup export/restore, with no hardware I/O.
 
+## Passive physical-motion diagnostics
+
+The bounded trusted-host `agent jog` command can opt into the shared
+`PassiveBackendTrace` recorder without changing SDK movement or safety
+paths. The trace wraps existing backend command and feedback operations,
+including the private Feetech raw-position write through which STOP/HOLD
+latches servo goals. Motion-time I/O is unchanged; the operator-selected
+diagnostic additionally observes the held arm immediately and 2 seconds
+after HOLD. `agent trace-summary` is an offline deterministic analyzer
+that compares requested model-space Cartesian intent with FK estimates
+of actual command and feedback streams, then reports the raw servo goal
+delta at HOLD. It does not claim metrological accuracy and is not exposed
+as an untrusted MCP host-file path.
+
 ## Bounded agent authority and CLI
 
 The full CLI is an operator/developer surface. External reasoning agents use a smaller
