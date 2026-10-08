@@ -53,6 +53,42 @@ under a different authority policy. MCP tool annotations and documentation
 are **hints, not authorization**; the trusted broker/SDK are the enforcement
 boundary. No direct MCP HTTP server or remote access is introduced in this PR.
 
+## Trusted-host capability profiles
+
+This optional broker feature uses a **versioned JSON profile** selected only by
+the operator starting the broker. It is loaded once and pinned for the entire
+broker process lifetime. Each profile restricts which existing broker routes
+may be invoked, which named cameras are accessible, and optional stricter
+single-command joint/model-coordinate displacement ceilings.
+
+For example, start the trusted broker with:
+
+```bash
+soarm101-broker --host 127.0.0.1 --port 8765 \\
+  --profile docs/examples/mcp-profile-coordinate.json
+```
+
+Start the stdio MCP client as usual. Before advertising tools it reads the
+authenticated `GET /v1/profile` descriptor and removes disabled MCP tools.
+The broker **independently enforces** the same profile on every HTTP request,
+including calls not made through MCP. The profile descriptor includes the
+canonical configuration's SHA-256 for experiment provenance.
+
+See the example `mcp-profile-read-only.json`, `mcp-profile-joint.json`,
+and `mcp-profile-coordinate.json` files in `docs/examples/`. A valid
+profile names a version-1 schema, lists recognized MCP tool identifiers,
+lists allowed logical cameras, and may declare `max_joint_delta_deg` and
+`max_model_jog_mm`. Unknown capabilities, fields, and limit names fail
+startup validation. No profile change API is exposed to agents.
+
+A model-frame displacement ceiling is intentionally *not* a claim of
+physical-distance accuracy: the SDK's calibrated physical workspace guard
+and full motion safety remain authoritative. These profile ceilings can only
+reduce allowed actions. Read-only profiles exclude motion routes; human-only
+arming, physical STOP access, and normal GUI/CLI authority remain outside
+the profile. Local broker health/profile discovery remain available for
+service administration, regardless of the MCP tool subset.
+
 ## MCP tool surface (initial implementation)
 
 | MCP tool | Existing broker route |
