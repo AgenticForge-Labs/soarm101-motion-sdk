@@ -4,6 +4,61 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
+## Future PR 5 plan — composable agent/perception experiments (design only)
+
+**Status:** intentionally not implemented. Begin experiments after the PR 4 MCP
+sandbox interface passes local OpenShell/physical read-only validation and the
+robot's measured coordinate mapping is independently checked. The motion SDK
+must not become a perception engine, orchestration platform, or benchmark
+runner. New perception providers belong in optional agent-side adapters; the
+authenticated broker remains the sole robot execution boundary.
+
+The experimental factor **agent/model setup** is broader than an LLM name.
+Represent it as a versioned, explicit *pipeline graph* (components + interfaces +
+configurations + provenance), including fully deterministic hand-coded baselines:
+
+- A hand-coded finite-state controller using fixed cues and safety-bounded
+  visual/pose corrections (no LLM inference);
+- A hand-coded camera segmentation, feature-tracking, color/shape detection or
+  fiducial pipeline feeding deterministic action selection;
+- A small local detector or pointing/grounding model feeding deterministic
+  planning with uncertainty gates;
+- One general-purpose VLM controlling tools through MCP;
+- An LLM planner + specialist vision model + deterministic target/guard
+  converter + MCP execution;
+- An inexpensive local observer with conditional hosted VLM escalation;
+- Hybrid human-in-the-loop, scripted replay, and learned-policy baselines
+  when they use the same authoritative validated motion interface.
+
+Treat each as an **agent configuration**, not a new robot control plane.
+Model identity, model build/hash, hand-coded algorithm revision/parameters,
+pre/post-processing, perception model, observer/camera topology, reasoning
+strategy, interface profile hash, safety gate, retry/escalation policy, and
+human intervention must be independently identifiable. Keep provider and
+inference cost distinct from local deterministic computation.
+
+Candidate *read-only* perception outputs are timestamped image identifiers,
+bounded image coordinates, bounding boxes, tracked object IDs, confidence,
+uncertainty, and optional pixel grounding. Only a calibrated, validated
+camera-to-robot transform can produce physical target poses; report missing
+calibration as unavailable, not a guessed XYZ. Never let a detector directly
+invoke motion or replace the Motion SDK workspace/IK/limit checks.
+
+First supervised study: repeated cube-marker recognition, target selection,
+coarse alignment, and re-observation using matched scenes and identical broker
+constraints. Record visual evidence hashes, state, commands, rejected motions,
+settle/error outcomes, wall time, inference tokens/cost, intervention/faults,
+physical calibration provenance, and run configuration. Randomize/counterbalance
+run order and scene arrangement where practicable. Forge Bench later owns the
+experimental design, trial IDs, analysis and cross-run comparisons; do not
+duplicate that engine in Motion SDK.
+
+**PR 5 entry criteria:** physical coordinate calibration and read-only
+image/tool plumbing characterized, benchmarkable control baselines defined,
+clear ownership for specialist perception adapter, and an explicit safe
+physical test protocol. Do not start implementation merely because PR 4
+merged.
+
 ## Model, coordinates, and shaking audit — 2026-10-07
 
 Reviewed main at `8830d9064bc6551674d1a7ec00c078a07ae73d12` and open motion
