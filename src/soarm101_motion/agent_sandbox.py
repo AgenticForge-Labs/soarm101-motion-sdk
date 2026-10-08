@@ -236,7 +236,23 @@ def skill_text(*, agent: str = DEFAULT_AGENT) -> str:
     return get_agent_adapter(agent).skill_text()
 
 
-def read_only_validation_task_text() -> str:
+def read_only_validation_task_text(*, interface: str = "robotctl") -> str:
+    """Interface-specific read-only task; never imply physical authority."""
+    if interface == "mcp":
+        return """Validate the isolated SO-ARM101 agent environment without commanding physical motion.
+
+1. Read SKILL.md and discover the available SO-ARM101 MCP resources and tools.
+2. Use MCP robot_capabilities and robot_state to inspect available robot state.
+3. An unarmed motion lease is expected: do not attempt to arm or use motion tools.
+4. Capture every configured, permitted camera with the MCP capture_camera tool.
+5. Inspect the actual MCP image content and record the broker request IDs and image hashes.
+   If this harness cannot inspect MCP pixels, report that limitation explicitly.
+6. Do not request any saved-pose, joint, Cartesian, gripper, Sleep or STOP action.
+7. Report current state, available tools, configured cameras and which fresh images
+   were inspected. Trusted image files are retained on the host from broker evidence.
+"""
+    if interface != "robotctl":
+        raise ValueError("unknown read-only agent interface")
     from importlib import resources
 
     return resources.files("soarm101_motion.agent_assets").joinpath(
@@ -1142,7 +1158,7 @@ def run_agent(
         if task_file is None:
             task_file = root / "TASK.md"
             task_file.write_text(
-                read_only_validation_task_text(),
+                read_only_validation_task_text(interface=interface),
                 encoding="utf-8",
             )
 
