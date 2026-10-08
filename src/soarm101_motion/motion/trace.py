@@ -417,6 +417,13 @@ def summarize_agent_jog_trace(path: str | Path) -> dict[str, Any]:
 
     start_tcp = preflight.get("start_model_xyz_mm")
     target_tcp = preflight.get("target_model_xyz_mm")
+    def model_z_range(samples: list[Mapping[str, Any]]) -> list[float] | None:
+        heights = [
+            xyz[2] for sample in samples
+            if (xyz := tcp(sample)) is not None
+        ]
+        return [min(heights), max(heights)] if heights else None
+
     first_command = tcp(executed_commands[0]) if executed_commands else None
     last_command = tcp(executed_commands[-1]) if executed_commands else None
     first_feedback = tcp(feedback[0]) if feedback else None
@@ -455,7 +462,9 @@ def summarize_agent_jog_trace(path: str | Path) -> dict[str, Any]:
             "first_command_model_tcp_xyz_mm": first_command,
             "last_command_model_tcp_xyz_mm": last_command,
             "commanded_model_z_change_mm": delta_z(first_command, last_command),
+            "commanded_model_z_range_mm": model_z_range(executed_commands),
             "observed_model_z_change_mm": delta_z(first_feedback, last_feedback),
+            "observed_model_z_range_mm": model_z_range(feedback),
             "model_tcp_xyz_mm_at_completion": settled_before_hold,
         },
         "hold": {
