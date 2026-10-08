@@ -103,7 +103,7 @@ def create_server(request_fn: BrokerRequest | None = None):
         return call("GET", "/v1/state")
 
     @mcp.tool(annotations=read_only, structured_output=False)
-    def capture_camera(camera: CameraName) -> list[TextContent | ImageContent]:
+    def capture_camera(camera: CameraName):
         """Capture a FRESH overhead/wrist image with verified broker SHA-256 evidence."""
         response = call("POST", "/v1/capture", {"camera": camera})
         metadata, encoded = _verified_capture(response)
