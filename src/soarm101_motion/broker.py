@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from soarm101_motion.capability_profile import CapabilityProfile, ProfileError, ROUTE_TO_TOOL
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
     DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
@@ -145,12 +146,14 @@ class RobotBrokerService:
         executor: AgentCommandExecutor | None = None,
         token: str,
         event_path: str | Path = DEFAULT_EVENT_PATH,
+        profile: CapabilityProfile | None = None,
     ) -> None:
         if not str(token):
             raise ValueError("broker token cannot be empty")
         self.executor = executor or AgentCommandExecutor()
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
+        self.profile = profile if profile is not None else CapabilityProfile.full()
         self._operation_lock = threading.Lock()
         self._event_lock = threading.Lock()
 
@@ -244,6 +247,36 @@ class RobotBrokerService:
             body={"ok": True, "request_id": request_id, "result": result},
         )
 
+    def _project_capabilities(self, response: BrokerResponse) -> BrokerResponse:
+        if response.status != HTTPStatus.OK:
+            return response
+        result = response.body.get("result")
+        if not isinstance(result, dict):
+            return response
+        visible = dict(result)
+        actions = visible.get("actions")
+        if isinstance(actions, dict):
+            names = {
+                "robot_state": "state", "capture_camera": "capture",
+                "go_pose": "go_pose", "jog_joint": "joint",
+                "jog_cartesian": "jog", "move_gripper": "gripper",
+                "sleep": "sleep", "sleep_up": "sleep_up", "stop": "stop",
+            }
+            visible["actions"] = {
+                key: value for key, value in actions.items()
+                if key not in names.values() or any(
+                    name in self.profile.allowed_tools and action == key
+                    for name, action in names.items()
+                )
+            }
+        if isinstance(visible.get("cameras"), list):
+            visible["cameras"] = [
+                camera for camera in visible["cameras"]
+                if camera in self.profile.allowed_cameras
+            ]
+        visible["broker_profile"] = self.profile.public()
+        return BrokerResponse(response.status, {**response.body, "result": visible})
+
     def dispatch(
         self,
         method: str,
@@ -253,6 +286,28 @@ class RobotBrokerService:
         method = method.upper()
         request = dict(payload or {})
         request_id = uuid.uuid4().hex
+
+        if method == "GET" and path == "/v1/profile":
+            return BrokerResponse(
+                HTTPStatus.OK,
+                {"ok": True, "request_id": request_id, "result": self.profile.public()},
+            )
+        try:
+            self.profile.check(method, path, request)
+        except (PermissionError, ProfileError) as exc:
+            self._record(
+                request_id=request_id,
+                action="profile_rejection",
+                request={"method": method, "path": path, **request},
+                ok=False,
+                duration_s=0.0,
+                error=str(exc),
+            )
+            status = HTTPStatus.FORBIDDEN if isinstance(exc, PermissionError) else HTTPStatus.BAD_REQUEST
+            return BrokerResponse(
+                status,
+                {"ok": False, "request_id": request_id, "error": str(exc)},
+            )
 
         if method == "GET" and path == "/v1/health":
             return BrokerResponse(
@@ -264,12 +319,12 @@ class RobotBrokerService:
                 },
             )
         if method == "GET" and path == "/v1/capabilities":
-            return self._execute(
+            return self._project_capabilities(self._execute(
                 request_id=request_id,
                 action="capabilities",
                 request=request,
                 arguments=["capabilities", "--robot-id", self.executor.robot_id],
-            )
+            ))
         if method == "GET" and path == "/v1/state":
             return self._execute(
                 request_id=request_id,
@@ -525,6 +580,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_BROKER_PORT)
     parser.add_argument("--robot-id", default="so101")
     parser.add_argument("--events", type=Path, default=DEFAULT_EVENT_PATH)
+    parser.add_argument(
+        "--profile", type=Path,
+        help="trusted-host JSON capability profile, pinned for broker process lifetime",
+    )
     envelope = parser.add_argument_group("trusted host motion envelope")
     envelope.add_argument(
         "--max-joint-speed-deg-s",
@@ -579,6 +638,7 @@ def main(argv: list[str] | None = None) -> int:
         executor=AgentCommandExecutor(config=config),
         token=token,
         event_path=args.events,
+        profile=CapabilityProfile.from_file(args.profile) if args.profile else None,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     limits = config.motion_limits_human
