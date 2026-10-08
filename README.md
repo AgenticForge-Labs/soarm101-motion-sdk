@@ -127,6 +127,12 @@ The unrestricted SDK, serial/camera devices, calibration files, Docker socket, S
 and unrelated host files remain outside the reasoning sandbox. The narrow transport is
 documented separately in [docs/agent-broker.md](docs/agent-broker.md). An optional **stdio MCP adapter** exposes exactly the same bounded broker routes to MCP-capable agents; see [docs/agent-mcp.md](docs/agent-mcp.md). It does not add robot authority or new motion methods. The built-in Hermes and Codex OpenShell runners may opt into it with `soarm101 agent sandbox run --interface mcp`; `robotctl` is retained as the default baseline. A trusted operator can also select a versioned `soarm101-broker --profile FILE.json` allowlist to vary which existing MCP tools, cameras, and tighter jog bounds an agent can use; that profile is enforced at the broker, not only in MCP discovery.
 
+Cartesian path execution now handles a narrow cheap-servo preflight race:
+if joints shift beyond the cached path's start tolerance during
+read-only workspace validation, the SDK rebuilds the path and rechecks
+workspace safety at most twice before refusing motion. It does not
+increase tolerance or retry an actual motion failure.
+
 For attended experimental manipulation, the
 [`mcp-profile-supervised-manipulation.json`](docs/examples/mcp-profile-supervised-manipulation.json)
 profile offers both cameras, saved poses/Sleep, bounded joint rotations,
