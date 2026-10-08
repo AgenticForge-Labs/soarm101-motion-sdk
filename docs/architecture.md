@@ -30,6 +30,12 @@ Rules:
   adding robot code. Adapter configuration may change harness launch/runtime state but cannot
   change broker routes, authority, broker credentials, or deterministic motion safety. This
   is product/runtime support, not benchmark orchestration.
+- The trusted broker may pin requested agent joint/Cartesian jog rates at startup
+  independently of its absolute motion envelope and inject them as explicit
+  arguments to the bounded CLI. The CLI validates their envelope bounds
+  before hardware access and the SDK still owns planning, workspace/IK,
+  joint, fault, following-error and settle checks. MCP clients cannot
+  raise rates through tool calls. No second motion controller is introduced.
 - The host-side agent broker remains transport-only: it serializes an explicit HTTP/JSON
   allowlist and delegates to the bounded agent CLI rather than reimplementing motion policy.
   It exposes no remote arm/disarm/relax, raw servo, arbitrary-command, calibration, or
