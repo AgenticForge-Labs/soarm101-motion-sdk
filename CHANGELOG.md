@@ -1,5 +1,11 @@
 # Changelog
 
+- Revalidate Cartesian paths on bounded stale-start recovery for
+  low-cost SO-ARM101 servos. A typed pre-execution stale-plan exception
+  prompts up to two complete replans and repeat workspace safety checks.
+  The cached-plan encoder tolerance, motor/path safety checks and agent
+  step limits are unchanged; continuous drift still fails closed.
+
 - Let the trusted broker pin requested single-joint and Cartesian agent
   jog speeds and accelerations separately from the SDK maximum envelope.
   Broker startup flags pass validated rates to the existing bounded CLI;
