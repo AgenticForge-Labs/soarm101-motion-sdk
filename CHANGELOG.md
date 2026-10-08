@@ -1,5 +1,7 @@
 # Changelog
 
+- Added operator-pinned, versioned broker capability profiles, validated at startup and enforced before broker dispatch, with matching MCP tool discovery, camera allowlists, model-frame/joint jog ceilings, configuration hashes, and example experimental profiles. No new robot-control authority or motion primitive.
+
 - Added an optional stdio MCP adapter for the existing authenticated bounded SO-ARM101 broker. It exposes typed robot state, cameras, saved poses, relative joint/Cartesian jogs, gripper, Sleep, and STOP/HOLD without creating a second motion or authority path. Camera images are SHA-verified; MCP configuration profiles, skills, and hosted perception remain future work.
 
 ## Guided desktop setup (locally validated)

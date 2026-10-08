@@ -41,6 +41,16 @@ Do not describe 100/1000 as physically validated until that run completes cleanl
 unchanged runtime guards.
 
 
+## Broker capability-profile testing
+
+Run `pytest tests/test_capability_profile.py tests/test_broker.py
+tests/test_mcp_server.py` without any robot or credentials. Validate that
+profile JSON rejects unknown capabilities, invalid limits and cameras; that
+hidden tool routes, aliases, or oversized movements are rejected at the
+authenticated broker even when called outside MCP; and that the stdio MCP
+tool list reflects the same trusted-host profile. This is separate from
+local supervised physical validation.
+
 ## Optional MCP agent facade
 
 Install the optional MCP extra with `pip install -e '.[mcp]'` and run

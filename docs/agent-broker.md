@@ -115,6 +115,17 @@ Acceptance requires authenticated health/capability/state responses, fresh named
 captures whose client-side SHA verification succeeds, and corresponding JSONL broker evidence.
 No motion authority is required or expected. Stop the broker after the check.
 
+## Operator-pinned capability profiles
+
+An operator may start the broker with `--profile FILE.json` to select a
+versioned restricted tool/camera/motion profile for one experimental run.
+The broker enforces it on every request, not just in MCP tool discovery;
+the profile and SHA-256 can be inspected via authenticated
+`GET /v1/profile`. Default startup (no profile) retains the existing full
+bounded broker surface. See [agent-mcp.md](agent-mcp.md) and
+`docs/examples/mcp-profile-*.json`. Profiles cannot authorize unbounded
+hardware control, relax calibration, or create physical authority.
+
 ## Broker routes
 
 Read-only:

@@ -12,9 +12,10 @@ import hmac
 import json
 import math
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Literal
 
+from soarm101_motion.capability_profile import TOOL_ROUTES
 from soarm101_motion.robotctl import _request
 
 BrokerRequest = Callable[..., dict[str, object]]
@@ -60,7 +61,26 @@ def _verified_capture(response: Mapping[str, object]) -> tuple[dict[str, object]
     return metadata, encoded
 
 
-def create_server(request_fn: BrokerRequest | None = None):
+def broker_visible_tools(request_fn: BrokerRequest | None = None) -> frozenset[str]:
+    """Discover pinned, broker-enforced tool permissions with the broker token."""
+    request = request_fn or _request
+    response = request(method="GET", path="/v1/profile", payload=None)
+    result = response.get("result")
+    if not response.get("ok") or not isinstance(result, dict):
+        raise RuntimeError("broker did not provide a valid capability profile")
+    tools = result.get("tools")
+    if not isinstance(tools, list) or any(not isinstance(x, str) for x in tools):
+        raise RuntimeError("broker capability profile is missing a tool list")
+    if len(tools) != len(set(tools)) or set(tools) - set(TOOL_ROUTES):
+        raise RuntimeError("broker capability profile lists unsupported or duplicate tools")
+    return frozenset(tools)
+
+
+def create_server(
+    request_fn: BrokerRequest | None = None,
+    *,
+    allowed_tools: Iterable[str] | None = None,
+):
     """Create an stdio MCP server bound only to the existing bounded broker API.
 
     Dependency injection permits tests without a robot, serial port, or running
@@ -169,6 +189,14 @@ def create_server(request_fn: BrokerRequest | None = None):
         """Request bounded STOP/HOLD. Available without a motion lease; not a hardware E-stop."""
         return call("POST", "/v1/stop", {})
 
+    if allowed_tools is not None:
+        enabled = frozenset(allowed_tools)
+        if enabled - frozenset(TOOL_ROUTES):
+            raise ValueError("unknown MCP capability in selected profile")
+        for tool in TOOL_ROUTES:
+            if tool not in enabled:
+                mcp.remove_tool(tool)
+
     return mcp
 
 
@@ -176,7 +204,7 @@ def main() -> None:
     """Start a local MCP stdio server; never write non-protocol output to stdout."""
     if not os.environ.get("SOARM101_BROKER_TOKEN", "").strip():
         raise SystemExit("SOARM101_BROKER_TOKEN must be set for the MCP adapter")
-    create_server().run(transport="stdio")
+    create_server(allowed_tools=broker_visible_tools()).run(transport="stdio")
 
 
 if __name__ == "__main__":

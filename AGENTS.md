@@ -127,6 +127,11 @@ changes require development discipline; robot use requires conservative hardware
     authenticated `broker -> bounded agent CLI -> SDK` physical path, whether
     reached through robotctl or an optional MCP adapter. MCP tool annotations
     never grant human-only arming, calibration, or unrestricted robot authority.
+16. Optional capability profiles are loaded once by the trusted broker host. The
+    active profile must constrain broker HTTP execution independently of which
+    tools MCP advertises, including alternate endpoint spellings, camera access,
+    and stricter per-call limits. An agent or sandbox manifest must not choose,
+    widen, or hot-reload the broker's trusted-host profile.
 
 ## Repository boundary
 
