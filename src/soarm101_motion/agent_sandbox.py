@@ -1005,11 +1005,34 @@ def run_agent(
     max_turns: int = 100,
     timeout: int = 1800,
     read_only: bool = False,
+    interface: str = "robotctl",
+    capability_profile: Path | None = None,
     adapter_manifest: Path | None = None,
     openshell: OpenShellClient | None = None,
 ) -> RunResult:
     adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
+    if interface not in {"robotctl", "mcp"}:
+        raise AgentSandboxError("interface must be 'robotctl' or 'mcp'")
+    if interface == "mcp" and adapter.name not in {"hermes", "codex"}:
+        raise AgentSandboxError("MCP currently requires the built-in Hermes or Codex adapter")
+    chosen_profile = (
+        CapabilityProfile.from_file(capability_profile)
+        if capability_profile is not None else CapabilityProfile.full()
+    )
+    if not {"robot_capabilities", "robot_state"}.issubset(chosen_profile.allowed_tools):
+        raise AgentSandboxError("agent sandbox profile must permit capabilities and state")
+    if read_only:
+        # Read-only is broker-enforced even if the input profile permits motion.
+        restricted = chosen_profile.as_dict()
+        restricted["name"] = "sandbox-read-only"
+        restricted["tools"] = sorted(chosen_profile.allowed_tools.intersection(
+            {"robot_health", "robot_capabilities", "robot_state", "capture_camera"}
+        ))
+        if "capture_camera" not in restricted["tools"]:
+            restricted["cameras"] = []
+        restricted["limits"] = {}
+        chosen_profile = CapabilityProfile.from_document(restricted)
     selected_image = image or adapter.image
     if selected_auth.uses_login_state and provider:
         raise AgentSandboxError(
@@ -1053,7 +1076,6 @@ def run_agent(
     token = secrets.token_urlsafe(32)
     sandbox = _sandbox_name(adapter.name)
     broker_events = output_dir / "broker-events.jsonl"
-    broker = BrokerProcess(port=broker_port, token=token, event_path=broker_events)
     created = False
     capabilities: dict[str, object] = {}
     broker_event_offset = 0
@@ -1062,6 +1084,16 @@ def run_agent(
         prefix=f"soarm101-{adapter.name}-run-"
     ) as tmp:
         root = Path(tmp)
+        profile_file = root / "broker-profile.json"
+        profile_file.write_text(
+            json.dumps(chosen_profile.as_dict(), indent=2) + "\n", encoding="utf-8"
+        )
+        broker_kwargs: dict[str, object] = {
+            "port": broker_port, "token": token, "event_path": broker_events
+        }
+        if read_only or capability_profile is not None or interface == "mcp":
+            broker_kwargs["profile_path"] = profile_file
+        broker = BrokerProcess(**broker_kwargs)
         policy = root / "policy.yaml"
         skill = root / "SKILL.md"
         task_file = resolved_task
@@ -1079,10 +1111,14 @@ def run_agent(
                 agent=adapter.name,
                 auth=selected_auth.name,
                 adapter_manifest=adapter_manifest,
+                interface=interface,
             ),
             encoding="utf-8",
         )
-        skill.write_text(adapter.skill_text(), encoding="utf-8")
+        skill.write_text(
+            mcp_skill_text(agent=adapter.name) if interface == "mcp" else adapter.skill_text(),
+            encoding="utf-8",
+        )
         prepared_files = list(
             adapter.prepare_files(
                 root,
@@ -1090,6 +1126,15 @@ def run_agent(
                 auth=selected_auth.name,
             )
         )
+        if interface == "mcp":
+            if adapter.name == "hermes":
+                config_path = root / "hermes-config.yaml"
+                if not config_path.is_file():
+                    raise AgentSandboxError("Hermes one-run config is not prepared")
+                mcp_config_file(root, agent="hermes", hermes_config=config_path)
+            else:
+                prepared_files.append(mcp_config_file(root, agent="codex"))
+            prepared_files.extend(mcp_client_files(root))
         if selected_auth.uses_login_state:
             source_auth = _codex_login_auth_path(selected_auth.name)
             if not _valid_codex_chatgpt_auth(source_auth):
@@ -1162,6 +1207,7 @@ def run_agent(
                 "skill": _sha256_path(skill),
                 "robotctl": _sha256_path(robotctl),
                 "policy": _sha256_path(policy),
+                "broker_profile": _sha256_path(profile_file),
             }
             sensitive_inputs: list[str] = []
             for source, destination in prepared_files:
@@ -1181,6 +1227,8 @@ def run_agent(
                         "image": selected_image,
                         "provider": selected_provider,
                         "read_only": bool(read_only),
+                        "interface": interface,
+                        "broker_profile": chosen_profile.public(),
                         "input_sha256": input_sha256,
                         "sensitive_inputs": sensitive_inputs,
                     },
@@ -1204,14 +1252,20 @@ def run_agent(
 
             client.upload(sandbox, task_file, "/sandbox/TASK.md")
             client.upload(sandbox, skill, "/sandbox/SKILL.md")
-            client.upload(sandbox, robotctl, "/sandbox/robotctl.py")
+            if interface == "robotctl":
+                client.upload(sandbox, robotctl, "/sandbox/robotctl.py")
             for source, destination in prepared_files:
                 client.upload(sandbox, source, destination)
 
             prompt = (
                 "Read TASK.md and SKILL.md completely before acting. "
-                "Use only robotctl.py for robot/camera actions. "
-                "For visual claims, inspect every relevant fresh capture using the "
+                (
+                    "Use only the discovered SO-ARM101 MCP tools for robot/camera actions. "
+                    "Inspect MCP image pixels rather than guessing; do not use shell robotctl. "
+                    if interface == "mcp"
+                    else "Use only robotctl.py for robot/camera actions. "
+                )
+                + "For visual claims, inspect every relevant fresh capture using the "
                 "agent-specific local image tool described in SKILL.md. "
                 + (
                     "This is a hard read-only validation run: do not request any pose, joint, "
@@ -1229,6 +1283,7 @@ def run_agent(
                 model=selected_model,
                 max_turns=max_turns,
                 auth=selected_auth.name,
+                interface=interface,
             )
             environment = {
                 **adapter.environment(auth=selected_auth.name),
@@ -1245,11 +1300,11 @@ def run_agent(
             )
 
             (output_dir / f"{adapter.name}-stdout.jsonl").write_text(
-                process.stdout or "",
+                (process.stdout or "").replace(token, "<redacted-soarm101-broker-token>"),
                 encoding="utf-8",
             )
             (output_dir / f"{adapter.name}-stderr.txt").write_text(
-                process.stderr or "",
+                (process.stderr or "").replace(token, "<redacted-soarm101-broker-token>"),
                 encoding="utf-8",
             )
 
