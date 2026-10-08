@@ -147,6 +147,18 @@ image inspection differs by harness (for example Hermes `vision_analyze`
 versus Codex `view_image`). The MCP resources deliberately do not claim a
 specific model or image tool.
 
+## Canonical OpenShell agent integration
+
+The built-in Hermes and Codex OpenShell adapters support an optional
+`--interface mcp` on `soarm101 agent sandbox run`. Use
+`--capability-profile FILE.json` to pin the trusted-host broker's permissions
+for one run. `--read-only` reduces those permissions at the broker even if
+the file permits motion. `robotctl` remains the default and a useful A/B
+baseline; MCP never replaces the broker safety path.
+
+See [agent-sandbox.md](agent-sandbox.md) for exact read-only startup,
+configuration, evidence, and later supervised physical checks.
+
 ## Validation and next steps
 
 ```bash
