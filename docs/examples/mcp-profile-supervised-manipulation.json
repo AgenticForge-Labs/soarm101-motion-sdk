@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "supervised-manipulation",
+  "tools": [
+    "robot_health",
+    "robot_capabilities",
+    "robot_state",
+    "capture_camera",
+    "go_pose",
+    "jog_joint",
+    "jog_cartesian",
+    "move_gripper",
+    "sleep",
+    "stop"
+  ],
+  "cameras": [
+    "overhead",
+    "wrist"
+  ],
+  "limits": {
+    "max_joint_delta_deg": 10
+  }
+}
