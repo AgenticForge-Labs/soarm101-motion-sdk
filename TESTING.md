@@ -41,6 +41,43 @@ Do not describe 100/1000 as physically validated until that run completes cleanl
 unchanged runtime guards.
 
 
+## Passive agent-jog motion/HOLD trace
+
+Opt-in diagnostics were added after a user observed model-space downward
+creep during a sequence of 2 mm horizontal Cartesian commands. Endpoint IK
+returned an internally consistent horizontal solution, but that alone could
+not separate incorrect path commands, servo tracking, HOLD re-latching, and
+subsequent gravity sag.
+
+`soarm101 agent jog --trace-file /tmp/soarm101-jog-001.jsonl`
+reuses `PassiveBackendTrace` for the actual execution, including internal
+`_write_raw_positions` writes used by Feetech STOP/HOLD. The trace records
+preflight intent, existing command and feedback traffic, pre-HOLD settled
+joint state, precise hold markers and raw latch writes, plus encoder positions
+immediately and 2 s after HOLD. No new high-rate feedback polling is added
+during a trajectory. JSONL events carry runtime robot/calibration provenance.
+
+`soarm101 agent trace-summary /tmp/soarm101-jog-001.jsonl`
+reads the trace **offline** and reports model-space commanded/observed Z
+changes and raw HOLD-goal deltas. It makes no physical-clearance claim.
+
+Hardware-free focused suite:
+
+```bash
+pytest --no-cov tests/test_motion_trace.py tests/test_agent_control.py
+ruff check src/soarm101_motion/cli/main.py src/soarm101_motion/motion/trace.py \
+  tests/test_motion_trace.py tests/test_agent_control.py
+```
+
+For hardware: run only on the checked-out commit, with a matching calibrated
+follower and human `agent arm` lease, clear table and no payload. Stop the
+broker/GUI before using the direct CLI. Begin with an unloaded 2 mm world-X
+jog at historic 10 mm/s and 40 mm/s² and an independent side view of
+the gripper/table. Never intentionally provoke an unsafe sag or following
+error. Report the full trace and offline summary; determine whether the
+descent occurs in the planned command, encoder feedback, raw HOLD latch,
+or the following 2 seconds before increasing rates.
+
 ## Stale Cartesian preflight on low-cost servos
 
 The live Codex MCP run on 2026-10-08 produced three broker HTTP 409
