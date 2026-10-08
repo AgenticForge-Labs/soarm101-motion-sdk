@@ -137,6 +137,7 @@ def test_read_only_profile_enforced_by_broker_not_just_mcp(tmp_path: Path) -> No
     assert service.dispatch("GET", "/v1/state").status == 200
     assert service.dispatch("POST", "/v1/stop", {}).status == 403
     assert service.dispatch("POST", "/v1/gripper", {"target": "open"}).status == 403
+    assert service.dispatch("POST", "/v1/sleep_up", {}).status == 403
     assert executor.calls == [("state", "--robot-id", "so101")]
 
 
