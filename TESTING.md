@@ -51,6 +51,10 @@ authenticated broker even when called outside MCP; and that the stdio MCP
 tool list reflects the same trusted-host profile. This is separate from
 local supervised physical validation.
 
+## MCP guidance contract testing
+
+Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm resources/prompts are readable, preserve calibrated-coordinate and evidence rules, and do not change the active MCP tool allowlist.
+
 ## Optional MCP agent facade
 
 Install the optional MCP extra with `pip install -e '.[mcp]'` and run
