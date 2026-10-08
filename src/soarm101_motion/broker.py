@@ -274,6 +274,14 @@ class RobotBrokerService:
                 camera for camera in visible["cameras"]
                 if camera in self.profile.allowed_cameras
             ]
+        if isinstance(visible.get("actions"), dict):
+            actions = dict(visible["actions"])
+            if isinstance(actions.get("capture"), list):
+                actions["capture"] = [
+                    camera for camera in actions["capture"]
+                    if camera in self.profile.allowed_cameras
+                ]
+            visible["actions"] = actions
         visible["broker_profile"] = self.profile.public()
         return BrokerResponse(response.status, {**response.body, "result": visible})
 
