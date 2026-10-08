@@ -1,5 +1,13 @@
 # Changelog
 
+- Added opt-in Hermes/Codex OpenShell MCP agent integration with one-run
+  client-only Python bundles, operator-pinned broker profiles, dual broker +
+  OpenShell read-only enforcement, camera evidence retention and run provenance.
+  Legacy robotctl remains the default baseline; live provider and physical
+  operation still require local validation. Documented future hand-coded and
+  multi-model specialist perception experiments in PLAN.md.
+
+
 - Added harness-neutral MCP guidance resources for coordinate, joint, visual, and failure-recovery operation plus an experimental task prompt; these are semantic context only and add no robot authority or motion primitive.
 
 - Added operator-pinned, versioned broker capability profiles, validated at startup and enforced before broker dispatch, with matching MCP tool discovery, camera allowlists, model-frame/joint jog ceilings, configuration hashes, and example experimental profiles. No new robot-control authority or motion primitive.
