@@ -23,6 +23,9 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .agent_adapters import HERMES
+from .agent_mcp_runtime import MCP_PYTHON, client_files as mcp_client_files
+from .agent_mcp_runtime import config_file as mcp_config_file, skill_text as mcp_skill_text
+from .capability_profile import CapabilityProfile
 from .agent_adapters import get_agent_adapter
 from .agent_adapters import resolve_agent_adapter
 
@@ -248,8 +251,11 @@ def broker_policy_text(
     agent: str = DEFAULT_AGENT,
     auth: str | None = None,
     adapter_manifest: Path | None = None,
+    interface: str = "robotctl",
 ) -> str:
     adapter = resolve_agent_adapter(agent, adapter_manifest)
+    if interface not in {"robotctl", "mcp"}:
+        raise ValueError(f"unsupported robot interface {interface!r}")
     read_only_rules = (
         ("GET", "/v1/health"),
         ("GET", "/v1/capabilities"),
@@ -265,6 +271,10 @@ def broker_policy_text(
         ("POST", "/v1/stop"),
     )
     rules = read_only_rules if read_only else read_only_rules + motion_rules
+    if interface == "mcp":
+        rules += (("GET", "/v1/profile"),)
+        if not read_only:
+            rules += (("POST", "/v1/sleep-up"),)
     lines = [
         "version: 1",
         "filesystem_policy:",
@@ -304,6 +314,8 @@ def broker_policy_text(
     lines.extend(
         f"      - path: {binary}" for binary in adapter.robot_client_binaries
     )
+    if interface == "mcp":
+        lines.extend(("      - path: " + MCP_PYTHON, "      - path: /opt/soarm101-mcp/bin/python3"))
     lines.extend(adapter.extra_network_policy_lines(auth=auth))
     return "\n".join(lines) + "\n"
 
@@ -501,7 +513,9 @@ class BrokerProcess:
         port: int,
         token: str,
         event_path: Path,
+        profile_path: Path | None = None,
     ) -> None:
+        self.profile_path = profile_path
         self.port = int(port)
         self.token = token
         self.event_path = event_path
@@ -511,18 +525,15 @@ class BrokerProcess:
         env = os.environ.copy()
         env["SOARM101_BROKER_TOKEN"] = self.token
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable, "-m", "soarm101_motion.broker",
+            "--host", DEFAULT_BROKER_HOST, "--port", str(self.port),
+            "--events", str(self.event_path),
+        ]
+        if self.profile_path is not None:
+            command.extend(["--profile", str(self.profile_path)])
         self.process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "soarm101_motion.broker",
-                "--host",
-                DEFAULT_BROKER_HOST,
-                "--port",
-                str(self.port),
-                "--events",
-                str(self.event_path),
-            ],
+            command,
             env=env,
             text=True,
             stdout=subprocess.PIPE,
