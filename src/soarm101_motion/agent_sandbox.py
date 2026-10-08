@@ -180,6 +180,46 @@ def _validate_read_only_evidence(
     return validation
 
 
+
+def _retain_mcp_capture_evidence(
+    *,
+    broker_events: Path,
+    event_offset: int,
+    output_dir: Path,
+) -> dict[str, str]:
+    """Retain SHA-checked host camera evidence when MCP returns pixels in-band.
+
+    Unlike robotctl, MCP provides images directly to the reasoning model without
+    first saving them in the sandbox observation folder. Use the broker's trusted
+    capture_evidence record, not a model-generated filename, to preserve frames.
+    """
+    saved: dict[str, str] = {}
+    for event in _read_broker_events(broker_events)[event_offset:]:
+        if event.get("action") != "capture_evidence" or event.get("ok") is not True:
+            continue
+        record = event.get("result")
+        if not isinstance(record, dict):
+            continue
+        camera = str(record.get("name") or "")
+        digest = str(record.get("sha256") or "")
+        host_path = str(record.get("host_path") or "")
+        request_id = str(event.get("request_id") or "")
+        if not (camera in {"overhead", "wrist"} and len(digest) == 64
+                and all(c in "0123456789abcdef" for c in digest)
+                and len(request_id) >= 12
+                and all(c in "0123456789abcdef" for c in request_id)):
+            raise AgentSandboxError("broker capture evidence is incomplete or invalid")
+        raw = Path(host_path).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise AgentSandboxError("broker capture evidence image SHA-256 mismatch")
+        relative = Path("observations") / "mcp" / f"{camera}-{request_id[:16]}.jpg"
+        destination = output_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(raw)
+        saved[str(relative)] = digest
+    return saved
+
+
 def dockerfile_text(*, agent: str = DEFAULT_AGENT) -> str:
     return get_agent_adapter(agent).dockerfile_text()
 
@@ -1333,6 +1373,15 @@ def run_agent(
                         encoding="utf-8",
                     ) as handle:
                         handle.write(f"{source}: {exc}\n")
+
+            if interface == "mcp":
+                # Retain the broker's verified camera bytes independently of
+                # whether a harness writes its own observation file.
+                _retain_mcp_capture_evidence(
+                    broker_events=broker_events,
+                    event_offset=broker_event_offset,
+                    output_dir=output_dir,
+                )
 
             if read_only:
                 _validate_read_only_evidence(
