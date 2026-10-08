@@ -113,8 +113,9 @@ changes require development discipline; robot use requires conservative hardware
     `docs/agent-sandbox.md`; higher-level benchmark design and scoring remain outside the SDK.
 13. The canonical OpenShell path must never mount the Motion SDK checkout, serial devices,
     camera devices, calibration files, Docker socket, SSH credentials, or unrelated host
-    files into the reasoning sandbox. The only physical action path is
-    OpenShell -> robotctl -> authenticated broker -> bounded agent CLI -> SDK.
+    files into the reasoning sandbox. Physical actions must always pass through
+    the authenticated broker -> bounded agent CLI -> SDK. The current OpenShell
+    path uses robotctl; optional local stdio MCP is another client of the same broker.
 14. Human `agent arm` authority remains outside the sandbox. Sandbox setup/run code may
     verify authority but must never create, extend, or bypass it.
 15. Keep agent-harness differences behind `agent_adapters.py`. Hermes and Codex are
@@ -123,7 +124,9 @@ changes require development discipline; robot use requires conservative hardware
     details. Neither Python adapters nor manifests may add a second robot API, second broker,
     override broker URL/token ownership, create authority, or introduce agent-specific motion
     semantics. Every harness must share the same
-    `robotctl -> broker -> bounded agent CLI -> SDK` physical path.
+    authenticated `broker -> bounded agent CLI -> SDK` physical path, whether
+    reached through robotctl or an optional MCP adapter. MCP tool annotations
+    never grant human-only arming, calibration, or unrestricted robot authority.
 
 ## Repository boundary
 
