@@ -32,6 +32,20 @@ The goal is not to replace ROS or MoveIt. Those ecosystems are valuable when a p
 
 LeRobot helped inspire this project’s approach to SO-ARM101 hardware and operation. Thank you to the LeRobot contributors and community. The approachable developer experience of the UFactory xArm SDK also helped shape the goal of making arm control easier to discover and use. This SDK is an independent implementation: LeRobot is optional and is not imported by the runtime.
 
+## Diagnostic trace for a bounded Cartesian jog
+
+For attended troubleshooting of an apparent downward shift during horizontal
+motion, the trusted operator can run
+`soarm101 agent jog --frame world --x-mm 2 --trace-file /tmp/jog.jsonl`
+under an existing human-issued agent authority lease, and then inspect
+`soarm101 agent trace-summary /tmp/jog.jsonl`. The JSONL trace
+records existing motor command/feedback reads, STOP/HOLD raw goal
+latching, and two post-HOLD encoder observations (immediate and 2 seconds
+later). It does not increase polling during the trajectory and does not
+alter the movement or safety policies. TCP coordinates reconstructed
+from encoders are model estimates, not direct physical clearance measurements.
+See [docs/agent-arm101-cli.md](docs/agent-arm101-cli.md).
+
 ## Motion envelope
 
 The SDK separates **requested host motion** from the faster inner servo tracking profile.
