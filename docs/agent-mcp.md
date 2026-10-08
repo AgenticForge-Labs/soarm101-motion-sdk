@@ -123,6 +123,30 @@ is **not** a hardware emergency stop. A human must explicitly arm through
 arming, disarming, relax, calibration, servo registers, unrestricted joint
 vectors, shell execution, or new motion primitives.
 
+## MCP guidance resources and task prompt
+
+The MCP server also publishes static, harness-neutral guidance. These resources
+do not call the broker and are not a source of dynamic robot state:
+
+- `soarm101://guidance/core` — authority boundary and evidence-first loop
+- `soarm101://guidance/coordinates` — calibrated world/tool-frame use
+- `soarm101://guidance/joints` — small named-joint corrections
+- `soarm101://guidance/vision` — fresh-camera evidence rules
+- `soarm101://guidance/recovery` — rejection/failure recovery
+
+The `operate_robot_task(task, strategy)` MCP prompt gives hosts a compact
+entry point for a task. `strategy` may be `auto`, `coordinates`,
+`joints`, or `observe-only`. This is an **experimental reasoning
+instruction**, not an enforcement switch: actual available actions still come
+from the broker profile and Motion SDK. This distinction lets Forge Bench
+compare how semantic guidance and tool surfaces affect agent performance
+without conflating prompts with physical authority.
+
+Harness-specific instructions remain in the existing OpenShell skills because
+image inspection differs by harness (for example Hermes `vision_analyze`
+versus Codex `view_image`). The MCP resources deliberately do not claim a
+specific model or image tool.
+
 ## Validation and next steps
 
 ```bash
