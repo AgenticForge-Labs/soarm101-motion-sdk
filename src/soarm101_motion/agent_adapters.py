@@ -133,6 +133,7 @@ class AgentAdapter:
         model: str | None,
         max_turns: int,
         auth: str | None = None,
+        interface: str = "robotctl",
     ) -> list[str]:
         raise NotImplementedError
 
@@ -184,6 +185,7 @@ class HermesAgentAdapter(AgentAdapter):
         model: str | None,
         max_turns: int,
         auth: str | None = None,
+        interface: str = "robotctl",
     ) -> list[str]:
         self.auth_mode(auth)
         chosen_model = model or self.default_model
@@ -201,7 +203,7 @@ class HermesAgentAdapter(AgentAdapter):
             str(int(max_turns)),
             "--ignore-rules",
             "--toolsets",
-            "hermes-cli",
+            "hermes-cli,mcp-soarm101" if interface == "mcp" else "hermes-cli",
             "--provider",
             "openrouter",
             "--model",
@@ -254,6 +256,7 @@ class CodexAgentAdapter(AgentAdapter):
         model: str | None,
         max_turns: int,
         auth: str | None = None,
+        interface: str = "robotctl",
     ) -> list[str]:
         del max_turns
         selected_auth = self.auth_mode(auth)
@@ -287,11 +290,18 @@ class CodexAgentAdapter(AgentAdapter):
         else:  # pragma: no cover - auth_mode already rejects unknown values.
             raise ValueError(selected_auth.name)
 
+        if interface not in {"robotctl", "mcp"}:
+            raise ValueError(f"unsupported robot interface {interface!r}")
+        # --ignore-user-config would suppress the isolated MCP config.toml.
+        # CODEX_HOME is per-run /sandbox/.codex, never the operator's host config.
+        if interface == "mcp":
+            command.extend(("-c", "mcp_servers.soarm101.enabled=true"))
+
         command.extend(
             (
                 "exec",
                 "--ephemeral",
-                "--ignore-user-config",
+                *(("--ignore-user-config",) if interface == "robotctl" else ()),
                 "--ignore-rules",
                 "--skip-git-repo-check",
                 "--dangerously-bypass-approvals-and-sandbox",
@@ -393,6 +403,7 @@ class ManifestAgentAdapter(AgentAdapter):
         model: str | None,
         max_turns: int,
         auth: str | None = None,
+        interface: str = "robotctl",
     ) -> list[str]:
         self.auth_mode(auth)
         values: dict[str, str | None] = {
@@ -403,6 +414,8 @@ class ManifestAgentAdapter(AgentAdapter):
             "{skill_path}": "/sandbox/SKILL.md",
         }
         command: list[str] = []
+        if interface != "robotctl":
+            raise ValueError("external agent manifests require the existing robotctl interface")
         for token in self.command_argv:
             if token in _MANIFEST_PLACEHOLDERS:
                 value = values[token]
