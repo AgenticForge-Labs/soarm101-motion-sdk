@@ -54,6 +54,10 @@ class PassiveBackendTrace:
         trace_metadata["calibration_id"] = getattr(self.arm, "calibration_id", None)
         self._record("trace_start", **trace_metadata)
         self._wrap("write_joint_positions", self._wrap_write_joint_positions)
+        # Feetech STOP/HOLD latches the live raw encoder snapshot via this
+        # lower-level method, bypassing write_joint_positions entirely.
+        # Recording it is necessary to see whether HOLD changes servo goals.
+        self._wrap("_write_raw_positions", self._wrap_write_raw_positions)
         self._wrap("read_joint_positions", self._wrap_read_joint_positions)
         self._wrap("get_hardware_state", self._wrap_get_hardware_state)
         self._wrap("write_tool_position", self._wrap_write_tool_position)
@@ -201,6 +205,42 @@ class PassiveBackendTrace:
                 speed_raw=self._json_speed(effective_speed_raw),
                 acceleration_raw=effective_acceleration_raw,
                 duplicate_raw=duplicate_raw,
+                call_ms=(time.perf_counter() - started) * 1000.0,
+            )
+            return result
+
+        return traced
+
+    def _wrap_write_raw_positions(self, original: Any) -> Any:
+        def traced(
+            positions: Mapping[str, int],
+            *,
+            speed_raw: int | Mapping[str, int],
+            acceleration_raw: int,
+        ) -> Any:
+            raw = {str(name): int(value) for name, value in positions.items()}
+            started = time.perf_counter()
+            try:
+                result = original(
+                    positions,
+                    speed_raw=speed_raw,
+                    acceleration_raw=acceleration_raw,
+                )
+            except BaseException as exc:
+                self._record(
+                    "raw_command_error",
+                    joints_raw=raw,
+                    speed_raw=self._json_speed(speed_raw),
+                    acceleration_raw=acceleration_raw,
+                    call_ms=(time.perf_counter() - started) * 1000.0,
+                    error=repr(exc),
+                )
+                raise
+            self._record(
+                "raw_command",
+                joints_raw=raw,
+                speed_raw=self._json_speed(speed_raw),
+                acceleration_raw=acceleration_raw,
                 call_ms=(time.perf_counter() - started) * 1000.0,
             )
             return result
