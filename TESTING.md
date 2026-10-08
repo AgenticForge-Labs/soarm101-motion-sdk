@@ -51,6 +51,16 @@ authenticated broker even when called outside MCP; and that the stdio MCP
 tool list reflects the same trusted-host profile. This is separate from
 local supervised physical validation.
 
+The `mcp-profile-supervised-manipulation.json` example must parse and
+advertise both cameras, joint control limited to 10 degrees per request,
+Cartesian jogs, saved poses, Sleep, gripper and STOP/HOLD. Tests should
+confirm the optional model-frame jog cap is absent so the unchanged
+bounded agent CLI's calibrated *physical* 50 mm/10 mm start-height guard
+remains authoritative. This must not be interpreted as validating 50 mm
+movements or higher speed on real hardware; investigate previously observed
+height drift and HTTP 409 rejections before increasing speed or step size
+during live object approach.
+
 ## MCP guidance contract testing
 
 Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm server initialization exposes MCP-first live
