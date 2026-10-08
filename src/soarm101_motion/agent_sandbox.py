@@ -1305,8 +1305,13 @@ def run_agent(
                     if interface == "mcp"
                     else "Use only robotctl.py for robot/camera actions. "
                 )
-                + "For visual claims, inspect every relevant fresh capture using the "
-                "agent-specific local image tool described in SKILL.md. "
+                + (
+                    "For visual claims, inspect the pixels returned in the fresh MCP image "
+                    "content using the harness's supported image capability. "
+                    if interface == "mcp"
+                    else "For visual claims, inspect every relevant fresh capture using the "
+                    "agent-specific local image tool described in SKILL.md. "
+                )
                 + (
                     "This is a hard read-only validation run: do not request any pose, joint, "
                     "Cartesian, gripper, Sleep, or STOP action. The OpenShell policy omits "
@@ -1332,6 +1337,25 @@ def run_agent(
                 ),
                 "SOARM101_BROKER_TOKEN": token,
             }
+            if interface == "mcp":
+                # Fail before handing motion authority to the model if the
+                # packaged MCP runtime or authenticated profile is unavailable.
+                probe = client.exec(
+                    sandbox,
+                    [
+                        MCP_PYTHON, "-c",
+                        "from soarm101_motion.mcp_server import create_server, broker_visible_tools; "
+                        "create_server(allowed_tools=broker_visible_tools()); "
+                        "print('soarm101-mcp-ready')",
+                    ],
+                    env=environment,
+                    timeout=30,
+                )
+                if probe.returncode != 0 or "soarm101-mcp-ready" not in probe.stdout:
+                    raise AgentSandboxError(
+                        "isolated MCP tool handshake failed; verify image build, broker "
+                        "profile and OpenShell policy before agent handoff"
+                    )
             process = client.exec(
                 sandbox,
                 command,
