@@ -7,6 +7,7 @@ from soarm101_motion.agent_control import (
     AgentAuthorityStore,
     evaluate_agent_jog,
 )
+from soarm101_motion.cli.main import _agent_requested_rate, build_parser
 from soarm101_motion.workspace import fit_paper_workspace
 
 
@@ -27,6 +28,26 @@ def _identity_workspace(*, calibration_id: str = "sha256:motor"):
         height_m=height,
         reference_height_m=0.050,
     )
+
+
+def test_agent_cli_rates_are_explicit_and_validated_before_hardware() -> None:
+    parser = build_parser()
+    jog = parser.parse_args([
+        "agent", "jog", "--frame", "world", "--x-mm", "5",
+        "--speed-mm-s", "20", "--acceleration-mm-s2", "80",
+    ])
+    assert jog.speed_mm_s == 20
+    assert jog.acceleration_mm_s2 == 80
+    joint = parser.parse_args([
+        "agent", "joint", "shoulder_pan", "--delta-deg", "2",
+        "--speed-deg-s", "16", "--acceleration-deg-s2", "50",
+    ])
+    assert joint.speed_deg_s == 16
+    assert joint.acceleration_deg_s2 == 50
+    assert _agent_requested_rate(20.0, "Cartesian speed", 50.0) == 20.0
+    for invalid in [0.0, -1.0, float("nan"), float("inf"), 51.0]:
+        with pytest.raises(ValueError):
+            _agent_requested_rate(invalid, "Cartesian speed", 50.0)
 
 
 def test_agent_authority_is_time_bounded_and_identity_bound(tmp_path) -> None:
