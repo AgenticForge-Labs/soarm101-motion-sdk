@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from soarm101_motion import SOARM101
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion import PassiveBackendTrace
+from soarm101_motion.motion.trace import summarize_agent_jog_trace
 
 
 class _FakeMotor:
@@ -117,3 +118,63 @@ def test_passive_trace_captures_raw_hold_latch_without_extra_reads(tmp_path) -> 
     assert writes[0]["speed_raw"] == 1
     assert writes[0]["acceleration_raw"] == 1
     assert not any(e["event"] == "feedback" for e in events)
+
+
+
+def test_offline_jog_summary_separates_command_feedback_and_hold(tmp_path) -> None:
+    path = tmp_path / "synthetic.jsonl"
+    events = [
+        {
+            "event": "trace_start",
+            "robot_id": "so101", "calibration_id": "sha256:known",
+            "action": "agent_jog", "frame": "world",
+            "delta_model_mm": [2.0, 0.0, 0.0],
+            "requested_speed_mm_s": 10.0,
+        },
+        {
+            "event": "marker", "marker": "preflight",
+            "start_model_xyz_mm": [195.0, 0.0, 100.0],
+            "target_model_xyz_mm": [197.0, 0.0, 100.0],
+        },
+        {"event": "command", "tcp_xyz_mm": [195.0, 0.0, 100.0]},
+        {"event": "raw_command", "joints_raw": {"shoulder_lift": 2000}},
+        {"event": "feedback", "tcp_xyz_mm": [195.0, 0.0, 100.0]},
+        {"event": "command", "tcp_xyz_mm": [197.0, 0.0, 100.0]},
+        {"event": "raw_command", "joints_raw": {"shoulder_lift": 2020}},
+        {"event": "feedback", "tcp_xyz_mm": [197.0, 0.0, 97.0]},
+        {
+            "event": "marker", "marker": "motion_completed_before_hold",
+            "completed": True, "tcp_xyz_mm": [197.0, 0.0, 97.0],
+        },
+        {"event": "marker", "marker": "hold_start"},
+        {"event": "raw_command", "joints_raw": {"shoulder_lift": 2010}},
+        {"event": "marker", "marker": "hold_complete"},
+        {
+            "event": "marker", "marker": "post_hold_immediate",
+            "tcp_xyz_mm": [197.0, 0.0, 96.0],
+        },
+        {
+            "event": "marker", "marker": "post_hold_2s",
+            "tcp_xyz_mm": [197.0, 0.0, 95.5],
+        },
+        {"event": "trace_end", "error": None},
+    ]
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    summary = summarize_agent_jog_trace(path)
+    assert summary["completed"] is True
+    assert summary["calibration_id"] == "sha256:known"
+    assert summary["request"]["target_model_xyz_mm"] == [197.0, 0.0, 100.0]
+    assert summary["trajectory"]["joint_commands"] == 2
+    assert summary["trajectory"]["commanded_model_z_change_mm"] == 0.0
+    assert summary["trajectory"]["observed_model_z_change_mm"] == -3.0
+    assert summary["hold"]["hold_goal_delta_ticks"] == {"shoulder_lift": -10}
+    assert summary["hold"]["model_z_change_over_2s_after_hold_mm"] == -0.5
+    assert "not direct measurements" in summary["coordinate_warning"]
+
+
+def test_offline_trace_summary_rejects_non_trace_jsonl(tmp_path) -> None:
+    path = tmp_path / "unrelated.jsonl"
+    path.write_text('{"event": "something_else"}\n')
+    import pytest
+    with pytest.raises(ValueError, match="not a passive"):
+        summarize_agent_jog_trace(path)
