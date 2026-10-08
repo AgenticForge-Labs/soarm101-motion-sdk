@@ -107,7 +107,8 @@ class FakeOpenShell:
 class FakeBroker:
     instances: list["FakeBroker"] = []
 
-    def __init__(self, *, port, token, event_path):
+    def __init__(self, *, port, token, event_path, profile_path=None):
+        self.profile_path = profile_path
         self.port = port
         self.token = token
         self.event_path = Path(event_path)
