@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "coordinate-small",
+  "tools": [
+    "robot_health",
+    "robot_capabilities",
+    "robot_state",
+    "capture_camera",
+    "go_pose",
+    "jog_cartesian",
+    "move_gripper",
+    "stop"
+  ],
+  "cameras": [
+    "overhead"
+  ],
+  "limits": {
+    "max_model_jog_mm": 5
+  }
+}
