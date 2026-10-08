@@ -41,6 +41,23 @@ Do not describe 100/1000 as physically validated until that run completes cleanl
 unchanged runtime guards.
 
 
+## Trusted broker requested-motion rate configuration
+
+Hardware-free tests cover broker defaults, custom joint/Cartesian requested
+rates, positive/finite/envelope checks before subprocess execution,
+propagation only into bounded joint/jog commands, and CLI parser/rate
+validation without opening the follower. Run:
+
+```bash
+pytest tests/test_broker.py tests/test_agent_control.py
+```
+
+Before an operator selects higher real-hardware rates, investigate the
+prior Cartesian physical-height drift and repeated HTTP 409 errors,
+validate motion settle and trajectory behavior at existing defaults,
+and perform supervised incremental speed characterization. A
+successful startup or test is not hardware validation.
+
 ## Broker capability-profile testing
 
 Run `pytest tests/test_capability_profile.py tests/test_broker.py
