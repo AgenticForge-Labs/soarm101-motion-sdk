@@ -1,5 +1,12 @@
 # Changelog
 
+- Let the trusted broker pin requested single-joint and Cartesian agent
+  jog speeds and accelerations separately from the SDK maximum envelope.
+  Broker startup flags pass validated rates to the existing bounded CLI;
+  the CLI revalidates them before hardware access. Default rates remain
+  unchanged, rates are not agent-selectable, and the SDK safety contract
+  remains authoritative.
+
 - Added a supervised MCP manipulation profile with both cameras,
   saved poses/Sleep, Cartesian jogs, 10-degree-per-command joint control,
   and gripper access. It defers distance authority to the existing
