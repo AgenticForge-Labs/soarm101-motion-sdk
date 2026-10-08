@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "read-only",
+  "tools": [
+    "robot_health",
+    "robot_capabilities",
+    "robot_state",
+    "capture_camera"
+  ],
+  "cameras": [
+    "overhead"
+  ],
+  "limits": {}
+}
