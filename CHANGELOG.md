@@ -1,5 +1,13 @@
 # Changelog
 
+- Add opt-in trusted-host `agent jog --trace-file` evidence using the
+  shared passive backend trace. It captures model-space intent, streamed
+  joint commands, encoder feedback, raw Feetech STOP/HOLD goal latching,
+  and two post-HOLD observations. A read-only `agent trace-summary`
+  command distinguishes planned-model Z, feedback-model Z and HOLD
+  goal shifts without adding polling during trajectory execution.
+  Existing authority, motion policy and safety checks are unchanged.
+
 - Revalidate Cartesian paths on bounded stale-start recovery for
   low-cost SO-ARM101 servos. A typed pre-execution stale-plan exception
   prompts up to two complete replans and repeat workspace safety checks.
