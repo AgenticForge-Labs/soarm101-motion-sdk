@@ -138,6 +138,14 @@ changes require development discipline; robot use requires conservative hardware
     the broker/SDK rather than copied into static guidance. Keep harness-specific
     perception instructions out of the shared MCP guidance.
 
+18. The optional built-in Hermes/Codex MCP interface must use client-only
+    transport files inside the OpenShell sandbox, never hardware SDK source
+    trees or device mounts. Trusted-host capability profiles are operator-
+    supplied and frozen per run; read-only mode must reduce the broker's
+    execution allowlist itself. Keep model/provider selection independent of
+    interface choice, redact credentials from retained logs, and preserve the
+    robotctl baseline for paired studies.
+
 ## Repository boundary
 
 This SDK owns SO-ARM101 motion, calibration, kinematics, tooling/TCP definitions,
