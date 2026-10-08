@@ -1,6 +1,19 @@
 # Safety
 
 
+## Operator-only passive jog tracing
+
+The trusted CLI may enable a local passive command/feedback trace with
+`agent jog --trace-file PATH`. It records backend writes/readbacks already
+performed during motion, including low-level Feetech raw writes used by
+STOP/HOLD. Two additional position observations are made **after** HOLD,
+immediately and 2 seconds later; no extra high-frequency motor polling is
+introduced during movement. The SDK does not change commanded motion,
+collision assumptions, floor-clearance policy, lease authority, or safety
+checks when tracing is enabled. Trace output is diagnostic evidence, not
+an authority or a substitute for direct physical clearance observation.
+Do not place traces in an agent-writable sensitive host path.
+
 ## Stale Cartesian start recovery
 
 On low-cost servos, measured joints may shift between read-only Cartesian
