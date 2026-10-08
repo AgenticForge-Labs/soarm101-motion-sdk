@@ -1,5 +1,12 @@
 # Changelog
 
+- Added a supervised MCP manipulation profile with both cameras,
+  saved poses/Sleep, Cartesian jogs, 10-degree-per-command joint control,
+  and gripper access. It defers distance authority to the existing
+  calibrated physical-height 50 mm/10 mm bounded CLI guard instead
+  of the earlier demonstration's 5 mm model-coordinate profile cap.
+  No motion speed or safety guards were increased.
+
 - Advertise MCP-first live robot operation through MCP v2 server initialization
   instructions and clearer tool descriptions, with matching repository Codex
   guidance. Live state/camera/pose/motion should use the bounded broker tools,
