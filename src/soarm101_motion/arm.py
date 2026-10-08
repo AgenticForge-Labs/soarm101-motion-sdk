@@ -29,6 +29,7 @@ from soarm101_motion.exceptions import (
     MotionCancelledError,
     RobotConnectionError,
     SafetyViolationError,
+    StaleCartesianPlanError,
 )
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
@@ -790,40 +791,53 @@ class SOARM101:
             raise InvalidCommandError(
                 "workspace_check must be 'full', 'target_only', or 'off'"
             )
-        if self.config.enable_workspace_checks and workspace_check != "off":
-            planned = self.motion.plan_linear(
-                target,
-                tcp=self.active_tcp,
-                orientation_mode=orientation_mode,
-                look_at=look_at_array,
-                speed=speed,
-                acceleration=acceleration,
-                target_seed=target_seed,
-            )
-            if workspace_check == "full":
-                validate_workspace_path(
-                    self.model,
-                    planned.command_samples,
+        inspect_workspace = self.config.enable_workspace_checks and workspace_check != "off"
+        # A low-cost servo may continue settling by several encoder ticks while
+        # the path is being inspected. Never execute a stale plan or increase its
+        # start tolerance: rebuild and revalidate at most twice more instead.
+        attempts = 3 if inspect_workspace else 1
+        for attempt in range(attempts):
+            if inspect_workspace:
+                planned = self.motion.plan_linear(
+                    target,
                     tcp=self.active_tcp,
-                    **self._workspace_kwargs(),
+                    orientation_mode=orientation_mode,
+                    look_at=look_at_array,
+                    speed=speed,
+                    acceleration=acceleration,
+                    target_seed=target_seed,
                 )
-            else:
-                validate_workspace_configuration(
-                    self.model,
-                    planned.command_samples[-1],
+                if workspace_check == "full":
+                    validate_workspace_path(
+                        self.model,
+                        planned.command_samples,
+                        tcp=self.active_tcp,
+                        **self._workspace_kwargs(),
+                    )
+                else:
+                    validate_workspace_configuration(
+                        self.model,
+                        planned.command_samples[-1],
+                        tcp=self.active_tcp,
+                        **self._workspace_kwargs(),
+                    )
+            try:
+                return self.motion.move_linear(
+                    target,
                     tcp=self.active_tcp,
-                    **self._workspace_kwargs(),
+                    orientation_mode=orientation_mode,
+                    look_at=look_at_array,
+                    speed=speed,
+                    acceleration=acceleration,
+                    wait=wait,
+                    target_seed=target_seed,
                 )
-        return self.motion.move_linear(
-            target,
-            tcp=self.active_tcp,
-            orientation_mode=orientation_mode,
-            look_at=look_at_array,
-            speed=speed,
-            acceleration=acceleration,
-            wait=wait,
-            target_seed=target_seed,
-        )
+            except StaleCartesianPlanError:
+                if attempt + 1 == attempts:
+                    raise
+                # The controller rejected the cached plan before launching any
+                # motor command. Revalidate the same goal from a new measurement.
+        raise AssertionError("Cartesian preflight loop ended unexpectedly")
 
     def get_servo_angle(self, *, is_radian: bool = True) -> list[float]:
         positions = self.backend.read_joint_positions()
