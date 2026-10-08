@@ -31,6 +31,8 @@ TOOL_ROUTES: dict[str, tuple[str, str]] = {
     "stop": ("POST", "/v1/stop"),
 }
 ROUTE_TO_TOOL = {route: name for name, route in TOOL_ROUTES.items()}
+# Retain the broker's existing alternate spelling under the same permissions.
+ROUTE_TO_TOOL[("POST", "/v1/sleep_up")] = "sleep_up"
 CAMERA_NAMES = frozenset({"overhead", "wrist"})
 MAX_PROFILE_JOINT_DELTA_DEG = 30.0
 MAX_PROFILE_MODEL_JOG_MM = 50.0
