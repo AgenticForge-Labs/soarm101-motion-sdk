@@ -1671,3 +1671,85 @@ def test_sandbox_mcp_cli_accepts_interface_and_profile() -> None:
     assert args.interface == "mcp"
     assert args.capability_profile == "profile.json"
     assert args.read_only is True
+
+
+def test_read_only_mcp_reduces_broker_even_when_input_profile_allows_motion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from soarm101_motion.capability_profile import CapabilityProfile
+
+    seen: list[CapabilityProfile] = []
+
+    class ProfileInspectingBroker(FakeBroker):
+        def start(self):
+            assert self.profile_path is not None
+            profile = CapabilityProfile.from_file(self.profile_path)
+            seen.append(profile)
+            assert "jog_cartesian" not in profile.allowed_tools
+            assert "go_pose" not in profile.allowed_tools
+            assert "stop" not in profile.allowed_tools
+            super().start()
+
+        def request(self, method, path, payload=None):
+            assert (method, path) == ("GET", "/v1/capabilities")
+            return {"ok": True, "result": {"cameras": [], "authority": {"armed": False}}}
+
+        def require_authority(self):
+            raise AssertionError("read-only MCP must not require arming")
+
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", ProfileInspectingBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    monkeypatch.setattr(agent_sandbox, "_validate_read_only_evidence", lambda **kwargs: {})
+    output = tmp_path / "run"
+    result = agent_sandbox.run_agent(
+        agent="codex", auth="api-key", task=None, output_dir=output,
+        interface="mcp", read_only=True,
+        openshell=FakeOpenShell(),
+    )
+    assert result.exit_code == 0
+    assert len(seen) == 1
+    assert seen[0].allowed_tools == frozenset({
+        "robot_health", "robot_capabilities", "robot_state", "capture_camera"
+    })
+    assert json.loads((output / "run-metadata.json").read_text())["read_only"] is True
+
+
+def test_broker_token_is_redacted_from_agent_output_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LeakySyntheticAgent(FakeOpenShell):
+        def exec(self, name, command, *, workdir="/sandbox", env=None, timeout=1800):
+            result = super().exec(name, command, workdir=workdir, env=env, timeout=timeout)
+            if command and command[0] == "codex" and env:
+                secret = env["SOARM101_BROKER_TOKEN"]
+                return subprocess.CompletedProcess(
+                    command, 0, stdout=secret + "\n", stderr="secret=" + secret
+                )
+            return result
+
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    task = tmp_path / "TASK.md"
+    task.write_text("Inspect", encoding="utf-8")
+    output = tmp_path / "run"
+    agent_sandbox.run_agent(
+        agent="codex", auth="api-key", task=task, output_dir=output,
+        interface="mcp", openshell=LeakySyntheticAgent(),
+    )
+    stdout = (output / "codex-stdout.jsonl").read_text()
+    stderr = (output / "codex-stderr.txt").read_text()
+    assert "<redacted-soarm101-broker-token>" in stdout
+    assert "<redacted-soarm101-broker-token>" in stderr
+    assert "secret=" in stderr
