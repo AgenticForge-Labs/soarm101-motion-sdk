@@ -41,6 +41,33 @@ Do not describe 100/1000 as physically validated until that run completes cleanl
 unchanged runtime guards.
 
 
+## Stale Cartesian preflight on low-cost servos
+
+The live Codex MCP run on 2026-10-08 produced three broker HTTP 409
+rejections reporting `robot joints changed after Cartesian path
+validation; retry the move` (request IDs starting `134dabe`,
+`dbe89fd`, and `4e4cf4f`). This was a pre-execution stale-plan
+check, **not** evidence of following error, motor overload or collision.
+
+The underlying managed controller keeps its narrow cached-plan
+start tolerance. The facade now retries the *whole* planning and
+workspace-validation sequence at most twice on a typed
+`StaleCartesianPlanError`, preserving fail-closed behavior for
+persistent drift or other safety failures. Validate the focused
+hardware-free regressions:
+
+```bash
+pytest --no-cov tests/test_validated_linear_plan.py
+```
+
+For physical validation: keep the arm unloaded, workspace clear, and
+the previously calibrated setup, begin with conservative 2–5 mm
+jogs at existing requested speeds, and verify that unexpected
+start drift either causes safe revalidation or a clean refusal with
+no intermediate motion. Do not use a real object grasp or faster
+rates to test this change. Local servo behavior remains
+unvalidated until this check is performed.
+
 ## Trusted broker requested-motion rate configuration
 
 Hardware-free tests cover broker defaults, custom joint/Cartesian requested
