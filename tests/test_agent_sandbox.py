@@ -68,6 +68,10 @@ class FakeOpenShell:
                 stdout=f"{command[0]} 9.9.9\n",
                 stderr="",
             )
+        if command and command[0] == "/opt/soarm101-mcp/bin/python":
+            return subprocess.CompletedProcess(
+                command, 0, stdout="soarm101-mcp-ready\n", stderr=""
+            )
         return subprocess.CompletedProcess(
             command,
             0,
