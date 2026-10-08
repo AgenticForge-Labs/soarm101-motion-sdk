@@ -133,9 +133,14 @@ profile offers both cameras, saved poses/Sleep, bounded joint rotations,
 Cartesian moves and gripper open/close. The existing deterministic bounded
 agent CLI caps physical displacement at 50 mm above 100 mm calibrated
 starting TCP height and 10 mm at/below that height, independent of the
-model-frame broker profile. These caps are not motion speed settings.
-Review [docs/agent-mcp.md](docs/agent-mcp.md) and investigate motion
-rejections/height mismatch before faster or close-object physical trials.
+model-frame broker profile. These caps are not motion speed settings. The trusted broker can
+configure **requested** agent jog speeds/accelerations separately from
+the absolute SDK motion envelope and passes them to the bounded
+CLI subprocess. The agent itself cannot change rates; defaults
+remain 10 mm/s and 8 deg/s. See
+[docs/agent-broker.md](docs/agent-broker.md) for the operator flags.
+Investigate motion rejections/height mismatch before faster or
+close-object physical trials.
 
 For direct-host Codex sessions, the MCP server now advertises an MCP-first live
 robot operating preference through initialization instructions and tool
