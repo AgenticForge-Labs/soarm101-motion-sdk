@@ -68,6 +68,7 @@ def create_server(request_fn: BrokerRequest | None = None):
     """
     try:
         from mcp.server import MCPServer
+        from mcp.server.mcpserver.exceptions import ToolError
         from mcp.types import ImageContent, TextContent, ToolAnnotations
     except ImportError as exc:
         raise RuntimeError("MCP is optional; install with pip install -e '.[mcp]'") from exc
@@ -76,12 +77,19 @@ def create_server(request_fn: BrokerRequest | None = None):
     mcp = MCPServer("SO-ARM101 bounded broker")
 
     def call(method: str, path: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
-        response = request(method=method, path=path, payload=payload)
-        if not isinstance(response, dict) or not response.get("ok"):
-            raise RuntimeError("robot broker rejected the request")
+        try:
+            response = request(method=method, path=path, payload=payload)
+        except RuntimeError as exc:
+            # Expected broker rejections must remain actionable MCP tool errors.
+            # The MCP SDK deliberately conceals unexpected Python exceptions.
+            raise ToolError(str(exc)) from exc
+        if not isinstance(response, dict):
+            raise ToolError("robot broker response is not a JSON object")
+        if not response.get("ok"):
+            raise ToolError(str(response.get("error") or "robot broker rejected the request"))
         result = response.get("result")
         if not isinstance(result, dict):
-            raise RuntimeError("robot broker response is missing structured result")
+            raise ToolError("robot broker response is missing structured result")
         return {"request_id": response.get("request_id"), "result": result}
 
     read_only = ToolAnnotations(read_only_hint=True, open_world_hint=False)
