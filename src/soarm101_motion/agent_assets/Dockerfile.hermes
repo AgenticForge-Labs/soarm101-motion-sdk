@@ -6,7 +6,7 @@ FROM nousresearch/hermes-agent:latest
 USER root
 RUN mkdir -p /sandbox && chown 10000:10000 /sandbox
 # Keep MCP's Python dependencies separate from Hermes' inference environment.
-RUN python3 -m venv /opt/soarm101-mcp \\
+RUN python3 -m venv /opt/soarm101-mcp \
     && /opt/soarm101-mcp/bin/pip install --no-cache-dir 'mcp>=2,<3'
 
 WORKDIR /sandbox
