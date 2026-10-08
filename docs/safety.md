@@ -1,6 +1,27 @@
 # Safety
 
 
+## Stale Cartesian start recovery
+
+On low-cost servos, measured joints may shift between read-only Cartesian
+preflight and execution, even while nominally torque-held. The original
+controller rejects a cached plan if the actual starting joints are outside
+its encoder-scale tolerance. The shared `SOARM101.move_linear()` facade
+now handles only that typed pre-execution rejection by rebuilding and
+rechecking the **entire** Cartesian plan and workspace path, with no more
+than two additional attempts (three total). It never commands a stale
+validated plan, does not widen the measured-start tolerance, and never
+automatically retries a following-error, hardware, IK, path, or other
+motion-execution rejection. If the start remains inconsistent, motion
+fails closed. The agent's per-command calibrated physical displacement
+and floor guards remain separately enforced at the agent operation
+boundary. Confirm those physical bounds again for close-to-threshold
+operations rather than relying on the model height as metrology.
+
+This is a pre-motion recovery for a verified cause, not permission
+for unattended high-speed manipulation. Validate on the user's
+calibrated arm before treating the observed 409 failures as resolved.
+
 ## Motion-rate envelope
 
 The current absolute host characterization envelope is:
