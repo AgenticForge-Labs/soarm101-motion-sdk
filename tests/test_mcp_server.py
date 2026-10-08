@@ -51,7 +51,7 @@ def test_finite_rejects_unsafe_numbers(bad: float) -> None:
 
 def test_mcp_tools_match_bounded_broker_contract() -> None:
     pytest.importorskip("mcp")
-    from mcp.client import Client
+    from mcp import Client
 
     calls: list[tuple[str, str, object]] = []
     raw = b"jpeg-evidence"
@@ -73,7 +73,7 @@ def test_mcp_tools_match_bounded_broker_contract() -> None:
 
     async def run() -> None:
         async with Client(server) as client:
-            tools = {tool.name for tool in await client.list_tools()}
+            tools = {tool.name for tool in (await client.list_tools()).tools}
             assert tools == {
                 "robot_health", "robot_capabilities", "robot_state",
                 "capture_camera", "go_pose", "jog_joint", "jog_cartesian",
@@ -121,7 +121,7 @@ def test_mcp_tools_match_bounded_broker_contract() -> None:
 
 def test_broker_errors_are_returned_as_mcp_errors() -> None:
     pytest.importorskip("mcp")
-    from mcp.client import Client
+    from mcp import Client
 
     def rejected(*, method: str, path: str, payload=None):
         raise RuntimeError("broker HTTP 409: motion authority expired")
