@@ -123,6 +123,30 @@ def test_broker_denies_hidden_routes_cameras_and_oversized_jogs(tmp_path: Path) 
     assert "profile_rejection" in audit
 
 
+
+def test_joint_profile_restricts_delta_before_cli(tmp_path: Path) -> None:
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "joint-small",
+        "tools": ["robot_state", "jog_joint", "stop"],
+        "cameras": [],
+        "limits": {"max_joint_delta_deg": 5},
+    })
+    executor = FakeExecutor()
+    service = RobotBrokerService(
+        executor=executor,  # type: ignore[arg-type]
+        token="secret", event_path=tmp_path / "events.jsonl", profile=profile,
+    )
+    assert service.dispatch("POST", "/v1/joint", {
+        "joint": "elbow_flex", "delta_deg": 6,
+    }).status == 403
+    assert executor.calls == []
+    assert service.dispatch("POST", "/v1/joint", {
+        "joint": "elbow_flex", "delta_deg": -5,
+    }).status == 200
+    assert executor.calls[0][0:2] == ("joint", "elbow_flex")
+
+
+
 def test_read_only_profile_enforced_by_broker_not_just_mcp(tmp_path: Path) -> None:
     profile = CapabilityProfile.from_document({
         "schema_version": 1, "name": "read-only",
