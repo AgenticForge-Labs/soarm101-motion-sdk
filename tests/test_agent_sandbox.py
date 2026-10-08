@@ -1488,3 +1488,182 @@ def test_openshell_sandbox_names_fit_server_limit_and_preserve_agent_hint(
     assert len(codex_name) <= agent_sandbox.OPENSHELL_SANDBOX_NAME_MAX_LENGTH
     assert len(long_name) <= agent_sandbox.OPENSHELL_SANDBOX_NAME_MAX_LENGTH
     assert long_name.startswith("s101-manif-")
+
+
+def test_mcp_one_run_configurations_and_closed_client_bundle(tmp_path: Path) -> None:
+    from soarm101_motion.agent_mcp_runtime import (
+        MCP_PYTHON, MCP_CLIENT_MODULES, client_files, config_file, skill_text,
+    )
+
+    bundle = client_files(tmp_path)
+    destinations = {destination for _, destination in bundle}
+    assert len(bundle) == 1 + len(MCP_CLIENT_MODULES)
+    assert destinations == {
+        "/sandbox/soarm101_motion/__init__.py",
+        *(f"/sandbox/soarm101_motion/{name}" for name in MCP_CLIENT_MODULES),
+    }
+    assert all(Path(source).is_file() for source, _ in bundle)
+    assert not any("hardware" in destination or "calibration" in destination
+                   for destination in destinations)
+
+    hermes_config = tmp_path / "hermes-config.yaml"
+    hermes_config.write_text("_config_version: 45\n", encoding="utf-8")
+    config_file(tmp_path, agent="hermes", hermes_config=hermes_config)
+    content = hermes_config.read_text(encoding="utf-8")
+    assert "mcp_servers:" in content
+    assert "resources: true" in content
+    assert "supports_parallel_tool_calls: false" in content
+    assert MCP_PYTHON in content
+    assert "${SOARM101_BROKER_TOKEN}" in content
+
+    codex_config, destination = config_file(tmp_path, agent="codex")
+    assert destination == "/sandbox/.codex/config.toml"
+    codex_text = codex_config.read_text(encoding="utf-8")
+    assert "[mcp_servers.soarm101]" in codex_text
+    assert 'env_vars = ["SOARM101_BROKER_URL", "SOARM101_BROKER_TOKEN"]' in codex_text
+    for agent in ("hermes", "codex"):
+        skill = skill_text(agent=agent)
+        assert "MCP" in skill
+        assert "world_directions" in skill
+        assert "broker" in skill.lower()
+
+
+def test_mcp_adapter_commands_and_policy_are_transport_specific() -> None:
+    hermes = get_agent_adapter("hermes")
+    hermes_command = hermes.command(
+        prompt="test", model="test/model", max_turns=5, interface="mcp"
+    )
+    assert "hermes-cli,mcp-soarm101" in hermes_command
+    assert "hermes-cli" in hermes.command(
+        prompt="test", model="test/model", max_turns=5
+    )
+    codex = get_agent_adapter("codex")
+    for auth in ("api-key", "installed", "chatgpt"):
+        command = codex.command(
+            prompt="test", model=None, max_turns=5, auth=auth, interface="mcp"
+        )
+        assert "--ignore-user-config" not in command
+        assert "mcp_servers.soarm101.enabled=true" in command
+    assert "--ignore-user-config" in codex.command(
+        prompt="test", model=None, max_turns=5, auth="api-key"
+    )
+
+    for agent in ("codex", "hermes"):
+        policy = agent_sandbox.broker_policy_text(agent=agent, interface="mcp")
+        assert "path: /v1/profile" in policy
+        assert "path: /v1/sleep-up" in policy
+        assert "/opt/soarm101-mcp/bin/python" in policy
+        assert "/v1/relax" not in policy
+        limited = agent_sandbox.broker_policy_text(
+            agent=agent, interface="mcp", read_only=True
+        )
+        assert "path: /v1/profile" in limited
+        assert "path: /v1/capture" in limited
+        assert "path: /v1/joint" not in limited
+        assert "path: /v1/stop" not in limited
+        assert "path: /v1/sleep-up" not in limited
+
+
+@pytest.mark.parametrize("agent", ["hermes", "codex"])
+def test_mcp_run_uses_pinned_broker_and_temporary_client_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str,
+) -> None:
+    from soarm101_motion.capability_profile import CapabilityProfile
+
+    task = tmp_path / "TASK.md"
+    task.write_text("Observe the robot and report.\n", encoding="utf-8")
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "schema_version": 1, "name": "coordinate-small",
+        "tools": ["robot_health", "robot_capabilities", "robot_state",
+                  "capture_camera", "jog_cartesian", "stop"],
+        "cameras": ["overhead"],
+        "limits": {"max_model_jog_mm": 5},
+    }), encoding="utf-8")
+    profile = CapabilityProfile.from_file(profile_path)
+    fake = FakeOpenShell()
+    FakeBroker.instances.clear()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    result = agent_sandbox.run_agent(
+        agent=agent,
+        auth="api-key" if agent == "codex" else None,
+        task=task,
+        output_dir=tmp_path / "run",
+        interface="mcp",
+        capability_profile=profile_path,
+        openshell=fake,
+    )
+    assert result.exit_code == 0
+    assert FakeBroker.instances[0].profile_path is not None
+    destinations = {dest for _, _, dest in fake.uploads}
+    assert "/sandbox/robotctl.py" not in destinations
+    assert "/sandbox/soarm101_motion/mcp_server.py" in destinations
+    assert "/sandbox/soarm101_motion/robotctl.py" in destinations
+    assert "/sandbox/soarm101_motion/calibration.py" not in destinations
+    assert "/sandbox/.hermes/config.yaml" in destinations if agent == "hermes" else (
+        "/sandbox/.codex/config.toml" in destinations
+    )
+    command = fake.exec_calls[-1]["command"]
+    assert ("mcp-soarm101" in " ".join(command)) if agent == "hermes" else (
+        "--ignore-user-config" not in command
+    )
+    metadata = json.loads((tmp_path / "run" / "run-metadata.json").read_text())
+    assert metadata["interface"] == "mcp"
+    assert metadata["broker_profile"]["sha256"] == profile.public()["sha256"]
+    assert "broker_profile" in metadata["input_sha256"]
+    assert "SOARM101_BROKER_TOKEN" not in metadata
+    assert FakeBroker.instances[0].stopped
+
+
+def test_mcp_capture_evidence_is_retained_from_broker_sha(tmp_path: Path) -> None:
+    image = tmp_path / "host.jpg"
+    image.write_bytes(b"trusted camera bytes")
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    reqid = "a" * 32
+    log = tmp_path / "events.jsonl"
+    records = [
+        {"action": "capabilities", "ok": True},
+        {"action": "state", "ok": True},
+        {"action": "capture", "ok": True, "request_id": reqid,
+         "request": {"camera": "overhead"},
+         "result": {"sha256": digest}},
+        {"action": "capture_evidence", "ok": True, "request_id": reqid,
+         "result": {"name": "overhead", "sha256": digest,
+                    "host_path": str(image)}},
+    ]
+    log.write_text("".join(json.dumps(record) + "\n" for record in records))
+    destination = tmp_path / "run"
+    saved = agent_sandbox._retain_mcp_capture_evidence(
+        broker_events=log, event_offset=0, output_dir=destination,
+    )
+    assert len(saved) == 1
+    assert list(saved.values()) == [digest]
+    validation = agent_sandbox._validate_read_only_evidence(
+        capabilities={"cameras": ["overhead"]}, broker_events=log,
+        event_offset=0, output_dir=destination, agent_exit_code=0,
+    )
+    assert validation["status"] == "passed"
+
+    image.write_bytes(b"modified after broker evidence")
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="SHA-256 mismatch"):
+        agent_sandbox._retain_mcp_capture_evidence(
+            broker_events=log, event_offset=0, output_dir=destination,
+        )
+
+
+def test_sandbox_mcp_cli_accepts_interface_and_profile() -> None:
+    args = build_parser().parse_args([
+        "agent", "sandbox", "run", "--agent", "codex",
+        "--interface", "mcp", "--capability-profile", "profile.json",
+        "--read-only",
+    ])
+    assert args.interface == "mcp"
+    assert args.capability_profile == "profile.json"
+    assert args.read_only is True
