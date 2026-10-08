@@ -1758,6 +1758,8 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         max_turns=args.max_turns,
         timeout=args.timeout,
         read_only=args.read_only,
+        interface=args.interface,
+        capability_profile=Path(args.capability_profile) if args.capability_profile else None,
         adapter_manifest=manifest,
     )
     payload = result.as_dict()
@@ -2289,6 +2291,13 @@ def build_parser() -> argparse.ArgumentParser:
     agent_sandbox_run.add_argument(
         "--provider",
         help="override the selected agent's canonical OpenShell provider",
+    )
+    agent_sandbox_run.add_argument(
+        "--interface", choices=("robotctl", "mcp"), default="robotctl",
+        help="bounded robot tool interface; robotctl remains the default baseline",
+    )
+    agent_sandbox_run.add_argument(
+        "--capability-profile", help="trusted host JSON tool/camera/limit profile for this run",
     )
     agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
     agent_sandbox_run.add_argument("--max-turns", type=int, default=100)
