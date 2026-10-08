@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -48,6 +50,99 @@ def test_agent_cli_rates_are_explicit_and_validated_before_hardware() -> None:
     for invalid in [0.0, -1.0, float("nan"), float("inf"), 51.0]:
         with pytest.raises(ValueError):
             _agent_requested_rate(invalid, "Cartesian speed", 50.0)
+
+
+def test_agent_joint_executes_at_broker_supplied_rates(monkeypatch) -> None:
+    from soarm101_motion.cli import main as cli
+
+    class FakeArm:
+        def __init__(self):
+            self.motion = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def get_joint_positions(self):
+            return SimpleNamespace(positions={"shoulder_pan": 0.0})
+
+        def enable(self):
+            pass
+
+        def hold(self):
+            pass
+
+        def move_joints(self, *args, **kwargs):
+            self.motion = kwargs
+            return SimpleNamespace(accepted=True, completed=True, message=None)
+
+    arm = FakeArm()
+    monkeypatch.setattr(cli, "_arm_from_args", lambda *a, **kw: arm)
+    monkeypatch.setattr(cli, "_agent_require_authority", lambda *a: {"armed": True})
+
+    args = build_parser().parse_args([
+        "agent", "joint", "shoulder_pan", "--delta-deg", "2",
+        "--speed-deg-s", "16", "--acceleration-deg-s2", "50",
+    ])
+    assert cli._cmd_agent_joint(args) == 0
+    assert arm.motion is not None
+    assert arm.motion["speed"] == pytest.approx(np.deg2rad(16))
+    assert arm.motion["acceleration"] == pytest.approx(np.deg2rad(50))
+
+
+def test_agent_cartesian_executes_at_broker_supplied_rates(monkeypatch) -> None:
+    from soarm101_motion.cli import main as cli
+
+    class FakeArm:
+        config = SimpleNamespace(robot_id="so101")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def get_position(self):
+            return SimpleNamespace(position=np.array([0.0, 0.0, 0.15]))
+
+        def enable(self):
+            pass
+
+        def hold(self):
+            pass
+
+    captured = {}
+    arm = FakeArm()
+    monkeypatch.setattr(cli, "_arm_from_args", lambda *a, **kw: arm)
+    monkeypatch.setattr(cli, "_agent_require_authority", lambda *a: {"armed": True})
+    monkeypatch.setattr(cli, "_agent_calibration_id", lambda *a, **kw: "sha256:motor")
+    monkeypatch.setattr(
+        cli, "WorkspaceCalibrationStore",
+        lambda *a: SimpleNamespace(load=lambda: object()),
+    )
+    monkeypatch.setattr(
+        cli, "relative_target_pose",
+        lambda *a, **kw: SimpleNamespace(position=np.array([0.005, 0.0, 0.15])),
+    )
+    monkeypatch.setattr(
+        cli, "evaluate_agent_jog",
+        lambda *a, **kw: SimpleNamespace(to_payload=lambda: {}),
+    )
+
+    def fake_jog(*a, **kw):
+        captured.update(kw)
+        return SimpleNamespace(accepted=True, completed=True, final_positions={}, message=None)
+
+    monkeypatch.setattr(cli, "jog_linear_cli_units", fake_jog)
+    args = build_parser().parse_args([
+        "agent", "jog", "--frame", "world", "--x-mm", "5",
+        "--speed-mm-s", "20", "--acceleration-mm-s2", "80",
+    ])
+    assert cli._cmd_agent_jog(args) == 0
+    assert captured["speed_mm_s"] == pytest.approx(20)
+    assert captured["acceleration_mm_s2"] == pytest.approx(80)
 
 
 def test_agent_authority_is_time_bounded_and_identity_bound(tmp_path) -> None:
