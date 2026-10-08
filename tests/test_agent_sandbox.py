@@ -1753,3 +1753,14 @@ def test_broker_token_is_redacted_from_agent_output_artifacts(
     assert "<redacted-soarm101-broker-token>" in stdout
     assert "<redacted-soarm101-broker-token>" in stderr
     assert "secret=" in stderr
+
+
+
+def test_read_only_task_uses_matching_interface() -> None:
+    legacy = agent_sandbox.read_only_validation_task_text()
+    assert "robotctl.py" in legacy
+    mcp = agent_sandbox.read_only_validation_task_text(interface="mcp")
+    assert "capture_camera" in mcp
+    assert "robot_capabilities" in mcp
+    assert "image content" in mcp
+    assert "robotctl.py" not in mcp
