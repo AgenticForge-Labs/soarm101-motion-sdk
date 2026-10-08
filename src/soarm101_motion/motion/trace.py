@@ -336,3 +336,103 @@ class PassiveBackendTrace:
             return result
 
         return traced
+
+
+
+def summarize_agent_jog_trace(path: str | Path) -> dict[str, Any]:
+    """Summarize model-space trajectory, encoder feedback and HOLD re-latching.
+
+    This is an offline JSONL analysis; it never connects to a robot or reads
+    hardware. TCP coordinates are forward-kinematics estimates, not independent
+    physical-position measurements.
+    """
+    trace_path = Path(path).expanduser()
+    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    if not events or events[0].get("event") != "trace_start":
+        raise ValueError("not a passive motion trace")
+    markers = {
+        str(event.get("marker")): (index, event)
+        for index, event in enumerate(events)
+        if event.get("event") == "marker"
+    }
+    preflight = markers.get("preflight", (None, {}))[1]
+    motion_end = markers.get("motion_completed_before_hold", (None, {}))[1]
+    hold_start = markers.get("hold_start", (len(events), {}))[0]
+    hold_complete = markers.get("hold_complete", (len(events), {}))[0]
+    executed_commands = [
+        event for event in events[:hold_start] if event.get("event") == "command"
+    ]
+    feedback = [
+        event for event in events[:hold_start] if event.get("event") == "feedback"
+    ]
+    raw_before = [
+        event for event in events[:hold_start] if event.get("event") == "raw_command"
+    ]
+    raw_hold = [
+        event for event in events[hold_start:hold_complete]
+        if event.get("event") == "raw_command"
+    ]
+
+    def tcp(event: Mapping[str, Any] | None) -> list[float] | None:
+        value = event.get("tcp_xyz_mm") if event is not None else None
+        if not isinstance(value, list) or len(value) != 3:
+            return None
+        return [float(v) for v in value]
+
+    def delta_z(left: list[float] | None, right: list[float] | None) -> float | None:
+        return None if left is None or right is None else right[2] - left[2]
+
+    start_tcp = preflight.get("start_model_xyz_mm")
+    target_tcp = preflight.get("target_model_xyz_mm")
+    first_command = tcp(executed_commands[0]) if executed_commands else None
+    last_command = tcp(executed_commands[-1]) if executed_commands else None
+    first_feedback = tcp(feedback[0]) if feedback else None
+    last_feedback = tcp(feedback[-1]) if feedback else None
+    settled_before_hold = tcp(motion_end)
+    immediate_after_hold = tcp(markers.get("post_hold_immediate", (None, {}))[1])
+    after_2s = tcp(markers.get("post_hold_2s", (None, {}))[1])
+
+    before_raw = raw_before[-1].get("joints_raw") if raw_before else None
+    hold_raw = raw_hold[-1].get("joints_raw") if raw_hold else None
+    raw_delta = None
+    if isinstance(before_raw, dict) and isinstance(hold_raw, dict):
+        raw_delta = {
+            name: int(hold_raw[name]) - int(before_raw[name])
+            for name in before_raw if name in hold_raw
+        }
+
+    return {
+        "trace_file": str(trace_path),
+        "robot_id": events[0].get("robot_id"),
+        "calibration_id": events[0].get("calibration_id"),
+        "request": {
+            "frame": events[0].get("frame"),
+            "delta_model_mm": events[0].get("delta_model_mm"),
+            "requested_speed_mm_s": events[0].get("requested_speed_mm_s"),
+            "start_model_xyz_mm": start_tcp,
+            "target_model_xyz_mm": target_tcp,
+        },
+        "trajectory": {
+            "joint_commands": len(executed_commands),
+            "joint_feedback_reads": len(feedback),
+            "first_command_model_tcp_xyz_mm": first_command,
+            "last_command_model_tcp_xyz_mm": last_command,
+            "commanded_model_z_change_mm": delta_z(first_command, last_command),
+            "observed_model_z_change_mm": delta_z(first_feedback, last_feedback),
+            "model_tcp_xyz_mm_at_completion": settled_before_hold,
+        },
+        "hold": {
+            "raw_goal_before_hold": before_raw,
+            "raw_goal_latched_by_hold": hold_raw,
+            "hold_goal_delta_ticks": raw_delta,
+            "model_tcp_xyz_mm_immediate_after_hold": immediate_after_hold,
+            "model_tcp_xyz_mm_2s_after_hold": after_2s,
+            "model_z_change_over_2s_after_hold_mm": delta_z(immediate_after_hold, after_2s),
+        },
+        "completed": bool(motion_end.get("completed")),
+        "trace_error": events[-1].get("error") if events[-1].get("event") == "trace_end" else "incomplete trace",
+        "coordinate_warning": (
+            "All TCP coordinates are modeled forward-kinematics estimates, "
+            "not direct measurements of physical table clearance."
+        ),
+    }
