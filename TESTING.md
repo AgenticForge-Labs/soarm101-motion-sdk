@@ -55,6 +55,19 @@ local supervised physical validation.
 
 Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm resources/prompts are readable, preserve calibrated-coordinate and evidence rules, and do not change the active MCP tool allowlist.
 
+## MCP OpenShell integration tests
+
+Run `pytest tests/test_agent_sandbox.py tests/test_mcp_server.py
+tests/test_capability_profile.py` using fake OpenShell and broker fixtures.
+Checks cover Codex/Hermes per-run MCP config, explicit environment-variable
+inheritance without literal credentials, client-only module uploads, profile
+pinning, read-only broker and network reductions, MCP image evidence retention
+and SHA mismatch rejection, and unchanged robotctl defaults.
+
+Actual image builds, isolated provider authentication, native MCP tool/image
+visibility, and hardware motion remain separate local Codex/supervised
+validation gates. Do not infer physical reliability from these tests.
+
 ## Optional MCP agent facade
 
 Install the optional MCP extra with `pip install -e '.[mcp]'` and run
