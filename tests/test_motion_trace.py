@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from soarm101_motion import SOARM101
+import numpy as np
+
+from soarm101_motion import Pose, SOARM101
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.motion.trace import summarize_agent_jog_trace
@@ -178,3 +180,27 @@ def test_offline_trace_summary_rejects_non_trace_jsonl(tmp_path) -> None:
     import pytest
     with pytest.raises(ValueError, match="not a passive"):
         summarize_agent_jog_trace(path)
+
+
+
+def test_passive_trace_records_planned_path_without_changing_planning(tmp_path) -> None:
+    path = tmp_path / "planned.jsonl"
+    with SOARM101.simulated() as arm:
+        arm.enable()
+        start = arm.get_position()
+        target = Pose(start.position + np.array([-0.005, 0.0, 0.0]), start.rotation)
+        with PassiveBackendTrace(arm, path):
+            plan = arm.motion.plan_linear(
+                target,
+                tcp=arm.active_tcp,
+                orientation_mode="position_only",
+                speed=0.01,
+            )
+        assert len(plan.command_samples) > 1
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    observed = [e for e in events if e["event"] == "planned_linear"]
+    assert len(observed) == 1
+    assert observed[0]["command_sample_count"] == len(plan.command_samples)
+    assert len(observed[0]["first_model_tcp_xyz_mm"]) == 3
+    assert len(observed[0]["last_model_tcp_xyz_mm"]) == 3
+    assert events[-1]["event"] == "trace_end"
