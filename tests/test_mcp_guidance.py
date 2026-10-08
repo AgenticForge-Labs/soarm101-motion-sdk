@@ -6,11 +6,16 @@ import asyncio
 
 import pytest
 
-from soarm101_motion.mcp_guidance import GUIDANCE_RESOURCES, task_prompt
+from soarm101_motion.mcp_guidance import GUIDANCE_RESOURCES, SERVER_INSTRUCTIONS, task_prompt
 from soarm101_motion.mcp_server import create_server
 
 
 def test_guidance_is_static_and_preserves_authority_boundary() -> None:
+    assert "use the connected soarm101 MCP tools" in SERVER_INSTRUCTIONS
+    assert 'Do not require the user to say "use MCP"' in SERVER_INSTRUCTIONS
+    assert "capture_camera" in SERVER_INSTRUCTIONS
+    assert "host hardware commands" in SERVER_INSTRUCTIONS
+    assert "Only request motion when the user asks" in SERVER_INSTRUCTIONS
     core = GUIDANCE_RESOURCES["core"]
     assert "robot_capabilities" in core
     assert "robot_state" in core
@@ -50,6 +55,7 @@ def test_mcp_lists_and_reads_guidance_and_prompt() -> None:
 
     async def run() -> None:
         async with Client(server) as client:
+            assert client.instructions == SERVER_INSTRUCTIONS
             resources = await client.list_resources()
             uris = {str(item.uri) for item in resources.resources}
             assert uris == {f"soarm101://guidance/{name}" for name in GUIDANCE_RESOURCES}
@@ -64,7 +70,10 @@ def test_mcp_lists_and_reads_guidance_and_prompt() -> None:
             rendered = str(prompt.messages)
             assert "inspect the workspace" in rendered
             assert "Do not request physical motion" in rendered
-            tools = {item.name for item in (await client.list_tools()).tools}
+            advertised = (await client.list_tools()).tools
+            tools = {item.name for item in advertised}
             assert tools == {"robot_health", "robot_capabilities", "robot_state"}
+            state_description = next(tool.description for tool in advertised if tool.name == "robot_state")
+            assert "through MCP" in state_description
 
     asyncio.run(run())
