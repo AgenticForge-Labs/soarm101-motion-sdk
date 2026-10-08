@@ -41,6 +41,17 @@ Do not describe 100/1000 as physically validated until that run completes cleanl
 unchanged runtime guards.
 
 
+## Optional MCP agent facade
+
+Install the optional MCP extra with `pip install -e '.[mcp]'` and run
+`pytest tests/test_mcp_server.py tests/test_broker.py tests/test_robotctl.py`.
+The MCP integration tests use the SDK's in-process MCP test client and a fake
+broker request function; they must never command physical hardware. Confirm
+`tools/list` exposes only bounded routes, typed coordinates/frames reject invalid
+inputs, camera pixels are SHA-verified and host paths are excluded, and broker
+authority errors propagate back as tool failures. See [docs/agent-mcp.md](docs/agent-mcp.md)
+for separate read-only workstation validation.
+
 ## Self-contained agent sandbox
 
 Automated tests remain hardware-free and cover packaged asset availability, OpenShell policy

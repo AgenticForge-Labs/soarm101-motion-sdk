@@ -1,5 +1,9 @@
 # Agent robot broker
 
+MCP-capable local agents can optionally use the stdio adapter described in
+[agent-mcp.md](agent-mcp.md). MCP is another client of these routes, not a
+second motion or authorization implementation.
+
 The broker is a narrow host-side transport boundary for sandboxed reasoning agents.
 
 It does not define new robot behavior. It serializes HTTP/JSON requests and delegates every

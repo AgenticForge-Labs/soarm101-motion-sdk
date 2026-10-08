@@ -1,5 +1,7 @@
 # Changelog
 
+- Added an optional stdio MCP adapter for the existing authenticated bounded SO-ARM101 broker. It exposes typed robot state, cameras, saved poses, relative joint/Cartesian jogs, gripper, Sleep, and STOP/HOLD without creating a second motion or authority path. Camera images are SHA-verified; MCP configuration profiles, skills, and hosted perception remain future work.
+
 ## Guided desktop setup (locally validated)
 
 - Compact arm readiness cards; calibration and diagnostics open on demand inside Setup.
