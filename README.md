@@ -127,6 +127,16 @@ The unrestricted SDK, serial/camera devices, calibration files, Docker socket, S
 and unrelated host files remain outside the reasoning sandbox. The narrow transport is
 documented separately in [docs/agent-broker.md](docs/agent-broker.md). An optional **stdio MCP adapter** exposes exactly the same bounded broker routes to MCP-capable agents; see [docs/agent-mcp.md](docs/agent-mcp.md). It does not add robot authority or new motion methods. The built-in Hermes and Codex OpenShell runners may opt into it with `soarm101 agent sandbox run --interface mcp`; `robotctl` is retained as the default baseline. A trusted operator can also select a versioned `soarm101-broker --profile FILE.json` allowlist to vary which existing MCP tools, cameras, and tighter jog bounds an agent can use; that profile is enforced at the broker, not only in MCP discovery.
 
+For attended experimental manipulation, the
+[`mcp-profile-supervised-manipulation.json`](docs/examples/mcp-profile-supervised-manipulation.json)
+profile offers both cameras, saved poses/Sleep, bounded joint rotations,
+Cartesian moves and gripper open/close. The existing deterministic bounded
+agent CLI caps physical displacement at 50 mm above 100 mm calibrated
+starting TCP height and 10 mm at/below that height, independent of the
+model-frame broker profile. These caps are not motion speed settings.
+Review [docs/agent-mcp.md](docs/agent-mcp.md) and investigate motion
+rejections/height mismatch before faster or close-object physical trials.
+
 For direct-host Codex sessions, the MCP server now advertises an MCP-first live
 robot operating preference through initialization instructions and tool
 descriptions. Repository `AGENTS.md` reinforces that preference: use
