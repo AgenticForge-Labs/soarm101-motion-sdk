@@ -1,5 +1,24 @@
 # SO-ARM101 Motion SDK
 
+## One-command software validation for PR #88
+
+On Ubuntu/Linux, copy and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AgenticForge-Labs/soarm101-motion-sdk/feature/broker-persistent-sdk-session/scripts/test_broker_pr88.sh -o /tmp/test_broker_pr88.sh && bash /tmp/test_broker_pr88.sh
+```
+
+The [repository test runner](scripts/test_broker_pr88.sh) clones or
+fast-forwards a clean checkout under
+`~/AgenticForge/soarm101-motion-sdk`, activates an isolated Python 3.12
+environment for the script, and runs Ruff, focused broker tests, the
+complete test suite, registry inspection and GUI simulation smoke checks.
+It refuses to overwrite uncommitted changes or pull a divergent branch.
+It never opens a real serial device or activates motor torque.
+
+Afterward, run `cd ~/AgenticForge/soarm101-motion-sdk && source .venv/bin/activate`
+to activate that environment in your current terminal.
+
 ## PR #88 preview: direct SDK read-only broker session
 
 The production broker continues to use the existing bounded agent CLI
