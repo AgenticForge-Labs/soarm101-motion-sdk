@@ -641,6 +641,27 @@ def _cmd_sleep_up(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_jog_joint(args: argparse.Namespace) -> int:
+    """Single-joint relative operator jog using shared SDK dispatch."""
+    if not args.yes:
+        print("Refusing to move without --yes.", file=sys.stderr)
+        return 2
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        arm.enable()
+        result = SDK_CAPABILITIES.dispatch(
+            "jog_joint", arm, {
+                "joint": args.joint,
+                "delta_rad": args.delta_deg * pi / 180.0,
+                "speed_rad_s": args.speed_deg_s * pi / 180.0,
+                "acceleration_rad_s2": args.acceleration_deg_s2 * pi / 180.0,
+            },
+        )
+        arm.hold()
+        _print_motion_result(result, as_json=args.json)
+        print("Joint jog complete; follower remains torque-held.", file=sys.stderr)
+    return 0
+
+
 def _cmd_jog(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
@@ -2051,6 +2072,18 @@ def build_parser() -> argparse.ArgumentParser:
     sleep_up.add_argument("--yes", action="store_true")
     sleep_up.add_argument("--json", action="store_true")
     sleep_up.set_defaults(func=_cmd_sleep_up)
+
+    joint_jog = sub.add_parser(
+        "jog-joint", help="perform one guarded relative operator joint jog",
+    )
+    add_session_options(joint_jog)
+    joint_jog.add_argument("joint", choices=ARM_JOINTS)
+    joint_jog.add_argument("--delta-deg", type=float, required=True)
+    joint_jog.add_argument("--speed-deg-s", type=float, default=8.0)
+    joint_jog.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    joint_jog.add_argument("--yes", action="store_true")
+    joint_jog.add_argument("--json", action="store_true")
+    joint_jog.set_defaults(func=_cmd_jog_joint)
 
     jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
     add_session_options(jog)
