@@ -1,5 +1,10 @@
 # Changelog
 
+- Extend PR 1 registry with saved pose listing and hardware/effort status
+  reads, using existing SDK and PoseLibrary operations. Ordinary CLI
+  pose-list/effort commands share dispatch; no broker, motion-policy, or
+  physical hardware-control changes.
+
 - Begin typed SDK capability-registry migration (PR 1): pure descriptions
   and validated direct SDK dispatch for foundational operations; ordinary
   operator CLI read, IK, joint, Cartesian, jog and gripper commands reuse
