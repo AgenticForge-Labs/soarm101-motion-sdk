@@ -212,6 +212,16 @@ _SPECS = (
                      required=False, default=False),
     )),
     ActionSpec("read_hardware_state", "Read current connected/torque/motion/fault state", "read"),
+    ActionSpec("sleep", "Move to guarded calibrated Sleep posture", "motion", (
+        _number("speed_rad_s", "rad/s", "Sleep joint speed", 8.0 * pi / 180.0),
+        _number("acceleration_rad_s2", "rad/s^2", "Sleep joint acceleration",
+                25.0 * pi / 180.0),
+    )),
+    ActionSpec("sleep_up", "Move to guarded folded Sleep-up posture", "motion", (
+        _number("speed_rad_s", "rad/s", "Sleep-up joint speed", 8.0 * pi / 180.0),
+        _number("acceleration_rad_s2", "rad/s^2", "Sleep-up joint acceleration",
+                25.0 * pi / 180.0),
+    )),
     ActionSpec("stop", "Request the SDK's guarded STOP/HOLD operation", "stop",
                agent_eligible=True),
 )
@@ -371,6 +381,12 @@ class CapabilityRegistry:
             if not 0.0 <= position <= 1.0:
                 raise ValueError("position must be in [0, 1]")
             return arm.tool.move(position)
+        if name in ("sleep", "sleep_up"):
+            motion = arm.move_sleep if name == "sleep" else arm.move_sleep_up
+            return motion(
+                speed=float(args["speed_rad_s"]),
+                acceleration=float(args["acceleration_rad_s2"]),
+            )
         if name == "stop":
             return arm.stop()
         raise AssertionError(f"missing SDK capability dispatcher for {name}")
