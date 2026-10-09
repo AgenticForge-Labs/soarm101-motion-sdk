@@ -195,6 +195,7 @@ class RobotBrokerService:
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
         self.profile = profile if profile is not None else CapabilityProfile.full()
+        self._profile_provenance = self.profile.public()
         self._operation_lock = threading.Lock()
         self._event_lock = threading.Lock()
 
@@ -236,6 +237,7 @@ class RobotBrokerService:
             "request_id": request_id,
             "timestamp": time.time(),
             "action": action,
+            "profile_sha256": self._profile_provenance["sha256"],
             "request": dict(request),
             "ok": ok,
             "duration_s": duration_s,
@@ -346,7 +348,7 @@ class RobotBrokerService:
         if method == "GET" and path == "/v1/profile":
             return BrokerResponse(
                 HTTPStatus.OK,
-                {"ok": True, "request_id": request_id, "result": self.profile.public()},
+                {"ok": True, "request_id": request_id, "result": dict(self._profile_provenance)},
             )
         try:
             self.profile.check(method, path, request)
