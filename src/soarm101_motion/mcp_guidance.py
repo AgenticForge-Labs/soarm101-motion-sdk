@@ -8,6 +8,22 @@ from __future__ import annotations
 
 GUIDANCE_SCHEMA_VERSION = 1
 
+# Sent in MCP initialization. Host support varies, so repository AGENTS.md
+# reinforces the same preference for Codex without changing broker authority.
+SERVER_INSTRUCTIONS = """For live SO-ARM101 robot tasks, use the connected soarm101 MCP tools
+by default for current state, capabilities, permitted cameras, saved poses, Sleep,
+and bounded movement. Do not require the user to say "use MCP".
+For live images call capture_camera and inspect its fresh returned pixels.
+Do not infer camera availability from local /dev/video* discovery, use the host
+camera CLI instead, or bypass the MCP broker when it denies a capability.
+Read robot_capabilities and robot_state for dynamic configuration and authority.
+Only request motion when the user asks, the human-issued lease is active, and
+the broker permits it. Never arm, calibrate, or override safety through shell.
+If a tool or camera is unavailable, report the restriction instead of falling
+back to host hardware commands. Normal SDK CLI use remains appropriate for
+explicit software development, testing, and operator-led diagnostics.
+"""
+
 CORE_GUIDANCE = """# SO-ARM101 bounded-agent operating guidance
 
 Treat robot_capabilities and robot_state as authoritative runtime evidence.

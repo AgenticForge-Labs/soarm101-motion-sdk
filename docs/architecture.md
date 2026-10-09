@@ -9,6 +9,8 @@ sandboxed agent -> OpenShell -> robotctl -> agent broker -> bounded agent CLI ->
 MCP-capable agent -> optional stdio MCP adapter -> same agent broker -> same bounded agent CLI
 Trusted-host broker profiles restrict this transport at dispatch and MCP discovery, never at motion-safety authority.
 Static MCP resources/prompts teach the same evidence-first coordinate/joint/vision/recovery semantics as existing skills; they are reasoning context, never an authority source.
+MCP initialization instructions and tool descriptions advertise MCP-first live robot access to compatible hosts; AGENTS.md reinforces selection for local Codex. These are hints, never authorization or a substitute for broker state.
+Canonical Hermes/Codex OpenShell runs may use robotctl (default) or the one-run client-only stdio MCP package; both reach the same host broker and deterministic SDK.
 ```
 
 Rules:
@@ -18,7 +20,13 @@ Rules:
 - Tools define motion-relevant TCP transforms. Tool/stage camera extrinsics, perception, tracking, OBS, and show-level capture orchestration remain higher-level concerns; this repository only owns the basic camera device session and raw frames.
 - No LeRobot import exists in the runtime package.
 - Hardware and simulation implement the same backend contract.
-- Cartesian paths are validated before execution.
+- Cartesian paths are validated before execution. When the cheap servo encoders
+  shift beyond the narrow cached-plan start tolerance *after* workspace
+  preflight, the SOARM101 facade may discard the stale plan and rebuild the
+  entire plan and workspace validation at most twice. The controller still
+  never executes an unvalidated cached plan; persistent start drift and all
+  other failures still reject before motion. This is not a tolerance increase,
+  hardware-settle bypass, or relaxation of the agent's physical step policy.
 - GUI and CLI features call the same SDK operations and saved libraries; the GUI owns persistent hardware sessions rather than launching CLI subprocesses.
 - The SDK owns one canonical robot-specific OpenShell agent environment. OpenShell owns
   filesystem/process/network isolation; the Motion SDK owns the shared robot policy/broker
@@ -28,6 +36,12 @@ Rules:
   adding robot code. Adapter configuration may change harness launch/runtime state but cannot
   change broker routes, authority, broker credentials, or deterministic motion safety. This
   is product/runtime support, not benchmark orchestration.
+- The trusted broker may pin requested agent joint/Cartesian jog rates at startup
+  independently of its absolute motion envelope and inject them as explicit
+  arguments to the bounded CLI. The CLI validates their envelope bounds
+  before hardware access and the SDK still owns planning, workspace/IK,
+  joint, fault, following-error and settle checks. MCP clients cannot
+  raise rates through tool calls. No second motion controller is introduced.
 - The host-side agent broker remains transport-only: it serializes an explicit HTTP/JSON
   allowlist and delegates to the bounded agent CLI rather than reimplementing motion policy.
   It exposes no remote arm/disarm/relax, raw servo, arbitrary-command, calibration, or
@@ -190,6 +204,20 @@ worker operations; it is not another calibration or motion controller. Guidance 
 optional persisted presentation preference in Qt settings. Calibration authority remains
 in the existing files and SDK resolver, not in Qt settings or widget visibility.
 `setup_backup.py` owns deterministic validated setup export/restore, with no hardware I/O.
+
+## Passive physical-motion diagnostics
+
+The bounded trusted-host `agent jog` command can opt into the shared
+`PassiveBackendTrace` recorder without changing SDK movement or safety
+paths. The trace wraps existing backend command and feedback operations,
+including the private Feetech raw-position write through which STOP/HOLD
+latches servo goals. Motion-time I/O is unchanged; the operator-selected
+diagnostic additionally observes the held arm immediately and 2 seconds
+after HOLD. `agent trace-summary` is an offline deterministic analyzer
+that compares requested model-space Cartesian intent with FK estimates
+of actual command and feedback streams, then reports the raw servo goal
+delta at HOLD. It does not claim metrological accuracy and is not exposed
+as an untrusted MCP host-file path.
 
 ## Bounded agent authority and CLI
 

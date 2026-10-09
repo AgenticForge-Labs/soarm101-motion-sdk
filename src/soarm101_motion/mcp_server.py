@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Literal
 
 from soarm101_motion.capability_profile import TOOL_ROUTES
-from soarm101_motion.mcp_guidance import GUIDANCE_RESOURCES, task_prompt
+from soarm101_motion.mcp_guidance import GUIDANCE_RESOURCES, SERVER_INSTRUCTIONS, task_prompt
 from soarm101_motion.robotctl import _request
 
 BrokerRequest = Callable[..., dict[str, object]]
@@ -95,7 +95,7 @@ def create_server(
         raise RuntimeError("MCP is optional; install with pip install -e '.[mcp]'") from exc
 
     request = request_fn or _request
-    mcp = MCPServer("SO-ARM101 bounded broker")
+    mcp = MCPServer("SO-ARM101 bounded broker", instructions=SERVER_INSTRUCTIONS)
 
     def call(method: str, path: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
         try:
@@ -123,17 +123,21 @@ def create_server(
 
     @mcp.tool(annotations=read_only)
     def robot_capabilities() -> dict[str, object]:
-        """Read robot abilities, motion envelope, calibrated directions, and authority state."""
+        """Read live broker capabilities, calibrated directions, and authority; prefer this MCP tool."""
         return call("GET", "/v1/capabilities")
 
     @mcp.tool(annotations=read_only)
     def robot_state() -> dict[str, object]:
-        """Get measured joints, TCP coordinates, gripper and current robot status."""
+        """Read live measured joints, TCP, gripper and status through MCP, not host CLI."""
         return call("GET", "/v1/state")
 
     @mcp.tool(annotations=read_only, structured_output=False)
     def capture_camera(camera: CameraName):
-        """Capture a FRESH overhead/wrist image with verified broker SHA-256 evidence."""
+        """Capture a fresh permitted robot camera image through MCP and inspect its pixels.
+
+        Prefer this tool for live overhead/wrist views, not host camera CLI or devices.
+        Returned pixels carry verified broker SHA-256 evidence.
+        """
         response = call("POST", "/v1/capture", {"camera": camera})
         metadata, encoded = _verified_capture(response)
         return [
@@ -143,7 +147,7 @@ def create_server(
 
     @mcp.tool(annotations=action)
     def go_pose(name: str) -> dict[str, object]:
-        """Move to an existing agent-approved saved pose (agent_* names only)."""
+        """Move to an existing agent-approved saved pose (agent_* names only) through MCP."""
         return call("POST", "/v1/go-pose", {"name": name})
 
     @mcp.tool(annotations=action)

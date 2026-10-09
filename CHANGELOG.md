@@ -1,5 +1,52 @@
 # Changelog
 
+- Temporarily constrain the optional GUI dependency to PySide6 <6.12 while
+  investigating CI-native Qt teardown aborts: green main resolved PySide6
+  6.11.2 whereas the unpinned PR runner resolved 6.12.0. Full matrix exit
+  codes, not Python test-pass counts alone, determine the merge gate.
+
+- Add opt-in trusted-host `agent jog --trace-file` evidence using the
+  shared passive backend trace. It captures model-space intent, streamed
+  joint commands, encoder feedback, raw Feetech STOP/HOLD goal latching,
+  and two post-HOLD observations. A read-only `agent trace-summary`
+  command distinguishes planned-model Z, feedback-model Z and HOLD
+  goal shifts without adding polling during trajectory execution.
+  Existing authority, motion policy and safety checks are unchanged.
+
+- Revalidate Cartesian paths on bounded stale-start recovery for
+  low-cost SO-ARM101 servos. A typed pre-execution stale-plan exception
+  prompts up to two complete replans and repeat workspace safety checks.
+  The cached-plan encoder tolerance, motor/path safety checks and agent
+  step limits are unchanged; continuous drift still fails closed.
+
+- Let the trusted broker pin requested single-joint and Cartesian agent
+  jog speeds and accelerations separately from the SDK maximum envelope.
+  Broker startup flags pass validated rates to the existing bounded CLI;
+  the CLI revalidates them before hardware access. Default rates remain
+  unchanged, rates are not agent-selectable, and the SDK safety contract
+  remains authoritative.
+
+- Added a supervised MCP manipulation profile with both cameras,
+  saved poses/Sleep, Cartesian jogs, 10-degree-per-command joint control,
+  and gripper access. It defers distance authority to the existing
+  calibrated physical-height 50 mm/10 mm bounded CLI guard instead
+  of the earlier demonstration's 5 mm model-coordinate profile cap.
+  No motion speed or safety guards were increased.
+
+- Advertise MCP-first live robot operation through MCP v2 server initialization
+  instructions and clearer tool descriptions, with matching repository Codex
+  guidance. Live state/camera/pose/motion should use the bounded broker tools,
+  not host camera discovery or untrusted CLI fallbacks. No tool or permission
+  changes; client adoption of instructions remains host-dependent.
+
+- Added opt-in Hermes/Codex OpenShell MCP agent integration with one-run
+  client-only Python bundles, operator-pinned broker profiles, dual broker +
+  OpenShell read-only enforcement, camera evidence retention and run provenance.
+  Legacy robotctl remains the default baseline; live provider and physical
+  operation still require local validation. Documented future hand-coded and
+  multi-model specialist perception experiments in PLAN.md.
+
+
 - Added harness-neutral MCP guidance resources for coordinate, joint, visual, and failure-recovery operation plus an experimental task prompt; these are semantic context only and add no robot authority or motion primitive.
 
 - Added operator-pinned, versioned broker capability profiles, validated at startup and enforced before broker dispatch, with matching MCP tool discovery, camera allowlists, model-frame/joint jog ceilings, configuration hashes, and example experimental profiles. No new robot-control authority or motion primitive.

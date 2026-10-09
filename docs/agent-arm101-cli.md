@@ -73,7 +73,10 @@ soarm101 agent joint shoulder_pan --delta-deg 20
 
 Only one named pose joint changes per command, the absolute delta is capped at 30 degrees,
 normal calibrated joint/workspace/path checks remain active, and the follower remains held
-after completion.
+after completion. Optional `--speed-deg-s` and `--acceleration-deg-s2` apply to
+this joint jog (defaults 8 and 25). They must be finite, positive and within
+the active motion envelope. The trusted broker pins these for its subprocess;
+MCP/robotctl clients cannot supply their own rates.
 
 The bounded Cartesian surface is translation-only and may use either the fixed SDK
 base/model frame or the current gripper/TCP frame:
@@ -85,6 +88,36 @@ soarm101 agent jog --frame tool --x-mm 0 --y-mm 0 --z-mm 5
 
 Tool-frame XYZ follows the current TCP axes and therefore rotates with the gripper.
 
+### Operator-only Cartesian motion/HOLD trace
+
+For diagnosing unexpected downward creep, the trusted-host CLI accepts an
+**optional** `--trace-file` on `agent jog`. This uses the existing passive
+backend recorder and does not add servo polling during trajectory execution.
+It records requested start/target model TCP XYZ, actual streamed joint commands,
+existing encoder feedback, the exact boundary where STOP/HOLD starts, raw
+servo goal writes (including the Feetech STOP latch), and encoder-derived TCP
+immediately and two seconds after HOLD:
+
+```bash
+soarm101 agent jog --frame world --x-mm 2 --speed-mm-s 10 \
+  --acceleration-mm-s2 40 --trace-file /tmp/soarm101-jog-001.jsonl
+soarm101 agent trace-summary /tmp/soarm101-jog-001.jsonl
+```
+
+`agent trace-summary` is a local, read-only JSONL analyzer; it requires no
+active motion lease or robot connection. Fields labeled `commanded_model_z`
+are FK calculations from motor commands; `observed_model_z` uses encoder
+feedback. Neither is independent physical-height metrology. Comparing the
+last trajectory `raw_command` with the first command between
+`hold_start` and `hold_complete` identifies whether the servo goal was
+relatched at HOLD. The 2-second reading occurs **after motion**, while
+the arm is held. Errors are recorded in a `trace_end` event.
+
+This trace path is **not** an MCP or robotctl request parameter: the trusted
+operator owns local evidence destinations. It does not change calibration,
+joint, workspace, command-size, speed, or fault policies, and it is not a
+license for further motion into an uncertain physical clearance.
+
 The command requires a matching saved workspace calibration and applies an additional
 physical-space policy before the normal SDK jog:
 
@@ -93,7 +126,11 @@ physical-space policy before the normal SDK jog:
 - target physical height below 10 mm above the calibrated ground plane: rejected.
 
 The displacement limit is the norm of the inverse-mapped requested physical displacement,
-not an independent per-axis allowance or a metrology guarantee. Hardware validation showed
+not an independent per-axis allowance or a metrology guarantee.
+Optional `--speed-mm-s` and `--acceleration-mm-s2` apply to this
+Cartesian jog (defaults 10 and 40), validated against the active maximum
+envelope before hardware access; the trusted broker selects these for
+its internal agent CLI subprocess. Hardware validation showed
 that ordinary joint settle tolerance can leave the achieved workspace position a few
 millimeters from the planned target, so the agent policy reserves a 10 mm ground-plane
 margin. The workspace mapping is used only for this additional safety measurement; actual

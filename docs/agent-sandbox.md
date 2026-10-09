@@ -32,6 +32,74 @@ robot-specific sandbox policy, adapter contract, broker lifecycle, standalone `r
 and the packaged Hermes/Codex recipes. An external manifest selects an existing OpenShell
 image/provider and direct harness argv; it does not define robot behavior.
 
+## Native MCP agent interface (PR 4)
+
+The built-in Hermes and Codex agents now support an **opt-in** MCP interface.
+The default `robotctl` mode remains the original comparison baseline.
+The MCP subprocess runs inside the *same* OpenShell sandbox and calls the
+same authenticated trusted-host broker; there is no extra motion authority,
+unrestricted SDK mount, or external MCP network listener.
+
+After updating the SDK, rebuild the relevant sandbox image with the existing
+`soarm101 agent sandbox setup --agent ...` command. Image construction installs
+the Python MCP runtime; no dependency is installed at agent task execution.
+Then start a **read-only** trial using a versioned trusted-host profile:
+
+```bash
+soarm101 agent sandbox run \\
+  --agent codex --auth installed \\
+  --interface mcp --read-only \\
+  --capability-profile docs/examples/mcp-profile-read-only.json \\
+  --output runs/codex-mcp-read-only
+```
+
+Hermes works analogously with `--agent hermes`. Codex also retains
+`--auth api-key` and `--auth chatgpt` choices. Provider/model selection
+remains independent of interface choice. Only built-in Hermes/Codex adapters
+are supported in MCP mode; external adapter manifests continue using robotctl.
+
+Full-control trials still require the separate operator-issued physical
+`soarm101 agent arm` lease, and must begin **only after** supervised physical
+calibration/motion validation. For example, a coordinate-small experiment:
+
+```bash
+soarm101 agent sandbox run \\
+  --agent hermes --interface mcp \\
+  --capability-profile docs/examples/mcp-profile-coordinate.json \\
+  --task TASK.md --output runs/hermes-mcp-coordinate
+```
+
+At run start, the operator-selected JSON profile is validated, frozen and
+passed to the trusted broker. `--read-only` further intersects its tools
+with observation-only tools *at broker dispatch*; OpenShell additionally
+excludes motion routes. MCP tool discovery reads the broker's effective
+profile. The sandbox receives only fixed client-side Python transport modules,
+the task, and a one-run skill/config—not the full SDK, device drivers, host
+calibration, or live host credentials. One-run MCP configs reference inherited
+environment variables; they never embed the broker token as a literal.
+
+Hermes exposes the `mcp-soarm101` toolset, Codex uses its temporary
+`/sandbox/.codex/config.toml`; legacy Codex's
+`--ignore-user-config` remains only for robotctl mode because that flag
+would also suppress the isolated MCP config. No workstation Codex settings
+are used. Camera images are returned as MCP image content and SHA-verified
+by the adapter. The host retains matching trusted broker capture evidence
+under `observations/mcp/`, independently of whether the model saved pixels
+to a sandbox file. MCP image visibility in a *real provider/model harness*
+still requires local validation; automated tests only prove protocol and
+artifact plumbing.
+
+Retained `run-metadata.json` includes interface, broker-profile digest,
+agent/model/provider, hashed inputs, and read-only flag. Broker events retain
+requested actions, results, rejections, and camera SHA evidence. Physical
+success is **never** inferred from MCP tool availability or model intention.
+
+**Local validation gate:** run
+`pytest tests/test_agent_sandbox.py tests/test_mcp_server.py
+tests/test_capability_profile.py`, then rebuild images and run read-only
+Hermes/Codex trials; inspect discovered tools, image content, event hashes,
+and profile denial before any human-armed supervised motion trial.
+
 ## Agent adapter boundary
 
 Agent-specific behavior is isolated in `soarm101_motion.agent_adapters`.

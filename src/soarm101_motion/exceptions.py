@@ -37,6 +37,10 @@ class InvalidCommandError(SOARM101Error):
     """A command is malformed or cannot be executed in the current state."""
 
 
+class StaleCartesianPlanError(InvalidCommandError):
+    """The measured start no longer matches a validated Cartesian plan."""
+
+
 class UnsupportedCapabilityError(SOARM101Error):
     """The active backend or tool does not implement the requested capability."""
 

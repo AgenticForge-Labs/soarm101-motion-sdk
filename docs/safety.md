@@ -1,6 +1,40 @@
 # Safety
 
 
+## Operator-only passive jog tracing
+
+The trusted CLI may enable a local passive command/feedback trace with
+`agent jog --trace-file PATH`. It records backend writes/readbacks already
+performed during motion, including low-level Feetech raw writes used by
+STOP/HOLD. Two additional position observations are made **after** HOLD,
+immediately and 2 seconds later; no extra high-frequency motor polling is
+introduced during movement. The SDK does not change commanded motion,
+collision assumptions, floor-clearance policy, lease authority, or safety
+checks when tracing is enabled. Trace output is diagnostic evidence, not
+an authority or a substitute for direct physical clearance observation.
+Do not place traces in an agent-writable sensitive host path.
+
+## Stale Cartesian start recovery
+
+On low-cost servos, measured joints may shift between read-only Cartesian
+preflight and execution, even while nominally torque-held. The original
+controller rejects a cached plan if the actual starting joints are outside
+its encoder-scale tolerance. The shared `SOARM101.move_linear()` facade
+now handles only that typed pre-execution rejection by rebuilding and
+rechecking the **entire** Cartesian plan and workspace path, with no more
+than two additional attempts (three total). It never commands a stale
+validated plan, does not widen the measured-start tolerance, and never
+automatically retries a following-error, hardware, IK, path, or other
+motion-execution rejection. If the start remains inconsistent, motion
+fails closed. The agent's per-command calibrated physical displacement
+and floor guards remain separately enforced at the agent operation
+boundary. Confirm those physical bounds again for close-to-threshold
+operations rather than relying on the model height as metrology.
+
+This is a pre-motion recovery for a verified cause, not permission
+for unattended high-speed manipulation. Validate on the user's
+calibrated arm before treating the observed 409 failures as resolved.
+
 ## Motion-rate envelope
 
 The current absolute host characterization envelope is:

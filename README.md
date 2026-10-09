@@ -32,6 +32,20 @@ The goal is not to replace ROS or MoveIt. Those ecosystems are valuable when a p
 
 LeRobot helped inspire this project’s approach to SO-ARM101 hardware and operation. Thank you to the LeRobot contributors and community. The approachable developer experience of the UFactory xArm SDK also helped shape the goal of making arm control easier to discover and use. This SDK is an independent implementation: LeRobot is optional and is not imported by the runtime.
 
+## Diagnostic trace for a bounded Cartesian jog
+
+For attended troubleshooting of an apparent downward shift during horizontal
+motion, the trusted operator can run
+`soarm101 agent jog --frame world --x-mm 2 --trace-file /tmp/jog.jsonl`
+under an existing human-issued agent authority lease, and then inspect
+`soarm101 agent trace-summary /tmp/jog.jsonl`. The JSONL trace
+records existing motor command/feedback reads, STOP/HOLD raw goal
+latching, and two post-HOLD encoder observations (immediate and 2 seconds
+later). It does not increase polling during the trajectory and does not
+alter the movement or safety policies. TCP coordinates reconstructed
+from encoders are model estimates, not direct physical clearance measurements.
+See [docs/agent-arm101-cli.md](docs/agent-arm101-cli.md).
+
 ## Motion envelope
 
 The SDK separates **requested host motion** from the faster inner servo tracking profile.
@@ -125,7 +139,36 @@ image/provider/direct argv only and cannot broaden robot routes or authority. Se
 [agent-as-code/openshell-adapter.example.json](agent-as-code/openshell-adapter.example.json).
 The unrestricted SDK, serial/camera devices, calibration files, Docker socket, SSH material,
 and unrelated host files remain outside the reasoning sandbox. The narrow transport is
-documented separately in [docs/agent-broker.md](docs/agent-broker.md). An optional **stdio MCP adapter** exposes exactly the same bounded broker routes to MCP-capable agents; see [docs/agent-mcp.md](docs/agent-mcp.md). It does not add robot authority or new motion methods. A trusted operator can also select a versioned `soarm101-broker --profile FILE.json` allowlist to vary which existing MCP tools, cameras, and tighter jog bounds an agent can use; that profile is enforced at the broker, not only in MCP discovery.
+documented separately in [docs/agent-broker.md](docs/agent-broker.md). An optional **stdio MCP adapter** exposes exactly the same bounded broker routes to MCP-capable agents; see [docs/agent-mcp.md](docs/agent-mcp.md). It does not add robot authority or new motion methods. The built-in Hermes and Codex OpenShell runners may opt into it with `soarm101 agent sandbox run --interface mcp`; `robotctl` is retained as the default baseline. A trusted operator can also select a versioned `soarm101-broker --profile FILE.json` allowlist to vary which existing MCP tools, cameras, and tighter jog bounds an agent can use; that profile is enforced at the broker, not only in MCP discovery.
+
+Cartesian path execution now handles a narrow cheap-servo preflight race:
+if joints shift beyond the cached path's start tolerance during
+read-only workspace validation, the SDK rebuilds the path and rechecks
+workspace safety at most twice before refusing motion. It does not
+increase tolerance or retry an actual motion failure.
+
+For attended experimental manipulation, the
+[`mcp-profile-supervised-manipulation.json`](docs/examples/mcp-profile-supervised-manipulation.json)
+profile offers both cameras, saved poses/Sleep, bounded joint rotations,
+Cartesian moves and gripper open/close. The existing deterministic bounded
+agent CLI caps physical displacement at 50 mm above 100 mm calibrated
+starting TCP height and 10 mm at/below that height, independent of the
+model-frame broker profile. These caps are not motion speed settings. The trusted broker can
+configure **requested** agent jog speeds/accelerations separately from
+the absolute SDK motion envelope and passes them to the bounded
+CLI subprocess. The agent itself cannot change rates; defaults
+remain 10 mm/s and 8 deg/s. See
+[docs/agent-broker.md](docs/agent-broker.md) for the operator flags.
+Investigate motion rejections/height mismatch before faster or
+close-object physical trials.
+
+For direct-host Codex sessions, the MCP server now advertises an MCP-first live
+robot operating preference through initialization instructions and tool
+descriptions. Repository `AGENTS.md` reinforces that preference: use
+`soarm101.capture_camera` for fresh overhead/wrist frames rather than
+probing local camera devices or falling back to the host camera CLI.
+MCP host adherence is not guaranteed, and neither guidance nor tool discovery
+bypasses broker profile restrictions or human arming.
 
 ## Get started
 

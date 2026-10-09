@@ -12,7 +12,7 @@ from soarm101_motion.constants import (
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
-from soarm101_motion.exceptions import InvalidCommandError
+from soarm101_motion.exceptions import StaleCartesianPlanError
 from soarm101_motion.kinematics import OrientationMode
 from soarm101_motion.motion.controller import (
     MotionController as _BaseMotionController,
@@ -155,7 +155,7 @@ class MotionController(_BaseMotionController):
                 present = self.backend.read_joint_positions()
                 tolerance = self._validated_start_tolerance()
                 if not self._starts_at(cached[1], present, tolerance=tolerance):
-                    raise InvalidCommandError(
+                    raise StaleCartesianPlanError(
                         "robot joints changed after Cartesian path validation; retry the move"
                     )
                 plan = cached[1]

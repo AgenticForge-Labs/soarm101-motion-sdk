@@ -4,7 +4,25 @@ This repository is used in two different ways: agents may **develop the SDK**, o
 **operate and inspect an SO-ARM101 through the SDK/CLI**. Keep those roles separate. Code
 changes require development discipline; robot use requires conservative hardware behavior.
 
-## Before doing anything
+## Live robot tasks when SO-ARM101 MCP is connected
+
+For requests to inspect or operate the **live** SO-ARM101, automatically prefer the
+connected `soarm101` MCP tools without asking the user to say "use MCP".
+Call `robot_state`/`robot_capabilities` for current information,
+`capture_camera` for permitted fresh overhead or wrist frames, `go_pose` for
+approved saved poses, `sleep` for Sleep, and `jog_cartesian` for bounded motion
+only when the broker advertises the tools. Read dynamic permissions from the broker.
+Inspect actual returned image pixels; do not rely on uncalibrated image geometry.
+
+Do not first search repository camera commands or probe `/dev/video*` for a live
+capture; MCP uses the trusted broker's hardware access. If an MCP tool or camera
+is absent or denied, report that boundary rather than using shell/CLI as a
+workaround. A human must arm the robot for movement. Do not bypass the broker,
+human authority, or SDK safety rules. Read `docs/safety.md` before physical motion.
+These preferences do **not** prohibit SDK CLI commands in explicit development,
+automated testing, or operator-led diagnostics.
+
+## Before development or direct CLI/hardware work
 
 - Read `README.md` for the current user workflow.
 - Read `docs/safety.md` before any real-arm motion.
@@ -137,6 +155,14 @@ changes require development discipline; robot use requires conservative hardware
     directions, cameras, profile permissions, and authority must be read from
     the broker/SDK rather than copied into static guidance. Keep harness-specific
     perception instructions out of the shared MCP guidance.
+
+18. The optional built-in Hermes/Codex MCP interface must use client-only
+    transport files inside the OpenShell sandbox, never hardware SDK source
+    trees or device mounts. Trusted-host capability profiles are operator-
+    supplied and frozen per run; read-only mode must reduce the broker's
+    execution allowlist itself. Keep model/provider selection independent of
+    interface choice, redact credentials from retained logs, and preserve the
+    robotctl baseline for paired studies.
 
 ## Repository boundary
 

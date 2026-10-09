@@ -13,13 +13,14 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import subprocess
 import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,6 +53,32 @@ class BrokerResponse:
     body: dict[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class AgentMotionRates:
+    """Operator-selected requested rates; separate from the SDK's hard ceilings."""
+
+    joint_speed_deg_s: float = 8.0
+    joint_acceleration_deg_s2: float = 25.0
+    cartesian_speed_mm_s: float = 10.0
+    cartesian_acceleration_mm_s2: float = 40.0
+
+    def validated(self, config: SOARM101Config) -> "AgentMotionRates":
+        limits = config.motion_limits_human
+        ceilings = {
+            "joint_speed_deg_s": limits["max_joint_speed_deg_s"],
+            "joint_acceleration_deg_s2": limits["max_joint_acceleration_deg_s2"],
+            "cartesian_speed_mm_s": limits["max_linear_speed_mm_s"],
+            "cartesian_acceleration_mm_s2": limits["max_linear_acceleration_mm_s2"],
+        }
+        for name, ceiling in ceilings.items():
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0 or value > ceiling:
+                raise ValueError(
+                    f"{name} must be finite, positive and at most {ceiling:g}"
+                )
+        return self
+
+
 class AgentCommandExecutor:
     """Invoke only the bounded agent namespace under the broker's motion policy."""
 
@@ -75,9 +102,11 @@ class AgentCommandExecutor:
         *,
         robot_id: str = "so101",
         config: SOARM101Config | None = None,
+        rates: AgentMotionRates | None = None,
     ) -> None:
         self.config = config or SOARM101Config(robot_id=str(robot_id))
         self.robot_id = self.config.robot_id
+        self.rates = (rates or AgentMotionRates()).validated(self.config)
 
     def _motion_limit_arguments(self) -> list[str]:
         limits = self.config.motion_limits_human
@@ -98,8 +127,19 @@ class AgentCommandExecutor:
 
     def run(self, arguments: Sequence[str]) -> dict[str, object]:
         bounded_arguments = list(arguments)
-        if bounded_arguments and bounded_arguments[0] in self._MOTION_LIMIT_COMMANDS:
-            bounded_arguments.extend(self._motion_limit_arguments())
+        if bounded_arguments:
+            if bounded_arguments[0] == "joint":
+                bounded_arguments.extend([
+                    "--speed-deg-s", f"{self.rates.joint_speed_deg_s:g}",
+                    "--acceleration-deg-s2", f"{self.rates.joint_acceleration_deg_s2:g}",
+                ])
+            elif bounded_arguments[0] == "jog":
+                bounded_arguments.extend([
+                    "--speed-mm-s", f"{self.rates.cartesian_speed_mm_s:g}",
+                    "--acceleration-mm-s2", f"{self.rates.cartesian_acceleration_mm_s2:g}",
+                ])
+            if bounded_arguments[0] in self._MOTION_LIMIT_COMMANDS:
+                bounded_arguments.extend(self._motion_limit_arguments())
         command = [
             sys.executable,
             "-m",
@@ -283,6 +323,8 @@ class RobotBrokerService:
                 ]
             visible["actions"] = actions
         visible["broker_profile"] = self.profile.public()
+        if isinstance(self.executor, AgentCommandExecutor):
+            visible["broker_requested_motion"] = asdict(self.executor.rates)
         return BrokerResponse(response.status, {**response.body, "result": visible})
 
     def dispatch(
@@ -623,6 +665,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
     )
+    requests = parser.add_argument_group("trusted host agent motion requests")
+    requests.add_argument(
+        "--agent-joint-speed-deg-s", type=float, default=8.0,
+        help="requested speed for bounded single-joint jogs (default 8 deg/s)",
+    )
+    requests.add_argument(
+        "--agent-joint-acceleration-deg-s2", type=float, default=25.0,
+        help="requested acceleration for bounded joint jogs (default 25 deg/s^2)",
+    )
+    requests.add_argument(
+        "--agent-cartesian-speed-mm-s", type=float, default=10.0,
+        help="requested Cartesian jog speed (default 10 mm/s)",
+    )
+    requests.add_argument(
+        "--agent-cartesian-acceleration-mm-s2", type=float, default=40.0,
+        help="requested Cartesian jog acceleration (default 40 mm/s^2)",
+    )
     return parser
 
 
@@ -642,8 +701,14 @@ def main(argv: list[str] | None = None) -> int:
         max_tool_angular_speed_deg_s=args.max_tool_angular_speed_deg_s,
         max_tool_angular_acceleration_deg_s2=args.max_tool_angular_acceleration_deg_s2,
     )
+    rates = AgentMotionRates(
+        joint_speed_deg_s=args.agent_joint_speed_deg_s,
+        joint_acceleration_deg_s2=args.agent_joint_acceleration_deg_s2,
+        cartesian_speed_mm_s=args.agent_cartesian_speed_mm_s,
+        cartesian_acceleration_mm_s2=args.agent_cartesian_acceleration_mm_s2,
+    ).validated(config)
     service = RobotBrokerService(
-        executor=AgentCommandExecutor(config=config),
+        executor=AgentCommandExecutor(config=config, rates=rates),
         token=token,
         event_path=args.events,
         profile=CapabilityProfile.from_file(args.profile) if args.profile else None,
@@ -658,7 +723,11 @@ def main(argv: list[str] | None = None) -> int:
         f"linear={limits['max_linear_speed_mm_s']:g} mm/s, "
         f"{limits['max_linear_acceleration_mm_s2']:g} mm/s^2; "
         f"tool angular={limits['max_tool_angular_speed_deg_s']:g} deg/s, "
-        f"{limits['max_tool_angular_acceleration_deg_s2']:g} deg/s^2"
+        f"{limits['max_tool_angular_acceleration_deg_s2']:g} deg/s^2; "
+        f"agent requests joint={rates.joint_speed_deg_s:g} deg/s, "
+        f"{rates.joint_acceleration_deg_s2:g} deg/s^2; "
+        f"Cartesian={rates.cartesian_speed_mm_s:g} mm/s, "
+        f"{rates.cartesian_acceleration_mm_s2:g} mm/s^2"
     )
     try:
         server.serve_forever()

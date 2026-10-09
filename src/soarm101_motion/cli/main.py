@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 from math import pi
 from pathlib import Path
@@ -44,6 +45,8 @@ from soarm101_motion.constants import (
 from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
+from soarm101_motion.motion import PassiveBackendTrace
+from soarm101_motion.motion.trace import summarize_agent_jog_trace
 from soarm101_motion.poses import (
     PoseLibrary,
     SavedPose,
@@ -1397,6 +1400,16 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _agent_requested_rate(value: float, name: str, ceiling: float) -> float:
+    """Reject unsafe requested rates before opening hardware."""
+    speed = float(value)
+    if not np.isfinite(speed) or speed <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    if speed > ceiling:
+        raise ValueError(f"{name} exceeds the configured motion envelope ({ceiling:g})")
+    return speed
+
+
 def _cmd_agent_joint(args: argparse.Namespace) -> int:
     delta_deg = float(args.delta_deg)
     if not np.isfinite(delta_deg) or abs(delta_deg) <= 1e-9:
@@ -1407,6 +1420,16 @@ def _cmd_agent_joint(args: argparse.Namespace) -> int:
             f"{AGENT_JOINT_MAX_DELTA_DEG:.1f} deg per-command limit"
         )
     delta_rad = delta_deg * pi / 180.0
+    limits = SOARM101Config(
+        robot_id=args.robot_id, **_motion_limit_overrides(args)
+    ).motion_limits_human
+    requested_speed = _agent_requested_rate(
+        args.speed_deg_s, "joint speed deg/s", limits["max_joint_speed_deg_s"]
+    )
+    requested_acceleration = _agent_requested_rate(
+        args.acceleration_deg_s2, "joint acceleration deg/s^2",
+        limits["max_joint_acceleration_deg_s2"],
+    )
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         before = dict(arm.get_joint_positions().positions)
@@ -1414,8 +1437,8 @@ def _cmd_agent_joint(args: argparse.Namespace) -> int:
         result = arm.move_joints(
             {args.joint: delta_rad},
             relative=True,
-            speed=8.0 * pi / 180.0,
-            acceleration=25.0 * pi / 180.0,
+            speed=requested_speed * pi / 180.0,
+            acceleration=requested_acceleration * pi / 180.0,
         )
         arm.hold()
         after = dict(arm.get_joint_positions().positions)
@@ -1438,6 +1461,17 @@ def _cmd_agent_jog(args: argparse.Namespace) -> int:
     delta_mm = np.asarray([args.x_mm, args.y_mm, args.z_mm], dtype=float)
     if not np.all(np.isfinite(delta_mm)):
         raise ValueError("agent jog deltas must be finite")
+    limits = SOARM101Config(
+        robot_id=args.robot_id, **_motion_limit_overrides(args)
+    ).motion_limits_human
+    requested_speed = _agent_requested_rate(
+        args.speed_mm_s, "Cartesian speed mm/s", limits["max_linear_speed_mm_s"]
+    )
+    requested_acceleration = _agent_requested_rate(
+        args.acceleration_mm_s2, "Cartesian acceleration mm/s^2",
+        limits["max_linear_acceleration_mm_s2"],
+    )
+    trace_summary: dict[str, int] | None = None
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         calibration_id = _agent_calibration_id(
@@ -1449,29 +1483,77 @@ def _cmd_agent_jog(args: argparse.Namespace) -> int:
                 "agent jog requires a measured workspace calibration and is not enabled in simulation"
             )
         workspace = WorkspaceCalibrationStore(arm.config.robot_id).load()
-        current = arm.get_position()
-        target = relative_target_pose(
-            current,
-            translation_m=delta_mm / 1000.0,
-            frame=args.frame,
+        trace_context = (
+            PassiveBackendTrace(
+                arm,
+                args.trace_file,
+                metadata={
+                    "action": "agent_jog",
+                    "frame": args.frame,
+                    "delta_model_mm": [float(v) for v in delta_mm],
+                    "requested_speed_mm_s": requested_speed,
+                    "requested_acceleration_mm_s2": requested_acceleration,
+                },
+            )
+            if args.trace_file is not None
+            else nullcontext()
         )
-        decision = evaluate_agent_jog(
-            workspace,
-            active_calibration_id=calibration_id,
-            current_model_position_m=current.position,
-            delta_model_m=target.position - current.position,
-        )
-        arm.enable()
-        result = jog_linear_cli_units(
-            arm,
-            frame=args.frame,
-            translation_mm=tuple(float(value) for value in delta_mm),
-            rotation_rpy_deg=(0.0, 0.0, 0.0),
-            orientation_mode="compatible",
-            speed_mm_s=10.0,
-            acceleration_mm_s2=40.0,
-        )
-        arm.hold()
+        with trace_context as trace:
+            current = arm.get_position()
+            target = relative_target_pose(
+                current,
+                translation_m=delta_mm / 1000.0,
+                frame=args.frame,
+            )
+            decision = evaluate_agent_jog(
+                workspace,
+                active_calibration_id=calibration_id,
+                current_model_position_m=current.position,
+                delta_model_m=target.position - current.position,
+            )
+            if trace is not None:
+                trace.mark(
+                    "preflight",
+                    start_model_xyz_mm=[float(v * 1000.0) for v in current.position],
+                    target_model_xyz_mm=[float(v * 1000.0) for v in target.position],
+                    physical_policy=decision.to_payload(),
+                )
+            arm.enable()
+            if trace is not None:
+                trace.mark("motion_start")
+            result = jog_linear_cli_units(
+                arm,
+                frame=args.frame,
+                translation_mm=tuple(float(value) for value in delta_mm),
+                rotation_rpy_deg=(0.0, 0.0, 0.0),
+                orientation_mode="compatible",
+                speed_mm_s=requested_speed,
+                acceleration_mm_s2=requested_acceleration,
+            )
+            if trace is not None:
+                trace.mark(
+                    "motion_completed_before_hold",
+                    accepted=result.accepted,
+                    completed=result.completed,
+                    joints_rad=dict(result.final_positions),
+                )
+                # Every planned joint command is recorded as a "command" event;
+                # the subsequent HOLD latch is recorded separately below.
+                trace.mark("hold_start")
+            arm.hold()
+            if trace is not None:
+                trace.mark("hold_complete")
+                trace.mark(
+                    "post_hold_immediate",
+                    joints_rad=dict(arm.get_joint_positions().positions),
+                )
+                # Deliberate post-motion read only, not trajectory-time polling.
+                time.sleep(2.0)
+                trace.mark(
+                    "post_hold_2s",
+                    joints_rad=dict(arm.get_joint_positions().positions),
+                )
+                trace_summary = dict(trace.summary)
     print(
         json.dumps(
             {
@@ -1483,10 +1565,24 @@ def _cmd_agent_jog(args: argparse.Namespace) -> int:
                 "policy": decision.to_payload(),
                 "final_positions": result.final_positions,
                 "message": result.message,
+                **(
+                    {
+                        "trace_file": str(Path(args.trace_file).expanduser()),
+                        "trace_summary": trace_summary,
+                    }
+                    if args.trace_file is not None
+                    else {}
+                ),
             },
             indent=2,
         )
     )
+    return 0
+
+
+def _cmd_agent_trace_summary(args: argparse.Namespace) -> int:
+    """Summarize a previously recorded JSONL jog; no hardware access."""
+    print(json.dumps(summarize_agent_jog_trace(args.path), indent=2))
     return 0
 
 
@@ -1758,6 +1854,8 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         max_turns=args.max_turns,
         timeout=args.timeout,
         read_only=args.read_only,
+        interface=args.interface,
+        capability_profile=Path(args.capability_profile) if args.capability_profile else None,
         adapter_manifest=manifest,
     )
     payload = result.as_dict()
@@ -2120,6 +2218,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_options(agent_joint)
     agent_joint.add_argument("joint", choices=ARM_JOINTS)
     agent_joint.add_argument("--delta-deg", type=float, required=True)
+    agent_joint.add_argument("--speed-deg-s", type=float, default=8.0)
+    agent_joint.add_argument("--acceleration-deg-s2", type=float, default=25.0)
     agent_joint.set_defaults(func=_cmd_agent_joint)
 
     agent_jog = agent_sub.add_parser(
@@ -2131,7 +2231,21 @@ def build_parser() -> argparse.ArgumentParser:
     agent_jog.add_argument("--x-mm", type=float, default=0.0)
     agent_jog.add_argument("--y-mm", type=float, default=0.0)
     agent_jog.add_argument("--z-mm", type=float, default=0.0)
+    agent_jog.add_argument("--speed-mm-s", type=float, default=10.0)
+    agent_jog.add_argument("--acceleration-mm-s2", type=float, default=40.0)
+    agent_jog.add_argument(
+        "--trace-file",
+        type=Path,
+        help="trusted-host JSONL motion trace: command/feedback, HOLD latch and 2s settling",
+    )
     agent_jog.set_defaults(func=_cmd_agent_jog)
+
+    agent_trace_summary = agent_sub.add_parser(
+        "trace-summary",
+        help="summarize model trajectory, encoder feedback and raw HOLD goals from a local JSONL trace",
+    )
+    agent_trace_summary.add_argument("path", type=Path)
+    agent_trace_summary.set_defaults(func=_cmd_agent_trace_summary)
 
     agent_gripper = agent_sub.add_parser(
         "gripper",
@@ -2289,6 +2403,13 @@ def build_parser() -> argparse.ArgumentParser:
     agent_sandbox_run.add_argument(
         "--provider",
         help="override the selected agent's canonical OpenShell provider",
+    )
+    agent_sandbox_run.add_argument(
+        "--interface", choices=("robotctl", "mcp"), default="robotctl",
+        help="bounded robot tool interface; robotctl remains the default baseline",
+    )
+    agent_sandbox_run.add_argument(
+        "--capability-profile", help="trusted host JSON tool/camera/limit profile for this run",
     )
     agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
     agent_sandbox_run.add_argument("--max-turns", type=int, default=100)

@@ -1,5 +1,50 @@
 # Testing
 
+## GUI test-session lifetime (PR #86 merge gate)
+
+The CI matrix runs Python 3.10 and 3.12 with the optional PySide6 GUI
+installed. GUI tests create numerous `QApplication`-owned widgets and worker
+threads in headless offscreen mode. PR #86's Python 3.10 run completed 569
+tests and Ruff successfully (80.71% coverage), then aborted with
+`QObject: shared QObject was deleted directly` / `malloc_consolidate`
+(exit 134). This is a CI failure despite pytest's pass count.
+
+A test-only, session-scoped `QApplication` lifetime fixture was tried on
+commit `14150c30b98ca7b9e50d871276a612a5fb9feb64`. It **did not fix**
+the crash: 569 tests again passed before the same exit-134 failure. The
+fixture was reverted; do not assume that Qt lifetime alone is the cause.
+
+**Dependency regression lead:** comparing the last green `main` CI job
+(Python 3.10, `113139291306`) with the failing PR job
+(`113582596764`) shows that identical `uv sync --extra dev --extra gui`
+resolved PySide6/Shiboken **6.11.2** versus **6.12.0**, respectively.
+The failing run also downloaded new PySide6 WebEngine/PDF wheels.
+Because `pyproject.toml` previously allowed `<7`, the resolution drifted
+without a source code change. As a bounded experiment, `gui` now requires
+`PySide6>=6.8,<6.12`. This is not proof of causality until the whole
+CI process exits zero. Keep the cap only while evidence supports it;
+a later controlled PySide upgrade requires independent GUI test coverage.
+
+Before another speculative fix, local Codex should isolate GUI teardown
+without changing the test definitions or ignoring process exit codes:
+
+```bash
+export QT_QPA_PLATFORM=offscreen
+uv run pytest --no-cov tests/test_gui_*.py tests/test_camera_worker.py \
+  tests/test_optional_gui_import.py
+uv run pytest --no-cov tests/test_agent_control.py tests/test_motion_trace.py \
+  tests/test_validated_linear_plan.py
+uv run pytest
+```
+
+If GUI-only crashes, bisect GUI test modules and inspect native QObject
+ownership/Qt thread cleanup. If only full suite crashes, identify its
+cross-test interaction/order and compare environment/dependencies with
+green `main`. A genuine fix must make the entire CI **process exit 0**
+on 3.10 and 3.12. Do not suppress the abort or mark the affected tests
+xfail merely to green the build.
+
+
 
 ## 100/1000 motion-envelope validation — 2026-10-06
 
@@ -41,6 +86,87 @@ Do not describe 100/1000 as physically validated until that run completes cleanl
 unchanged runtime guards.
 
 
+## Passive agent-jog motion/HOLD trace
+
+Opt-in diagnostics were added after a user observed model-space downward
+creep during a sequence of 2 mm horizontal Cartesian commands. Endpoint IK
+returned an internally consistent horizontal solution, but that alone could
+not separate incorrect path commands, servo tracking, HOLD re-latching, and
+subsequent gravity sag.
+
+`soarm101 agent jog --trace-file /tmp/soarm101-jog-001.jsonl`
+reuses `PassiveBackendTrace` for the actual execution, including internal
+`_write_raw_positions` writes used by Feetech STOP/HOLD. The trace records
+preflight intent, existing command and feedback traffic, pre-HOLD settled
+joint state, precise hold markers and raw latch writes, plus encoder positions
+immediately and 2 s after HOLD. No new high-rate feedback polling is added
+during a trajectory. JSONL events carry runtime robot/calibration provenance.
+
+`soarm101 agent trace-summary /tmp/soarm101-jog-001.jsonl`
+reads the trace **offline** and reports model-space commanded/observed Z
+changes and raw HOLD-goal deltas. It makes no physical-clearance claim.
+
+Hardware-free focused suite:
+
+```bash
+pytest --no-cov tests/test_motion_trace.py tests/test_agent_control.py
+ruff check src/soarm101_motion/cli/main.py src/soarm101_motion/motion/trace.py \
+  tests/test_motion_trace.py tests/test_agent_control.py
+```
+
+For hardware: run only on the checked-out commit, with a matching calibrated
+follower and human `agent arm` lease, clear table and no payload. Stop the
+broker/GUI before using the direct CLI. Begin with an unloaded 2 mm world-X
+jog at historic 10 mm/s and 40 mm/s² and an independent side view of
+the gripper/table. Never intentionally provoke an unsafe sag or following
+error. Report the full trace and offline summary; determine whether the
+descent occurs in the planned command, encoder feedback, raw HOLD latch,
+or the following 2 seconds before increasing rates.
+
+## Stale Cartesian preflight on low-cost servos
+
+The live Codex MCP run on 2026-10-08 produced three broker HTTP 409
+rejections reporting `robot joints changed after Cartesian path
+validation; retry the move` (request IDs starting `134dabe`,
+`dbe89fd`, and `4e4cf4f`). This was a pre-execution stale-plan
+check, **not** evidence of following error, motor overload or collision.
+
+The underlying managed controller keeps its narrow cached-plan
+start tolerance. The facade now retries the *whole* planning and
+workspace-validation sequence at most twice on a typed
+`StaleCartesianPlanError`, preserving fail-closed behavior for
+persistent drift or other safety failures. Validate the focused
+hardware-free regressions:
+
+```bash
+pytest --no-cov tests/test_validated_linear_plan.py
+```
+
+For physical validation: keep the arm unloaded, workspace clear, and
+the previously calibrated setup, begin with conservative 2–5 mm
+jogs at existing requested speeds, and verify that unexpected
+start drift either causes safe revalidation or a clean refusal with
+no intermediate motion. Do not use a real object grasp or faster
+rates to test this change. Local servo behavior remains
+unvalidated until this check is performed.
+
+## Trusted broker requested-motion rate configuration
+
+Hardware-free tests cover broker defaults, custom joint/Cartesian requested
+rates, positive/finite/envelope checks before subprocess execution,
+propagation only into bounded joint/jog commands, and CLI parser/rate
+validation without opening the follower. Run:
+
+```bash
+pytest tests/test_broker.py tests/test_agent_control.py
+```
+
+Before an operator selects higher real-hardware rates, investigate the
+prior Cartesian physical-height drift and repeated HTTP 409 errors,
+validate motion settle and trajectory behavior at existing defaults,
+and perform supervised incremental speed characterization. A
+successful startup or test is not hardware validation.
+
 ## Broker capability-profile testing
 
 Run `pytest tests/test_capability_profile.py tests/test_broker.py
@@ -51,9 +177,39 @@ authenticated broker even when called outside MCP; and that the stdio MCP
 tool list reflects the same trusted-host profile. This is separate from
 local supervised physical validation.
 
+The `mcp-profile-supervised-manipulation.json` example must parse and
+advertise both cameras, joint control limited to 10 degrees per request,
+Cartesian jogs, saved poses, Sleep, gripper and STOP/HOLD. Tests should
+confirm the optional model-frame jog cap is absent so the unchanged
+bounded agent CLI's calibrated *physical* 50 mm/10 mm start-height guard
+remains authoritative. This must not be interpreted as validating 50 mm
+movements or higher speed on real hardware; investigate previously observed
+height drift and HTTP 409 rejections before increasing speed or step size
+during live object approach.
+
 ## MCP guidance contract testing
 
-Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm resources/prompts are readable, preserve calibrated-coordinate and evidence rules, and do not change the active MCP tool allowlist.
+Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm server initialization exposes MCP-first live
+robot instructions, tool descriptions direct camera/state use through the
+broker, resources/prompts preserve calibrated-coordinate and evidence rules,
+and no guidance changes the active MCP tool allowlist. A separate read-only
+Codex workstation check should ask for both cameras **without** saying
+"use MCP" and confirm the agent directly selects `soarm101.capture_camera`
+for each permitted camera instead of host `soarm101 camera` commands. This
+host/model behavior is not established by the deterministic tests.
+
+## MCP OpenShell integration tests
+
+Run `pytest tests/test_agent_sandbox.py tests/test_mcp_server.py
+tests/test_capability_profile.py` using fake OpenShell and broker fixtures.
+Checks cover Codex/Hermes per-run MCP config, explicit environment-variable
+inheritance without literal credentials, client-only module uploads, profile
+pinning, read-only broker and network reductions, MCP image evidence retention
+and SHA mismatch rejection, and unchanged robotctl defaults.
+
+Actual image builds, isolated provider authentication, native MCP tool/image
+visibility, and hardware motion remain separate local Codex/supervised
+validation gates. Do not infer physical reliability from these tests.
 
 ## Optional MCP agent facade
 

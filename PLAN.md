@@ -4,6 +4,116 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
+## Follow-on capability-registry migration — planned after PR #86
+
+Detailed design, authority boundaries, STOP/cancellation acceptance tests, and
+merge gates: [`docs/capability-registry-migration.md`](docs/capability-registry-migration.md).
+
+**Status:** design only; no new registry, dispatcher, or persistent robot broker
+is implemented by PR #86. This work is **dependent** on PR #86's MCP, capability
+profile, tracing and agent integration and must not start from `main` until
+that work is merged and the real-arm validation gate is satisfied.
+
+**Target:** a single typed, deterministic SDK capability registry becomes
+authoritative for supported motion/camera actions, descriptions, units, argument
+schemas, SDK dispatch, and shared CLI/broker introspection. Human CLI and
+broker/MCP are adapters. The broker owns agent allowlists, narrower per-field
+limits, human-issued authority leases, request auditing and exclusive robot
+session ownership. SDK guards remain non-negotiable independently of profiles.
+Registry actions may be designated operator-only and cannot be enabled for a
+remote agent by profile editing.
+
+Implement as **three sequential follow-on PRs**:
+
+1. **Registry and ordinary CLI parity.** Introduce typed action specs and
+   adapters to existing SDK primitives; preserve human CLI syntax/semantics.
+   Register existing read/state, single-joint, Cartesian, saved pose, gripper,
+   camera, STOP and diagnostic operations. Cross-check parameters, units,
+   descriptions and schemas against existing CLI; retain operator-only admin
+   commands. Tests prove dispatch parity with today's SDK and no accidental
+   hardware I/O during introspection. No broker runtime migration here.
+2. **Broker registry dispatch and persistent session.** Broker validates
+   static tool and parameter policies against the registry, performs **dynamic**
+   calibration/physical-workspace/authority prechecks against current measured
+   state, and directly invokes trusted SDK operations through one serialized
+   long-lived device session. Preserve bounded retries, following-error, STOP,
+   fault and cancellation behavior, camera evidence/sha, execution audit and
+   OpenShell isolation; deny unknown arguments rather than forwarding CLI flags.
+   Importantly, profile limits intersect with SDK safety and can only narrow.
+   Test TOCTOU/revalidation, lease expiry, request concurrency, reconnect and
+   failed HOLD, and supervised physical 2 mm jog/tracing versus subprocess
+   baseline before merge.
+3. **Retire agent-only execution wrappers.** Remove duplicate agent motion
+   methods/subprocess execution while retaining human-only arm/disarm, regular
+   operator CLI, generic trace diagnostics and stable MCP/robotctl contracts.
+   Migrate existing profile examples, tests, docs and agent sandbox callers;
+   verify there is no second authority source or motion implementation.
+
+The broker should invoke Python SDK operations directly rather than shelling out
+to unrestricted `soarm101` commands; exposing arbitrary CLI argv would be a
+capability escalation. Generic registry metadata does **not** permit raw servo
+register writes or arbitrary configuration from an agent. Do not widen policy
+based on the unverified model/table geometry or treat model FK as true clearance.
+
+**Precondition for PR 1:** #86 merged, local smoke/trace evidence reviewed,
+and CI exits cleanly on supported Python versions. Current `main` remains
+authoritative until then.
+
+## Future PR 5 plan — composable agent/perception experiments (design only)
+
+**Status:** intentionally not implemented. Begin experiments after the PR 4 MCP
+sandbox interface passes local OpenShell/physical read-only validation and the
+robot's measured coordinate mapping is independently checked. The motion SDK
+must not become a perception engine, orchestration platform, or benchmark
+runner. New perception providers belong in optional agent-side adapters; the
+authenticated broker remains the sole robot execution boundary.
+
+The experimental factor **agent/model setup** is broader than an LLM name.
+Represent it as a versioned, explicit *pipeline graph* (components + interfaces +
+configurations + provenance), including fully deterministic hand-coded baselines:
+
+- A hand-coded finite-state controller using fixed cues and safety-bounded
+  visual/pose corrections (no LLM inference);
+- A hand-coded camera segmentation, feature-tracking, color/shape detection or
+  fiducial pipeline feeding deterministic action selection;
+- A small local detector or pointing/grounding model feeding deterministic
+  planning with uncertainty gates;
+- One general-purpose VLM controlling tools through MCP;
+- An LLM planner + specialist vision model + deterministic target/guard
+  converter + MCP execution;
+- An inexpensive local observer with conditional hosted VLM escalation;
+- Hybrid human-in-the-loop, scripted replay, and learned-policy baselines
+  when they use the same authoritative validated motion interface.
+
+Treat each as an **agent configuration**, not a new robot control plane.
+Model identity, model build/hash, hand-coded algorithm revision/parameters,
+pre/post-processing, perception model, observer/camera topology, reasoning
+strategy, interface profile hash, safety gate, retry/escalation policy, and
+human intervention must be independently identifiable. Keep provider and
+inference cost distinct from local deterministic computation.
+
+Candidate *read-only* perception outputs are timestamped image identifiers,
+bounded image coordinates, bounding boxes, tracked object IDs, confidence,
+uncertainty, and optional pixel grounding. Only a calibrated, validated
+camera-to-robot transform can produce physical target poses; report missing
+calibration as unavailable, not a guessed XYZ. Never let a detector directly
+invoke motion or replace the Motion SDK workspace/IK/limit checks.
+
+First supervised study: repeated cube-marker recognition, target selection,
+coarse alignment, and re-observation using matched scenes and identical broker
+constraints. Record visual evidence hashes, state, commands, rejected motions,
+settle/error outcomes, wall time, inference tokens/cost, intervention/faults,
+physical calibration provenance, and run configuration. Randomize/counterbalance
+run order and scene arrangement where practicable. Forge Bench later owns the
+experimental design, trial IDs, analysis and cross-run comparisons; do not
+duplicate that engine in Motion SDK.
+
+**PR 5 entry criteria:** physical coordinate calibration and read-only
+image/tool plumbing characterized, benchmarkable control baselines defined,
+clear ownership for specialist perception adapter, and an explicit safe
+physical test protocol. Do not start implementation merely because PR 4
+merged.
+
 ## Model, coordinates, and shaking audit — 2026-10-07
 
 Reviewed main at `8830d9064bc6551674d1a7ec00c078a07ae73d12` and open motion

@@ -189,6 +189,30 @@ def test_mcp_lists_only_broker_authorized_tools() -> None:
     asyncio.run(run())
 
 
+def test_supervised_manipulation_profile_uses_physical_height_guard() -> None:
+    example = (
+        Path(__file__).resolve().parents[1]
+        / "docs/examples/mcp-profile-supervised-manipulation.json"
+    )
+    profile = CapabilityProfile.from_file(example)
+    assert profile.name == "supervised-manipulation"
+    assert profile.allowed_cameras == frozenset({"overhead", "wrist"})
+    assert {
+        "go_pose", "jog_cartesian", "jog_joint", "move_gripper", "sleep", "stop",
+    }.issubset(profile.allowed_tools)
+    assert profile.max_joint_delta_deg == 10
+    # Deliberately leave the optional model-space cap unset. The bounded
+    # agent CLI independently enforces 50 mm/10 mm *physical* jog limits
+    # using the current calibrated height, even for non-MCP broker calls.
+    assert profile.max_model_jog_mm is None
+    profile.check("POST", "/v1/jog", {"frame": "world", "x_mm": 50})
+    profile.check("POST", "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 10})
+    with pytest.raises(PermissionError, match="profile limit"):
+        profile.check("POST", "/v1/joint", {
+            "joint": "shoulder_pan", "delta_deg": 10.01,
+        })
+
+
 def test_invalid_broker_tool_list_fails_closed() -> None:
     def dishonest(*, method: str, path: str, payload=None):
         return {"ok": True, "result": {"tools": ["arm"]}}
