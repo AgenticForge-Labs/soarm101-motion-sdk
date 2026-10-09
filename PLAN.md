@@ -6,6 +6,9 @@ historical Director/Studio integration references below describe older adapter w
 
 ## Follow-on capability-registry migration — planned after PR #86
 
+Detailed design, authority boundaries, STOP/cancellation acceptance tests, and
+merge gates: [`docs/capability-registry-migration.md`](docs/capability-registry-migration.md).
+
 **Status:** design only; no new registry, dispatcher, or persistent robot broker
 is implemented by PR #86. This work is **dependent** on PR #86's MCP, capability
 profile, tracing and agent integration and must not start from `main` until
