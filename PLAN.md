@@ -11,8 +11,11 @@ historical Director/Studio integration references below describe older adapter w
 PR 1 is now open as `feature/shared-sdk-capability-registry`. It has
 implemented the initial pure registry and migrated core ordinary CLI
 read/move/IK/jog/gripper dispatch, plus read-only saved-pose listing,
-hardware state and effort diagnostics. It has **not yet** completed
-saved-pose capture/replay, camera capture, full CLI parity or merger.
+hardware state and effort diagnostics. It has now added saved-pose capture/replay, named camera capture,
+persisted camera-profile readout, state and effort diagnostics. Its tests
+and final compatibility checks must pass before PR 1 can merge. Operator
+configuration, calibration, sequences/trajectories and the agent-specific
+subprocess remain deliberately unchanged.
 PRs 2 and 3 remain strictly dependent and unimplemented.
 
 
