@@ -251,3 +251,46 @@ def test_native_executor_stop_can_interrupt_a_fake_inflight_move(tmp_path) -> No
         interrupted.set()
         thread.join(timeout=2)
         executor.close()
+
+
+def test_native_executor_serializes_ordinary_calls_without_blocking_stop(
+    native, monkeypatch,
+) -> None:
+    executor, _ = native
+    entered = threading.Event()
+    release = threading.Event()
+    observations = []
+    errors = []
+
+    def guarded_action(action, request):
+        assert action == "state"
+        observations.append("enter")
+        if len(observations) == 1:
+            entered.set()
+            assert release.wait(timeout=2)
+        return {"action": action}
+
+    monkeypatch.setattr(executor, "_execute_action", guarded_action)
+
+    def call_state():
+        try:
+            executor.execute("state", {})
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=call_state)
+    second = threading.Thread(target=call_state)
+    first.start()
+    try:
+        assert entered.wait(timeout=2)
+        second.start()
+        assert not release.is_set()
+        assert observations == ["enter"]
+    finally:
+        release.set()
+        first.join(timeout=2)
+        if second.ident is not None:
+            second.join(timeout=2)
+    assert not errors
+    assert observations == ["enter", "enter"]
+    assert not first.is_alive() and not second.is_alive()
