@@ -294,3 +294,34 @@ def test_native_executor_serializes_ordinary_calls_without_blocking_stop(
     assert not errors
     assert observations == ["enter", "enter"]
     assert not first.is_alive() and not second.is_alive()
+
+
+def test_preview_sdk_disconnect_error_is_audited_not_http_success(
+    native, tmp_path, monkeypatch,
+) -> None:
+    executor, _ = native
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "read-only",
+        "tools": ["robot_state"], "cameras": [], "limits": {},
+    })
+    service = RobotBrokerService(
+        executor=executor,
+        token="token",
+        profile=profile,
+        event_path=tmp_path / "audit.jsonl",
+    )
+
+    def disconnected(action, request):
+        raise RuntimeError("SDK session disconnected")
+
+    monkeypatch.setattr(executor, "execute", disconnected)
+    response = service.dispatch("GET", "/v1/state")
+    assert response.status == 409
+    assert response.body["ok"] is False
+    records = [
+        __import__("json").loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text().splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["ok"] is False
+    assert records[0]["profile_sha256"] == profile.public()["sha256"]
