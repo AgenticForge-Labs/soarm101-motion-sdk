@@ -1,5 +1,14 @@
 # Changelog
 
+- Begin typed SDK capability-registry migration (PR 1): pure descriptions
+  and validated direct SDK dispatch for foundational operations; ordinary
+  operator CLI read, IK, joint, Cartesian, jog and gripper commands reuse
+  them while preserving confirmation and connection behavior. Add read-only
+  `soarm101 sdk-capabilities --json` introspection and fake/simulation tests.
+  Broker, MCP permissions, physical authority and agent CLI execution remain
+  unchanged; this PR does not add a persistent broker session.
+
+
 - Temporarily constrain the optional GUI dependency to PySide6 <6.12 while
   investigating CI-native Qt teardown aborts: green main resolved PySide6
   6.11.2 whereas the unpinned PR runner resolved 6.12.0. Full matrix exit
