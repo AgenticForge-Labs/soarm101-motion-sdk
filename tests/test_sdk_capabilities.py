@@ -41,6 +41,14 @@ class FakeArm:
         self.calls.append(("gripper", position))
         return "gripper complete"
 
+    def get_state(self):
+        self.calls.append(("hardware_state", None))
+        return SimpleNamespace(connected=True, moving=False)
+
+    def get_effort_safety_status(self, *, refresh=False):
+        self.calls.append(("effort_status", refresh))
+        return {"enabled": False, "refreshed": refresh}
+
     def stop(self):
         self.calls.append(("stop", None))
         return "holding"
@@ -51,7 +59,8 @@ def test_registry_inspection_is_pure_and_exposes_units() -> None:
     names = [spec["name"] for spec in specs]
     assert len(names) == len(set(names))
     assert {"read_pose", "solve_ik", "move_joints", "jog_joint", "move_linear",
-            "jog_cartesian", "move_gripper", "stop"} == set(names)
+            "jog_cartesian", "move_gripper", "list_saved_poses",
+            "read_effort_status", "read_hardware_state", "stop"} == set(names)
     joint = SDK_CAPABILITIES.get("move_joints").describe()
     assert joint["effect"] == "motion"
     assert joint["agent_eligible"] is False
@@ -136,3 +145,52 @@ def test_single_joint_jog_uses_relative_guarded_sdk_and_validates_names() -> Non
 def test_cli_single_joint_operator_jog_needs_explicit_confirmation(capsys) -> None:
     assert main(["jog-joint", "shoulder_pan", "--delta-deg", "2", "--simulation"]) == 2
     assert "Refusing to move without --yes" in capsys.readouterr().err
+
+
+def test_registry_shared_effort_and_state_reads() -> None:
+    arm = FakeArm()
+    assert SDK_CAPABILITIES.dispatch(
+        "read_effort_status", arm, {"refresh": True},
+    ) == {"enabled": False, "refreshed": True}
+    assert arm.calls[-1] == ("effort_status", True)
+    state = SDK_CAPABILITIES.dispatch("read_hardware_state", arm, {})
+    assert state.connected and not state.moving
+    assert arm.calls[-1] == ("hardware_state", None)
+    before = list(arm.calls)
+    with pytest.raises(ValueError, match="boolean"):
+        SDK_CAPABILITIES.dispatch("read_effort_status", arm, {"refresh": "yes"})
+    assert arm.calls == before
+    with pytest.raises(ValueError, match="connected SDK session"):
+        SDK_CAPABILITIES.dispatch("read_hardware_state", None, {})
+
+
+def test_registry_lists_saved_poses_without_hardware(tmp_path, monkeypatch) -> None:
+    import soarm101_motion.poses as poses
+    from soarm101_motion.constants import ARM_JOINTS
+
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}.json",
+    )
+    library = poses.PoseLibrary("so101")
+    library.save(
+        "test_point",
+        poses.SavedPose(
+            joints={name: 0.0 for name in ARM_JOINTS},
+            gripper=0.5,
+            tcp_xyz_rpy=(0.0, 0.0, 0.2, 0.0, 0.0, 0.0),
+            source="follower",
+            created_at="2026-10-09T00:00:00Z",
+        ),
+    )
+    rows = SDK_CAPABILITIES.dispatch(
+        "list_saved_poses", None, {"robot_id": "so101"},
+    )
+    assert rows == [{
+        "name": "test_point",
+        "source": "follower",
+        "created_at": "2026-10-09T00:00:00Z",
+    }]
+    assert main(["pose", "list", "--robot-id", "so101"]) == 0
+    with pytest.raises(ValueError, match="nonempty"):
+        SDK_CAPABILITIES.dispatch("list_saved_poses", None, {"robot_id": " "})
