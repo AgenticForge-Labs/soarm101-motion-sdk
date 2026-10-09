@@ -14,10 +14,12 @@ SOARM101_BROKER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(24)
 This mode creates one simulated SDK session lazily and supports only the
 authenticated health, profile, state and capabilities GET endpoints. It
 rejects every POST, including STOP and all movement/camera actions; no serial
-port is opened and no torque is enabled. It exists to validate the
-persistent-session/transport approach while direct physical hardware STOP,
-cross-process ownership, lease/preflight checks and trusted camera evidence
-are implemented/tested behind separate safety gates in **the same PR #88**.
+port is opened and no torque is enabled. It exists to validate the persistent-session/transport approach.
+PR #88's internal simulated HTTP tests exercise authorization and STOP
+while a fake joint move is in progress; this cannot establish safe Feetech
+bus cancellation, cross-process ownership, physical workspace correctness,
+or hardware HOLD success. Those require separate validation on this PR
+before activating a physical SDK executor.
 The standard broker behavior remains unchanged until a supervised
 physical validation and merge.
 
