@@ -1,5 +1,25 @@
 # Testing
 
+## PR #88 simulated persistent broker contract (not physical validation)
+
+Run `uv run ruff check .`, `uv run pytest --no-cov
+tests/test_broker_sdk.py tests/test_broker.py tests/test_capability_profile.py`,
+and the full `uv run pytest` suite. The native broker preview
+`--sdk-simulation-preview` should preserve bearer authentication, pin a
+read-only profile, reuse one simulated SDK session, and reject all POST
+routes. Contract tests cover unknown arguments, missing/expired leases,
+invalid joints, no automatic torque, and refusal to interpret model space
+as measured physical clearance.
+
+**Not validated or enabled:** the real servo bus, exclusive ownership
+across GUI/CLI/broker, interruptible HTTP STOP under a moving hardware SDK,
+full native capture evidence, stale-geometry retry and model/physical jog
+agreement. Before PR #88 can merge, these require fake-transport tests and
+supervised unloaded hardware testing under `docs/physical-run.md`.
+Software-only pytest never clears the physical gate.
+
+
+
 ## One-command PR #87 checkout and simulation validation
 
 From an Ubuntu/Linux terminal, run this **single copy-and-paste line**:
