@@ -70,6 +70,8 @@ class SDKAgentExecutor:
                 "direct-SDK physical sessions are disabled pending supervised "
                 "STOP, ownership and workspace validation"
             )
+        if config.auto_enable_torque:
+            raise ValueError("broker SDK preview forbids automatic torque enable")
         self.config = config
         self.robot_id = config.robot_id
         self.rates = rates
@@ -171,7 +173,8 @@ class SDKAgentExecutor:
             joints = dict(arm.get_joint_positions().positions)
             return {
                 "accepted": True, "completed": True, "action": "stop",
-                "holding": True, "joint_positions_rad": joints,
+                "holding": bool(arm.get_state().torque_enabled),
+                "joint_positions_rad": joints,
             }
 
         arm = self._arm()
