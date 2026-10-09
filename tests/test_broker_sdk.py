@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import threading
 import urllib.error
@@ -615,3 +617,92 @@ def test_native_stop_failure_also_revokes_lease(native, tmp_path, monkeypatch) -
     assert response.status == 409
     assert "STOP/HOLD bus failure" in response.body["error"]
     assert auth.status()["armed"] is False
+
+
+
+def test_native_camera_evidence_preserves_bytes_hash_and_redacts_host_path(
+    native, tmp_path, monkeypatch,
+) -> None:
+    """No camera device opens: fake trusted SDK capture returns a local test JPEG."""
+    executor, _ = native
+    bytes_on_disk = b"\xff\xd8\xffsynthetic-camera-evidence\xff\xd9"
+    picture = tmp_path / "private-capture.jpg"
+    picture.write_bytes(bytes_on_disk)
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "fake-capture",
+        "tools": ["capture_camera"],
+        "cameras": ["overhead"], "limits": {},
+    })
+    service = RobotBrokerService(
+        executor=executor, token="secret", profile=profile,
+        allow_simulated_sdk_posts=True,
+        event_path=tmp_path / "audit.jsonl",
+    )
+    original = executor.execute
+
+    def fake_capture(action, request):
+        if action == "capture":
+            assert request == {"camera": "overhead"}
+            return {
+                "name": "overhead", "path": str(picture),
+                "device": "/dev/video-test-private",
+                "width": 12, "height": 8, "timestamp": 1.0,
+            }
+        return original(action, request)
+
+    monkeypatch.setattr(executor, "execute", fake_capture)
+    response = service.dispatch(
+        "POST", "/v1/capture", {"camera": "overhead"},
+    )
+    assert response.status == 200
+    payload = response.body["result"]
+    expected_sha = hashlib.sha256(bytes_on_disk).hexdigest()
+    assert payload["sha256"] == expected_sha
+    assert base64.b64decode(payload["image_base64"]) == bytes_on_disk
+    assert "path" not in payload and "device" not in payload
+    assert str(picture) not in json.dumps(response.body)
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text().splitlines()
+    ]
+    assert [row["action"] for row in events] == ["capture", "capture_evidence"]
+    assert events[0]["result"]["sha256"] == expected_sha
+    assert events[1]["result"]["host_path"] == str(picture)
+    assert events[0]["request_id"] == events[1]["request_id"]
+    assert all(
+        row["profile_sha256"] == profile.public()["sha256"] for row in events
+    )
+
+
+def test_native_camera_missing_evidence_fails_before_success_event(
+    native, tmp_path, monkeypatch,
+) -> None:
+    executor, _ = native
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "fake-capture-missing",
+        "tools": ["capture_camera"], "cameras": ["overhead"], "limits": {},
+    })
+    service = RobotBrokerService(
+        executor=executor, token="secret", profile=profile,
+        allow_simulated_sdk_posts=True,
+        event_path=tmp_path / "audit.jsonl",
+    )
+
+    def fake_missing_capture(action, request):
+        assert action == "capture"
+        return {"name": "overhead", "path": str(tmp_path / "missing.jpg")}
+
+    monkeypatch.setattr(executor, "execute", fake_missing_capture)
+    response = service.dispatch(
+        "POST", "/v1/capture", {"camera": "overhead"},
+    )
+    assert response.status == 409
+    assert response.body["ok"] is False
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "audit.jsonl").read_text().splitlines()
+    ]
+    assert len(events) == 1
+    assert events[0]["action"] == "capture"
+    assert events[0]["ok"] is False
