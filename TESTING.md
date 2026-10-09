@@ -1,5 +1,40 @@
 # Testing
 
+## One-command PR #87 checkout and simulation validation
+
+From an Ubuntu/Linux terminal, run this **single copy-and-paste line**:
+
+\`\`\`bash
+curl -fsSL https://raw.githubusercontent.com/AgenticForge-Labs/soarm101-motion-sdk/feature/shared-sdk-capability-registry/scripts/test_registry_pr87.sh -o /tmp/test_registry_pr87.sh && bash /tmp/test_registry_pr87.sh
+\`\`\`
+
+The source is tracked at [\`scripts/test_registry_pr87.sh\`](scripts/test_registry_pr87.sh).
+The runner clones or fast-forward pulls branch
+\`feature/shared-sdk-capability-registry\` into
+\`~/AgenticForge/soarm101-motion-sdk\`; it refuses dirty worktrees,
+unexpected remotes and divergent local branches. It then creates or updates
+the isolated \`.venv\` (using \`uv\` when installed, otherwise Python
+3.10–3.13 \`venv\`), activates that environment **for the test process**,
+installs dev/GUI/simulation/MCP dependencies, and runs Ruff, compilation,
+registry introspection, the focused and complete test suites, GUI offscreen
+smoke test and CLI simulation. Logs remain under a reported temporary folder.
+
+For an existing repository installed elsewhere, set
+\`SOARM101_CHECKOUT=/absolute/path\` before the \`bash\` command.
+To keep the environment active **after** the test, use:
+
+\`\`\`bash
+cd ~/AgenticForge/soarm101-motion-sdk
+source .venv/bin/activate
+soarm101 sdk-capabilities --json
+soarm101-gui --simulation
+\`\`\`
+
+The scripted validation makes **no live hardware connections and does not
+arm or move the robot**. Physical operation remains separately supervised,
+with documented calibration, workspace and emergency power gates.
+This script tests the open PR branch, not the current \`main\` release.
+
 ## Shared SDK capability registry — PR 1 (software-only)
 
 Run `uv run ruff check .`, `uv run pytest --no-cov
