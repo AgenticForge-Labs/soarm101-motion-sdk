@@ -1,5 +1,22 @@
 # Architecture
 
+## Staged shared capability registry (open PR 1 — not deployed)
+
+`sdk_capabilities.py` introduces pure action metadata and explicit,
+validated SDK dispatch, presently covering read, IK, direct joint/Cartesian
+move, jog, gripper and STOP. It adds no alternate motion controller, implicit
+motor enable, operator bypass, or new remote route. Selected human CLI
+commands adapt to this shared surface. The broker **still shells out to the
+bounded agent CLI**; its existing authenticated dispatch, profiles, authority,
+events and SHA-verified camera captures are unchanged.
+
+The target after PR 2 is a broker-owned persistent SDK session and immutable
+per-run policy intersection, with independent interruptible STOP semantics.
+The target after PR 3 is removal of duplicate agent-only motion execution.
+Do not describe either as implemented by PR 1. See
+`docs/capability-registry-migration.md`.
+
+
 Dependency direction is strict:
 
 ```text
