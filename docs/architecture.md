@@ -11,7 +11,8 @@ uses the existing bounded `soarm101 agent` subprocess path and its profile,
 authority and motion checks unchanged. The new executor also includes
 prototype motion adapters. An explicitly simulated programmatic test-only
 broker setting can exercise these through the real HTTP handler for
-concurrency and STOP regression tests, with profile/lease enforcement.
+concurrency and STOP regression tests, with profile/lease enforcement,
+queued-command invalidation and native lease revocation on STOP.
 No command-line option exposes that mode; public preview and production
 HTTP continue to reject direct-SDK motion. This is neither a released robot-control migration nor
 hardware-validated STOP, calibrated-jog, or device exclusivity.
