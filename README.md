@@ -1,5 +1,24 @@
 # SO-ARM101 Motion SDK
 
+## Typed SDK capability discovery (PR 1 in progress)
+
+The ordinary operator CLI can inspect the SDK's typed, hardware-free action
+contracts with `soarm101 sdk-capabilities --json`. The experimental
+`soarm101_motion.sdk_capabilities.SDK_CAPABILITIES` registry owns argument
+names, units, semantic descriptions, validation and SDK dispatch for core
+read, IK, joint/Cartesian move, jog, gripper and STOP operations. The ordinary
+CLI uses those operations while retaining its existing syntax and human
+confirmation/hold semantics. Registry inspection never connects to hardware,
+and dispatch never implicitly enables torque or grants motion authority.
+
+This branch is **not** the persistent broker migration. Saved poses,
+cameras, diagnostics and the remaining CLI action families still need to
+be registered in PR 1. The existing MCP/robotctl broker continues to use the
+previous bounded agent CLI subprocess path until a separately validated PR 2.
+Neither the registry nor its metadata is an authorization grant: existing
+broker profiles, leases, calibrated limits and SDK motion safety still apply.
+
+
 **A Python-first way to learn, teach, program, and automate the SO-ARM101.**
 
 Low-cost arms make robotics hardware much more accessible, but there is still a gap between assembling an arm and programming it to do useful work. The SO-ARM101 Motion SDK is intended to fill that gap with a lighter, fundamentals-first environment built around a shared Python motion system, USB-camera observation layer, desktop GUI, and CLI.
