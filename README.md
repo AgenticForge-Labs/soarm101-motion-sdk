@@ -33,9 +33,9 @@ soarm101-gui --simulation
 The scripted validation makes **no live hardware connections and does not
 arm or move the robot**. Physical operation remains separately supervised,
 with documented calibration, workspace and emergency power gates.
-This script tests the open PR branch, not the current `main` release.
+This script explicitly tests the PR #87 branch, not whatever revision `main` happens to contain.
 
-## Typed SDK capability discovery (PR 1 in progress)
+## Typed SDK capability discovery (PR #87)
 
 The ordinary operator CLI can inspect the SDK's typed, hardware-free action
 contracts with `soarm101 sdk-capabilities --json`. A guarded operator-only
@@ -48,7 +48,7 @@ CLI uses those operations while retaining its existing syntax and human
 confirmation/hold semantics. Registry inspection never connects to hardware,
 and dispatch never implicitly enables torque or grants motion authority.
 
-This branch is **not** the persistent broker migration. Saved-pose capture/replay, pose listing, persisted camera profiles and
+This registry phase is **not** the persistent broker migration. Saved-pose capture/replay, pose listing, persisted camera profiles and
 single/all named-camera capture now use the registry along with basic
 read-only hardware/effort status. Operator-only configuration, calibration,
 more advanced sequence/trajectory controls, and agent-only CLI wrappers
