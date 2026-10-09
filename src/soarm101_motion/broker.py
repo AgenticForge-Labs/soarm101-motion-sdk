@@ -267,7 +267,7 @@ class RobotBrokerService:
                     result = self.executor.execute(action, request)
                 else:
                     result = self.executor.run(arguments)
-        except (BrokerCommandError, ValueError, KeyError, PermissionError) as exc:
+        except (BrokerCommandError, RuntimeError, ValueError, KeyError, PermissionError) as exc:
             duration = time.monotonic() - started
             self._record(
                 request_id=request_id,
