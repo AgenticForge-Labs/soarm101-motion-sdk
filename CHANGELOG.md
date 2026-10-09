@@ -1,5 +1,11 @@
 # Changelog
 
+- PR #88 fake/HTTP cancellation hardening: test authorized, profile-limited
+  out-of-band STOP during a blocked fake movement; reject queued native
+  commands admitted before STOP, revoke simulated motion authority on
+  STOP (including failed HOLD), and retain profile-linked error evidence.
+  No physical broker control is enabled by these changes.
+
 - PR #88 work in progress: introduce a strictly typed persistent SDK broker
   executor with a lazy simulated session and an opt-in **read-only**
   `soarm101-broker --sdk-simulation-preview` mode. Existing production
