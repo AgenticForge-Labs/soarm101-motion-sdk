@@ -15,8 +15,9 @@ This mode creates one simulated SDK session lazily and supports only the
 authenticated health, profile, state and capabilities GET endpoints. It
 rejects every POST, including STOP and all movement/camera actions; no serial
 port is opened and no torque is enabled. It exists to validate the persistent-session/transport approach.
-PR #88's internal simulated HTTP tests exercise authorization and STOP
-while a fake joint move is in progress; this cannot establish safe Feetech
+PR #88's internal simulated HTTP tests exercise authorization, STOP
+while a fake joint move is in progress, queued-command cancellation and
+lease revocation; this cannot establish safe Feetech
 bus cancellation, cross-process ownership, physical workspace correctness,
 or hardware HOLD success. Those require separate validation on this PR
 before activating a physical SDK executor.
