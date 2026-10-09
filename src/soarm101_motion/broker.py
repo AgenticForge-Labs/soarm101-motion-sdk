@@ -207,6 +207,10 @@ class RobotBrokerService:
         self.profile = profile if profile is not None else CapabilityProfile.full()
         self._profile_provenance = self.profile.public()
         self._operation_lock = threading.Lock()
+        # Native-session queued actions admitted before STOP must never run
+        # after it, even if an action was waiting for this dispatch lock.
+        self._sdk_stop_epoch = 0
+        self._sdk_epoch_lock = threading.Lock()
         self._event_lock = threading.Lock()
 
     def authorized(self, authorization: str | None) -> bool:
@@ -269,16 +273,26 @@ class RobotBrokerService:
         arguments: Sequence[str],
     ) -> BrokerResponse:
         started = time.monotonic()
+        with self._sdk_epoch_lock:
+            admitted_epoch = self._sdk_stop_epoch
         try:
             if isinstance(self.executor, SDKAgentExecutor) and action == "stop":
                 if not self._allow_simulated_sdk_posts:
                     raise PermissionError("native SDK STOP is not available in read-only preview")
                 # An authorized STOP must not queue behind the synchronous
-                # broker command lock. The SDK owns safe bus cancellation.
+                # broker command lock. Invalidate previously admitted actions
+                # even if the backend STOP itself raises.
+                with self._sdk_epoch_lock:
+                    self._sdk_stop_epoch += 1
                 result = self.executor.execute(action, request)
             else:
                 with self._operation_lock:
                     if isinstance(self.executor, SDKAgentExecutor):
+                        with self._sdk_epoch_lock:
+                            if admitted_epoch != self._sdk_stop_epoch:
+                                raise BrokerCommandError(
+                                    "request cancelled by a newer STOP"
+                                )
                         if (
                             action not in {"state", "capabilities"}
                             and not self._allow_simulated_sdk_posts
