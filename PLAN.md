@@ -4,15 +4,29 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
-## Follow-on capability-registry migration — planned after PR #86
+## Shared SDK registry and broker migration plan
+
+**Implementation update:** PR #86 merged into `main` at
+`dfa2cbd128cf6cb4e37f9742333a63c0fc249cbc`.
+PR #87 implements PR 1: typed SDK action registry, shared ordinary CLI
+read/motion/IK/jog/gripper operations, saved-pose capture/replay, named
+camera still capture, camera profiles, state and effort diagnostics.
+Software CI passed on Python 3.10 and 3.12 with 586 tests; the GitHub
+PR state is authoritative for whether #87 has merged. Operator-only
+configuration, calibration, sequence/trajectory execution and the
+agent-specific bounded subprocess remain deliberately unchanged.
+PRs 2 and 3 remain strictly dependent and unimplemented.
+
 
 Detailed design, authority boundaries, STOP/cancellation acceptance tests, and
 merge gates: [`docs/capability-registry-migration.md`](docs/capability-registry-migration.md).
 
-**Status:** design only; no new registry, dispatcher, or persistent robot broker
-is implemented by PR #86. This work is **dependent** on PR #86's MCP, capability
-profile, tracing and agent integration and must not start from `main` until
-that work is merged and the real-arm validation gate is satisfied.
+**Status:** #86 merged and #87 implemented the first registry phase.
+This original three-PR roadmap remains here for reference. PR 2 (trusted
+broker direct SDK execution and persistent session) and PR 3 (agent-only
+wrapper retirement) are **not implemented**. They must not begin from
+`main` until #87 has actually merged; PR 2 also requires its own
+separate real-arm safety/STOP validation.
 
 **Target:** a single typed, deterministic SDK capability registry becomes
 authoritative for supported motion/camera actions, descriptions, units, argument

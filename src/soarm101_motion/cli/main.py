@@ -29,7 +29,6 @@ from soarm101_motion.agent_control import (
 )
 from soarm101_motion.calibration import SO101Calibration, default_calibration_path
 from soarm101_motion.camera import (
-    CameraCapture,
     CameraSettings,
     discover_camera_devices,
 )
@@ -49,16 +48,16 @@ from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.motion.trace import summarize_agent_jog_trace
 from soarm101_motion.poses import (
     PoseLibrary,
-    SavedPose,
     sleep_joint_positions,
     sleep_up_joint_positions,
 )
 from soarm101_motion.primitives import MotionPrimitiveLibrary
 from soarm101_motion.safety import resolve_effective_joint_limits
+from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
 from soarm101_motion.tools import SO101Gripper
 from soarm101_motion.trajectories import TrajectoryLibrary
-from soarm101_motion.types import MotionResult, Pose
+from soarm101_motion.types import MotionResult
 from soarm101_motion.workspace import WorkspaceCalibrationStore
 from soarm101_motion.workstation import (
     ArmConnectionProfile,
@@ -253,23 +252,28 @@ def _cmd_configure(args: argparse.Namespace) -> int:
 
 def _cmd_read(args: argparse.Namespace) -> int:
     with _arm_from_args(args) as arm:
-        positions = dict(arm.get_joint_positions().positions)
-        pose = arm.get_position().xyz_rpy()
+        payload = SDK_CAPABILITIES.dispatch("read_pose", arm, {})
     if args.json:
-        payload = {
-            "joint_positions_rad": positions,
-            "tcp_xyz_mm": [value * 1000.0 for value in pose[:3]],
-            "tcp_rpy_deg": [value * 180.0 / pi for value in pose[3:]],
-        }
         print(json.dumps(payload, indent=2))
     else:
         print("Joint positions (radians):")
         for name in ARM_JOINTS:
-            print(f"  {name:15s} {positions[name]: .6f}")
-        print("TCP pose (m, rad):", " ".join(f"{value:.6f}" for value in pose))
+            print(f"  {name:15s} {payload['joint_positions_rad'][name]: .6f}")
+        xyz_m = [value / 1000.0 for value in payload["tcp_xyz_mm"]]
+        rpy_rad = [value * pi / 180.0 for value in payload["tcp_rpy_deg"]]
+        print("TCP pose (m, rad):", " ".join(f"{value:.6f}" for value in (*xyz_m, *rpy_rad)))
     return 0
 
 
+def _cmd_sdk_capabilities(args: argparse.Namespace) -> int:
+    """Report authoritative typed SDK actions without opening hardware."""
+    actions = SDK_CAPABILITIES.describe()
+    if args.json:
+        print(json.dumps({"schema_version": 1, "actions": actions}, indent=2))
+    else:
+        for action in actions:
+            print(f"{action['name']}: {action['description']} ({action['effect']})")
+    return 0
 
 def _cmd_motion_envelope(args: argparse.Namespace) -> int:
     """Report the effective host motion envelope without requiring calibration."""
@@ -582,14 +586,18 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
         if args.acceleration_deg_s2 is not None
         else args.acceleration
     )
+    request: dict[str, object] = {"positions_rad": values}
+    if speed is not None:
+        request["speed_rad_s"] = speed
+    if acceleration is not None:
+        request["acceleration_rad_s2"] = acceleration
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
-        result = arm.move_joints(values, speed=speed, acceleration=acceleration)
+        result = SDK_CAPABILITIES.dispatch("move_joints", arm, request)
         arm.hold()
         _print_motion_result(result, as_json=args.json)
         print("Joint move complete; follower remains torque-held.", file=sys.stderr)
     return 0
-
 
 def _cmd_sleep(args: argparse.Namespace) -> int:
     if not args.yes:
@@ -631,24 +639,45 @@ def _cmd_sleep_up(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_jog_joint(args: argparse.Namespace) -> int:
+    """Single-joint relative operator jog using shared SDK dispatch."""
+    if not args.yes:
+        print("Refusing to move without --yes.", file=sys.stderr)
+        return 2
+    with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
+        arm.enable()
+        result = SDK_CAPABILITIES.dispatch(
+            "jog_joint", arm, {
+                "joint": args.joint,
+                "delta_rad": args.delta_deg * pi / 180.0,
+                "speed_rad_s": args.speed_deg_s * pi / 180.0,
+                "acceleration_rad_s2": args.acceleration_deg_s2 * pi / 180.0,
+            },
+        )
+        arm.hold()
+        _print_motion_result(result, as_json=args.json)
+        print("Joint jog complete; follower remains torque-held.", file=sys.stderr)
+    return 0
+
+
 def _cmd_jog(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
     with _arm_from_args(args) as arm:
         arm.enable()
-        result = jog_linear_cli_units(
-            arm,
-            frame=args.frame,
-            translation_mm=(args.x_mm, args.y_mm, args.z_mm),
-            rotation_rpy_deg=(args.roll_deg, args.pitch_deg, args.yaw_deg),
-            orientation_mode=args.orientation_mode,
-            speed_mm_s=args.speed_mm_s,
-            acceleration_mm_s2=args.acceleration_mm_s2,
+        result = SDK_CAPABILITIES.dispatch(
+            "jog_cartesian", arm, {
+                "frame": args.frame,
+                "translation_mm": [args.x_mm, args.y_mm, args.z_mm],
+                "rotation_rpy_deg": [args.roll_deg, args.pitch_deg, args.yaw_deg],
+                "orientation_mode": args.orientation_mode,
+                "speed_mm_s": args.speed_mm_s,
+                "acceleration_mm_s2": args.acceleration_mm_s2,
+            },
         )
         _print_motion_result(result, as_json=args.json)
     return 0
-
 
 def _cmd_gripper(args: argparse.Namespace) -> int:
     if not args.yes:
@@ -664,20 +693,20 @@ def _cmd_gripper(args: argparse.Namespace) -> int:
         raise ValueError("gripper target must be 'open', 'close', or a value in [0, 1]")
     with _arm_from_args(args) as arm:
         arm.enable()
-        result = arm.tool.move(position)
+        result = SDK_CAPABILITIES.dispatch("move_gripper", arm, {"position": position})
         _print_motion_result(result, as_json=args.json)
     return 0
 
 
 def _cmd_ik(args: argparse.Namespace) -> int:
-    target = Pose.from_xyz_rpy(
-        args.x_mm / 1000.0,
-        args.y_mm / 1000.0,
-        args.z_mm / 1000.0,
-        *(value * pi / 180.0 for value in (args.roll_deg, args.pitch_deg, args.yaw_deg)),
-    )
     with _arm_from_args(args) as arm:
-        result = arm.solve_ik(target, orientation_mode=args.orientation_mode)
+        result = SDK_CAPABILITIES.dispatch(
+            "solve_ik", arm, {
+                "target_xyz_mm": [args.x_mm, args.y_mm, args.z_mm],
+                "target_rpy_deg": [args.roll_deg, args.pitch_deg, args.yaw_deg],
+                "orientation_mode": args.orientation_mode,
+            },
+        )
     payload = {
         "success": result.success,
         "joints_rad": dict(result.joints),
@@ -698,77 +727,74 @@ def _cmd_ik(args: argparse.Namespace) -> int:
         print(result.message)
     return 0 if result.success else 2
 
-
 def _cmd_move_linear(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
-    target = Pose.from_xyz_rpy(
-        args.x_mm / 1000.0,
-        args.y_mm / 1000.0,
-        args.z_mm / 1000.0,
-        *(value * pi / 180.0 for value in (args.roll_deg, args.pitch_deg, args.yaw_deg)),
-    )
     with _arm_from_args(args) as arm:
         arm.enable()
-        result = arm.move_linear(
-            target,
-            orientation_mode=args.orientation_mode,
-            speed=args.speed_mm_s / 1000.0,
-            acceleration=args.acceleration_mm_s2 / 1000.0,
+        result = SDK_CAPABILITIES.dispatch(
+            "move_linear", arm, {
+                "target_xyz_mm": [args.x_mm, args.y_mm, args.z_mm],
+                "target_rpy_deg": [args.roll_deg, args.pitch_deg, args.yaw_deg],
+                "orientation_mode": args.orientation_mode,
+                "speed_mm_s": args.speed_mm_s,
+                "acceleration_mm_s2": args.acceleration_mm_s2,
+            },
         )
         _print_motion_result(result, as_json=args.json)
     return 0
 
-
 def _cmd_pose_list(args: argparse.Namespace) -> int:
-    library = PoseLibrary(args.robot_id)
-    for name in library.names():
-        pose = library.require(name)
-        print(f"{name}\t{pose.source}\t{pose.created_at}")
+    poses = SDK_CAPABILITIES.dispatch(
+        "list_saved_poses", None, {"robot_id": args.robot_id},
+    )
+    for pose in poses:
+        print(f"{pose['name']}\t{pose['source']}\t{pose['created_at']}")
     return 0
 
 
 def _cmd_pose_capture(args: argparse.Namespace) -> int:
     with _arm_from_args(args) as arm:
-        pose = SavedPose.capture(arm, source=args.source)
-    path = PoseLibrary(args.robot_id).save(args.name, pose)
+        path = SDK_CAPABILITIES.dispatch(
+            "capture_saved_pose", arm, {
+                "robot_id": args.robot_id,
+                "name": args.name,
+                "source": args.source,
+            },
+        )
     print(f"Saved {args.name} to {path}")
     return 0
-
 
 def _cmd_pose_go(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move hardware without --yes.", file=sys.stderr)
         return 2
-    pose = PoseLibrary(args.robot_id).require(args.name)
+    request = {
+        "robot_id": args.robot_id,
+        "name": args.name,
+        "mode": args.mode,
+        "orientation_mode": args.orientation_mode,
+        "speed_deg_s": args.speed_deg_s,
+        "acceleration_deg_s2": args.acceleration_deg_s2,
+        "speed_mm_s": args.speed_mm_s,
+        "acceleration_mm_s2": args.acceleration_mm_s2,
+    }
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
-        arm.require_artifact_calibration(
-            {
-                "source_robot_id": pose.source_robot_id,
-                "source_calibration_id": pose.source_calibration_id,
-                "target_robot_id": pose.target_robot_id,
-                "target_calibration_id": pose.target_calibration_id,
+        # Preserve existing gate: verify saved-pose calibration *before*
+        # enabling torque; replay rechecks it immediately before the move.
+        SDK_CAPABILITIES.dispatch(
+            "validate_saved_pose", arm, {
+                "robot_id": args.robot_id,
+                "name": args.name,
             },
-            artifact_label=f"saved pose {args.name!r}",
         )
         arm.enable()
-        if args.mode == "joint":
-            result = arm.move_joints_from_saved_pose(
-                pose.joints,
-                speed=args.speed_deg_s * pi / 180.0,
-                acceleration=args.acceleration_deg_s2 * pi / 180.0,
-            )
-        else:
-            result = arm.move_linear(
-                Pose.from_xyz_rpy(*pose.tcp_xyz_rpy),
-                orientation_mode=args.orientation_mode,
-                speed=args.speed_mm_s / 1000.0,
-                acceleration=args.acceleration_mm_s2 / 1000.0,
-            )
+        result, gripper_result = SDK_CAPABILITIES.dispatch(
+            "replay_saved_pose", arm, request,
+        )
         print(result)
-        print(arm.tool.move(pose.gripper))
-        arm.hold()
+        print(gripper_result)
         print("Pose reached; follower remains torque-held.", file=sys.stderr)
     return 0
 
@@ -836,7 +862,10 @@ def _cmd_sequence_run(args: argparse.Namespace) -> int:
 
 def _cmd_effort_status(args: argparse.Namespace) -> int:
     with _arm_from_args(args) as arm:
-        print(json.dumps(arm.get_effort_safety_status(refresh=args.refresh), indent=2))
+        status = SDK_CAPABILITIES.dispatch(
+            "read_effort_status", arm, {"refresh": args.refresh},
+        )
+        print(json.dumps(status, indent=2))
     return 0
 
 
@@ -946,23 +975,13 @@ def _camera_settings_from_args(
     return store, profile, name, settings
 
 
-def _camera_profile_payload(profile: WorkstationProfile) -> dict[str, object]:
-    return {
-        "selected_camera": profile.selected_camera,
-        "cameras": {
-            name: asdict(settings)
-            for name, settings in profile.cameras.items()
-        },
-    }
-
-
 def _cmd_camera_list(args: argparse.Namespace) -> int:
     devices = discover_camera_devices()
-    profile = WorkstationProfileStore().load()
     payload = {
         "devices": devices,
-        **_camera_profile_payload(profile),
+        **SDK_CAPABILITIES.dispatch("camera_profiles", None, {}),
     }
+    profile = WorkstationProfileStore().load()
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
@@ -980,15 +999,11 @@ def _cmd_camera_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_camera_show(args: argparse.Namespace) -> int:
-    profile = WorkstationProfileStore().load()
     requested = str(getattr(args, "name", "") or "").strip()
-    if requested:
-        payload: object = {
-            "name": requested,
-            **asdict(profile.camera(requested)),
-        }
-    else:
-        payload = _camera_profile_payload(profile)
+    payload: object = SDK_CAPABILITIES.dispatch(
+        "camera_profiles", None,
+        {"name": requested} if requested else {},
+    )
     if args.json:
         print(json.dumps(payload, indent=2))
     elif isinstance(payload, dict):
@@ -1036,10 +1051,12 @@ def _capture_named_camera(
     settings: CameraSettings,
     output: str | None = None,
 ) -> dict[str, object]:
-    with CameraCapture(settings) as camera:
-        path, metadata = camera.snapshot(output)
-    return {"name": name, **metadata}
-
+    request: dict[str, object] = {"name": name}
+    if output is not None:
+        request["output"] = output
+    return SDK_CAPABILITIES.dispatch(
+        "capture_camera", None, request, camera_settings=settings,
+    )
 
 def _cmd_camera_capture(args: argparse.Namespace) -> int:
     store = WorkstationProfileStore()
@@ -1680,7 +1697,7 @@ def _workstation_payload(profile: WorkstationProfile) -> dict[str, object]:
         "schema_version": profile.schema_version,
         "follower": asdict(profile.follower),
         "leader": asdict(profile.leader),
-        **_camera_profile_payload(profile),
+        **profile.camera_payload(),
     }
 
 
@@ -1875,6 +1892,12 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--json", action="store_true")
     discover.set_defaults(func=_cmd_discover)
 
+    sdk_capabilities = sub.add_parser(
+        "sdk-capabilities", help="inspect SDK action contracts without hardware access",
+    )
+    sdk_capabilities.add_argument("--json", action="store_true")
+    sdk_capabilities.set_defaults(func=_cmd_sdk_capabilities)
+
     def add_motion_limit_options(command: argparse.ArgumentParser) -> None:
         group = command.add_argument_group("motion envelope")
         group.add_argument(
@@ -2040,6 +2063,18 @@ def build_parser() -> argparse.ArgumentParser:
     sleep_up.add_argument("--yes", action="store_true")
     sleep_up.add_argument("--json", action="store_true")
     sleep_up.set_defaults(func=_cmd_sleep_up)
+
+    joint_jog = sub.add_parser(
+        "jog-joint", help="perform one guarded relative operator joint jog",
+    )
+    add_session_options(joint_jog)
+    joint_jog.add_argument("joint", choices=ARM_JOINTS)
+    joint_jog.add_argument("--delta-deg", type=float, required=True)
+    joint_jog.add_argument("--speed-deg-s", type=float, default=8.0)
+    joint_jog.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    joint_jog.add_argument("--yes", action="store_true")
+    joint_jog.add_argument("--json", action="store_true")
+    joint_jog.set_defaults(func=_cmd_jog_joint)
 
     jog = sub.add_parser("jog", help="perform one guarded world- or tool-frame Cartesian linear jog")
     add_session_options(jog)

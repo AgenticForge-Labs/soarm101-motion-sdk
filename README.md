@@ -1,5 +1,63 @@
 # SO-ARM101 Motion SDK
 
+## One-command PR #87 checkout and simulation validation
+
+From an Ubuntu/Linux terminal, run this **single copy-and-paste line**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AgenticForge-Labs/soarm101-motion-sdk/feature/shared-sdk-capability-registry/scripts/test_registry_pr87.sh -o /tmp/test_registry_pr87.sh && bash /tmp/test_registry_pr87.sh
+```
+
+The source is tracked at [`scripts/test_registry_pr87.sh`](scripts/test_registry_pr87.sh).
+The runner clones or fast-forward pulls branch
+`feature/shared-sdk-capability-registry` into
+`~/AgenticForge/soarm101-motion-sdk`; it refuses dirty worktrees,
+unexpected remotes and divergent local branches. It then creates or updates
+the isolated `.venv` (using `uv` when installed, otherwise Python
+3.10–3.13 `venv`), activates that environment **for the test process**,
+installs dev/GUI/simulation/MCP dependencies, and runs Ruff, compilation,
+registry introspection, the focused and complete test suites, GUI offscreen
+smoke test and CLI simulation. Logs remain under a reported temporary folder.
+
+For an existing repository installed elsewhere, set
+`SOARM101_CHECKOUT=/absolute/path` before the `bash` command.
+To keep the environment active **after** the test, use:
+
+```bash
+cd ~/AgenticForge/soarm101-motion-sdk
+source .venv/bin/activate
+soarm101 sdk-capabilities --json
+soarm101-gui --simulation
+```
+
+The scripted validation makes **no live hardware connections and does not
+arm or move the robot**. Physical operation remains separately supervised,
+with documented calibration, workspace and emergency power gates.
+This script explicitly tests the PR #87 branch, not whatever revision `main` happens to contain.
+
+## Typed SDK capability discovery (PR #87)
+
+The ordinary operator CLI can inspect the SDK's typed, hardware-free action
+contracts with `soarm101 sdk-capabilities --json`. A guarded operator-only
+`soarm101 jog-joint JOINT --delta-deg DEGREES --yes` command also uses the
+same registry (with explicit confirmation). The experimental
+`soarm101_motion.sdk_capabilities.SDK_CAPABILITIES` registry owns argument
+names, units, semantic descriptions, validation and SDK dispatch for core
+read, IK, joint/Cartesian move, jog, gripper and STOP operations. The ordinary
+CLI uses those operations while retaining its existing syntax and human
+confirmation/hold semantics. Registry inspection never connects to hardware,
+and dispatch never implicitly enables torque or grants motion authority.
+
+This registry phase is **not** the persistent broker migration. Saved-pose capture/replay, pose listing, persisted camera profiles and
+single/all named-camera capture now use the registry along with basic
+read-only hardware/effort status. Operator-only configuration, calibration,
+more advanced sequence/trajectory controls, and agent-only CLI wrappers
+remain outside this migration step. The existing MCP/robotctl broker continues to use the
+previous bounded agent CLI subprocess path until a separately validated PR 2.
+Neither the registry nor its metadata is an authorization grant: existing
+broker profiles, leases, calibrated limits and SDK motion safety still apply.
+
+
 **A Python-first way to learn, teach, program, and automate the SO-ARM101.**
 
 Low-cost arms make robotics hardware much more accessible, but there is still a gap between assembling an arm and programming it to do useful work. The SO-ARM101 Motion SDK is intended to fill that gap with a lighter, fundamentals-first environment built around a shared Python motion system, USB-camera observation layer, desktop GUI, and CLI.

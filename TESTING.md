@@ -1,5 +1,62 @@
 # Testing
 
+## One-command PR #87 checkout and simulation validation
+
+From an Ubuntu/Linux terminal, run this **single copy-and-paste line**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AgenticForge-Labs/soarm101-motion-sdk/feature/shared-sdk-capability-registry/scripts/test_registry_pr87.sh -o /tmp/test_registry_pr87.sh && bash /tmp/test_registry_pr87.sh
+```
+
+The source is tracked at [`scripts/test_registry_pr87.sh`](scripts/test_registry_pr87.sh).
+The runner clones or fast-forward pulls branch
+`feature/shared-sdk-capability-registry` into
+`~/AgenticForge/soarm101-motion-sdk`; it refuses dirty worktrees,
+unexpected remotes and divergent local branches. It then creates or updates
+the isolated `.venv` (using `uv` when installed, otherwise Python
+3.10–3.13 `venv`), activates that environment **for the test process**,
+installs dev/GUI/simulation/MCP dependencies, and runs Ruff, compilation,
+registry introspection, the focused and complete test suites, GUI offscreen
+smoke test and CLI simulation. Logs remain under a reported temporary folder.
+
+For an existing repository installed elsewhere, set
+`SOARM101_CHECKOUT=/absolute/path` before the `bash` command.
+To keep the environment active **after** the test, use:
+
+```bash
+cd ~/AgenticForge/soarm101-motion-sdk
+source .venv/bin/activate
+soarm101 sdk-capabilities --json
+soarm101-gui --simulation
+```
+
+The scripted validation makes **no live hardware connections and does not
+arm or move the robot**. Physical operation remains separately supervised,
+with documented calibration, workspace and emergency power gates.
+This script tests the open PR branch, not the current `main` release.
+
+## Shared SDK capability registry — PR 1 (software-only)
+
+Run `uv run ruff check .`, `uv run pytest --no-cov
+tests/test_sdk_capabilities.py tests/test_cli.py`, and the complete normal
+test suite. Confirm that `soarm101 sdk-capabilities --json` works without
+any serial port, profile, torque, camera access, broker, or agent lease.
+Tests must check unknown/extra/invalid payload rejection before SDK calls,
+existing human CLI confirmation and JSON response parity, no automatic
+torque enable, and retention of SDK dynamic safety guards.
+
+This PR intentionally does not migrate broker subprocess execution.
+Saved-pose listing/capture/replay, camera-profile readout and named-camera
+capture have focused fake/simulation regression coverage. Verify pose
+calibration provenance is checked before torque activation and again before
+motion; camera capture must retain saved profile settings, device overrides,
+output paths and --all semantics. Operator-only administration, serial
+calibration, trajectories/sequences, and physical motion are not migrated or
+validated by this PR.
+Physical motion testing is not needed for pure registry introspection;
+do not interpret simulation or fake arms as real-hardware validation.
+
+
 ## GUI test-session lifetime (PR #86 merge gate)
 
 The CI matrix runs Python 3.10 and 3.12 with the optional PySide6 GUI
