@@ -5,8 +5,9 @@ from __future__ import annotations
 import pytest
 
 from soarm101_motion.agent_control import AgentAuthorityStore
-from soarm101_motion.broker import AgentMotionRates
+from soarm101_motion.broker import AgentMotionRates, RobotBrokerService, build_parser
 from soarm101_motion.broker_sdk import SDKAgentExecutor
+from soarm101_motion.capability_profile import CapabilityProfile
 from soarm101_motion.config import SOARM101Config
 
 
@@ -110,3 +111,54 @@ def test_invalid_joint_and_bool_delta_are_rejected(native) -> None:
     with pytest.raises(ValueError, match="finite number"):
         executor.execute("joint", {"joint": "shoulder_pan", "delta_deg": True})
     assert executor._session.get_state().torque_enabled is False
+
+
+def test_opt_in_native_broker_exposes_only_read_routes(tmp_path) -> None:
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(robot_id="so101"),
+        rates=AgentMotionRates(),
+        simulation=True,
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
+    )
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1,
+        "name": "sdk-preview-read-only",
+        "tools": ["robot_health", "robot_state", "robot_capabilities"],
+        "cameras": [],
+        "limits": {},
+    })
+    service = RobotBrokerService(
+        executor=executor,
+        token="sandbox-secret",
+        profile=profile,
+        event_path=tmp_path / "broker-events.jsonl",
+    )
+    try:
+        assert service.authorized("Bearer sandbox-secret")
+        assert service.dispatch("GET", "/v1/health").status == 200
+        state = service.dispatch("GET", "/v1/state")
+        assert state.status == 200
+        assert state.body["result"]["calibration_id"] == "simulation"
+        caps = service.dispatch("GET", "/v1/capabilities")
+        assert caps.status == 200
+        visible = caps.body["result"]["actions"]
+        assert "state" in visible
+        assert "joint" not in visible and "jog" not in visible
+        for endpoint, payload in (
+            ("/v1/joint", {"joint": "shoulder_pan", "delta_deg": 1}),
+            ("/v1/jog", {"frame": "world", "x_mm": 2}),
+            ("/v1/stop", {}),
+            ("/v1/capture", {"camera": "overhead"}),
+            ("/v1/arm", {}),
+        ):
+            response = service.dispatch("POST", endpoint, payload)
+            assert response.status in (403, 404)
+            assert response.body["ok"] is False
+        assert executor._session.get_state().torque_enabled is False
+    finally:
+        executor.close()
+
+
+def test_native_preview_parser_is_opt_in() -> None:
+    assert build_parser().parse_args([]).sdk_simulation_preview is False
+    assert build_parser().parse_args(["--sdk-simulation-preview"]).sdk_simulation_preview
