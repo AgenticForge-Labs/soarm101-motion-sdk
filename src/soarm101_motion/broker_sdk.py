@@ -24,7 +24,6 @@ from soarm101_motion.agent_control import (
 )
 from soarm101_motion.arm import SOARM101
 from soarm101_motion.control import relative_target_pose
-from soarm101_motion.poses import PoseLibrary
 from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
 from soarm101_motion.workspace import WorkspaceCalibrationStore
 from soarm101_motion.workstation import WorkstationProfileStore
