@@ -158,6 +158,12 @@ def test_opt_in_native_broker_exposes_only_read_routes(tmp_path) -> None:
             assert response.status in (403, 404)
             assert response.body["ok"] is False
         assert executor._session.get_state().torque_enabled is False
+        expected = service.profile.public()["sha256"]
+        events = [
+            __import__("json").loads(line)
+            for line in (tmp_path / "broker-events.jsonl").read_text().splitlines()
+        ]
+        assert events and all(row["profile_sha256"] == expected for row in events)
     finally:
         executor.close()
 
