@@ -11,9 +11,13 @@ PR #87 merged into `main` at `e941e2686d2fd87569cdf1e91d6e508b228787ee`.
 The new `broker_sdk.py` contains a persistent SDK session and strict typed
 action adapter, initially exposed through an explicitly opted-in
 `soarm101-broker --sdk-simulation-preview` **read-only simulation mode**.
-In this preview, `GET /v1/state` and `GET /v1/capabilities` use the
-SDK session and all POST routes are denied. Production broker operation
-still uses the existing bounded agent CLI subprocesses by default.
+In the public preview, `GET /v1/state` and `GET /v1/capabilities` use the
+SDK session and **all POST routes remain denied**. An internal,
+explicitly simulated test-only service setting permits HTTP regression
+coverage for pinned profiles, expired authority, serialized commands and
+concurrent STOP. It is not a CLI option and cannot activate a physical
+SDK session. Production broker operation still uses the existing bounded
+agent CLI subprocesses by default.
 The preview intentionally does not authorize real hardware; tests of the
 session adapter do not establish STOP interruptibility at the physical bus,
 cross-process exclusivity, calibrated jog safety, or live reliability.
