@@ -33,6 +33,16 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+In PR #88 the broker has an explicitly opted-in, simulated **read-only**
+native SDK session. Its production default remains the existing bounded
+agent CLI executor. Do not enable a real-arm direct SDK session, open robot
+hardware from the preview, expose motion POST routes, or bypass current
+broker authority/camera/STOP semantics. STOP on a persistent session must be
+independently interruptible without competing uncontrolled serial writes
+and needs a supervised hardware gate before replacing the legacy backend.
+
+
+
 The shared `sdk_capabilities.py` action registry was introduced in
 PR #87. Its saved-pose playback validates calibration provenance before replay;
 the operator CLI also verifies the provenance before torque activation.
