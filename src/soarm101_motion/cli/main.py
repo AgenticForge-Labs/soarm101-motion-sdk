@@ -1697,7 +1697,7 @@ def _workstation_payload(profile: WorkstationProfile) -> dict[str, object]:
         "schema_version": profile.schema_version,
         "follower": asdict(profile.follower),
         "leader": asdict(profile.leader),
-        **_camera_profile_payload(profile),
+        **profile.camera_payload(),
     }
 
 
