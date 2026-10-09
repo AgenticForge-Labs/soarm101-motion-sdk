@@ -18,7 +18,7 @@ from soarm101_motion.constants import ARM_JOINTS
 if TYPE_CHECKING:
     from soarm101_motion.arm import SOARM101
 
-ValueKind = Literal["number", "numbers", "choice"]
+ValueKind = Literal["number", "numbers", "choice", "text", "bool"]
 EffectKind = Literal["read", "motion", "stop"]
 
 
@@ -49,6 +49,13 @@ class ArgumentSpec:
                    or not math.isfinite(float(v)) for v in value):
                 raise ValueError(f"{self.name} must contain finite numbers")
             value = tuple(float(v) for v in value)
+        elif self.kind == "text":
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{self.name} must be a nonempty string")
+            value = value.strip()
+        elif self.kind == "bool":
+            if not isinstance(value, bool):
+                raise ValueError(f"{self.name} must be a boolean")
         elif self.kind == "choice":
             if not isinstance(value, str) or value not in self.choices:
                 raise ValueError(f"{self.name} must be one of {self.choices!r}")
@@ -168,6 +175,14 @@ _SPECS = (
     ActionSpec("move_gripper", "Set the stock gripper normalized position", "motion", (
         ArgumentSpec("position", "number", "Normalized gripper position 0 to 1", "fraction"),
     )),
+    ActionSpec("list_saved_poses", "List persisted saved pose metadata", "read", (
+        ArgumentSpec("robot_id", "text", "Identity of the saved pose library"),
+    )),
+    ActionSpec("read_effort_status", "Read the existing SDK effort-safety status", "read", (
+        ArgumentSpec("refresh", "bool", "Refresh existing effort diagnostics",
+                     required=False, default=False),
+    )),
+    ActionSpec("read_hardware_state", "Read current connected/torque/motion/fault state", "read"),
     ActionSpec("stop", "Request the SDK's guarded STOP/HOLD operation", "stop",
                agent_eligible=True),
 )
@@ -191,13 +206,27 @@ class CapabilityRegistry:
         except KeyError as exc:
             raise ValueError(f"unknown SDK capability: {name}") from exc
 
-    def dispatch(self, name: str, arm: SOARM101, payload: Mapping[str, object]) -> Any:
+    def dispatch(self, name: str, arm: SOARM101 | None, payload: Mapping[str, object]) -> Any:
         """Validated SDK operation, with *no* privilege elevation or implicit enable.
 
         The caller must already own an appropriate connected robot session and
         fulfill operator confirmation / broker authority and profile requirements.
         """
         args = self.get(name).validate(payload)
+        if name == "list_saved_poses":
+            from soarm101_motion.poses import PoseLibrary
+            library = PoseLibrary(str(args["robot_id"]))
+            return [
+                {"name": pose_name, "source": library.require(pose_name).source,
+                 "created_at": library.require(pose_name).created_at}
+                for pose_name in library.names()
+            ]
+        if arm is None:
+            raise ValueError(f"SDK capability {name} requires a connected SDK session")
+        if name == "read_hardware_state":
+            return arm.get_state()
+        if name == "read_effort_status":
+            return arm.get_effort_safety_status(refresh=bool(args["refresh"]))
         if name == "read_pose":
             joints = dict(arm.get_joint_positions().positions)
             pose = arm.get_position().xyz_rpy()
