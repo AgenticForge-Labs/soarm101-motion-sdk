@@ -6,6 +6,15 @@ historical Director/Studio integration references below describe older adapter w
 
 ## Follow-on capability-registry migration — planned after PR #86
 
+**Implementation update:** PR #86 merged into `main` at
+`dfa2cbd128cf6cb4e37f9742333a63c0fc249cbc`.
+PR 1 is now open as `feature/shared-sdk-capability-registry`. It has
+implemented the initial pure registry and migrated core ordinary CLI
+read/move/IK/jog/gripper dispatch; it has **not yet** completed saved pose,
+camera and diagnostic coverage, CI acceptance, or merger.
+PRs 2 and 3 remain strictly dependent and unimplemented.
+
+
 Detailed design, authority boundaries, STOP/cancellation acceptance tests, and
 merge gates: [`docs/capability-registry-migration.md`](docs/capability-registry-migration.md).
 
