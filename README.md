@@ -48,9 +48,11 @@ CLI uses those operations while retaining its existing syntax and human
 confirmation/hold semantics. Registry inspection never connects to hardware,
 and dispatch never implicitly enables torque or grants motion authority.
 
-This branch is **not** the persistent broker migration. Saved pose **listing** and basic read-only hardware/effort status now use the
-registry; saved-pose capture/replay, camera capture and other CLI action
-families still need to be registered in PR 1. The existing MCP/robotctl broker continues to use the
+This branch is **not** the persistent broker migration. Saved-pose capture/replay, pose listing, persisted camera profiles and
+single/all named-camera capture now use the registry along with basic
+read-only hardware/effort status. Operator-only configuration, calibration,
+more advanced sequence/trajectory controls, and agent-only CLI wrappers
+remain outside this migration step. The existing MCP/robotctl broker continues to use the
 previous bounded agent CLI subprocess path until a separately validated PR 2.
 Neither the registry nor its metadata is an authorization grant: existing
 broker profiles, leases, calibrated limits and SDK motion safety still apply.
