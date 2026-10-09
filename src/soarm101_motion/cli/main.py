@@ -748,10 +748,11 @@ def _cmd_move_linear(args: argparse.Namespace) -> int:
     return 0
 
 def _cmd_pose_list(args: argparse.Namespace) -> int:
-    library = PoseLibrary(args.robot_id)
-    for name in library.names():
-        pose = library.require(name)
-        print(f"{name}\t{pose.source}\t{pose.created_at}")
+    poses = SDK_CAPABILITIES.dispatch(
+        "list_saved_poses", None, {"robot_id": args.robot_id},
+    )
+    for pose in poses:
+        print(f"{pose['name']}\t{pose['source']}\t{pose['created_at']}")
     return 0
 
 
@@ -862,7 +863,10 @@ def _cmd_sequence_run(args: argparse.Namespace) -> int:
 
 def _cmd_effort_status(args: argparse.Namespace) -> int:
     with _arm_from_args(args) as arm:
-        print(json.dumps(arm.get_effort_safety_status(refresh=args.refresh), indent=2))
+        status = SDK_CAPABILITIES.dispatch(
+            "read_effort_status", arm, {"refresh": args.refresh},
+        )
+        print(json.dumps(status, indent=2))
     return 0
 
 
