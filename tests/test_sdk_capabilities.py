@@ -318,8 +318,15 @@ def test_operator_camera_capture_keeps_cli_profile_and_output_parity(
     monkeypatch, tmp_path, capsys,
 ) -> None:
     import soarm101_motion.camera as camera
+    import soarm101_motion.workstation as workstation
     from soarm101_motion.workstation import WorkstationProfileStore
 
+    # A local legacy camera.json would otherwise seed an extra "camera"
+    # profile in this temporary workstation. Keep this test deterministic
+    # without altering the production migration behavior.
+    monkeypatch.setattr(
+        workstation, "DEFAULT_CAMERA_CONFIG_PATH", tmp_path / "legacy-camera.json",
+    )
     monkeypatch.setenv(
         "SOARM101_WORKSTATION_CONFIG", str(tmp_path / "workstation.json"),
     )
