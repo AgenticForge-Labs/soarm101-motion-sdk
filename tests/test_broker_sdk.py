@@ -523,3 +523,95 @@ def test_simulated_native_stop_failure_is_audited_and_never_claims_completion(
     assert entries[-1]["action"] == "stop"
     assert entries[-1]["ok"] is False
     assert entries[-1]["result"] == {}
+
+
+
+def test_native_stop_cancels_queued_action_and_revokes_authority(
+    native, tmp_path,
+) -> None:
+    """Deterministically queue a request after admission but before dispatch."""
+    executor, auth = native
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "queued-stop",
+        "tools": ["robot_state", "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 2.0},
+    })
+    service = RobotBrokerService(
+        executor=executor, token="token", profile=profile,
+        allow_simulated_sdk_posts=True,
+        event_path=tmp_path / "events.jsonl",
+    )
+    auth.issue(robot_id="so101", calibration_id="simulation", minutes=1)
+    assert service.dispatch("GET", "/v1/state").status == 200
+    entered_queue = threading.Event()
+    original = service._operation_lock
+
+    class GateLock:
+        def __enter__(self):
+            entered_queue.set()
+            original.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            original.release()
+
+    service._operation_lock = GateLock()
+    queued = []
+    original.acquire()
+
+    def run_queued():
+        queued.append(service.dispatch(
+            "POST", "/v1/joint",
+            {"joint": "shoulder_pan", "delta_deg": 0.5},
+        ))
+
+    worker = threading.Thread(target=run_queued)
+    worker.start()
+    try:
+        assert entered_queue.wait(timeout=2)
+        # The queued request has captured the earlier STOP generation.
+        stopped = service.dispatch("POST", "/v1/stop", {})
+        assert stopped.status == 200
+        assert stopped.body["result"]["holding"] is False
+    finally:
+        original.release()
+        worker.join(timeout=3)
+
+    assert not worker.is_alive()
+    assert len(queued) == 1
+    assert queued[0].status == 409
+    assert "cancelled by a newer STOP" in queued[0].body["error"]
+    assert auth.status()["armed"] is False
+    assert executor._session.get_state().torque_enabled is False
+    # A newly admitted request after STOP must also require a fresh lease.
+    later = service.dispatch(
+        "POST", "/v1/joint",
+        {"joint": "shoulder_pan", "delta_deg": 0.5},
+    )
+    assert later.status == 409
+    assert "not armed" in later.body["error"]
+
+
+def test_native_stop_failure_also_revokes_lease(native, tmp_path, monkeypatch) -> None:
+    executor, auth = native
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "failed-stop",
+        "tools": ["robot_state", "stop"],
+        "cameras": [], "limits": {},
+    })
+    service = RobotBrokerService(
+        executor=executor, token="token", profile=profile,
+        allow_simulated_sdk_posts=True,
+        event_path=tmp_path / "events.jsonl",
+    )
+    auth.issue(robot_id="so101", calibration_id="simulation", minutes=1)
+    assert service.dispatch("GET", "/v1/state").status == 200
+
+    def failed_hold():
+        raise RuntimeError("STOP/HOLD bus failure")
+
+    monkeypatch.setattr(executor._session, "stop", failed_hold)
+    response = service.dispatch("POST", "/v1/stop", {})
+    assert response.status == 409
+    assert "STOP/HOLD bus failure" in response.body["error"]
+    assert auth.status()["armed"] is False
