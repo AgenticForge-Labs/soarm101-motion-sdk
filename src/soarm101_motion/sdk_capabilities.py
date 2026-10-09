@@ -258,21 +258,13 @@ class CapabilityRegistry:
                 for pose_name in library.names()
             ]
         if name == "camera_profiles":
-            from dataclasses import asdict
             from soarm101_motion.workstation import WorkstationProfileStore
 
             profile = WorkstationProfileStore().load()
             selected = args["name"]
-            if selected is not None:
-                requested = str(selected)
-                return {"name": requested, **asdict(profile.camera(requested))}
-            return {
-                "selected_camera": profile.selected_camera,
-                "cameras": {
-                    camera_name: asdict(settings)
-                    for camera_name, settings in profile.cameras.items()
-                },
-            }
+            return profile.camera_payload(
+                None if selected is None else str(selected)
+            )
         if name == "capture_camera":
             from soarm101_motion.camera import CameraCapture
             from soarm101_motion.workstation import WorkstationProfileStore
