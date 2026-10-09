@@ -81,6 +81,7 @@ class SDKAgentExecutor:
         )
         self._authority = authority_store or AgentAuthorityStore()
         self._create_lock = threading.Lock()
+        self._dispatch_lock = threading.Lock()
         self._session: SOARM101 | None = None
 
     def _arm(self) -> SOARM101:
@@ -94,11 +95,13 @@ class SDKAgentExecutor:
             return self._session
 
     def close(self) -> None:
-        with self._create_lock:
-            arm = self._session
-            self._session = None
-            if arm is not None:
-                arm.disconnect()
+        # Do not disconnect a session under an ordinary active SDK command.
+        with self._dispatch_lock:
+            with self._create_lock:
+                arm = self._session
+                self._session = None
+                if arm is not None:
+                    arm.disconnect()
 
     def _calibration_id(self, arm: SOARM101) -> str:
         identity = arm.calibration_id
@@ -141,12 +144,17 @@ class SDKAgentExecutor:
             raise ValueError(f"unknown {action} fields: {sorted(unexpected)!r}")
 
     def execute(self, action: str, request: Mapping[str, object]) -> dict[str, object]:
-        """Typed action entrypoint; caller enforces pinned profile and concurrency.
-
-        STOP may run in parallel with a motion call in order to signal the
-        same MotionController. All other calls are serialized by the broker.
-        """
+        """Validate and serialize ordinary SDK actions; do not block STOP."""
         self._validate(action, request)
+        if action == "stop":
+            return self._execute_action(action, request)
+        with self._dispatch_lock:
+            return self._execute_action(action, request)
+
+    def _execute_action(
+        self, action: str, request: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Perform one already validated trusted-host SDK operation."""
         if action == "capabilities":
             # Reuse the legacy pure projection until wrapper retirement in PR 3.
             from soarm101_motion.cli.main import _agent_capabilities_payload
