@@ -221,6 +221,9 @@ class SDKAgentExecutor:
                 "replay_saved_pose", arm,
                 {"robot_id": self.robot_id, "name": name},
             )
+            if not (moved.accepted and moved.completed
+                    and gripper.accepted and gripper.completed):
+                raise RuntimeError("saved pose playback did not complete successfully")
             return {
                 "accepted": True, "completed": True, "action": "go_pose",
                 "pose": name, "holding": True, "authority": authority,
@@ -243,6 +246,8 @@ class SDKAgentExecutor:
             arm.enable()
             result = SDK_CAPABILITIES.dispatch("jog_joint", arm, arguments)
             arm.hold()
+            if not result.accepted or not result.completed:
+                raise RuntimeError("joint motion did not complete successfully")
             after = dict(arm.get_joint_positions().positions)
             return {
                 "accepted": result.accepted, "completed": result.completed,
@@ -284,6 +289,8 @@ class SDKAgentExecutor:
                 "acceleration_mm_s2": getattr(self.rates, "cartesian_acceleration_mm_s2"),
             })
             arm.hold()
+            if not result.accepted or not result.completed:
+                raise RuntimeError("Cartesian jog did not complete successfully")
             return {
                 "accepted": result.accepted, "completed": result.completed,
                 "action": "jog", "holding": True, "authority": authority,
@@ -301,6 +308,8 @@ class SDKAgentExecutor:
                 "move_gripper", arm, {"position": position}
             )
             arm.hold()
+            if not result.accepted or not result.completed:
+                raise RuntimeError("gripper command did not complete successfully")
             return {
                 "accepted": result.accepted, "completed": result.completed,
                 "action": "gripper", "target": target,
@@ -317,6 +326,8 @@ class SDKAgentExecutor:
                 }
             )
             arm.hold()
+            if not result.accepted or not result.completed:
+                raise RuntimeError("Sleep operation did not complete successfully")
             return {**asdict(result), "action": action, "holding": True,
                     "authority": authority}
         raise AssertionError(f"missing SDK broker action handler for {action}")
