@@ -641,6 +641,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_BROKER_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_BROKER_PORT)
     parser.add_argument("--robot-id", default="so101")
+    parser.add_argument(
+        "--sdk-simulation-preview", action="store_true",
+        help="read-only persistent simulated SDK session; no serial or motion endpoints",
+    )
     parser.add_argument("--events", type=Path, default=DEFAULT_EVENT_PATH)
     parser.add_argument(
         "--profile", type=Path,
@@ -719,11 +723,25 @@ def main(argv: list[str] | None = None) -> int:
         cartesian_speed_mm_s=args.agent_cartesian_speed_mm_s,
         cartesian_acceleration_mm_s2=args.agent_cartesian_acceleration_mm_s2,
     ).validated(config)
+    if args.sdk_simulation_preview:
+        preview = CapabilityProfile.from_document({
+            "schema_version": 1,
+            "name": "sdk-preview-read-only",
+            "tools": ["robot_health", "robot_capabilities", "robot_state"],
+            "cameras": [],
+            "limits": {},
+        })
+        if args.profile is not None:
+            raise SystemExit("--profile is not supported in read-only SDK simulation preview")
+        executor = SDKAgentExecutor(config=config, rates=rates, simulation=True)
+    else:
+        preview = CapabilityProfile.from_file(args.profile) if args.profile else None
+        executor = AgentCommandExecutor(config=config, rates=rates)
     service = RobotBrokerService(
-        executor=AgentCommandExecutor(config=config, rates=rates),
+        executor=executor,
         token=token,
         event_path=args.events,
-        profile=CapabilityProfile.from_file(args.profile) if args.profile else None,
+        profile=preview,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     limits = config.motion_limits_human
@@ -747,6 +765,8 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         server.server_close()
+        if isinstance(executor, SDKAgentExecutor):
+            executor.close()
     return 0
 
 
