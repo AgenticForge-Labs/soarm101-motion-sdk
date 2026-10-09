@@ -41,6 +41,12 @@ class FakeArm:
         self.calls.append(("gripper", position))
         return "gripper complete"
 
+    def require_artifact_calibration(self, provenance, *, artifact_label):
+        self.calls.append(("provenance", provenance))
+
+    def hold(self):
+        self.calls.append(("hold", None))
+
     def get_state(self):
         self.calls.append(("hardware_state", None))
         return SimpleNamespace(connected=True, moving=False)
@@ -432,3 +438,37 @@ def test_operator_pose_go_checks_provenance_before_torque(
                  "--robot-id", "so101", "--simulation", "--yes"]) == 1
     assert "calibration mismatch" in capsys.readouterr().err
     assert arm.enabled is False
+
+
+def test_registry_saved_pose_linear_replay_retains_gripper_then_hold_order(
+    monkeypatch, tmp_path,
+) -> None:
+    from soarm101_motion.constants import ARM_JOINTS
+    import soarm101_motion.poses as poses
+
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}.json",
+    )
+    poses.PoseLibrary("so101").save(
+        "line",
+        poses.SavedPose(
+            joints={name: 0.0 for name in ARM_JOINTS},
+            gripper=0.4,
+            tcp_xyz_rpy=(0.10, 0.10, 0.20, 0.0, 0.0, 0.0),
+        ),
+    )
+    arm = FakeArm()
+    result = SDK_CAPABILITIES.dispatch(
+        "replay_saved_pose", arm,
+        {"robot_id": "so101", "name": "line", "mode": "linear",
+         "speed_mm_s": 5.0, "acceleration_mm_s2": 20.0},
+    )
+    assert result == ("linear complete", "gripper complete")
+    assert [name for name, _ in arm.calls] == [
+        "provenance", "linear", "gripper", "hold",
+    ]
+    _, (target, options) = arm.calls[1]
+    assert target.xyz_rpy()[:3] == pytest.approx([0.1, 0.1, 0.2])
+    assert options["speed"] == pytest.approx(0.005)
+    assert options["acceleration"] == pytest.approx(0.020)
