@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+from types import SimpleNamespace
+
 import pytest
 
 from soarm101_motion.agent_control import AgentAuthorityStore
@@ -162,3 +165,79 @@ def test_opt_in_native_broker_exposes_only_read_routes(tmp_path) -> None:
 def test_native_preview_parser_is_opt_in() -> None:
     assert build_parser().parse_args([]).sdk_simulation_preview is False
     assert build_parser().parse_args(["--sdk-simulation-preview"]).sdk_simulation_preview
+
+
+def test_native_executor_stop_can_interrupt_a_fake_inflight_move(tmp_path) -> None:
+    """Executor unit proof only; NOT a real serial/HOLD or HTTP-level STOP proof."""
+    started = threading.Event()
+    interrupted = threading.Event()
+    config = SOARM101Config(robot_id="so101")
+
+    class FakeArm:
+        config = config
+        calibration_id = None
+
+        def connect(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+        def get_joint_positions(self):
+            return SimpleNamespace(positions={"shoulder_pan": 0.0})
+
+        def get_state(self):
+            return SimpleNamespace(torque_enabled=True)
+
+        def enable(self):
+            pass
+
+        def move_joints(self, positions, *, relative, speed, acceleration):
+            assert positions == {"shoulder_pan": pytest.approx(0.02 * 3.141592653589793 / 180)}
+            assert relative
+            started.set()
+            if not interrupted.wait(timeout=2):
+                raise RuntimeError("STOP was blocked behind motion")
+            return SimpleNamespace(accepted=True, completed=False, message="interrupted")
+
+        def stop(self):
+            interrupted.set()
+
+        def hold(self):
+            pass
+
+    lease = AgentAuthorityStore(tmp_path / "lease.json")
+    lease.issue(robot_id="so101", calibration_id="simulation", minutes=1)
+    executor = SDKAgentExecutor(
+        config=config,
+        rates=AgentMotionRates(),
+        simulation=True,
+        arm_factory=FakeArm,
+        authority_store=lease,
+    )
+    errors = []
+
+    def moving_worker():
+        try:
+            executor.execute(
+                "joint", {"joint": "shoulder_pan", "delta_deg": 0.02},
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=moving_worker)
+    thread.start()
+    try:
+        assert started.wait(timeout=2)
+        stopped = executor.execute("stop", {})
+        assert stopped["action"] == "stop"
+        assert stopped["holding"] is True
+        assert interrupted.is_set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert "did not complete" in str(errors[0])
+    finally:
+        interrupted.set()
+        thread.join(timeout=2)
+        executor.close()
