@@ -28,7 +28,11 @@ and the full `uv run pytest` suite. The native broker preview
 read-only profile, reuse one simulated SDK session, and reject all POST
 routes. Contract tests cover unknown arguments, missing/expired leases,
 invalid joints, no automatic torque, and refusal to interpret model space
-as measured physical clearance.
+as measured physical clearance. Additional internal simulation-only HTTP
+tests (not exposed by the broker CLI) verify bearer authentication, profile
+rate intersection, STOP racing an in-flight fake joint move, a 409 error
+rather than false success on cancellation, and observable failed HOLD
+with audit evidence. These tests do not validate servo-bus concurrency.
 
 **Not validated or enabled:** the real servo bus, exclusive ownership
 across GUI/CLI/broker, interruptible HTTP STOP under a moving hardware SDK,
