@@ -60,7 +60,9 @@ def test_registry_inspection_is_pure_and_exposes_units() -> None:
     assert len(names) == len(set(names))
     assert {"read_pose", "solve_ik", "move_joints", "jog_joint", "move_linear",
             "jog_cartesian", "move_gripper", "list_saved_poses",
-            "read_effort_status", "read_hardware_state", "stop"} == set(names)
+            "capture_saved_pose", "validate_saved_pose", "replay_saved_pose",
+            "capture_camera", "camera_profiles", "read_effort_status",
+            "read_hardware_state", "stop"} == set(names)
     joint = SDK_CAPABILITIES.get("move_joints").describe()
     assert joint["effect"] == "motion"
     assert joint["agent_eligible"] is False
@@ -352,3 +354,28 @@ def test_operator_camera_capture_keeps_cli_profile_and_output_parity(
     all_data = json.loads(capsys.readouterr().out)
     assert len(all_data["captures"]) == 1
     assert records[-1] == ("/dev/video7", None)
+
+
+def test_registry_camera_profiles_use_persisted_source_without_devices(
+    tmp_path, monkeypatch,
+) -> None:
+    from soarm101_motion.camera import CameraSettings
+    from soarm101_motion.workstation import WorkstationProfileStore
+
+    monkeypatch.setenv(
+        "SOARM101_WORKSTATION_CONFIG", str(tmp_path / "workstation.json"),
+    )
+    store = WorkstationProfileStore()
+    store.save(store.load().with_camera(
+        "wrist", CameraSettings(device="/dev/video8"), select=True,
+    ))
+    all_profiles = SDK_CAPABILITIES.dispatch("camera_profiles", None, {})
+    assert all_profiles["selected_camera"] == "wrist"
+    assert all_profiles["cameras"]["wrist"]["device"] == "/dev/video8"
+    named = SDK_CAPABILITIES.dispatch(
+        "camera_profiles", None, {"name": "wrist"},
+    )
+    assert named["name"] == "wrist"
+    assert named["device"] == "/dev/video8"
+    with pytest.raises(KeyError):
+        SDK_CAPABILITIES.dispatch("camera_profiles", None, {"name": "absent"})
