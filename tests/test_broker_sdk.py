@@ -174,8 +174,10 @@ def test_native_executor_stop_can_interrupt_a_fake_inflight_move(tmp_path) -> No
     config = SOARM101Config(robot_id="so101")
 
     class FakeArm:
-        config = config
         calibration_id = None
+
+        def __init__(self):
+            self.config = config
 
         def connect(self):
             pass
