@@ -57,7 +57,7 @@ from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
 from soarm101_motion.sequences import SequenceLibrary, SequenceRunner
 from soarm101_motion.tools import SO101Gripper
 from soarm101_motion.trajectories import TrajectoryLibrary
-from soarm101_motion.types import MotionResult, Pose
+from soarm101_motion.types import MotionResult
 from soarm101_motion.workspace import WorkspaceCalibrationStore
 from soarm101_motion.workstation import (
     ArmConnectionProfile,
