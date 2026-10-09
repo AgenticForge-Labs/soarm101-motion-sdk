@@ -68,7 +68,7 @@ def test_registry_inspection_is_pure_and_exposes_units() -> None:
             "jog_cartesian", "move_gripper", "list_saved_poses",
             "capture_saved_pose", "validate_saved_pose", "replay_saved_pose",
             "capture_camera", "camera_profiles", "read_effort_status",
-            "read_hardware_state", "stop"} == set(names)
+            "read_hardware_state", "sleep", "sleep_up", "stop"} == set(names)
     joint = SDK_CAPABILITIES.get("move_joints").describe()
     assert joint["effect"] == "motion"
     assert joint["agent_eligible"] is False
