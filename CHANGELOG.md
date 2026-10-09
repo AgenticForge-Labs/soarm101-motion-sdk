@@ -1,5 +1,11 @@
 # Changelog
 
+- Extend PR 1 registry to saved-pose capture and provenance-checked joint/linear
+  replay, named-camera still capture with trusted caller settings, and persisted
+  camera profiles. Ordinary CLI continues to own confirmation and torque
+  activation; registry never activates hardware implicitly. Existing MCP
+  and bounded agent broker paths retain their original authority and URLs.
+
 - Extend PR 1 registry with saved pose listing and hardware/effort status
   reads, using existing SDK and PoseLibrary operations. Ordinary CLI
   pose-list/effort commands share dispatch; no broker, motion-policy, or
