@@ -1,5 +1,10 @@
 # Changelog
 
+- PR #88 fake native-camera parity: exercise trusted-host image read,
+  SHA-256 evidence, sandbox path/device redaction and failure-before-success
+  auditing under the existing broker profile. No physical camera access
+  or production direct-SDK routing is activated.
+
 - PR #88 fake/HTTP cancellation hardening: test authorized, profile-limited
   out-of-band STOP during a blocked fake movement; reject queued native
   commands admitted before STOP, revoke simulated motion authority on
