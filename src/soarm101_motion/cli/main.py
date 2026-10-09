@@ -29,7 +29,6 @@ from soarm101_motion.agent_control import (
 )
 from soarm101_motion.calibration import SO101Calibration, default_calibration_path
 from soarm101_motion.camera import (
-    CameraCapture,
     CameraSettings,
     discover_camera_devices,
 )
@@ -49,7 +48,6 @@ from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.motion.trace import summarize_agent_jog_trace
 from soarm101_motion.poses import (
     PoseLibrary,
-    SavedPose,
     sleep_joint_positions,
     sleep_up_joint_positions,
 )
