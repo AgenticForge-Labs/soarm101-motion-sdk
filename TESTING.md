@@ -1,5 +1,22 @@
 # Testing
 
+## Shared SDK capability registry — PR 1 (software-only)
+
+Run `uv run ruff check .`, `uv run pytest --no-cov
+tests/test_sdk_capabilities.py tests/test_cli.py`, and the complete normal
+test suite. Confirm that `soarm101 sdk-capabilities --json` works without
+any serial port, profile, torque, camera access, broker, or agent lease.
+Tests must check unknown/extra/invalid payload rejection before SDK calls,
+existing human CLI confirmation and JSON response parity, no automatic
+torque enable, and retention of SDK dynamic safety guards.
+
+This PR intentionally does not migrate broker subprocess execution.
+Any claimed parity for saved pose, cameras, diagnostics, or operator-only
+administration requires separate coverage before calling PR 1 complete.
+Physical motion testing is not needed for pure registry introspection;
+do not interpret simulation or fake arms as real-hardware validation.
+
+
 ## GUI test-session lifetime (PR #86 merge gate)
 
 The CI matrix runs Python 3.10 and 3.12 with the optional PySide6 GUI
