@@ -127,6 +127,18 @@ class WorkstationProfile:
                 f"unknown camera profile {resolved!r}; configured profiles: {available}"
             ) from exc
 
+    def camera_payload(self, name: str | None = None) -> dict[str, object]:
+        """One canonical projection for CLI/registry camera settings."""
+        if name is not None:
+            return {"name": name, **asdict(self.camera(name))}
+        return {
+            "selected_camera": self.selected_camera,
+            "cameras": {
+                camera_name: asdict(settings)
+                for camera_name, settings in self.cameras.items()
+            },
+        }
+
     def with_camera(
         self,
         name: str,
@@ -255,11 +267,7 @@ class WorkstationProfileStore:
             "schema_version": profile.schema_version,
             "follower": asdict(profile.follower),
             "leader": asdict(profile.leader),
-            "selected_camera": profile.selected_camera,
-            "cameras": {
-                name: asdict(settings)
-                for name, settings in profile.cameras.items()
-            },
+            **profile.camera_payload(),
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
