@@ -1,5 +1,26 @@
 # Architecture
 
+## PR 2 staged persistent SDK broker (open branch; simulation-only)
+
+The new `broker_sdk.SDKAgentExecutor` provides a typed SDK operation path
+with a lazily established persistent session. The `--sdk-simulation-preview`
+broker option exposes read-only state/capability requests through that session
+and rejects **every POST action**; it creates a SimulationBackend, not a
+physical Feetech/serial connection. The unflagged production broker still
+uses the existing bounded `soarm101 agent` subprocess path and its profile,
+authority and motion checks unchanged. The new executor also includes
+prototype motion adapters for test construction, but production HTTP does
+not dispatch them. This is neither a released robot-control migration nor
+hardware-validated STOP, calibrated-jog, or device exclusivity.
+
+The eventual production path must preserve the same MCP/robotctl API, per-run
+profile and human authority, use one exclusive persistent SDK session, and
+support STOP interrupting active motion without ordinary concurrent motor
+commands. Hardware safety remains in the existing SDK. See
+`docs/capability-registry-migration.md`.
+
+
+
 ## Shared SDK capability registry (PR #87)
 
 `sdk_capabilities.py` introduces pure action metadata and explicit,
