@@ -1,6 +1,6 @@
 # Architecture
 
-## Staged shared capability registry (open PR 1 — not deployed)
+## Shared SDK capability registry (PR #87)
 
 `sdk_capabilities.py` introduces pure action metadata and explicit,
 validated SDK dispatch, presently covering read, IK, direct joint/Cartesian
