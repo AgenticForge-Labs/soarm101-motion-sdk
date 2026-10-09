@@ -39,7 +39,9 @@ def test_simulation_session_is_lazy_persistent_and_read_only_by_default(native) 
     executor, auth = native
     assert executor._session is None
     capabilities = executor.execute("capabilities", {})
-    assert "actions" in capabilities
+    assert capabilities["actions"] == {"state": "read_only"}
+    assert capabilities["authority"]["armed"] is False
+    assert capabilities["world_directions"]["available"] is False
     assert executor._session is None
     result = executor.execute("state", {})
     assert result["robot_id"] == "so101"
