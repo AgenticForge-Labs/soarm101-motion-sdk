@@ -6,6 +6,28 @@ historical Director/Studio integration references below describe older adapter w
 
 ## Shared SDK registry and broker migration plan
 
+**PR 2 work in progress (branch `feature/broker-persistent-sdk-session`):**
+PR #87 merged into `main` at `e941e2686d2fd87569cdf1e91d6e508b228787ee`.
+The new `broker_sdk.py` contains a persistent SDK session and strict typed
+action adapter, initially exposed through an explicitly opted-in
+`soarm101-broker --sdk-simulation-preview` **read-only simulation mode**.
+In this preview, `GET /v1/state` and `GET /v1/capabilities` use the
+SDK session and all POST routes are denied. Production broker operation
+still uses the existing bounded agent CLI subprocesses by default.
+The preview intentionally does not authorize real hardware; tests of the
+session adapter do not establish STOP interruptibility at the physical bus,
+cross-process exclusivity, calibrated jog safety, or live reliability.
+
+**PR 2 merge blockers:** before replacing the production broker, complete
+profile/lease enforcement at execution, direct SDK HTTP motion and evidence
+parity, reliable concurrent STOP independent of the operation lock, shared
+cross-process hardware ownership with ordinary CLI/GUI, session fault/
+disconnect handling, simulated/fake-transport regression, and a supervised,
+traced physical 2 mm jog with clear operator observation. Keep all fixes on
+this same PR. No dependent PR 3 branch until this PR merges.
+
+
+
 **Implementation update:** PR #86 merged into `main` at
 `dfa2cbd128cf6cb4e37f9742333a63c0fc249cbc`.
 PR #87 implements PR 1: typed SDK action registry, shared ordinary CLI
