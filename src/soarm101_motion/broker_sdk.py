@@ -190,6 +190,9 @@ class SDKAgentExecutor:
                 camera_settings=profile.camera(name),
             )
         if action == "stop":
+            # Revocation occurs even if the physical/fake HOLD subsequently
+            # fails. A human must issue fresh motion authority after STOP.
+            self._authority.clear()
             # DO NOT wait for the motion lock or silently enable torque here.
             # A new session cannot be opened by STOP during an active command.
             arm = self._session
