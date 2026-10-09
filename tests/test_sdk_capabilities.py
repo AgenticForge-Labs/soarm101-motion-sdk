@@ -194,3 +194,161 @@ def test_registry_lists_saved_poses_without_hardware(tmp_path, monkeypatch) -> N
     assert main(["pose", "list", "--robot-id", "so101"]) == 0
     with pytest.raises(ValueError, match="nonempty"):
         SDK_CAPABILITIES.dispatch("list_saved_poses", None, {"robot_id": " "})
+
+
+def test_registry_pose_capture_and_replay_are_calibration_bound(
+    monkeypatch, tmp_path,
+) -> None:
+    from soarm101_motion import SOARM101
+    import soarm101_motion.poses as poses
+
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}.json",
+    )
+    with SOARM101.simulated() as arm:
+        path = SDK_CAPABILITIES.dispatch(
+            "capture_saved_pose", arm,
+            {"robot_id": arm.config.robot_id, "name": "test", "source": "follower"},
+        )
+        assert path.exists()
+        bound = SDK_CAPABILITIES.dispatch(
+            "validate_saved_pose", arm,
+            {"robot_id": arm.config.robot_id, "name": "test"},
+        )
+        assert bound.source == "follower"
+        # Registry never enables torque: the owner of the session must do it.
+        assert not arm.get_state().torque_enabled
+        arm.enable()
+        arm_result, gripper_result = SDK_CAPABILITIES.dispatch(
+            "replay_saved_pose", arm,
+            {"robot_id": arm.config.robot_id, "name": "test", "mode": "joint"},
+        )
+        assert arm_result.completed and gripper_result.completed
+
+
+def test_registry_pose_replay_rejects_provenance_before_motion(tmp_path, monkeypatch) -> None:
+    import soarm101_motion.poses as poses
+    from soarm101_motion.constants import ARM_JOINTS
+
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}.json",
+    )
+    poses.PoseLibrary("so101").save(
+        "bad",
+        poses.SavedPose(
+            joints={name: 0.0 for name in ARM_JOINTS},
+            gripper=0.5,
+            tcp_xyz_rpy=(0.0, 0.0, 0.2, 0.0, 0.0, 0.0),
+            source_robot_id="so101",
+            source_calibration_id="sha256:stale",
+        ),
+    )
+
+    class RejectingArm(FakeArm):
+        def require_artifact_calibration(self, provenance, *, artifact_label):
+            self.calls.append(("provenance", provenance))
+            raise ValueError("stale calibration")
+
+    arm = RejectingArm()
+    with pytest.raises(ValueError, match="stale calibration"):
+        SDK_CAPABILITIES.dispatch(
+            "replay_saved_pose", arm,
+            {"robot_id": "so101", "name": "bad"},
+        )
+    assert [name for name, _ in arm.calls] == ["provenance"]
+
+
+def test_registry_camera_capture_uses_trusted_settings_not_request_overrides(
+    monkeypatch, tmp_path,
+) -> None:
+    from soarm101_motion.camera import CameraSettings
+    import soarm101_motion.camera as camera
+
+    captured = []
+
+    class FakeCapture:
+        def __init__(self, settings):
+            captured.append(settings)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def snapshot(self, output):
+            captured.append(output)
+            return tmp_path / "capture.jpg", {
+                "path": str(tmp_path / "capture.jpg"),
+                "width": 640,
+                "height": 480,
+                "device": "/dev/video9",
+            }
+
+    monkeypatch.setattr(camera, "CameraCapture", FakeCapture)
+    settings = CameraSettings(device="/dev/video9")
+    payload = SDK_CAPABILITIES.dispatch(
+        "capture_camera", None,
+        {"name": "overhead", "output": str(tmp_path / "capture.jpg")},
+        camera_settings=settings,
+    )
+    assert payload["name"] == "overhead"
+    assert payload["path"] == str(tmp_path / "capture.jpg")
+    assert captured == [settings, str(tmp_path / "capture.jpg")]
+    with pytest.raises(ValueError, match="unknown"):
+        SDK_CAPABILITIES.dispatch(
+            "capture_camera", None,
+            {"name": "overhead", "device": "/dev/video0"},
+            camera_settings=settings,
+        )
+    assert len(captured) == 2
+
+
+def test_operator_camera_capture_keeps_cli_profile_and_output_parity(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    import soarm101_motion.camera as camera
+    from soarm101_motion.workstation import WorkstationProfileStore
+
+    monkeypatch.setenv(
+        "SOARM101_WORKSTATION_CONFIG", str(tmp_path / "workstation.json"),
+    )
+    records = []
+
+    class FakeCapture:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def snapshot(self, output):
+            records.append((self.settings.device, output))
+            return tmp_path / "shot.jpg", {
+                "path": str(tmp_path / "shot.jpg"), "device": self.settings.device,
+                "width": 640, "height": 480,
+            }
+
+    monkeypatch.setattr(camera, "CameraCapture", FakeCapture)
+    store = WorkstationProfileStore()
+    # Set up the same persisted camera name that the CLI and GUI share.
+    from soarm101_motion.camera import CameraSettings
+    store.save(store.load().with_camera(
+        "overhead", CameraSettings(device="/dev/video7"), select=True,
+    ))
+    output = str(tmp_path / "override.jpg")
+    assert main(["camera", "capture", "--name", "overhead",
+                 "--output", output, "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["name"] == "overhead"
+    assert payload["device"] == "/dev/video7"
+    assert records == [("/dev/video7", output)]
+    assert main(["camera", "capture", "--all", "--json"]) == 0
+    all_data = json.loads(capsys.readouterr().out)
+    assert len(all_data["captures"]) == 1
+    assert records[-1] == ("/dev/video7", None)
