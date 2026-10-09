@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
@@ -258,7 +259,12 @@ class RobotBrokerService:
         started = time.monotonic()
         try:
             with self._operation_lock:
-                result = self.executor.run(arguments)
+                if isinstance(self.executor, SDKAgentExecutor):
+                    if action not in {"state", "capabilities"}:
+                        raise PermissionError("SDK preview currently permits only read-only routes")
+                    result = self.executor.execute(action, request)
+                else:
+                    result = self.executor.run(arguments)
         except (BrokerCommandError, ValueError, KeyError, PermissionError) as exc:
             duration = time.monotonic() - started
             self._record(
@@ -381,6 +387,12 @@ class RobotBrokerService:
                 action="state",
                 request=request,
                 arguments=["state", "--robot-id", self.executor.robot_id],
+            )
+        if isinstance(self.executor, SDKAgentExecutor):
+            return BrokerResponse(
+                HTTPStatus.FORBIDDEN,
+                {"ok": False, "request_id": request_id,
+                 "error": "SDK simulation preview is read-only"},
             )
         if method != "POST":
             return BrokerResponse(
