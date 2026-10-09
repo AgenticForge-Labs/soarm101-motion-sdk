@@ -184,14 +184,24 @@ class RobotBrokerService:
     def __init__(
         self,
         *,
-        executor: AgentCommandExecutor | None = None,
+        executor: AgentCommandExecutor | SDKAgentExecutor | None = None,
         token: str,
         event_path: str | Path = DEFAULT_EVENT_PATH,
         profile: CapabilityProfile | None = None,
+        allow_simulated_sdk_posts: bool = False,
     ) -> None:
+        if allow_simulated_sdk_posts and not (
+            isinstance(executor, SDKAgentExecutor) and executor.simulation
+        ):
+            raise ValueError(
+                "simulated SDK POST tests require an explicitly simulated SDK executor"
+            )
         if not str(token):
             raise ValueError("broker token cannot be empty")
         self.executor = executor or AgentCommandExecutor()
+        # Not exposed by the broker CLI. The real broker keeps native POST
+        # disabled until physical STOP/ownership/workspace gates are passed.
+        self._allow_simulated_sdk_posts = allow_simulated_sdk_posts
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
         self.profile = profile if profile is not None else CapabilityProfile.full()
@@ -260,14 +270,25 @@ class RobotBrokerService:
     ) -> BrokerResponse:
         started = time.monotonic()
         try:
-            with self._operation_lock:
-                if isinstance(self.executor, SDKAgentExecutor):
-                    if action not in {"state", "capabilities"}:
-                        raise PermissionError("SDK preview currently permits only read-only routes")
-                    result = self.executor.execute(action, request)
-                else:
-                    result = self.executor.run(arguments)
-        except (BrokerCommandError, RuntimeError, ValueError, KeyError, PermissionError) as exc:
+            if isinstance(self.executor, SDKAgentExecutor) and action == "stop":
+                if not self._allow_simulated_sdk_posts:
+                    raise PermissionError("native SDK STOP is not available in read-only preview")
+                # An authorized STOP must not queue behind the synchronous
+                # broker command lock. The SDK owns safe bus cancellation.
+                result = self.executor.execute(action, request)
+            else:
+                with self._operation_lock:
+                    if isinstance(self.executor, SDKAgentExecutor):
+                        if (
+                            action not in {"state", "capabilities"}
+                            and not self._allow_simulated_sdk_posts
+                        ):
+                            raise PermissionError("SDK preview currently permits only read-only routes")
+                        result = self.executor.execute(action, request)
+                    else:
+                        result = self.executor.run(arguments)
+        except (BrokerCommandError, RuntimeError, ValueError, KeyError,
+                OSError, PermissionError) as exc:
             duration = time.monotonic() - started
             self._record(
                 request_id=request_id,
@@ -331,7 +352,7 @@ class RobotBrokerService:
                 ]
             visible["actions"] = actions
         visible["broker_profile"] = self.profile.public()
-        if isinstance(self.executor, AgentCommandExecutor):
+        if isinstance(self.executor, (AgentCommandExecutor, SDKAgentExecutor)):
             visible["broker_requested_motion"] = asdict(self.executor.rates)
         return BrokerResponse(response.status, {**response.body, "result": visible})
 
@@ -390,7 +411,7 @@ class RobotBrokerService:
                 request=request,
                 arguments=["state", "--robot-id", self.executor.robot_id],
             )
-        if isinstance(self.executor, SDKAgentExecutor):
+        if isinstance(self.executor, SDKAgentExecutor) and not self._allow_simulated_sdk_posts:
             return BrokerResponse(
                 HTTPStatus.FORBIDDEN,
                 {"ok": False, "request_id": request_id,
@@ -411,11 +432,15 @@ class RobotBrokerService:
                     # operation. Otherwise a second capture could race the first request's
                     # evidence read after the device command returns.
                     with self._operation_lock:
-                        result = self.executor.run(["capture", name])
+                        if isinstance(self.executor, SDKAgentExecutor):
+                            result = self.executor.execute("capture", request)
+                        else:
+                            result = self.executor.run(["capture", name])
                         capture_path = Path(str(result["path"])).expanduser()
                         image_bytes = capture_path.read_bytes()
                         image_sha256 = hashlib.sha256(image_bytes).hexdigest()
-                except (BrokerCommandError, ValueError, KeyError, OSError) as exc:
+                except (BrokerCommandError, RuntimeError, ValueError, KeyError,
+                        OSError, PermissionError) as exc:
                     duration = time.monotonic() - started
                     self._record(
                         request_id=request_id,
