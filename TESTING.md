@@ -32,7 +32,9 @@ as measured physical clearance. Additional internal simulation-only HTTP
 tests (not exposed by the broker CLI) verify bearer authentication, profile
 rate intersection, STOP racing an in-flight fake joint move, a 409 error
 rather than false success on cancellation, and observable failed HOLD
-with audit evidence. These tests do not validate servo-bus concurrency.
+with audit evidence. STOP also cancels requests already queued behind the
+broker dispatch lock and revokes the native lease, even on failed HOLD.
+These tests do not validate servo-bus concurrency.
 
 **Not validated or enabled:** the real servo bus, exclusive ownership
 across GUI/CLI/broker, interruptible HTTP STOP under a moving hardware SDK,
