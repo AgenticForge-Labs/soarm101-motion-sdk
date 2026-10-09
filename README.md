@@ -3,7 +3,9 @@
 ## Typed SDK capability discovery (PR 1 in progress)
 
 The ordinary operator CLI can inspect the SDK's typed, hardware-free action
-contracts with `soarm101 sdk-capabilities --json`. The experimental
+contracts with `soarm101 sdk-capabilities --json`. A guarded operator-only
+`soarm101 jog-joint JOINT --delta-deg DEGREES --yes` command also uses the
+same registry (with explicit confirmation). The experimental
 `soarm101_motion.sdk_capabilities.SDK_CAPABILITIES` registry owns argument
 names, units, semantic descriptions, validation and SDK dispatch for core
 read, IK, joint/Cartesian move, jog, gripper and STOP operations. The ordinary
