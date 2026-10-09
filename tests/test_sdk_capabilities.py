@@ -354,6 +354,15 @@ def test_operator_camera_capture_keeps_cli_profile_and_output_parity(
     all_data = json.loads(capsys.readouterr().out)
     assert len(all_data["captures"]) == 1
     assert records[-1] == ("/dev/video7", None)
+    assert main(["camera", "capture", "--name", "overhead",
+                 "--device", "/dev/video11", "--json"]) == 0
+    overridden = json.loads(capsys.readouterr().out)
+    assert overridden["device"] == "/dev/video11"
+    assert records[-1] == ("/dev/video11", None)
+    # An ad-hoc CLI override must not rewrite persisted camera configuration.
+    assert SDK_CAPABILITIES.dispatch(
+        "camera_profiles", None, {"name": "overhead"},
+    )["device"] == "/dev/video7"
 
 
 def test_registry_camera_profiles_use_persisted_source_without_devices(
@@ -379,3 +388,47 @@ def test_registry_camera_profiles_use_persisted_source_without_devices(
     assert named["device"] == "/dev/video8"
     with pytest.raises(KeyError):
         SDK_CAPABILITIES.dispatch("camera_profiles", None, {"name": "absent"})
+
+
+def test_operator_pose_go_checks_provenance_before_torque(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    import soarm101_motion.poses as poses
+    from soarm101_motion.constants import ARM_JOINTS
+    from soarm101_motion.cli import main as cli
+
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}.json",
+    )
+    poses.PoseLibrary("so101").save(
+        "test_invalid",
+        poses.SavedPose(
+            joints={name: 0.0 for name in ARM_JOINTS},
+            gripper=0.5,
+            tcp_xyz_rpy=(0.0, 0.0, 0.2, 0.0, 0.0, 0.0),
+            target_calibration_id="sha256:stale",
+            target_robot_id="so101",
+        ),
+    )
+    class ArmReject:
+        enabled = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def require_artifact_calibration(self, *args, **kwargs):
+            raise ValueError("saved pose calibration mismatch")
+
+        def enable(self):
+            self.enabled = True
+
+    arm = ArmReject()
+    monkeypatch.setattr(cli, "_arm_from_args", lambda *a, **kw: arm)
+    assert main(["pose", "go", "test_invalid",
+                 "--robot-id", "so101", "--simulation", "--yes"]) == 1
+    assert "calibration mismatch" in capsys.readouterr().err
+    assert arm.enabled is False
