@@ -34,7 +34,10 @@ automated testing, or operator-led diagnostics.
 ## Development
 
 The shared `sdk_capabilities.py` action registry is being introduced in
-PR 1. Its descriptions, typed units, and validated direct SDK dispatch are
+PR 1. Its saved-pose playback validates calibration provenance before replay;
+the operator CLI also verifies the provenance before torque activation.
+Camera capture uses trusted host camera settings and local output paths,
+not an agent-defined or broker-exposed host filesystem surface. Its descriptions, typed units, and validated direct SDK dispatch are
 an operation contract, not authority. Do not expose a registry operation to
 agents based only on its metadata. Never bypass existing broker profiles,
 calibrated workspace checks, human leases or independent STOP requirements.
