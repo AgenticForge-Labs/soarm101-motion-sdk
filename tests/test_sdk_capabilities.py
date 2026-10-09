@@ -24,8 +24,9 @@ class FakeArm:
         self.calls.append(("tcp_read", None))
         return SimpleNamespace(xyz_rpy=lambda: (0.1, 0.2, 0.3, 0.0, 0.0, 0.0))
 
-    def move_joints(self, positions, *, speed, acceleration):
-        self.calls.append(("joints", (positions, speed, acceleration)))
+    def move_joints(self, positions, *, speed, acceleration, relative=False):
+        event = "joint_jog" if relative else "joints"
+        self.calls.append((event, (positions, speed, acceleration)))
         return "joints complete"
 
     def move_linear(self, target, **kwargs):
@@ -49,7 +50,7 @@ def test_registry_inspection_is_pure_and_exposes_units() -> None:
     specs = SDK_CAPABILITIES.describe()
     names = [spec["name"] for spec in specs]
     assert len(names) == len(set(names))
-    assert {"read_pose", "solve_ik", "move_joints", "move_linear",
+    assert {"read_pose", "solve_ik", "move_joints", "jog_joint", "move_linear",
             "jog_cartesian", "move_gripper", "stop"} == set(names)
     joint = SDK_CAPABILITIES.get("move_joints").describe()
     assert joint["effect"] == "motion"
@@ -116,3 +117,22 @@ def test_existing_read_cli_json_parity_in_simulation(capsys) -> None:
     assert list(payload) == ["joint_positions_rad", "tcp_xyz_mm", "tcp_rpy_deg"]
     assert len(payload["tcp_xyz_mm"]) == 3
     assert len(payload["tcp_rpy_deg"]) == 3
+
+
+def test_single_joint_jog_uses_relative_guarded_sdk_and_validates_names() -> None:
+    arm = FakeArm()
+    request = {
+        "joint": "elbow_flex", "delta_rad": 0.03,
+        "speed_rad_s": 0.1, "acceleration_rad_s2": 0.3,
+    }
+    assert SDK_CAPABILITIES.dispatch("jog_joint", arm, request) == "joints complete"
+    assert arm.calls[-1] == ("joint_jog", ({"elbow_flex": 0.03}, 0.1, 0.3))
+    before = list(arm.calls)
+    with pytest.raises(ValueError, match="joint"):
+        SDK_CAPABILITIES.dispatch("jog_joint", arm, {**request, "joint": "servo_6"})
+    assert arm.calls == before
+
+
+def test_cli_single_joint_operator_jog_needs_explicit_confirmation(capsys) -> None:
+    assert main(["jog-joint", "shoulder_pan", "--delta-deg", "2", "--simulation"]) == 2
+    assert "Refusing to move without --yes" in capsys.readouterr().err
