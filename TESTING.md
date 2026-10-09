@@ -34,7 +34,10 @@ rate intersection, STOP racing an in-flight fake joint move, a 409 error
 rather than false success on cancellation, and observable failed HOLD
 with audit evidence. STOP also cancels requests already queued behind the
 broker dispatch lock and revokes the native lease, even on failed HOLD.
-These tests do not validate servo-bus concurrency.
+Fake native camera capture tests also verify exact image-byte SHA-256,
+no disclosure of host capture paths or device nodes to broker clients,
+and no success evidence when a trusted capture file is missing.
+These tests do not validate servo-bus concurrency or real cameras.
 
 **Not validated or enabled:** the real servo bus, exclusive ownership
 across GUI/CLI/broker, interruptible HTTP STOP under a moving hardware SDK,
