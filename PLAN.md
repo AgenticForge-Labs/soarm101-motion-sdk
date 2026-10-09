@@ -15,9 +15,10 @@ In the public preview, `GET /v1/state` and `GET /v1/capabilities` use the
 SDK session and **all POST routes remain denied**. An internal,
 explicitly simulated test-only service setting permits HTTP regression
 coverage for pinned profiles, expired authority, serialized commands and
-concurrent STOP. It is not a CLI option and cannot activate a physical
-SDK session. Production broker operation still uses the existing bounded
-agent CLI subprocesses by default.
+concurrent STOP. A native STOP also invalidates already-queued requests
+and revokes the simulated motion authority even if HOLD fails. It is not
+a CLI option and cannot activate a physical SDK session. Production broker
+operation still uses the existing bounded agent CLI subprocesses by default.
 The preview intentionally does not authorize real hardware; tests of the
 session adapter do not establish STOP interruptibility at the physical bus,
 cross-process exclusivity, calibrated jog safety, or live reliability.
