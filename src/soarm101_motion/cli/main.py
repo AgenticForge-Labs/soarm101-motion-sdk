@@ -975,23 +975,13 @@ def _camera_settings_from_args(
     return store, profile, name, settings
 
 
-def _camera_profile_payload(profile: WorkstationProfile) -> dict[str, object]:
-    return {
-        "selected_camera": profile.selected_camera,
-        "cameras": {
-            name: asdict(settings)
-            for name, settings in profile.cameras.items()
-        },
-    }
-
-
 def _cmd_camera_list(args: argparse.Namespace) -> int:
     devices = discover_camera_devices()
-    profile = WorkstationProfileStore().load()
     payload = {
         "devices": devices,
-        **_camera_profile_payload(profile),
+        **SDK_CAPABILITIES.dispatch("camera_profiles", None, {}),
     }
+    profile = WorkstationProfileStore().load()
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
@@ -1009,15 +999,11 @@ def _cmd_camera_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_camera_show(args: argparse.Namespace) -> int:
-    profile = WorkstationProfileStore().load()
     requested = str(getattr(args, "name", "") or "").strip()
-    if requested:
-        payload: object = {
-            "name": requested,
-            **asdict(profile.camera(requested)),
-        }
-    else:
-        payload = _camera_profile_payload(profile)
+    payload: object = SDK_CAPABILITIES.dispatch(
+        "camera_profiles", None,
+        {"name": requested} if requested else {},
+    )
     if args.json:
         print(json.dumps(payload, indent=2))
     elif isinstance(payload, dict):
