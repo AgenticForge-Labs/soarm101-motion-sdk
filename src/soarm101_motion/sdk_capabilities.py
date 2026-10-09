@@ -200,6 +200,9 @@ _SPECS = (
         _number("speed_mm_s", "mm/s", "Linear playback speed", 10.0),
         _number("acceleration_mm_s2", "mm/s^2", "Linear playback acceleration", 40.0),
     )),
+    ActionSpec("camera_profiles", "Read persisted named camera profiles", "read", (
+        ArgumentSpec("name", "text", "Specific saved camera name", required=False),
+    )),
     ActionSpec("capture_camera", "Capture a named camera still using trusted settings", "read", (
         ArgumentSpec("name", "text", "Saved camera name"),
         ArgumentSpec("output", "text", "Trusted-host output path", required=False),
@@ -254,6 +257,22 @@ class CapabilityRegistry:
                  "created_at": library.require(pose_name).created_at}
                 for pose_name in library.names()
             ]
+        if name == "camera_profiles":
+            from dataclasses import asdict
+            from soarm101_motion.workstation import WorkstationProfileStore
+
+            profile = WorkstationProfileStore().load()
+            selected = args["name"]
+            if selected is not None:
+                requested = str(selected)
+                return {"name": requested, **asdict(profile.camera(requested))}
+            return {
+                "selected_camera": profile.selected_camera,
+                "cameras": {
+                    camera_name: asdict(settings)
+                    for camera_name, settings in profile.cameras.items()
+                },
+            }
         if name == "capture_camera":
             from soarm101_motion.camera import CameraCapture
             from soarm101_motion.workstation import WorkstationProfileStore
