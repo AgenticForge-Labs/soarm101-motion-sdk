@@ -26,7 +26,9 @@ subprocesses. A new opt-in `soarm101-broker --sdk-simulation-preview`
 mode exercises a persistent simulated SDK session for authenticated
 `GET /v1/state` and `GET /v1/capabilities`, but **all POST routes
 fail closed**. This mode opens no physical serial connection and cannot
-activate real motors. Do not confuse this with completed broker migration
+activate real motors. Internal simulated HTTP regression tests exercise
+interruption of a fake in-flight move, but the public preview continues to
+deny every POST. Do not confuse this with completed broker migration
 or verified real-arm STOP; the work remains in open PR #88 until additional
 safety tests and supervised physical validation.
 
