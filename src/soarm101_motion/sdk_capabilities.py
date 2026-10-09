@@ -17,6 +17,7 @@ from soarm101_motion.constants import ARM_JOINTS
 
 if TYPE_CHECKING:
     from soarm101_motion.arm import SOARM101
+    from soarm101_motion.camera import CameraSettings
 
 ValueKind = Literal["number", "numbers", "choice", "text", "bool"]
 EffectKind = Literal["read", "motion", "stop"]
@@ -178,6 +179,31 @@ _SPECS = (
     ActionSpec("list_saved_poses", "List persisted saved pose metadata", "read", (
         ArgumentSpec("robot_id", "text", "Identity of the saved pose library"),
     )),
+    ActionSpec("capture_saved_pose", "Capture one measured calibration-bound saved pose", "read", (
+        ArgumentSpec("robot_id", "text", "Saved pose library robot identity"),
+        ArgumentSpec("name", "text", "Name for the saved pose"),
+        ArgumentSpec("source", "choice", "Arm source of the measurement",
+                     choices=("follower", "leader"), required=False, default="follower"),
+    )),
+    ActionSpec("validate_saved_pose", "Check saved pose provenance before torque enable", "read", (
+        ArgumentSpec("robot_id", "text", "Saved pose library robot identity"),
+        ArgumentSpec("name", "text", "Saved pose to validate"),
+    )),
+    ActionSpec("replay_saved_pose", "Replay calibration-bound arm and gripper pose", "motion", (
+        ArgumentSpec("robot_id", "text", "Saved pose library robot identity"),
+        ArgumentSpec("name", "text", "Saved pose to replay"),
+        ArgumentSpec("mode", "choice", "Joint or absolute Cartesian playback",
+                     choices=("joint", "linear"), required=False, default="joint"),
+        _ORIENTATION,
+        _number("speed_deg_s", "deg/s", "Joint playback speed", 8.0),
+        _number("acceleration_deg_s2", "deg/s^2", "Joint playback acceleration", 25.0),
+        _number("speed_mm_s", "mm/s", "Linear playback speed", 10.0),
+        _number("acceleration_mm_s2", "mm/s^2", "Linear playback acceleration", 40.0),
+    )),
+    ActionSpec("capture_camera", "Capture a named camera still using trusted settings", "read", (
+        ArgumentSpec("name", "text", "Saved camera name"),
+        ArgumentSpec("output", "text", "Trusted-host output path", required=False),
+    )),
     ActionSpec("read_effort_status", "Read the existing SDK effort-safety status", "read", (
         ArgumentSpec("refresh", "bool", "Refresh existing effort diagnostics",
                      required=False, default=False),
@@ -206,7 +232,14 @@ class CapabilityRegistry:
         except KeyError as exc:
             raise ValueError(f"unknown SDK capability: {name}") from exc
 
-    def dispatch(self, name: str, arm: SOARM101 | None, payload: Mapping[str, object]) -> Any:
+    def dispatch(
+        self,
+        name: str,
+        arm: SOARM101 | None,
+        payload: Mapping[str, object],
+        *,
+        camera_settings: CameraSettings | None = None,
+    ) -> Any:
         """Validated SDK operation, with *no* privilege elevation or implicit enable.
 
         The caller must already own an appropriate connected robot session and
@@ -221,8 +254,58 @@ class CapabilityRegistry:
                  "created_at": library.require(pose_name).created_at}
                 for pose_name in library.names()
             ]
+        if name == "capture_camera":
+            from soarm101_motion.camera import CameraCapture
+            from soarm101_motion.workstation import WorkstationProfileStore
+
+            camera_name = str(args["name"])
+            settings = camera_settings or WorkstationProfileStore().load().camera(
+                camera_name
+            )
+            with CameraCapture(settings) as camera:
+                path, metadata = camera.snapshot(args["output"])
+            return {"name": camera_name, **metadata}
         if arm is None:
             raise ValueError(f"SDK capability {name} requires a connected SDK session")
+        if name in {"validate_saved_pose", "replay_saved_pose"}:
+            from soarm101_motion.poses import PoseLibrary
+
+            pose_name = str(args["name"])
+            saved = PoseLibrary(str(args["robot_id"])).require(pose_name)
+            arm.require_artifact_calibration(
+                {
+                    "source_robot_id": saved.source_robot_id,
+                    "source_calibration_id": saved.source_calibration_id,
+                    "target_robot_id": saved.target_robot_id,
+                    "target_calibration_id": saved.target_calibration_id,
+                },
+                artifact_label=f"saved pose {pose_name!r}",
+            )
+            if name == "validate_saved_pose":
+                return saved
+            if args["mode"] == "joint":
+                result = arm.move_joints_from_saved_pose(
+                    saved.joints,
+                    speed=float(args["speed_deg_s"]) * pi / 180.0,
+                    acceleration=float(args["acceleration_deg_s2"]) * pi / 180.0,
+                )
+            else:
+                from soarm101_motion.types import Pose
+
+                result = arm.move_linear(
+                    Pose.from_xyz_rpy(*saved.tcp_xyz_rpy),
+                    orientation_mode=args["orientation_mode"],
+                    speed=float(args["speed_mm_s"]) / 1000.0,
+                    acceleration=float(args["acceleration_mm_s2"]) / 1000.0,
+                )
+            gripper_result = arm.tool.move(saved.gripper)
+            arm.hold()
+            return result, gripper_result
+        if name == "capture_saved_pose":
+            from soarm101_motion.poses import PoseLibrary, SavedPose
+
+            saved = SavedPose.capture(arm, source=str(args["source"]))
+            return PoseLibrary(str(args["robot_id"])).save(str(args["name"]), saved)
         if name == "read_hardware_state":
             return arm.get_state()
         if name == "read_effort_status":
