@@ -758,44 +758,45 @@ def _cmd_pose_list(args: argparse.Namespace) -> int:
 
 def _cmd_pose_capture(args: argparse.Namespace) -> int:
     with _arm_from_args(args) as arm:
-        pose = SavedPose.capture(arm, source=args.source)
-    path = PoseLibrary(args.robot_id).save(args.name, pose)
+        path = SDK_CAPABILITIES.dispatch(
+            "capture_saved_pose", arm, {
+                "robot_id": args.robot_id,
+                "name": args.name,
+                "source": args.source,
+            },
+        )
     print(f"Saved {args.name} to {path}")
     return 0
-
 
 def _cmd_pose_go(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move hardware without --yes.", file=sys.stderr)
         return 2
-    pose = PoseLibrary(args.robot_id).require(args.name)
+    request = {
+        "robot_id": args.robot_id,
+        "name": args.name,
+        "mode": args.mode,
+        "orientation_mode": args.orientation_mode,
+        "speed_deg_s": args.speed_deg_s,
+        "acceleration_deg_s2": args.acceleration_deg_s2,
+        "speed_mm_s": args.speed_mm_s,
+        "acceleration_mm_s2": args.acceleration_mm_s2,
+    }
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
-        arm.require_artifact_calibration(
-            {
-                "source_robot_id": pose.source_robot_id,
-                "source_calibration_id": pose.source_calibration_id,
-                "target_robot_id": pose.target_robot_id,
-                "target_calibration_id": pose.target_calibration_id,
+        # Preserve existing gate: verify saved-pose calibration *before*
+        # enabling torque; replay rechecks it immediately before the move.
+        SDK_CAPABILITIES.dispatch(
+            "validate_saved_pose", arm, {
+                "robot_id": args.robot_id,
+                "name": args.name,
             },
-            artifact_label=f"saved pose {args.name!r}",
         )
         arm.enable()
-        if args.mode == "joint":
-            result = arm.move_joints_from_saved_pose(
-                pose.joints,
-                speed=args.speed_deg_s * pi / 180.0,
-                acceleration=args.acceleration_deg_s2 * pi / 180.0,
-            )
-        else:
-            result = arm.move_linear(
-                Pose.from_xyz_rpy(*pose.tcp_xyz_rpy),
-                orientation_mode=args.orientation_mode,
-                speed=args.speed_mm_s / 1000.0,
-                acceleration=args.acceleration_mm_s2 / 1000.0,
-            )
+        result, gripper_result = SDK_CAPABILITIES.dispatch(
+            "replay_saved_pose", arm, request,
+        )
         print(result)
-        print(arm.tool.move(pose.gripper))
-        arm.hold()
+        print(gripper_result)
         print("Pose reached; follower remains torque-held.", file=sys.stderr)
     return 0
 
@@ -1066,10 +1067,12 @@ def _capture_named_camera(
     settings: CameraSettings,
     output: str | None = None,
 ) -> dict[str, object]:
-    with CameraCapture(settings) as camera:
-        path, metadata = camera.snapshot(output)
-    return {"name": name, **metadata}
-
+    request: dict[str, object] = {"name": name}
+    if output is not None:
+        request["output"] = output
+    return SDK_CAPABILITIES.dispatch(
+        "capture_camera", None, request, camera_settings=settings,
+    )
 
 def _cmd_camera_capture(args: argparse.Namespace) -> int:
     store = WorkstationProfileStore()
