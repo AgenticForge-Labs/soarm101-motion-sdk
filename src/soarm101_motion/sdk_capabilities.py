@@ -13,6 +13,8 @@ from math import pi
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 
+from soarm101_motion.constants import ARM_JOINTS
+
 if TYPE_CHECKING:
     from soarm101_motion.arm import SOARM101
 
@@ -140,6 +142,15 @@ _SPECS = (
         ArgumentSpec("acceleration_rad_s2", "number", "Optional joint acceleration",
                      "rad/s^2", required=False),
     )),
+    ActionSpec("jog_joint", "Relative movement of one calibrated pose joint", "motion", (
+        ArgumentSpec("joint", "choice", "Name of pose joint",
+                     choices=tuple(ARM_JOINTS)),
+        ArgumentSpec("delta_rad", "number", "Relative joint angle", "rad"),
+        ArgumentSpec("speed_rad_s", "number", "Optional joint speed", "rad/s",
+                     required=False),
+        ArgumentSpec("acceleration_rad_s2", "number", "Optional joint acceleration",
+                     "rad/s^2", required=False),
+    )),
     ActionSpec("move_linear", "Move to a validated absolute model TCP pose", "motion", (
         _triplet("target_xyz_mm", "mm", "Model TCP position"),
         _triplet("target_rpy_deg", "deg", "Target roll, pitch and yaw"),
@@ -213,6 +224,13 @@ class CapabilityRegistry:
         if name == "move_joints":
             return arm.move_joints(
                 args["positions_rad"],
+                speed=args["speed_rad_s"],
+                acceleration=args["acceleration_rad_s2"],
+            )
+        if name == "jog_joint":
+            return arm.move_joints(
+                {str(args["joint"]): float(args["delta_rad"])},
+                relative=True,
                 speed=args["speed_rad_s"],
                 acceleration=args["acceleration_rad_s2"],
             )
