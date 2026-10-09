@@ -8,7 +8,7 @@ Importing or inspecting the registry never opens hardware.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from math import pi
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Mapping
@@ -94,7 +94,9 @@ class ActionSpec:
             elif arg.required:
                 raise ValueError(f"missing required argument: {arg.name}")
             else:
-                validated[arg.name] = arg.validate(arg.default)
+                validated[arg.name] = (
+                    None if arg.default is None else arg.validate(arg.default)
+                )
         return validated
 
     def describe(self) -> dict[str, object]:
@@ -133,9 +135,10 @@ _SPECS = (
                )),
     ActionSpec("move_joints", "Move all five absolute pose joints in radians", "motion", (
         ArgumentSpec("positions_rad", "numbers", "Five pose joint angles", "rad", length=5),
-        _number("speed_rad_s", "rad/s", "Requested joint speed; zero means SDK default", 0.0),
-        _number("acceleration_rad_s2", "rad/s^2",
-                "Requested joint acceleration; zero means SDK default", 0.0),
+        ArgumentSpec("speed_rad_s", "number", "Optional joint speed", "rad/s",
+                     required=False),
+        ArgumentSpec("acceleration_rad_s2", "number", "Optional joint acceleration",
+                     "rad/s^2", required=False),
     )),
     ActionSpec("move_linear", "Move to a validated absolute model TCP pose", "motion", (
         _triplet("target_xyz_mm", "mm", "Model TCP position"),
@@ -208,12 +211,10 @@ class CapabilityRegistry:
                 acceleration=float(args["acceleration_mm_s2"]) / 1000.0,
             )
         if name == "move_joints":
-            speed = float(args["speed_rad_s"])
-            accel = float(args["acceleration_rad_s2"])
             return arm.move_joints(
                 args["positions_rad"],
-                speed=None if speed == 0 else speed,
-                acceleration=None if accel == 0 else accel,
+                speed=args["speed_rad_s"],
+                acceleration=args["acceleration_rad_s2"],
             )
         if name == "jog_cartesian":
             from soarm101_motion.control import jog_linear_cli_units
