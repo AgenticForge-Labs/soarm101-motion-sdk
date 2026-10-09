@@ -151,7 +151,25 @@ class SDKAgentExecutor:
             # Reuse the legacy pure projection until wrapper retirement in PR 3.
             from soarm101_motion.cli.main import _agent_capabilities_payload
 
-            return _agent_capabilities_payload(self.robot_id, config=self.config)
+            result = _agent_capabilities_payload(self.robot_id, config=self.config)
+            # This opt-in preview must not advertise physical authority or
+            # motion/camera tools that its HTTP boundary explicitly denies.
+            result["actions"] = {"state": "read_only"}
+            result["poses"] = []
+            result["cameras"] = []
+            result["world_directions"] = {
+                "available": False,
+                "reason": "simulation preview has no measured physical directions",
+            }
+            result["authority"] = {
+                "armed": False,
+                "robot_id": None,
+                "calibration_id": None,
+                "issued_at": None,
+                "expires_at": None,
+                "remaining_seconds": 0.0,
+            }
+            return result
         if action == "capture":
             name = self._text(request, "camera")
             if name not in AGENT_CAMERA_NAMES:
@@ -195,7 +213,11 @@ class SDKAgentExecutor:
                 except Exception as exc:
                     error = str(exc)
             return {
-                "authority": self._authority.status(),
+                "authority": {
+                    "armed": False, "robot_id": None,
+                    "calibration_id": None, "issued_at": None,
+                    "expires_at": None, "remaining_seconds": 0.0,
+                },
                 "robot_id": self.robot_id,
                 "calibration_id": calibration_id,
                 **state,
