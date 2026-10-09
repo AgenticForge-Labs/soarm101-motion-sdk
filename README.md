@@ -1,5 +1,18 @@
 # SO-ARM101 Motion SDK
 
+## PR #88 preview: direct SDK read-only broker session
+
+The production broker continues to use the existing bounded agent CLI
+subprocesses. A new opt-in `soarm101-broker --sdk-simulation-preview`
+mode exercises a persistent simulated SDK session for authenticated
+`GET /v1/state` and `GET /v1/capabilities`, but **all POST routes
+fail closed**. This mode opens no physical serial connection and cannot
+activate real motors. Do not confuse this with completed broker migration
+or verified real-arm STOP; the work remains in open PR #88 until additional
+safety tests and supervised physical validation.
+
+
+
 ## One-command PR #87 checkout and simulation validation
 
 From an Ubuntu/Linux terminal, run this **single copy-and-paste line**:
