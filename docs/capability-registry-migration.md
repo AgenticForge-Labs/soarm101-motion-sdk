@@ -1,11 +1,15 @@
-# Shared SDK capability registry migration (design only)
+# Shared SDK capability registry and broker migration
 
-**Status:** PR #86 merged; PR #87 implements the first, typed SDK registry
-phase, with Python 3.10 and 3.12 CI green (586 tests). Verify the GitHub
-PR state before treating PR #87 as merged into `main`. PRs 2 and 3 are
-still design-only. The checked-in broker remains a subprocess client of
-the bounded `soarm101 agent` CLI until a separately reviewed broker
-migration passes its own safety and physical validation gates.
+**Status:** PR #86 and registry/ordinary-CLI PR #87 are merged into
+`main` (registry merge `e941e2686d2fd87569cdf1e91d6e508b228787ee`).
+PR #88 is an open **draft**, not on `main`. It stages a persistent SDK
+session through an opt-in **read-only simulation** broker and internal
+fake/simulation HTTP tests for profile enforcement, concurrent STOP,
+queued-request invalidation, lease revocation and camera evidence.
+The deployed broker **still invokes the bounded `soarm101 agent` CLI**.
+Physical device exclusivity, bus-level interruptibility, calibrated motion
+and supervised STOP/2 mm trace validation remain merge blockers.
+Dependent PR 3 (retiring agent-only wrappers) is not started.
 
 ## Purpose and ownership
 
