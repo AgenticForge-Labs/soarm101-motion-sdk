@@ -4,7 +4,8 @@
 
 `sdk_capabilities.py` introduces pure action metadata and explicit,
 validated SDK dispatch, presently covering read, IK, direct joint/Cartesian
-move, jog, gripper and STOP. It adds no alternate motion controller, implicit
+move, jog, gripper and STOP, with read-only saved-pose listing, hardware
+state and effort diagnostics. It adds no alternate motion controller, implicit
 motor enable, operator bypass, or new remote route. Selected human CLI
 commands adapt to this shared surface. The broker **still shells out to the
 bounded agent CLI**; its existing authenticated dispatch, profiles, authority,
