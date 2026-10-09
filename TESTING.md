@@ -46,10 +46,13 @@ existing human CLI confirmation and JSON response parity, no automatic
 torque enable, and retention of SDK dynamic safety guards.
 
 This PR intentionally does not migrate broker subprocess execution.
-Read-only saved-pose listing, hardware-state and effort-status dispatch now
-have focused coverage. Saved pose capture/replay, camera operations and
-operator-only administration still need separate parity checks before
-calling PR 1 complete.
+Saved-pose listing/capture/replay, camera-profile readout and named-camera
+capture have focused fake/simulation regression coverage. Verify pose
+calibration provenance is checked before torque activation and again before
+motion; camera capture must retain saved profile settings, device overrides,
+output paths and --all semantics. Operator-only administration, serial
+calibration, trajectories/sequences, and physical motion are not migrated or
+validated by this PR.
 Physical motion testing is not needed for pure registry introspection;
 do not interpret simulation or fake arms as real-hardware validation.
 
