@@ -1,5 +1,15 @@
 # Changelog
 
+- PR #88 work in progress: introduce a strictly typed persistent SDK broker
+  executor with a lazy simulated session and an opt-in **read-only**
+  `soarm101-broker --sdk-simulation-preview` mode. Existing production
+  broker/agent CLI execution remains unchanged. All preview POST endpoints
+  are forbidden; no physical port opens or torque enables. New session,
+  authority, profile and fake interrupt tests do not establish real-arm
+  STOP safety or physical Cartesian validity.
+
+
+
 - Extend PR 1 registry to saved-pose capture and provenance-checked joint/linear
   replay, named-camera still capture with trusted caller settings, and persisted
   camera profiles. Ordinary CLI continues to own confirmation and torque
