@@ -1,5 +1,28 @@
 # Agent robot broker
 
+## PR 2 experimental read-only SDK session
+
+The normal broker still invokes the bounded agent CLI; do not deploy the
+SDK preview as a physical-motion service.
+
+For safe, local simulated inspection only (requires a broker token):
+```bash
+SOARM101_BROKER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(24))')" \
+  soarm101-broker --sdk-simulation-preview --host 127.0.0.1 --port 8765
+```
+
+This mode creates one simulated SDK session lazily and supports only the
+authenticated health, profile, state and capabilities GET endpoints. It
+rejects every POST, including STOP and all movement/camera actions; no serial
+port is opened and no torque is enabled. It exists to validate the
+persistent-session/transport approach while direct physical hardware STOP,
+cross-process ownership, lease/preflight checks and trusted camera evidence
+are implemented/tested behind separate safety gates in **the same PR #88**.
+The standard broker behavior remains unchanged until a supervised
+physical validation and merge.
+
+
+
 MCP-capable local agents can optionally use the stdio adapter described in
 [agent-mcp.md](agent-mcp.md). MCP is another client of these routes, not a
 second motion or authorization implementation.
