@@ -22,6 +22,8 @@ operation still uses the existing bounded agent CLI subprocesses by default.
 The preview intentionally does not authorize real hardware; tests of the
 session adapter do not establish STOP interruptibility at the physical bus,
 cross-process exclusivity, calibrated jog safety, or live reliability.
+The internal fake-capture tests also verify image hashing, response
+redaction and failure evidence without opening a camera device.
 
 **PR 2 merge blockers:** before replacing the production broker, complete
 profile/lease enforcement at execution, direct SDK HTTP motion and evidence
