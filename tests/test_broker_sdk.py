@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import threading
+import urllib.error
+import urllib.request
 from types import SimpleNamespace
 
 import pytest
 
 from soarm101_motion.agent_control import AgentAuthorityStore
-from soarm101_motion.broker import AgentMotionRates, RobotBrokerService, build_parser
+from soarm101_motion.broker import (
+    AgentMotionRates, RobotBrokerHTTPServer, RobotBrokerService, build_parser,
+)
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile
 from soarm101_motion.config import SOARM101Config
@@ -325,3 +330,196 @@ def test_preview_sdk_disconnect_error_is_audited_not_http_success(
     assert len(records) == 1
     assert records[0]["ok"] is False
     assert records[0]["profile_sha256"] == profile.public()["sha256"]
+
+
+
+def test_simulated_native_posts_reject_real_executor_and_default_preview(native, tmp_path) -> None:
+    executor, _ = native
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "limited-simulation",
+        "tools": ["robot_state", "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 0.5},
+    })
+    with pytest.raises(ValueError, match="explicitly simulated"):
+        RobotBrokerService(
+            executor=None, token="secret", profile=profile,
+            allow_simulated_sdk_posts=True,
+        )
+    service = RobotBrokerService(
+        executor=executor, token="secret", profile=profile,
+        event_path=tmp_path / "events.jsonl",
+    )
+    denied = service.dispatch(
+        "POST", "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 0.1},
+    )
+    assert denied.status == 403
+    assert executor._session is None
+
+
+def test_simulated_http_stop_interrupts_active_native_motion_and_preserves_evidence(
+    tmp_path,
+) -> None:
+    """Real HTTP concurrency with a fake arm; no Feetech hardware or physical safety claim."""
+    started = threading.Event()
+    cancelled = threading.Event()
+    config = SOARM101Config(robot_id="so101")
+    auth = AgentAuthorityStore(tmp_path / "human-lease.json")
+    auth.issue(robot_id="so101", calibration_id="simulation", minutes=1)
+
+    class FakeArm:
+        calibration_id = None
+
+        def __init__(self):
+            self.config = config
+            self.torque_enabled = False
+            self.enabled_calls = 0
+
+        def connect(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+        def get_joint_positions(self):
+            return SimpleNamespace(positions={"shoulder_pan": 0.0})
+
+        def get_state(self):
+            return SimpleNamespace(torque_enabled=self.torque_enabled)
+
+        def enable(self):
+            self.enabled_calls += 1
+            self.torque_enabled = True
+
+        def move_joints(self, positions, *, relative, speed, acceleration):
+            assert relative and list(positions) == ["shoulder_pan"]
+            started.set()
+            if not cancelled.wait(timeout=4):
+                raise RuntimeError("STOP did not interrupt active movement")
+            return SimpleNamespace(
+                accepted=True, completed=False, message="cancelled by STOP"
+            )
+
+        def hold(self):
+            pass
+
+        def stop(self):
+            cancelled.set()
+
+    arm = FakeArm()
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(), simulation=True,
+        authority_store=auth, arm_factory=lambda: arm,
+    )
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "interruptible-fake",
+        "tools": ["robot_health", "robot_state", "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 0.5},
+    })
+    events_path = tmp_path / "events.jsonl"
+    service = RobotBrokerService(
+        executor=executor, token="local-token", profile=profile,
+        allow_simulated_sdk_posts=True, event_path=events_path,
+    )
+    server = RobotBrokerHTTPServer(("127.0.0.1", 0), service)
+    http_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    http_thread.start()
+    root = f"http://127.0.0.1:{server.server_address[1]}"
+    joint_reply = []
+
+    def post(path, payload, *, authorized=True):
+        headers = {"Content-Type": "application/json"}
+        if authorized:
+            headers["Authorization"] = "Bearer local-token"
+        request = urllib.request.Request(
+            root + path,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=4) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def joint_worker():
+        try:
+            joint_reply.append(post(
+                "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 0.1},
+            ))
+        except Exception as exc:
+            joint_reply.append(exc)
+
+    moving = threading.Thread(target=joint_worker)
+    try:
+        moving.start()
+        assert started.wait(timeout=3)
+        # Authentication and pinned profile checks still precede out-of-band STOP.
+        code, body = post("/v1/stop", {}, authorized=False)
+        assert code == 401 and body["ok"] is False
+        assert not cancelled.is_set()
+        code, body = post(
+            "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 1.0},
+        )
+        assert code == 403 and body["ok"] is False
+        assert not cancelled.is_set()
+        code, body = post("/v1/stop", {})
+        assert code == 200 and body["ok"] is True
+        assert body["result"]["holding"] is True
+        assert cancelled.is_set()
+        moving.join(timeout=3)
+        assert not moving.is_alive()
+        assert len(joint_reply) == 1
+        assert joint_reply[0][0] == 409
+        assert joint_reply[0][1]["ok"] is False
+        assert arm.enabled_calls == 1
+        events = [
+            json.loads(row) for row in events_path.read_text().splitlines()
+        ]
+        statuses = {(row["action"], row["ok"]) for row in events}
+        assert ("joint", False) in statuses
+        assert ("stop", True) in statuses
+        assert ("profile_rejection", False) in statuses
+        assert len({row["profile_sha256"] for row in events}) == 1
+        assert events[0]["profile_sha256"] == profile.public()["sha256"]
+        assert all(row["request_id"] for row in events)
+    finally:
+        cancelled.set()
+        moving.join(timeout=3)
+        server.shutdown()
+        server.server_close()
+        http_thread.join(timeout=3)
+        executor.close()
+
+
+def test_simulated_native_stop_failure_is_audited_and_never_claims_completion(
+    native, tmp_path, monkeypatch,
+) -> None:
+    executor, _ = native
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "stop-failure",
+        "tools": ["robot_state", "stop"],
+        "cameras": [], "limits": {},
+    })
+    service = RobotBrokerService(
+        executor=executor, token="secret", profile=profile,
+        allow_simulated_sdk_posts=True,
+        event_path=tmp_path / "events.jsonl",
+    )
+    service.dispatch("GET", "/v1/state")
+
+    def fail_hold(*args, **kwargs):
+        raise RuntimeError("HOLD failed")
+
+    monkeypatch.setattr(executor._session, "stop", fail_hold)
+    result = service.dispatch("POST", "/v1/stop", {})
+    assert result.status == 409
+    assert result.body["ok"] is False
+    assert "HOLD failed" in result.body["error"]
+    entries = [
+        json.loads(row)
+        for row in (tmp_path / "events.jsonl").read_text().splitlines()
+    ]
+    assert entries[-1]["action"] == "stop"
+    assert entries[-1]["ok"] is False
+    assert entries[-1]["result"] == {}
