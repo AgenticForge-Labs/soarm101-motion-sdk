@@ -9,8 +9,11 @@ and rejects **every POST action**; it creates a SimulationBackend, not a
 physical Feetech/serial connection. The unflagged production broker still
 uses the existing bounded `soarm101 agent` subprocess path and its profile,
 authority and motion checks unchanged. The new executor also includes
-prototype motion adapters for test construction, but production HTTP does
-not dispatch them. This is neither a released robot-control migration nor
+prototype motion adapters. An explicitly simulated programmatic test-only
+broker setting can exercise these through the real HTTP handler for
+concurrency and STOP regression tests, with profile/lease enforcement.
+No command-line option exposes that mode; public preview and production
+HTTP continue to reject direct-SDK motion. This is neither a released robot-control migration nor
 hardware-validated STOP, calibrated-jog, or device exclusivity.
 
 The eventual production path must preserve the same MCP/robotctl API, per-run
