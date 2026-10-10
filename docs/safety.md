@@ -162,6 +162,19 @@ trajectories.
 
 ## Runtime safeguards
 
+A gripper `[ServoStatus] Overload` report is a servo-status failure,
+not necessarily a current-measurement sample. Do not ignore the status just
+because the external fingers appear unobstructed. If a motor's status
+prevents reading its current encoder position, STOP/HOLD now still requests
+a hold for other independently readable motors and raises an explicit
+incomplete-HOLD error. It never guesses a goal for the unreadable servo,
+never clears a servo protection bit, and never reports full success.
+A failed motion's original exception is preserved when cleanup also fails.
+For a joint-only saved-pose quality study, run `examples/motion_quality_trace.py`
+with `--joint-only` to preserve default joint-space Sleep arm movement but
+not command the post-fold gripper close. The default Sleep operation still
+closes the stock gripper unless explicitly opted out.
+
 A successful physical `soarm101 pose go` is intentionally a **park/hold** operation:
 the CLI closes its serial session without disabling servo torque so the follower remains
 at the reached pose. Closing the terminal or returning to the shell is therefore not a
