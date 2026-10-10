@@ -199,3 +199,53 @@ def test_shutdown_rejects_queued_requests_while_first_action_finishes(
     assert len(completed) == 1
     assert sdk.session_evidence["lifecycle"] == "closed"
     assert arm.disconnect_calls == 1
+
+
+def test_stop_can_reach_owned_arm_while_close_waits_for_active_action(
+    tmp_path, monkeypatch,
+) -> None:
+    arm = FakeConnectedArm(SOARM101Config(robot_id="so101"))
+    sdk, _ = make_executor(tmp_path, arm)
+    sdk._arm()
+    entered = threading.Event()
+    released = threading.Event()
+    motion_error = []
+
+    def simulated_action(action, request):
+        entered.set()
+        if not released.wait(timeout=3):
+            raise RuntimeError("simulated move did not release")
+        return {"state": "done"}
+
+    original = sdk._execute_action
+    monkeypatch.setattr(sdk, "_execute_action", simulated_action)
+
+    def moving():
+        try:
+            sdk.execute("state", {})
+        except Exception as exc:
+            motion_error.append(exc)
+
+    t = threading.Thread(target=moving)
+    t.start()
+    assert entered.wait(timeout=2)
+    closing = threading.Thread(target=sdk.close)
+    closing.start()
+    try:
+        for _ in range(200):
+            if sdk.session_evidence["lifecycle"] == "closing":
+                break
+            time.sleep(0.005)
+        assert sdk.session_evidence["lifecycle"] == "closing"
+        # Restore canonical STOP dispatch, which does not acquire the long
+        # ordinary-action lock. This must work even after closing begins.
+        monkeypatch.setattr(sdk, "_execute_action", original)
+        assert sdk.execute("stop", {})["completed"] is True
+        assert arm.stop_calls == 1
+    finally:
+        released.set()
+        t.join(timeout=3)
+        closing.join(timeout=3)
+    assert not motion_error
+    assert not closing.is_alive() and not t.is_alive()
+    assert sdk.session_evidence["lifecycle"] == "closed"
