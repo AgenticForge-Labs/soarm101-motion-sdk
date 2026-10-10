@@ -210,7 +210,14 @@ class SDKAgentExecutor:
         def run() -> dict[str, object]:
             trace = self._trace
             if trace is not None:
-                trace.mark("broker_action_start", action=action)
+                trace.mark(
+                    "broker_action_start", action=action,
+                    pose_name=request.get("name"), joint_only=request.get("joint_only"),
+                    speed_deg_s=request.get("speed_deg_s", self.rates.joint_speed_deg_s),
+                    acceleration_deg_s2=request.get(
+                        "acceleration_deg_s2", self.rates.joint_acceleration_deg_s2
+                    ),
+                )
             try:
                 result = self._execute_action(action, request)
             except BaseException as exc:
