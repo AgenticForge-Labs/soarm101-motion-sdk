@@ -34,6 +34,18 @@ image/provider and direct harness argv; it does not define robot behavior.
 
 ## Native MCP agent interface (PR 4)
 
+If the read-only MCP run reports an **isolated MCP tool handshake** failure,
+inspect the returned subprocess exit code and redacted stdout/stderr before
+repeating the run. The doctor command checks image existence, not the MCP
+runtime's import or broker connectivity. A missing MCP Python interpreter or
+module can indicate an image built before MCP support: run
+`soarm101 agent sandbox setup --agent codex --auth installed` (or the analogous
+Hermes setup), then retry with a **new** output directory. If the error instead
+indicates rejected broker access, inspect the generated
+`openshell-effective-policy.yaml` and broker profile rather than bypassing
+OpenShell restrictions. MCP preflight never grants motion authority.
+
+
 The built-in Hermes and Codex agents now support an **opt-in** MCP interface.
 The default `robotctl` mode remains the original comparison baseline.
 The MCP subprocess runs inside the *same* OpenShell sandbox and calls the
