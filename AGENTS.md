@@ -33,6 +33,13 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+For the bundled Codex/Hermes MCP interface, OpenShell's filesystem Landlock
+rules must include read-only access to the SDK's fixed client-only
+`/opt/soarm101-mcp` virtualenv (Python reads `pyvenv.cfg` and site-packages).
+Network `binaries` permission alone does **not** grant this. Do not grant
+write access, blanket `/opt` access, or SDK/hardware access to fix an MCP
+bootstrap error; non-MCP `robotctl` sandboxes remain unaffected.
+
 In PR #88 the broker has an explicitly opted-in, simulated **read-only**
 native SDK session. Its production default remains the existing bounded
 agent CLI executor. Do not enable a real-arm direct SDK session, open robot
