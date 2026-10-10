@@ -1,5 +1,24 @@
 # Testing
 
+## 2026-10-10 OpenShell/MCP broker 409 preflight regression (PR #88)
+
+Observed physical-workstation error before Codex started:
+`broker HTTP 409: default_joint_speed must not exceed its configured maximum
+0.13962634015954636`. The operator-pinned 8 deg/s broker ceiling was
+correctly propagated into the bounded CLI, but the CLI still constructed
+`SOARM101Config` with the faster ordinary default of 0.45 rad/s. The 25 deg/s^2
+joint acceleration, 10 mm/s Cartesian speed, and 40 mm/s^2 Cartesian acceleration
+ceilings created analogous contradictions.
+
+The CLI converts explicit absolute caps to SI and lowers only the corresponding
+*internal defaults* where necessary. Tests exercise the actual read-only
+`agent capabilities` CLI path with low caps and inspect the parsed simulated
+`agent state` session configuration without connecting to any serial device:
+`pytest -q --no-cov tests/test_cli.py tests/test_broker.py tests/test_agent_sandbox.py`.
+This fixes preflight configuration; real OpenShell provider, camera, MCP tool,
+and physical motion behavior still require separate local validation.
+
+
 ## 2026-10-10 physical broker 15/150 precision regression
 
 User's first physical persistent-broker route failed *before opening hardware*
