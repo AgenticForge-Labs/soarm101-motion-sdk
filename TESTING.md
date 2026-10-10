@@ -1,5 +1,34 @@
 # Testing
 
+## PR #89 simulated ownership and lifecycle regression
+
+Test on the exact PR #89 commit without connecting a real arm:
+
+```bash
+ruff check .
+python -m pytest --no-cov -q \
+  tests/test_broker_session_lifecycle.py \
+  tests/test_broker_sdk.py tests/test_feetech_backend.py
+python -m pytest --no-cov -q
+```
+
+The lifecycle suite uses a fake connected arm: verify at most one connect,
+closed/faulted terminal states, hardware-failure lease revocation,
+calibration-identity mismatch, STOP on a preexisting faulted/closing session,
+shutdown waiting for active ordinary commands, and no ghost resumption.
+Feetech tests use the safe `/dev/null` character-device lock to verify
+that a partially opened port is closed before the advisory lock is
+released, including a secondary cleanup error. They **never** instantiate
+a real SO-ARM101 or command hardware.
+
+The human must separately validate that the current GUI, CLI and broker
+cannot simultaneously acquire the real follower, that failed initialization
+releases ownership, and that no motion resumes after reconnect. Preserve
+console logs, exact SHA, calibration and tty identity. This is not permission
+for automated hardware fault injection. Active-motion STOP/HOLD, native
+camera and a measured 2 mm Cartesian trial remain separate PR gates.
+
+
 ## 2026-10-10 OpenShell/MCP broker 409 preflight regression (PR #88)
 
 Observed physical-workstation error before Codex started:
