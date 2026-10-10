@@ -37,8 +37,9 @@ class FakeArm:
         self.calls.append(("ik", orientation_mode))
         return "solved"
 
-    def gripper_move(self, position):
+    def gripper_move(self, position, *, speed_raw=None, acceleration_raw=None):
         self.calls.append(("gripper", position))
+        self.last_gripper_rates = (speed_raw, acceleration_raw)
         return "gripper complete"
 
     def require_artifact_calibration(self, provenance, *, artifact_label):
@@ -479,3 +480,16 @@ def test_registry_saved_pose_linear_replay_retains_gripper_then_hold_order(
     assert target.xyz_rpy()[:3] == pytest.approx([0.1, 0.1, 0.2])
     assert options["speed"] == pytest.approx(0.005)
     assert options["acceleration"] == pytest.approx(0.020)
+
+
+def test_registry_forwards_explicit_gripper_pacing_to_sdk() -> None:
+    arm = FakeArm()
+    assert SDK_CAPABILITIES.dispatch("move_gripper", arm, {
+        "position": 0.35, "gripper_speed_raw": 100, "gripper_acceleration_raw": 10,
+    }) == "gripper complete"
+    assert arm.last_gripper_rates == (100, 10)
+    for bad in (0, 3401, -1, 4.5, float("inf")):
+        with pytest.raises(ValueError):
+            SDK_CAPABILITIES.dispatch("move_gripper", arm, {
+                "position": 0.35, "gripper_speed_raw": bad,
+            })
