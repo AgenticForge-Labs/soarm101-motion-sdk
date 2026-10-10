@@ -338,6 +338,12 @@ def broker_policy_text(
         "  read_only:",
     ]
     lines.extend(f"    - {path}" for path in adapter.read_only_paths)
+    if interface == "mcp":
+        # Network binary permission only authorizes executing the interpreter.
+        # Landlock also needs read access to its pyvenv.cfg and site-packages;
+        # otherwise Python fails before the MCP server can even initialize.
+        # Scope this to the fixed SDK-owned client-only venv in MCP runs.
+        lines.append("    - /opt/soarm101-mcp")
     lines.extend(
         (
             "  read_write:",
