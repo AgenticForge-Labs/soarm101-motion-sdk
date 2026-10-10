@@ -715,8 +715,24 @@ class FeetechBackend(SO101HardwareBackend):
         with self._io_lock:
             if not self._torque_enabled or not self._connected:
                 return
-            raw_positions = {name: self.read_raw_position(name) for name in ALL_MOTORS}
-            self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
+            raw_positions: dict[str, int] = {}
+            failures: list[str] = []
+            for name in ALL_MOTORS:
+                try:
+                    raw_positions[name] = self.read_raw_position(name)
+                except CommunicationError as exc:
+                    failures.append(f"{name}: {exc}")
+
+            # A servo status fault can make its own position unreadable.
+            # Still request HOLD for each independently readable actuator.
+            # Never substitute a stale position or claim full STOP success.
+            if raw_positions:
+                self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
+            if failures:
+                raise CommunicationError(
+                    "STOP/HOLD incomplete; unable to read " + "; ".join(failures)
+                    + f"; HOLD requested for {len(raw_positions)} readable motors"
+                )
 
     def get_hardware_state(self) -> HardwareState:
         with self._io_lock:
