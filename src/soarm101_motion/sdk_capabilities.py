@@ -123,8 +123,9 @@ def _number(name: str, unit: str, description: str, default: float) -> ArgumentS
 
 def _checked_gripper_raw(value: object, name: str, maximum: int) -> int:
     """Servo register limits: reject float coercion and 0=max-speed sentinel."""
-    if isinstance(value, bool) or float(value) != int(value):
-        raise ValueError(f"gripper {name} must be a whole number")
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(float(value)) or int(value) != value):
+        raise ValueError(f"gripper {name} must be a finite whole number")
     raw = int(value)
     if not 1 <= raw <= maximum:
         raise ValueError(f"gripper {name} must be in [1, {maximum}]")
