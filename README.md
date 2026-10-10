@@ -1,5 +1,34 @@
 # SO-ARM101 Motion SDK
 
+## Uniform operator motion policy (PR #88 — unmerged)
+
+For a trusted broker or an OpenShell sandbox run, the human now sets
+agent motion speed and acceleration ceilings. Joint rates in deg/s and
+deg/s² apply to **all** broker joint movement: `go_pose`,
+`jog_joint`, `sleep` and `sleep_up`, rather than only jogs.
+Cartesian translation has separate mm/s and mm/s² bounds; the stock
+gripper has separate Feetech raw pacing bounds, including the gripper
+portion of poses and Sleep. Each MCP/robotctl action can choose a lower
+speed or acceleration, never a higher one.
+
+Example for a *candidate* supervised profile (not yet agent-hardware-validated):
+
+```bash
+soarm101 agent sandbox run \
+  --agent codex --auth installed --interface mcp \
+  --capability-profile docs/examples/mcp-profile-supervised-manipulation.json \
+  --agent-joint-speed-deg-s 15 \
+  --agent-joint-acceleration-deg-s2 150 \
+  --task /path/to/operator-reviewed-task.md \
+  --output runs/agent-supervised-example
+```
+
+This changes trusted broker policy only; no profile can bypass human
+arming, saved calibration checks, joint/workspace limits, effort/fault
+guards or STOP/HOLD. The persistent native-SDK broker remains
+simulation/read-only only. See [broker rates](docs/agent-broker.md).
+
+
 ## One-command software validation for PR #88
 
 On Ubuntu/Linux, copy and paste:
