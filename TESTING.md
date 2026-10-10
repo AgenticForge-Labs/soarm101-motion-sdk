@@ -1,5 +1,24 @@
 # Testing
 
+## Gripper overload and joint-only Sleep regression (PR #88)
+
+The 2026-10-10 local supervised route failed with `[ServoStatus] Overload`
+reported by `so101_gripper`. A status bit from the servo is not evidence
+of current joint load or a verified mechanical jam. The backend must **fail
+closed** for motion and report the servo status, but STOP/HOLD must attempt
+a live-position latch on every independently readable motor even if the tool
+motor is unreadable. Incomplete HOLD must not be reported as success.
+
+Run `python -m pytest --no-cov -q tests/test_feetech_backend.py tests/test_poses.py`
+and the complete test suite. The joint-only experiment path is
+`python examples/motion_quality_trace.py --joint-only ...`; it must
+retain the default five-leg Sleep/Overhead/Left/Right/Sleep trajectory,
+normal servo/fault checks, telemetry, and first-failure reporting, but
+avoid the separately commanded Sleep gripper close. The default
+`move_sleep()` behavior is unchanged. Before a physical retest,
+inspect the gripper status bit and existing trace, and determine whether
+the fault is still active. This is pending workstation/hardware validation.
+
 ## Sleep executable endpoint regression (PR #88)
 
 Run `uv run pytest --no-cov tests/test_poses.py` plus the complete suite.
