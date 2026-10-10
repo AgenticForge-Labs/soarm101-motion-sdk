@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -46,6 +47,9 @@ from soarm101_motion.safety import (
 from soarm101_motion.tools import RobotTool, SO101Gripper
 from soarm101_motion.trajectories import Trajectory
 from soarm101_motion.types import HardwareState, IKResult, JointState, MotionResult, Pose
+
+
+logger = logging.getLogger(__name__)
 
 
 class SOARM101:
@@ -119,7 +123,14 @@ class SOARM101:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        self.disconnect()
+        try:
+            self.disconnect()
+        except Exception:
+            if exc is None:
+                raise
+            # Preserve the first motion failure instead of replacing it with
+            # a second failure while attempting STOP/HOLD during cleanup.
+            logger.exception("secondary SO-ARM101 cleanup failure")
 
     @property
     def is_connected(self) -> bool:
@@ -306,9 +317,18 @@ class SOARM101:
             raise RobotConnectionError("failed to connect to SO-ARM101") from exc
 
     def disconnect(self) -> None:
-        self.motion.stop(wait=True)
-        self._stop_tool(wait=True)
-        self.backend.disconnect()
+        errors: list[Exception] = []
+        for action in (
+            lambda: self.motion.stop(wait=True),
+            lambda: self._stop_tool(wait=True),
+            self.backend.disconnect,
+        ):
+            try:
+                action()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     def enable(self) -> None:
         """Latch present positions and enable torque without executing stale goals."""
