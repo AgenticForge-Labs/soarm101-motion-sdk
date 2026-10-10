@@ -33,6 +33,19 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+Broker motion pacing has one operator-owned source of truth:
+`AgentMotionRates` passed into the trusted broker at startup. Joint
+rate ceilings must reach **all** agent joint-space actions
+(`go_pose`, `jog_joint`, `sleep`, `sleep_up`);
+Cartesian jogs retain distinct mm/s units and embedded gripper moves
+retain distinct Feetech raw pacing. Clients may request slower
+parameters, not widen the broker's immutable bounds. The broker must
+validate before hardware interaction and inject SDK motion ceilings
+into bounded CLI subprocesses. Keep the direct-SDK simulated preview
+in parity without enabling physical sessions. Do not add agent-side
+speed authority or alternate saved-pose execution paths.
+
+
 For joint-only characterization, use the canonical Sleep primitive with
 `close_gripper=False` via the opt-in test flag; do not approximate Sleep by
 unvalidated external servo goals or disable the motor effort/status guards.
