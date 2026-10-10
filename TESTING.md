@@ -12,6 +12,15 @@ must not invoke actual hardware motion. A Feetech control-bit reply warning
 with verified readback is a separate communication diagnostic, not evidence
 of a joint-limit failure.
 
+## Isolated MCP preflight diagnostics
+
+Run `python -m pytest --no-cov -q tests/test_agent_sandbox.py` and check
+that a failing mocked MCP preflight reports exit status and bounded stdout/stderr
+with the per-run broker token redacted. A nonzero probe exit or missing readiness
+marker must fail before the agent subprocess is launched. The real Codex image
+and OpenShell host policy still require separate local validation; `sandbox doctor`
+checking image existence does not prove MCP dependencies are present.
+
 ## One-command software validation for PR #88
 
 On Ubuntu/Linux, copy and paste:
