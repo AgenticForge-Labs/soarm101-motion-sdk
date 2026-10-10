@@ -73,7 +73,9 @@ does not authorize agent/OpenShell motion or the general physical SDK broker.
 Production continues with the existing bounded CLI. The open merge
 gates remain physical STOP/HOLD, device exclusivity, fault recovery,
 camera/trace parity, and supervised calibrated Cartesian movement.
-Keep hardware revisions and test results on this PR.
+Retain the operator's trace evidence on merged #88. Additional physical
+safety qualification belongs to subsequent PRs and must be attached to those
+reviews rather than presented as already released behavior.
 
 ## Milestone B integration sequence (#88 merged; #89 in progress)
 
@@ -81,8 +83,8 @@ GitHub `main` is authoritative. Do not create a dependent branch until the
 preceding PR is merged. Preserve the extensive #88 staged work rather than
 starting a competing SDK executor.
 
-1. **PR #88 — staged SDK/broker foundation (current draft):** merge only after
-   full software CI and local read-only OpenShell/MCP preflight pass. Production
+1. **PR #88 — staged SDK/broker foundation (merged):** complete software
+   CI and local read-only OpenShell/MCP preflight passed. Production
    still uses the bounded CLI subprocess broker; the public SDK preview is
    read-only simulation. The operator-only physical route requires a terminal,
    human arming, explicit RUN confirmation and a separate narrow loopback profile.
