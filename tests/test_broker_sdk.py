@@ -878,6 +878,7 @@ def test_physical_broker_trace_requires_operator_tty_and_has_no_yes_bypass(
     """No connected robot, no broker, and no output file from unattended launch."""
     import importlib.util
     import io
+    from pathlib import Path
 
     script = Path(__file__).resolve().parents[1] / "examples" / "persistent_broker_motion_trace.py"
     spec = importlib.util.spec_from_file_location("physical_broker_trace_test", script)
