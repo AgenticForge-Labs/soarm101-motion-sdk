@@ -1,5 +1,21 @@
 # Safety
 
+## PR #89 broker lifecycle guard (staged, unmerged)
+
+The native SDK broker's lifecycle is terminal on close or qualifying
+transport/hardware fault. It must not silently create a new SDK connection,
+resume a queued action, or reuse a physical authorization lease after a
+transport/calibration failure. A connected session may still accept STOP
+while shutdown is waiting for ordinary motion; no STOP action may acquire
+new hardware. Closing a physical trial also revokes its lease.
+
+This guard is **not** a verified physical emergency-stop system and does
+not enable the standard broker to use native physical sessions. Keep the
+hardware power cutoff reachable. Test a second GUI/CLI/SDK instance only
+with an unloaded, physically supervised arm; legacy programs may not
+honor the cooperative lock. A failed software HOLD must remain observable.
+
+
 
 ## Operator-only passive jog tracing
 
