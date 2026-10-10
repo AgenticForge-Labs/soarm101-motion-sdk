@@ -112,26 +112,50 @@ def build_parser() -> argparse.ArgumentParser:
     pose = sub.add_parser("go-pose")
     pose.add_argument("name")
 
+    def optional_rates(command, *, joint=False, cartesian=False, gripper=False):
+        if joint:
+            command.add_argument("--speed-deg-s", type=float)
+            command.add_argument("--acceleration-deg-s2", type=float)
+        if cartesian:
+            command.add_argument("--speed-mm-s", type=float)
+            command.add_argument("--acceleration-mm-s2", type=float)
+        if gripper:
+            command.add_argument("--gripper-speed-raw", type=int)
+            command.add_argument("--gripper-acceleration-raw", type=int)
+
+    optional_rates(pose, joint=True, gripper=True)
     joint = sub.add_parser("joint")
     joint.add_argument(
         "joint",
         choices=("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"),
     )
     joint.add_argument("--delta-deg", type=float, required=True)
+    optional_rates(joint, joint=True)
 
     jog = sub.add_parser("jog")
     jog.add_argument("--frame", choices=("world", "tool"), default="world")
     jog.add_argument("--x-mm", type=float, default=0.0)
     jog.add_argument("--y-mm", type=float, default=0.0)
     jog.add_argument("--z-mm", type=float, default=0.0)
+    optional_rates(jog, cartesian=True)
 
     gripper = sub.add_parser("gripper")
     gripper.add_argument("target", choices=("open", "close"))
+    optional_rates(gripper, gripper=True)
 
-    sub.add_parser("sleep")
-    sub.add_parser("sleep-up", aliases=["sleep_up"])
+    sleep = sub.add_parser("sleep")
+    optional_rates(sleep, joint=True, gripper=True)
+    sleep_up = sub.add_parser("sleep-up", aliases=["sleep_up"])
+    optional_rates(sleep_up, joint=True, gripper=True)
     sub.add_parser("stop")
     return parser
+
+
+def _motion_overrides(args: argparse.Namespace) -> dict[str, object]:
+    names = ("speed_deg_s", "acceleration_deg_s2", "speed_mm_s",
+             "acceleration_mm_s2", "gripper_speed_raw", "gripper_acceleration_raw")
+    return {key: value for key in names
+            if (value := getattr(args, key, None)) is not None}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -150,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
                 _request(
                     method="POST",
                     path="/v1/go-pose",
-                    payload={"name": args.name},
+                    payload={"name": args.name, **_motion_overrides(args)},
                 )
             )
         elif args.command == "joint":
@@ -158,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
                 _request(
                     method="POST",
                     path="/v1/joint",
-                    payload={"joint": args.joint, "delta_deg": args.delta_deg},
+                    payload={"joint": args.joint, "delta_deg": args.delta_deg,
+                             **_motion_overrides(args)},
                 )
             )
         elif args.command == "jog":
@@ -171,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
                         "x_mm": args.x_mm,
                         "y_mm": args.y_mm,
                         "z_mm": args.z_mm,
+                        **_motion_overrides(args),
                     },
                 )
             )
@@ -179,13 +205,15 @@ def main(argv: list[str] | None = None) -> int:
                 _request(
                     method="POST",
                     path="/v1/gripper",
-                    payload={"target": args.target},
+                    payload={"target": args.target, **_motion_overrides(args)},
                 )
             )
         elif args.command == "sleep":
-            _print_result(_request(method="POST", path="/v1/sleep", payload={}))
+            _print_result(_request(method="POST", path="/v1/sleep",
+                                   payload=_motion_overrides(args)))
         elif args.command in {"sleep-up", "sleep_up"}:
-            _print_result(_request(method="POST", path="/v1/sleep-up", payload={}))
+            _print_result(_request(method="POST", path="/v1/sleep-up",
+                                   payload=_motion_overrides(args)))
         elif args.command == "stop":
             _print_result(_request(method="POST", path="/v1/stop", payload={}))
         else:
