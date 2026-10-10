@@ -436,3 +436,39 @@ def test_joint_sync_write_accepts_per_motor_speed_limits(
     assert packet.sync_speeds[MOTOR_IDS["shoulder_pan"]] == 300
     assert packet.sync_speeds[MOTOR_IDS["shoulder_lift"]] == 150
     backend.disconnect()
+
+
+def test_partial_stop_still_holds_readable_arm_motors_on_gripper_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False, verify_model_numbers=True)
+    )
+    backend.connect()
+    backend.enable_torque()
+    original_read = backend.read_raw_position
+    original_write = backend._write_raw_positions
+    held = []
+
+    def faulty_position(motor: str) -> int:
+        if motor == "so101_gripper":
+            raise CommunicationError("gripper overload status 0x20")
+        return original_read(motor)
+
+    def observe_hold(positions, *, speed_raw, acceleration_raw):
+        held.append(dict(positions))
+        return original_write(
+            positions, speed_raw=speed_raw, acceleration_raw=acceleration_raw
+        )
+
+    monkeypatch.setattr(backend, "read_raw_position", faulty_position)
+    monkeypatch.setattr(backend, "_write_raw_positions", observe_hold)
+    try:
+        with pytest.raises(CommunicationError, match="STOP/HOLD incomplete"):
+            backend.stop()
+        assert len(held) == 1
+        assert set(held[0]) == set(MOTOR_IDS) - {"so101_gripper"}
+        assert backend._torque_enabled
+    finally:
+        backend.disconnect()
