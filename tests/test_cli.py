@@ -636,10 +636,10 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     sleep = payload["sleep_pose_deg"]
     assert sleep["shoulder_pan"] == pytest.approx(0.0)
     assert sleep["shoulder_lift"] == pytest.approx(
-        payload["joints"]["shoulder_lift"]["effective_deg"][0]
+        payload["joints"]["shoulder_lift"]["effective_deg"][0] + 2.0
     )
     assert sleep["elbow_flex"] == pytest.approx(
-        payload["joints"]["elbow_flex"]["effective_deg"][1]
+        payload["joints"]["elbow_flex"]["effective_deg"][1] - 2.0
     )
     wrist_lower = payload["joints"]["wrist_flex"]["effective_deg"][0]
     wrist_upper = payload["joints"]["wrist_flex"]["effective_deg"][1]
@@ -651,12 +651,12 @@ def test_limits_reports_saved_calibration_without_hardware(tmp_path, capsys) -> 
     sleep_up = payload["sleep_up_pose_deg"]
     assert sleep_up["shoulder_pan"] == pytest.approx(0.0)
     assert sleep_up["shoulder_lift"] == pytest.approx(
-        payload["joints"]["shoulder_lift"]["effective_deg"][0]
+        payload["joints"]["shoulder_lift"]["effective_deg"][0] + 2.0
     )
     assert sleep_up["elbow_flex"] == pytest.approx(
-        payload["joints"]["elbow_flex"]["effective_deg"][1]
+        payload["joints"]["elbow_flex"]["effective_deg"][1] - 2.0
     )
-    assert sleep_up["wrist_flex"] == pytest.approx(wrist_lower)
+    assert sleep_up["wrist_flex"] == pytest.approx(wrist_lower + 2.0)
     assert sleep_up["wrist_roll"] == pytest.approx(0.0)
 
     assert payload["coarse_cartesian_envelope_mm"]["maximum_tcp_reach"] == pytest.approx(500.0)
