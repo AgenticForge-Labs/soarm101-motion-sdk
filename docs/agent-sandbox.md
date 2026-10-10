@@ -1,5 +1,22 @@
 # Self-contained agent sandbox
 
+## Human-pinned motion rate ceilings (PR #88, unmerged)
+
+The OpenShell runner starts the broker itself. For full-control Codex/Hermes
+sessions, the human can now choose a per-run upper bound on joint speed
+and acceleration using `--agent-joint-speed-deg-s 15` and
+`--agent-joint-acceleration-deg-s2 150`. The same caps cover
+`go_pose`, `sleep`, `sleep_up` and `jog_joint`; there are
+no hard-coded saved-pose exceptions. The runner also accepts
+`--agent-cartesian-speed-mm-s`, `--agent-cartesian-acceleration-mm-s2`,
+`--agent-gripper-speed-raw`, and `--agent-gripper-acceleration-raw`.
+Each action may request slower rates, but cannot increase them.
+The flags are host-side trusted settings, not arguments an agent can
+change inside the sandbox. A human still must arm the robot and select
+a motion-capable profile. This has not yet been validated through
+Codex-controlled physical motion.
+
+
 The Motion SDK ships a canonical OpenShell environment for operating an SO-ARM101 with a
 reasoning agent without exposing the unrestricted SDK, serial bus, or camera devices to that
 agent.
