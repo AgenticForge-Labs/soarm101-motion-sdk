@@ -121,6 +121,16 @@ def _number(name: str, unit: str, description: str, default: float) -> ArgumentS
     return ArgumentSpec(name, "number", description, unit, required=False, default=default)
 
 
+def _checked_gripper_raw(value: object, name: str, maximum: int) -> int:
+    """Servo register limits: reject float coercion and 0=max-speed sentinel."""
+    if isinstance(value, bool) or float(value) != int(value):
+        raise ValueError(f"gripper {name} must be a whole number")
+    raw = int(value)
+    if not 1 <= raw <= maximum:
+        raise ValueError(f"gripper {name} must be in [1, {maximum}]")
+    return raw
+
+
 def _triplet(name: str, unit: str, description: str) -> ArgumentSpec:
     return ArgumentSpec(name, "numbers", description, unit, length=3)
 
@@ -175,6 +185,8 @@ _SPECS = (
     )),
     ActionSpec("move_gripper", "Set the stock gripper normalized position", "motion", (
         ArgumentSpec("position", "number", "Normalized gripper position 0 to 1", "fraction"),
+        _number("gripper_speed_raw", "raw", "Feetech gripper speed", 250.0),
+        _number("gripper_acceleration_raw", "raw", "Feetech gripper acceleration", 20.0),
     )),
     ActionSpec("list_saved_poses", "List persisted saved pose metadata", "read", (
         ArgumentSpec("robot_id", "text", "Identity of the saved pose library"),
@@ -199,6 +211,8 @@ _SPECS = (
         _number("acceleration_deg_s2", "deg/s^2", "Joint playback acceleration", 25.0),
         _number("speed_mm_s", "mm/s", "Linear playback speed", 10.0),
         _number("acceleration_mm_s2", "mm/s^2", "Linear playback acceleration", 40.0),
+        _number("gripper_speed_raw", "raw", "Saved gripper speed", 250.0),
+        _number("gripper_acceleration_raw", "raw", "Saved gripper acceleration", 20.0),
     )),
     ActionSpec("camera_profiles", "Read persisted named camera profiles", "read", (
         ArgumentSpec("name", "text", "Specific saved camera name", required=False),
@@ -216,11 +230,15 @@ _SPECS = (
         _number("speed_rad_s", "rad/s", "Sleep joint speed", 8.0 * pi / 180.0),
         _number("acceleration_rad_s2", "rad/s^2", "Sleep joint acceleration",
                 25.0 * pi / 180.0),
+        _number("gripper_speed_raw", "raw", "Sleep gripper speed", 250.0),
+        _number("gripper_acceleration_raw", "raw", "Sleep gripper acceleration", 20.0),
     )),
     ActionSpec("sleep_up", "Move to guarded folded Sleep-up posture", "motion", (
         _number("speed_rad_s", "rad/s", "Sleep-up joint speed", 8.0 * pi / 180.0),
         _number("acceleration_rad_s2", "rad/s^2", "Sleep-up joint acceleration",
                 25.0 * pi / 180.0),
+        _number("gripper_speed_raw", "raw", "Sleep-up gripper speed", 250.0),
+        _number("gripper_acceleration_raw", "raw", "Sleep-up gripper acceleration", 20.0),
     )),
     ActionSpec("stop", "Request the SDK's guarded STOP/HOLD operation", "stop",
                agent_eligible=True),
@@ -319,7 +337,13 @@ class CapabilityRegistry:
                     speed=float(args["speed_mm_s"]) / 1000.0,
                     acceleration=float(args["acceleration_mm_s2"]) / 1000.0,
                 )
-            gripper_result = arm.tool.move(saved.gripper)
+            gripper_result = arm.tool.move(
+                saved.gripper,
+                speed_raw=_checked_gripper_raw(args["gripper_speed_raw"], "speed", 3400),
+                acceleration_raw=_checked_gripper_raw(
+                    args["gripper_acceleration_raw"], "acceleration", 254
+                ),
+            )
             arm.hold()
             return result, gripper_result
         if name == "capture_saved_pose":
@@ -380,12 +404,24 @@ class CapabilityRegistry:
             position = float(args["position"])
             if not 0.0 <= position <= 1.0:
                 raise ValueError("position must be in [0, 1]")
-            return arm.tool.move(position)
+            return arm.tool.move(
+                position,
+                speed_raw=_checked_gripper_raw(args["gripper_speed_raw"], "speed", 3400),
+                acceleration_raw=_checked_gripper_raw(
+                    args["gripper_acceleration_raw"], "acceleration", 254
+                ),
+            )
         if name in ("sleep", "sleep_up"):
             motion = arm.move_sleep if name == "sleep" else arm.move_sleep_up
             return motion(
                 speed=float(args["speed_rad_s"]),
                 acceleration=float(args["acceleration_rad_s2"]),
+                gripper_speed_raw=_checked_gripper_raw(
+                    args["gripper_speed_raw"], "speed", 3400
+                ),
+                gripper_acceleration_raw=_checked_gripper_raw(
+                    args["gripper_acceleration_raw"], "acceleration", 254
+                ),
             )
         if name == "stop":
             return arm.stop()
