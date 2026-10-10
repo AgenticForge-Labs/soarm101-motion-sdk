@@ -1,5 +1,26 @@
 # SO-ARM101 Motion SDK
 
+## PR #89 — one-owner SDK session lifecycle (unmerged)
+
+The staged persistent-SDK executor now has explicit lifecycle states
+(`new`, `open`, `faulted`, `closing`, `closed`). Once a device
+disconnects, changes calibration identity, or reports a transport/motor
+fault, the executor latches failure and will **not reconnect automatically**.
+A new trusted-host process and fresh human authorization are required
+to resume physical operation. An existing arm remains STOP-accessible during
+fault/shutdown until transport closure. Closing is terminal and serialized
+against other device operations; serial-connect error paths clean up a
+partially opened port before releasing the advisory lock.
+
+This change is being tested on PR #89 and **does not enable native SDK
+physical control from the standard broker**. Normal `soarm101-broker`
+and OpenShell MCP still use bounded CLI subprocesses; the opt-in public SDK
+preview is still simulation/read-only. Cooperative Linux device locks
+protect updated SDK processes sharing a lock namespace, **not** unrelated
+legacy software or every cross-user/process configuration. Physical
+exclusivity must be observed on the actual Ubuntu workstation before the
+production cutover.
+
 ## Physical persistent-SDK broker route trial (PR #88; **not production**)
 
 The trusted-host example `examples/persistent_broker_motion_trace.py` exercises
@@ -48,7 +69,7 @@ cross-process advisory lock on actual Linux tty ports, but older
 programs that ignore the lock can still compete.
 
 
-## Uniform operator motion policy (PR #88 — unmerged)
+## Uniform operator motion policy (merged PR #88)
 
 The experimental pinned-rate broker now constructs internally consistent
 bounded-CLI SDK defaults whenever an operator ceiling is below the ordinary
