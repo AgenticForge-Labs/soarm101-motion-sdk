@@ -605,10 +605,10 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
 
     assert np.degrees(sleep["shoulder_pan"]) == pytest.approx(0.0)
     assert np.degrees(sleep["shoulder_lift"]) == pytest.approx(
-        measured_deg["shoulder_lift"][0] + 1.0
+        measured_deg["shoulder_lift"][0] + 3.0
     )
     assert np.degrees(sleep["elbow_flex"]) == pytest.approx(
-        measured_deg["elbow_flex"][1] - 1.0
+        measured_deg["elbow_flex"][1] - 3.0
     )
     wrist_lower = measured_deg["wrist_flex"][0] + 1.0
     wrist_upper = measured_deg["wrist_flex"][1] - 1.0
@@ -659,7 +659,7 @@ def test_sleep_up_preserves_historical_lower_limit_wrist_fold() -> None:
         final = dict(arm.get_joint_positions().positions)
 
     assert np.degrees(sleep_up["wrist_flex"]) == pytest.approx(
-        measured_deg["wrist_flex"][0] + 1.0
+        measured_deg["wrist_flex"][0] + 3.0
     )
     assert result.completed is True
     for name, target in sleep_up.items():
