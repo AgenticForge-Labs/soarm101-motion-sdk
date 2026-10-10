@@ -584,6 +584,7 @@ class SOARM101:
         acceleration: float | None,
         execution_mode: JointExecutionMode,
         label: str,
+        close_gripper: bool,
     ) -> MotionResult:
         arm_handle = self.move_joints(
             target,
@@ -599,8 +600,8 @@ class SOARM101:
         if cancel_event.is_set():
             raise MotionCancelledError(f"{label} motion cancelled before gripper close")
 
-        gripper = self._sleep_gripper()
-        gripper_target = self.get_sleep_gripper_position()
+        gripper = self._sleep_gripper() if close_gripper else None
+        gripper_target = self.get_sleep_gripper_position() if close_gripper else None
         if gripper is not None and gripper_target is not None:
             gripper_handle = gripper.move(gripper_target, wait=False)
             assert isinstance(gripper_handle, MotionHandle)
@@ -621,6 +622,7 @@ class SOARM101:
         speed: float | None,
         acceleration: float | None,
         execution_mode: JointExecutionMode,
+        close_gripper: bool,
     ) -> MotionResult:
         return self._execute_sleep_target(
             cancel_event,
@@ -629,6 +631,7 @@ class SOARM101:
             acceleration=acceleration,
             execution_mode=execution_mode,
             label="Sleep",
+            close_gripper=close_gripper,
         )
 
     def _execute_sleep_up(
@@ -646,6 +649,7 @@ class SOARM101:
             acceleration=acceleration,
             execution_mode=execution_mode,
             label="sleep_up",
+            close_gripper=True,
         )
 
     def move_sleep(
@@ -655,8 +659,12 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
+        close_gripper: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Move to the default calibration-relative Sleep pose and close the gripper.
+        """Move to the default calibration-relative Sleep pose.
+
+        The default also closes the gripper. The explicit joint-only option
+        leaves gripper commands unchanged, without weakening arm guards.
 
         Sleep keeps the historical shoulder/elbow fold but places wrist_flex
         three-quarters of the way from its executable lower limit to upper limit.
@@ -676,6 +684,7 @@ class SOARM101:
                 speed=speed,
                 acceleration=acceleration,
                 execution_mode=execution_mode,
+                close_gripper=close_gripper,
             )
         )
         handle.start()
