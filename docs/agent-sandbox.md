@@ -35,15 +35,19 @@ image/provider and direct harness argv; it does not define robot behavior.
 ## Native MCP agent interface (PR 4)
 
 If the read-only MCP run reports an **isolated MCP tool handshake** failure,
-inspect the returned subprocess exit code and redacted stdout/stderr before
-repeating the run. The doctor command checks image existence, not the MCP
-runtime's import or broker connectivity. A missing MCP Python interpreter or
-module can indicate an image built before MCP support: run
-`soarm101 agent sandbox setup --agent codex --auth installed` (or the analogous
-Hermes setup), then retry with a **new** output directory. If the error instead
-indicates rejected broker access, inspect the generated
-`openshell-effective-policy.yaml` and broker profile rather than bypassing
-OpenShell restrictions. MCP preflight never grants motion authority.
+inspect its redacted subprocess exit code and stdout/stderr before repeating.
+The doctor command checks image existence, not the MCP runtime's import or
+broker connectivity. In particular, `PermissionError` reading
+`/opt/soarm101-mcp/pyvenv.cfg` means the Python interpreter was executable but
+Landlock denied its virtual environment. The canonical MCP policy now adds
+only `/opt/soarm101-mcp` under filesystem `read_only`, in both Codex and Hermes
+MCP runs; `robotctl`-only runs do not need this exception. Pull the policy fix
+and retry with a **new** output directory; rebuilding the same Docker image
+cannot repair that Landlock denial. If the interpreter or module really is
+missing, rebuild with `soarm101 agent sandbox setup --agent codex --auth installed`
+(or the analogous Hermes setup). If broker access is denied, inspect the
+generated `openshell-effective-policy.yaml` and broker profile, never bypass
+the policy. This permission grants no writes, device access, or physical motion.
 
 
 The built-in Hermes and Codex agents now support an **opt-in** MCP interface.
