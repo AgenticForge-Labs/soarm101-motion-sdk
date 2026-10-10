@@ -1,5 +1,41 @@
 # Testing
 
+## Persistent SDK broker five-pose physical experiment (PR #88)
+
+The new `examples/persistent_broker_motion_trace.py` is an
+**operator-only physical bench procedure** and must never run as part
+of unit tests or GitHub CI. Automated CI uses a simulated SDK backend
+behind the *actual loopback HTTP broker*, issues the five Sleep/Overhead/
+Left/Right/Sleep POST requests, requires the same `broker_session.id`
+and `sdk_connect_count == 1` each leg, and confirms the ordinary
+CLI executor is never called. Additional regressions cover opt-in
+access, locked-down capability profile, reject-external bind, invalid
+`joint_only` request, human authority, STOP revocation and Linux tty
+advisory lock.
+
+Run `ruff check .` and
+`python -m pytest --no-cov -q tests/test_broker_sdk.py
+tests/test_broker.py tests/test_feetech_backend.py
+tests/test_sdk_capabilities.py tests/test_poses.py` before the full suite.
+
+Hardware handoff: verify a single real tty owner, calibrations, the
+lease and powered HOLD/STOP, then run
+`soarm101 agent arm --minutes 30` and
+`python examples/persistent_broker_motion_trace.py
+--port /dev/ttyACM1 --robot-id so101
+--speed-deg-s 15 --acceleration-deg-s2 150
+--command-frequency-hz 50 --pause-s 0.5
+--output ~/soarm-motion-tests/persistent-broker-local.jsonl`.
+Use a new unique output path. Operator must enter `RUN`.
+Do not use `--include-gripper` initially because an earlier
+almost-closed gripper triggered a transient overload status.
+The physical profile remains a *candidate* until inspected by the
+operator. Capture terminal output, `.summary.json`, motor trace
+JSONL, broker events JSONL, physical STOP result, and any shaking
+or tracking divergence. No Codex/OpenShell agent-controlled movement
+is established by this experiment.
+
+
 ## Global trusted broker motion profile regression (PR #88)
 
 Run `python -m pytest --no-cov -q tests/test_broker.py
