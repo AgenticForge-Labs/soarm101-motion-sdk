@@ -1,5 +1,13 @@
 # Changelog
 
+- PR #88 staging consolidation: remove the unattended `--yes` bypass from
+  `examples/persistent_broker_motion_trace.py`; require a TTY and literal RUN
+  confirmation in addition to the existing human lease. Add a hardware-free
+  regression for rejection before starting a broker or touching a device.
+  Record the sequential #88–#93 staging, ownership, STOP, parity, physical
+  cutover and wrapper-retirement plan in source-controlled documentation.
+
+
 - Fix PR #88 OpenShell/MCP broker preflight HTTP 409 when the operator's
   trusted motion pacing is below the SDK's default rate. The bounded CLI now
   clamps its internal *default* joint/Cartesian/tool rates to explicit lower
