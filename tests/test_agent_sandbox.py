@@ -1854,3 +1854,43 @@ def test_mcp_probe_failure_reports_redacted_diagnostics_before_handoff(
         if call["command"] and call["command"][0] == "codex"
     ] == [("codex", "--version")]
     assert fake.deleted
+
+
+def test_openshell_broker_process_receives_human_pinned_rate_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from soarm101_motion.broker import AgentMotionRates
+    calls = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    def fake_popen(command, **kwargs):
+        calls.append((tuple(command), kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr(agent_sandbox.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        agent_sandbox.BrokerProcess, "request",
+        lambda self, method, path: {"ok": True},
+    )
+    broker = agent_sandbox.BrokerProcess(
+        port=9000, token="unit-token",
+        event_path=tmp_path / "broker.jsonl",
+        rates=AgentMotionRates(
+            joint_speed_deg_s=15,
+            joint_acceleration_deg_s2=150,
+            cartesian_speed_mm_s=10,
+            cartesian_acceleration_mm_s2=40,
+            gripper_speed_raw=250,
+            gripper_acceleration_raw=20,
+        ),
+    )
+    broker.start()
+    assert len(calls) == 1
+    command, _ = calls[0]
+    assert command[command.index("--agent-joint-speed-deg-s") + 1] == "15"
+    assert command[command.index("--agent-joint-acceleration-deg-s2") + 1] == "150"
+    assert command[command.index("--agent-gripper-speed-raw") + 1] == "250"
+    assert command[command.index("--agent-gripper-acceleration-raw") + 1] == "20"
