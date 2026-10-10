@@ -111,6 +111,15 @@ set by the trusted host.
 
 ## Operator-owned motion rates (all broker movement)
 
+When the trusted host pins a requested joint/Cartesian rate below the SDK's
+ordinary default, the subprocess adapter passes the narrower hard ceiling
+to the bounded CLI. The CLI now lowers only its *internal default* rate to
+fit that explicit ceiling so even read-only `capabilities` and `state`
+requests can construct a valid configuration. PR #88's original 8 deg/s
+pacing had exposed this as HTTP 409. This preserves the human-selected
+ceiling and does not establish physical OpenShell motion validation.
+
+
 The trusted human chooses one **maximum** speed and acceleration for each
 physical unit family at broker startup, separate from the SDK's absolute
 100/1000 hardware envelope. These rates are not per-agent privileges. Every
