@@ -21,12 +21,17 @@ to activate that environment in your current terminal.
 
 ## PR #88 preview: direct SDK read-only broker session
 
-The packaged Codex/Hermes MCP sandbox preflight now reports the redacted
-subprocess exit code and stdout/stderr if its isolated MCP import or broker
-profile handshake fails. `sandbox doctor` only verifies that the image exists,
-not that it was built with MCP dependencies. Rebuild stale images with
-`soarm101 agent sandbox setup --agent codex --auth installed`; retry with a
-new output directory. This does not relax read-only or hardware authority.
+The packaged Codex/Hermes MCP sandbox preflight reports redacted subprocess
+exit status and stdout/stderr if initialization fails. A real Codex failure
+showed `PermissionError: /opt/soarm101-mcp/pyvenv.cfg`: the OpenShell policy
+had allowed the MCP Python executable but omitted read-only access to its
+virtual environment. MCP runs now explicitly allow **read-only** access to
+`/opt/soarm101-mcp` under Landlock; non-MCP runs do not. Updating the SDK
+policy and retrying with a new output directory is sufficient for this specific
+error; rebuilding the image does not repair missing Landlock access. The
+`sandbox doctor` check only establishes that the image exists and still does
+not prove the MCP dependencies work. Robot authority and other restrictions
+are unchanged.
 
 
 The production broker continues to use the existing bounded agent CLI
