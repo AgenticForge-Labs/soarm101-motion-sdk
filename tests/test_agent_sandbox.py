@@ -1847,5 +1847,10 @@ def test_mcp_probe_failure_reports_redacted_diagnostics_before_handoff(
     assert "MCP import or broker policy failed" in message
     assert fake.leaked_token not in message
     assert "<redacted-soarm101-broker-token>" in message
-    assert not any(call["command"][0] == "codex" for call in fake.exec_calls)
+    # The preflight intentionally runs `codex --version` before MCP setup;
+    # a failed handshake must prevent the *task* command, not that version check.
+    assert [
+        call["command"] for call in fake.exec_calls
+        if call["command"] and call["command"][0] == "codex"
+    ] == [("codex", "--version")]
     assert fake.deleted
