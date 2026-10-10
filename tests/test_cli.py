@@ -749,3 +749,13 @@ def test_openshell_run_parser_accepts_human_broker_rate_ceiling_options() -> Non
     assert parsed.agent_joint_speed_deg_s == 15
     assert parsed.agent_joint_acceleration_deg_s2 == 150
     assert parsed.agent_gripper_speed_raw == 250
+
+
+def test_cli_operator_rate_exactly_at_converted_ceiling() -> None:
+    from soarm101_motion.cli.main import _agent_requested_rate
+
+    # Human sets 15 deg/s; the config round-trip produces one ULP less.
+    ceiling = math.degrees(math.radians(15))
+    assert _agent_requested_rate(15, "joint speed deg/s", ceiling) == 15
+    with pytest.raises(ValueError, match="exceeds"):
+        _agent_requested_rate(15.000001, "joint speed deg/s", ceiling)
