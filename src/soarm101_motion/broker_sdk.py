@@ -1,15 +1,18 @@
-"""Preview of broker-owned persistent SDK dispatch (not hardware-enabled).
+"""Persistent broker-owned SDK dispatch with a restricted physical bench trial.
 
-The broker is the sole HTTP authority. This executor consumes typed actions, not
-CLI arguments or shell commands. Real robot execution is deliberately NOT enabled
-by the production broker until local supervised STOP/workspace validation passes.
+The production broker retains its CLI fallback, and the opt-in public SDK
+simulation preview remains read-only. Physical execution is available only to
+an explicitly constructed, loopback-only supervised trial broker: never from
+the ordinary broker CLI or an OpenShell sandbox.
 """
 
 from __future__ import annotations
 
 import math
 import threading
+import uuid
 from dataclasses import asdict
+from pathlib import Path
 from math import pi
 from typing import TYPE_CHECKING, Callable, Mapping
 
@@ -24,6 +27,7 @@ from soarm101_motion.agent_control import (
 )
 from soarm101_motion.arm import SOARM101
 from soarm101_motion.control import relative_target_pose
+from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
 from soarm101_motion.workspace import WorkspaceCalibrationStore
 from soarm101_motion.workstation import WorkstationProfileStore
@@ -39,13 +43,15 @@ _ACTION_FIELDS: Mapping[str, frozenset[str]] = {
     "state": frozenset(),
     "capture": frozenset({"camera"}),
     "go_pose": frozenset({"name", "speed_deg_s", "acceleration_deg_s2",
-                           "gripper_speed_raw", "gripper_acceleration_raw"}),
+                           "gripper_speed_raw", "gripper_acceleration_raw",
+                           "joint_only"}),
     "joint": frozenset({"joint", "delta_deg", "speed_deg_s", "acceleration_deg_s2"}),
     "jog": frozenset({"frame", "x_mm", "y_mm", "z_mm",
                         "speed_mm_s", "acceleration_mm_s2"}),
     "gripper": frozenset({"target", "gripper_speed_raw", "gripper_acceleration_raw"}),
     "sleep": frozenset({"speed_deg_s", "acceleration_deg_s2",
-                          "gripper_speed_raw", "gripper_acceleration_raw"}),
+                          "gripper_speed_raw", "gripper_acceleration_raw",
+                          "joint_only"}),
     "sleep_up": frozenset({"speed_deg_s", "acceleration_deg_s2",
                              "gripper_speed_raw", "gripper_acceleration_raw"}),
     "stop": frozenset(),
@@ -55,9 +61,9 @@ _ACTION_FIELDS: Mapping[str, frozenset[str]] = {
 class SDKAgentExecutor:
     """Single lazy SDK session owned by a trusted broker, with explicit dispatch.
 
-    The production entrypoint permits ONLY simulated preview sessions. A
-    fake-arm factory is supported exclusively for deterministic tests.
-    Physical enabling requires a later, separately gated change.
+    Public broker entrypoints remain CLI-backed or read-only simulated.
+    A dedicated trusted-host trial may explicitly provide one physical
+    SOARM101 factory, a trace path, and a narrowed broker capability profile.
     """
 
     def __init__(
@@ -68,7 +74,13 @@ class SDKAgentExecutor:
         simulation: bool = False,
         arm_factory: Callable[[], SOARM101] | None = None,
         authority_store: AgentAuthorityStore | None = None,
+        physical_trial: bool = False,
+        trace_path: str | Path | None = None,
     ) -> None:
+        if physical_trial and (simulation or arm_factory is None or not config.port):
+            raise ValueError("physical trial requires a real port and explicit SDK arm factory")
+        if trace_path is not None and not physical_trial:
+            raise ValueError("passive broker motion trace requires physical trial mode")
         if not simulation and arm_factory is None:
             raise ValueError(
                 "direct-SDK physical sessions are disabled pending supervised "
@@ -80,6 +92,11 @@ class SDKAgentExecutor:
         self.robot_id = config.robot_id
         self.rates = rates
         self.simulation = simulation
+        self.physical_trial = physical_trial
+        self.session_id = uuid.uuid4().hex
+        self.connection_count = 0
+        self.trace_path = Path(trace_path).expanduser() if trace_path else None
+        self._trace: PassiveBackendTrace | None = None
         self._arm_factory = arm_factory or (
             lambda: SOARM101.simulated(config=config, realtime=False)
         )
@@ -95,6 +112,23 @@ class SDKAgentExecutor:
                 if arm.config.robot_id != self.robot_id:
                     raise ValueError("SDK session robot ID differs from broker identity")
                 arm.connect()  # Connection only. No automatic torque enable.
+                try:
+                    if self.trace_path is not None:
+                        trace = PassiveBackendTrace(
+                            arm, self.trace_path,
+                            metadata={
+                                "kind": "persistent_sdk_broker_physical_trial",
+                                "session_id": self.session_id,
+                                "joint_speed_deg_s": self.rates.joint_speed_deg_s,
+                                "joint_acceleration_deg_s2": self.rates.joint_acceleration_deg_s2,
+                            },
+                        )
+                        trace.__enter__()
+                        self._trace = trace
+                except BaseException:
+                    arm.disconnect()
+                    raise
+                self.connection_count += 1
                 self._session = arm
             return self._session
 
@@ -104,8 +138,23 @@ class SDKAgentExecutor:
             with self._create_lock:
                 arm = self._session
                 self._session = None
-                if arm is not None:
-                    arm.disconnect()
+                try:
+                    if arm is not None:
+                        arm.disconnect()
+                finally:
+                    if self._trace is not None:
+                        trace = self._trace
+                        self._trace = None
+                        trace.__exit__(None, None, None)
+
+    @property
+    def session_evidence(self) -> dict[str, object]:
+        return {
+            "id": self.session_id,
+            "sdk_connect_count": self.connection_count,
+            "mode": "physical_trial" if self.physical_trial else "simulation_preview",
+            "robot_id": self.robot_id,
+        }
 
     def _calibration_id(self, arm: SOARM101) -> str:
         identity = arm.calibration_id
@@ -146,6 +195,11 @@ class SDKAgentExecutor:
         unexpected = set(request) - fields
         if unexpected:
             raise ValueError(f"unknown {action} fields: {sorted(unexpected)!r}")
+        if "joint_only" in request:
+            if not self.physical_trial or action not in {"go_pose", "sleep"}:
+                raise PermissionError("joint-only is limited to local physical trial poses")
+            if not isinstance(request["joint_only"], bool):
+                raise ValueError("joint_only must be boolean")
         # Direct in-process calls receive the same trusted ceiling enforcement
         # as the HTTP/CLI adapter. Validation happens before device activity.
         self.rates.selected(action, request)
@@ -153,10 +207,24 @@ class SDKAgentExecutor:
     def execute(self, action: str, request: Mapping[str, object]) -> dict[str, object]:
         """Validate and serialize ordinary SDK actions; do not block STOP."""
         self._validate(action, request)
+        def run() -> dict[str, object]:
+            trace = self._trace
+            if trace is not None:
+                trace.mark("broker_action_start", action=action)
+            try:
+                result = self._execute_action(action, request)
+            except BaseException as exc:
+                if self._trace is not None:
+                    self._trace.mark("broker_action_error", action=action, error=repr(exc))
+                raise
+            if self._trace is not None:
+                self._trace.mark("broker_action_end", action=action)
+            return {**result, "broker_session": self.session_evidence}
+
         if action == "stop":
-            return self._execute_action(action, request)
+            return run()
         with self._dispatch_lock:
-            return self._execute_action(action, request)
+            return run()
 
     def _execute_action(
         self, action: str, request: Mapping[str, object]
@@ -169,21 +237,28 @@ class SDKAgentExecutor:
             result = _agent_capabilities_payload(self.robot_id, config=self.config)
             # This opt-in preview must not advertise physical authority or
             # motion/camera tools that its HTTP boundary explicitly denies.
-            result["actions"] = {"state": "read_only"}
-            result["poses"] = []
+            if self.physical_trial:
+                result["actions"] = {
+                    "state": "read_only", "go_pose": True,
+                    "sleep": True, "stop": True,
+                }
+                from soarm101_motion.poses import PoseLibrary
+                names = PoseLibrary(self.robot_id).names()
+                result["poses"] = [name for name in names if name.startswith(AGENT_POSE_PREFIX)]
+                result["authority"] = self._authority.status()
+            else:
+                result["actions"] = {"state": "read_only"}
+                result["poses"] = []
+                result["authority"] = {
+                    "armed": False, "robot_id": None, "calibration_id": None,
+                    "issued_at": None, "expires_at": None,
+                    "remaining_seconds": 0.0,
+                }
+                result["world_directions"] = {
+                    "available": False,
+                    "reason": "simulation preview has no measured physical directions",
+                }
             result["cameras"] = []
-            result["world_directions"] = {
-                "available": False,
-                "reason": "simulation preview has no measured physical directions",
-            }
-            result["authority"] = {
-                "armed": False,
-                "robot_id": None,
-                "calibration_id": None,
-                "issued_at": None,
-                "expires_at": None,
-                "remaining_seconds": 0.0,
-            }
             return result
         if action == "capture":
             name = self._text(request, "camera")
@@ -231,7 +306,7 @@ class SDKAgentExecutor:
                 except Exception as exc:
                     error = str(exc)
             return {
-                "authority": {
+                "authority": self._authority.status() if self.physical_trial else {
                     "armed": False, "robot_id": None,
                     "calibration_id": None, "issued_at": None,
                     "expires_at": None, "remaining_seconds": 0.0,
@@ -258,18 +333,21 @@ class SDKAgentExecutor:
                 {"robot_id": self.robot_id, "name": name},
             )
             arm.enable()
+            joint_only = bool(request.get("joint_only", False))
             moved, gripper = SDK_CAPABILITIES.dispatch(
                 "replay_saved_pose", arm,
                 {"robot_id": self.robot_id, "name": name,
-                 **rates},
+                 "include_gripper": not joint_only, **rates},
             )
             if not (moved.accepted and moved.completed
-                    and gripper.accepted and gripper.completed):
+                    and (gripper is None or (gripper.accepted and gripper.completed))):
                 raise RuntimeError("saved pose playback did not complete successfully")
             return {
                 "accepted": True, "completed": True, "action": "go_pose",
                 "pose": name, "holding": True, "authority": authority,
-                "arm": asdict(moved), "gripper": asdict(gripper),
+                "arm": asdict(moved),
+                "gripper": asdict(gripper) if gripper is not None else None,
+                "joint_only": joint_only,
             }
         if action == "joint":
             joint = self._text(request, "joint")
@@ -365,6 +443,8 @@ class SDKAgentExecutor:
                     "acceleration_rad_s2": float(rates["acceleration_deg_s2"]) * pi / 180.0,
                     "gripper_speed_raw": rates["gripper_speed_raw"],
                     "gripper_acceleration_raw": rates["gripper_acceleration_raw"],
+                    **({"close_gripper": not request.get("joint_only", False)}
+                       if action == "sleep" else {}),
                 }
             )
             arm.hold()
