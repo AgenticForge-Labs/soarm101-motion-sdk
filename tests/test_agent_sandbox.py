@@ -1582,11 +1582,11 @@ def test_mcp_policy_allows_reading_only_its_isolated_venv(
     policy = agent_sandbox.broker_policy_text(
         agent=agent, interface="mcp", read_only=read_only,
     )
-    fs = policy.split("filesystem_policy:\\n", 1)[1].split("landlock:\\n", 1)[0]
-    allowed_read = fs.split("  read_only:\\n", 1)[1].split("  read_write:\\n", 1)[0]
-    allowed_write = fs.split("  read_write:\\n", 1)[1]
+    fs = policy.split("filesystem_policy:\n", 1)[1].split("landlock:\n", 1)[0]
+    allowed_read = fs.split("  read_only:\n", 1)[1].split("  read_write:\n", 1)[0]
+    allowed_write = fs.split("  read_write:\n", 1)[1]
 
-    assert "    - /opt/soarm101-mcp\\n" in allowed_read
+    assert "    - /opt/soarm101-mcp\n" in allowed_read
     assert "/opt/soarm101-mcp" not in allowed_write
     assert "      - path: /opt/soarm101-mcp/bin/python" in policy
     assert "      - path: /opt/soarm101-mcp/bin/python3" in policy
@@ -1601,8 +1601,6 @@ def test_mcp_policy_allows_reading_only_its_isolated_venv(
         assert "path: /v1/joint" not in policy
         assert "path: /v1/gripper" not in policy
         assert "path: /v1/stop" not in policy
-
-
 
 @pytest.mark.parametrize("agent", ["hermes", "codex"])
 def test_mcp_run_uses_pinned_broker_and_temporary_client_only(
