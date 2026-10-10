@@ -133,6 +133,19 @@ confirmation and hardware connection semantics unchanged.
 13. Keep tests and lint green on the supported Python versions before considering a change
     complete.
 
+## PR #88 staging and operator-only physical validation
+
+The draft persistent SDK broker is not the default physical agent backend.
+The normal MCP/OpenShell broker remains bounded-CLI-backed until the
+production safety cutover is physically validated and merged. The restricted
+physical five-pose script is an attended operator benchmark: it requires
+an interactive terminal, an existing human motion lease, explicit `RUN`
+confirmation, a fixed loopback profile, and accessible power cutoff.
+Do not add unattended bypass flags or interpret its five-leg pass as an
+active-motion STOP, calibrated jog, device-exclusivity, camera or Codex
+agent-motion acceptance test. `PLAN.md` contains the staged #88–#93
+release sequence; do not branch dependent changes from unmerged PR work.
+
 ## Using the CLI / operating the arm
 
 1. Prefer inspection before motion. Start with commands such as `soarm101 ports`,
