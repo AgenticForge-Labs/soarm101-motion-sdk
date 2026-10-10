@@ -493,3 +493,36 @@ def test_bad_requested_joint_rates_fail_closed(value) -> None:
     rates = AgentMotionRates(joint_speed_deg_s=15, joint_acceleration_deg_s2=150)
     with pytest.raises(ValueError):
         rates.selected("sleep", {"speed_deg_s": value})
+
+
+def test_operator_rate_exactly_matches_roundtrip_human_limit() -> None:
+    """Regression: 15 deg/s -> radians -> 14.999999999999998 deg/s."""
+    import math
+
+    from soarm101_motion.config import rate_within_ceiling
+
+    config = SOARM101Config.from_motion_limits(
+        max_joint_speed_deg_s=15,
+        max_joint_acceleration_deg_s2=150,
+        default_joint_speed=math.radians(15),
+        default_joint_acceleration=math.radians(150),
+    )
+    rounded_limit = config.motion_limits_human["max_joint_speed_deg_s"]
+    assert rounded_limit < 15.0  # Document the exact original failure.
+    rates = AgentMotionRates(
+        joint_speed_deg_s=15.0, joint_acceleration_deg_s2=150.0,
+    ).validated(config)
+    assert rates.joint_speed_deg_s == 15.0
+    assert rate_within_ceiling(15.0, rounded_limit)
+    assert not rate_within_ceiling(15.000001, rounded_limit)
+    with pytest.raises(ValueError, match="joint_speed_deg_s"):
+        AgentMotionRates(
+            joint_speed_deg_s=15.000001, joint_acceleration_deg_s2=150.0,
+        ).validated(config)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
+def test_ceiling_roundtrip_helper_never_accepts_invalid_rates(value: float) -> None:
+    from soarm101_motion.config import rate_within_ceiling
+
+    assert not rate_within_ceiling(value, 15.0)
