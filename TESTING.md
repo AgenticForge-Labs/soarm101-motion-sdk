@@ -1,5 +1,17 @@
 # Testing
 
+## Sleep executable endpoint regression (PR #88)
+
+Run `uv run pytest --no-cov tests/test_poses.py` plus the complete suite.
+`Sleep` and `sleep_up` must select powered target angles strictly inside
+calibrated effective joint limits (2° additional inset for ordinary ranges,
+proportionally inside exceptionally narrow ranges). Their baseline wrist
+orientation differences remain. Verify on a supervised unloaded arm only
+after the independent joint-direction and STOP/HOLD gates; automated tests
+must not invoke actual hardware motion. A Feetech control-bit reply warning
+with verified readback is a separate communication diagnostic, not evidence
+of a joint-limit failure.
+
 ## One-command software validation for PR #88
 
 On Ubuntu/Linux, copy and paste:
