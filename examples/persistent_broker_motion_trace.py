@@ -130,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
         configure_motors_on_connect=False,
         disable_torque_on_disconnect=False,
         command_frequency_hz=args.command_frequency_hz,
+        default_joint_speed=math.radians(args.speed_deg_s),
+        default_joint_acceleration=math.radians(args.acceleration_deg_s2),
         max_joint_speed_deg_s=args.speed_deg_s,
         max_joint_acceleration_deg_s2=args.acceleration_deg_s2,
     )
