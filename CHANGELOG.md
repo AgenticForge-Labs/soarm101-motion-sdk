@@ -1,5 +1,13 @@
 # Changelog
 
+- Avoid exact executable joint-limit targets in the generated Sleep and
+  sleep_up postures: lower/upper selectors are inset by up to 2° (or 10%
+  of a narrow joint's range), on top of the calibrated mechanical-stop
+  margin. This addresses previously observed endpoint rounding rejection
+  without widening safety limits; physical Sleep replay remains to be
+  validated separately. A recovered Feetech `Lock` reply warning remains
+  independent of joint position and must not be masked as a limit issue.
+
 - PR #88 fake native-camera parity: exercise trusted-host image read,
   SHA-256 evidence, sandbox path/device redaction and failure-before-success
   auditing under the existing broker profile. No physical camera access
