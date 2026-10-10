@@ -47,6 +47,50 @@ gates remain physical STOP/HOLD, device exclusivity, fault recovery,
 camera/trace parity, and supervised calibrated Cartesian movement.
 Keep hardware revisions and test results on this PR.
 
+## Milestone B integration sequence (proposed; only PR #88 exists)
+
+GitHub `main` is authoritative. Do not create a dependent branch until the
+preceding PR is merged. Preserve the extensive #88 staged work rather than
+starting a competing SDK executor.
+
+1. **PR #88 — staged SDK/broker foundation (current draft):** merge only after
+   full software CI and local read-only OpenShell/MCP preflight pass. Production
+   still uses the bounded CLI subprocess broker; the public SDK preview is
+   read-only simulation. The operator-only physical route requires a terminal,
+   human arming, explicit RUN confirmation and a separate narrow loopback profile.
+   The completed 2026-10-10 five-leg experiment is evidence for *that route*
+   only, not generalized robot safety.
+2. **Proposed PR #89 — exclusive hardware ownership/session lifecycle:**
+   one broker-owned persistent SDK session; fail-closed disconnect, restart,
+   authority expiry and calibration changes; confirm GUI/CLI/second-broker
+   exclusivity, including cooperative lock limitations.
+3. **Proposed PR #90 — independent STOP and fault handling:** true active-motion
+   cancellation, generation-based queued-request invalidation, incomplete HOLD
+   and servo faults; hardware-free race tests followed by a supervised STOP
+   while moving with physical power cutoff accessible.
+4. **Proposed PR #91 — native registry dispatch and camera evidence parity:**
+   bounded joint/Cartesian/pose/Sleep/gripper/camera operations through the
+   shared SDK; retain MCP/robotctl contracts, immutable profile, human lease,
+   camera SHA evidence and complete auditable errors. Reject any duplicate
+   untrusted host paths or direct agent hardware entrypoints.
+5. **Proposed PR #92 — supervised physical qualification and cutover:**
+   conservative 20 Hz trial candidate, observed 2 mm calibrated jog, STOP,
+   stale position/workspace checks, fault recovery, camera capture and
+   attended Codex/MCP run. Switch the production broker only after the
+   documented physical gate passes. Do not infer clearance from model FK.
+6. **Proposed PR #93 — retire duplicate agent CLI execution paths:**
+   remove only the superseded bounded-agent motion executor and duplicate
+   code; retain the human CLI, calibration/diagnostics and stable external
+   capability contracts, update source-controlled architecture docs.
+
+These PR numbers are tentative. This sequence **supersedes the original
+three-PR cutover schedule below**, but keeps its original acceptance gates.
+After Milestone B has merged, implement the persistent interactive Codex/Hermes
+OpenShell terminal separately. Read-only interactive tests may be designed
+earlier, but must not create a parallel robot controller. Ordinary real robot
+usage is not a replacement for fault-injection and independently observed
+STOP/ownership testing.
+
 ## Next milestone — interactive, sandboxed Codex/Hermes (design only)
 
 The existing `soarm101 agent sandbox run` executes a one-shot harness process
@@ -56,8 +100,7 @@ equivalent to OpenShell confinement: host tools can discover uncontrolled
 device, subprocess, or network routes even when MCP tools are profile-limited.
 Do not treat a prompt's instruction to stay within MCP as a security control.
 
-**After completing and merging the necessary PR #88 production-broker safety
-gates**, implement a persistent interactive OpenShell terminal as a dedicated
+**After the Milestone B production-broker safety gates are merged**, implement a persistent interactive OpenShell terminal as a dedicated
 follow-on change. Reuse the packaged Codex/Hermes adapters and current
 MCP/broker/lease/profile primitives; never invent a second robot transport.
 Proposed CLI UX (not yet implemented): `soarm101 agent sandbox interactive
@@ -100,7 +143,8 @@ cross-process exclusivity, calibrated jog safety, or live reliability.
 The internal fake-capture tests also verify image hashing, response
 redaction and failure evidence without opening a camera device.
 
-**PR 2 merge blockers:** before replacing the production broker, complete
+**Original PR 2 production cutover blockers (now sequenced across proposed
+PRs #89–#92):** before replacing the production broker, complete
 profile/lease enforcement at execution, direct SDK HTTP motion and evidence
 parity, reliable concurrent STOP independent of the operation lock, shared
 cross-process hardware ownership with ordinary CLI/GUI, session fault/
