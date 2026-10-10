@@ -605,6 +605,8 @@ class SOARM101:
         execution_mode: JointExecutionMode,
         label: str,
         close_gripper: bool,
+        gripper_speed_raw: int | None,
+        gripper_acceleration_raw: int | None,
     ) -> MotionResult:
         arm_handle = self.move_joints(
             target,
@@ -623,7 +625,11 @@ class SOARM101:
         gripper = self._sleep_gripper() if close_gripper else None
         gripper_target = self.get_sleep_gripper_position() if close_gripper else None
         if gripper is not None and gripper_target is not None:
-            gripper_handle = gripper.move(gripper_target, wait=False)
+            gripper_handle = gripper.move(
+                gripper_target, wait=False,
+                speed_raw=gripper_speed_raw,
+                acceleration_raw=gripper_acceleration_raw,
+            )
             assert isinstance(gripper_handle, MotionHandle)
             gripper_result = self._wait_sleep_child(gripper_handle, cancel_event)
             final_positions.update(gripper_result.final_positions)
@@ -643,6 +649,8 @@ class SOARM101:
         acceleration: float | None,
         execution_mode: JointExecutionMode,
         close_gripper: bool,
+        gripper_speed_raw: int | None,
+        gripper_acceleration_raw: int | None,
     ) -> MotionResult:
         return self._execute_sleep_target(
             cancel_event,
@@ -652,6 +660,8 @@ class SOARM101:
             execution_mode=execution_mode,
             label="Sleep",
             close_gripper=close_gripper,
+            gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
         )
 
     def _execute_sleep_up(
@@ -661,6 +671,8 @@ class SOARM101:
         speed: float | None,
         acceleration: float | None,
         execution_mode: JointExecutionMode,
+        gripper_speed_raw: int | None,
+        gripper_acceleration_raw: int | None,
     ) -> MotionResult:
         return self._execute_sleep_target(
             cancel_event,
@@ -670,6 +682,8 @@ class SOARM101:
             execution_mode=execution_mode,
             label="sleep_up",
             close_gripper=True,
+            gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
         )
 
     def move_sleep(
@@ -680,6 +694,8 @@ class SOARM101:
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
         close_gripper: bool = True,
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Move to the default calibration-relative Sleep pose.
 
@@ -705,6 +721,8 @@ class SOARM101:
                 acceleration=acceleration,
                 execution_mode=execution_mode,
                 close_gripper=close_gripper,
+                gripper_speed_raw=gripper_speed_raw,
+                gripper_acceleration_raw=gripper_acceleration_raw,
             )
         )
         handle.start()
@@ -717,6 +735,8 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Move to the historical fully folded wrist-up Sleep posture.
 
@@ -731,6 +751,8 @@ class SOARM101:
                 speed=speed,
                 acceleration=acceleration,
                 execution_mode=execution_mode,
+                gripper_speed_raw=gripper_speed_raw,
+                gripper_acceleration_raw=gripper_acceleration_raw,
             )
         )
         handle.start()
