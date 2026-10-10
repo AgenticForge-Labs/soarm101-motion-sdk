@@ -1,5 +1,14 @@
 # Changelog
 
+- Fix PR #88 OpenShell/MCP broker preflight HTTP 409 when the operator's
+  trusted motion pacing is below the SDK's default rate. The bounded CLI now
+  clamps its internal *default* joint/Cartesian/tool rates to explicit lower
+  absolute ceilings (8 deg/s, 25 deg/s^2, 10 mm/s, 40 mm/s^2 by default)
+  instead of constructing an invalid config. This does not increase the
+  authorized rate, change physical motion policy, or bypass any safety checks.
+  Add hardware-free capabilities and parsed-session regression tests.
+
+
 - Fix exact-ceiling 15°/s supervised persistent-broker startup. Human-unit
   limits are converted deg/s -> rad/s -> deg/s for reporting; binary rounding
   can return 14.999999999999998. The shared ceiling validator now tolerates
