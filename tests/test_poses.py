@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -123,8 +124,8 @@ def test_sleep_joint_positions_use_smoother_calibration_relative_wrist() -> None
     assert sleep == pytest.approx(
         {
             "shoulder_pan": 0.0,
-            "shoulder_lift": -1.8,
-            "elbow_flex": 1.6,
+            "shoulder_lift": -1.8 + math.radians(2.0),
+            "elbow_flex": 1.6 - math.radians(2.0),
             "wrist_flex": -1.7 + 0.75 * 3.4,
             "wrist_roll": 0.1,
         }
@@ -132,9 +133,42 @@ def test_sleep_joint_positions_use_smoother_calibration_relative_wrist() -> None
     assert sleep_up == pytest.approx(
         {
             "shoulder_pan": 0.0,
-            "shoulder_lift": -1.8,
-            "elbow_flex": 1.6,
-            "wrist_flex": -1.7,
+            "shoulder_lift": -1.8 + math.radians(2.0),
+            "elbow_flex": 1.6 - math.radians(2.0),
+            "wrist_flex": -1.7 + math.radians(2.0),
             "wrist_roll": 0.1,
         }
     )
+
+
+def test_sleep_family_endpoint_targets_remain_inside_effective_limits() -> None:
+    # The previous implementation selected the effective limit exactly; a
+    # planned endpoint could then be rejected for rounding even though the
+    # advertised angle appeared to match that limit.
+    limits = {
+        "shoulder_pan": (-2.0, 2.0),
+        "shoulder_lift": (-1.816054, 1.816054),
+        "elbow_flex": (-1.674941, 1.674941),
+        "wrist_flex": (-1.8, 1.8),
+        "wrist_roll": (-2.9, 2.9),
+    }
+    for derived in (sleep_joint_positions(limits), sleep_up_joint_positions(limits)):
+        assert all(limits[name][0] < angle < limits[name][1]
+                   for name, angle in derived.items())
+        assert derived["shoulder_lift"] == pytest.approx(
+            limits["shoulder_lift"][0] + math.radians(2.0)
+        )
+        assert derived["elbow_flex"] == pytest.approx(
+            limits["elbow_flex"][1] - math.radians(2.0)
+        )
+
+
+def test_sleep_inset_scales_for_unusually_narrow_calibration() -> None:
+    limits = {name: (-0.01, 0.01) for name in (
+        "shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"
+    )}
+    for derived in (sleep_joint_positions(limits), sleep_up_joint_positions(limits)):
+        assert all(limits[name][0] < angle < limits[name][1]
+                   for name, angle in derived.items())
+        assert derived["shoulder_lift"] == pytest.approx(-0.008)
+        assert derived["elbow_flex"] == pytest.approx(0.008)
