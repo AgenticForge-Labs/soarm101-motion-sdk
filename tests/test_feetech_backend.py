@@ -8,7 +8,7 @@ import pytest
 
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import MOTOR_IDS
-from soarm101_motion.exceptions import CalibrationError, CommunicationError, SafetyViolationError
+from soarm101_motion.exceptions import CalibrationError, CommunicationError, RobotConnectionError, SafetyViolationError
 from soarm101_motion.hardware.feetech import FeetechBackend
 from soarm101_motion.tools import SO101Gripper
 
