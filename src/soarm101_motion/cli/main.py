@@ -41,6 +41,7 @@ from soarm101_motion.constants import (
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
+from soarm101_motion.config import rate_within_ceiling
 from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
@@ -1425,7 +1426,7 @@ def _agent_requested_rate(value: float, name: str, ceiling: float) -> float:
     speed = float(value)
     if not np.isfinite(speed) or speed <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
-    if speed > ceiling:
+    if not rate_within_ceiling(speed, ceiling):
         raise ValueError(f"{name} exceeds the configured motion envelope ({ceiling:g})")
     return speed
 
