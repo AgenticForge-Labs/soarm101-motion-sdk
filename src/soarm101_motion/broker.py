@@ -28,7 +28,7 @@ from typing import Mapping, Sequence
 
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
-from soarm101_motion.config import SOARM101Config
+from soarm101_motion.config import SOARM101Config, rate_within_ceiling
 from soarm101_motion.constants import (
     DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
     DEFAULT_MAX_JOINT_SPEED_DEG_S,
@@ -132,7 +132,7 @@ class AgentMotionRates:
         }
         for name, ceiling in ceilings.items():
             value = getattr(self, name)
-            if isinstance(value, bool) or not math.isfinite(value) or value <= 0 or value > ceiling:
+            if isinstance(value, bool) or not rate_within_ceiling(float(value), ceiling):
                 raise ValueError(
                     f"{name} must be finite, positive and at most {ceiling:g}"
                 )
