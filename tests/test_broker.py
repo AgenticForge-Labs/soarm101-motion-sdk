@@ -52,13 +52,13 @@ def test_broker_executor_propagates_trusted_motion_envelope(monkeypatch) -> None
     motion_command = commands[-1]
     assert motion_command[-12:] == [
         "--max-joint-speed-deg-s",
-        "80",
+        "8",
         "--max-joint-acceleration-deg-s2",
-        "500",
+        "25",
         "--max-linear-speed-mm-s",
-        "90",
+        "10",
         "--max-linear-acceleration-mm-s2",
-        "900",
+        "40",
         "--max-tool-angular-speed-deg-s",
         "70",
         "--max-tool-angular-acceleration-deg-s2",
@@ -71,7 +71,7 @@ def test_broker_executor_propagates_trusted_motion_envelope(monkeypatch) -> None
     assert "--max-linear-speed-mm-s" not in capture_command
 
 
-def test_broker_pins_agent_motion_rates_and_never_accepts_agent_overrides(monkeypatch) -> None:
+def test_broker_pins_global_rates_and_allows_only_slower_requests(monkeypatch) -> None:
     commands: list[list[str]] = []
 
     class Completed:
@@ -103,13 +103,13 @@ def test_broker_pins_agent_motion_rates_and_never_accepts_agent_overrides(monkey
     command = commands[-1]
     assert command[command.index("--speed-mm-s") + 1] == "20"
     assert command[command.index("--acceleration-mm-s2") + 1] == "80"
-    assert command[command.index("--max-linear-speed-mm-s") + 1] == "80"
+    assert command[command.index("--max-linear-speed-mm-s") + 1] == "20"
 
     executor.run(["joint", "shoulder_pan", "--delta-deg", "3"])
     command = commands[-1]
     assert command[command.index("--speed-deg-s") + 1] == "16"
     assert command[command.index("--acceleration-deg-s2") + 1] == "50"
-    assert command[command.index("--max-joint-speed-deg-s") + 1] == "60"
+    assert command[command.index("--max-joint-speed-deg-s") + 1] == "16"
 
     executor.run(["capture", "overhead"])
     assert "--speed-mm-s" not in commands[-1]
@@ -144,6 +144,8 @@ def test_broker_parser_defaults_to_100_1000_motion_envelope() -> None:
     assert args.agent_joint_acceleration_deg_s2 == pytest.approx(25.0)
     assert args.agent_cartesian_speed_mm_s == pytest.approx(10.0)
     assert args.agent_cartesian_acceleration_mm_s2 == pytest.approx(40.0)
+    assert args.agent_gripper_speed_raw == 250
+    assert args.agent_gripper_acceleration_raw == 20
 
 
 class FakeExecutor:
@@ -378,3 +380,149 @@ def test_broker_translates_sleep_up_to_bounded_cli(tmp_path: Path) -> None:
 
     assert response.status == 200
     assert executor.calls == [expected]
+
+
+@pytest.mark.parametrize("action,path,body,expected_flags", [
+    ("go_pose", "/v1/go-pose", {"name": "agent_start_overhead"},
+     {"--speed-deg-s": "15", "--acceleration-deg-s2": "150",
+      "--gripper-speed-raw": "250", "--gripper-acceleration-raw": "20"}),
+    ("sleep", "/v1/sleep", {},
+     {"--speed-deg-s": "15", "--acceleration-deg-s2": "150",
+      "--gripper-speed-raw": "250", "--gripper-acceleration-raw": "20"}),
+    ("sleep_up", "/v1/sleep-up", {},
+     {"--speed-deg-s": "15", "--acceleration-deg-s2": "150",
+      "--gripper-speed-raw": "250", "--gripper-acceleration-raw": "20"}),
+    ("joint", "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 2},
+     {"--speed-deg-s": "15", "--acceleration-deg-s2": "150"}),
+    ("jog", "/v1/jog", {"frame": "world", "x_mm": 1},
+     {"--speed-mm-s": "10", "--acceleration-mm-s2": "40"}),
+    ("gripper", "/v1/gripper", {"target": "open"},
+     {"--gripper-speed-raw": "250", "--gripper-acceleration-raw": "20"}),
+])
+def test_every_broker_motion_uses_pinned_rates(
+    monkeypatch, tmp_path, action, path, body, expected_flags,
+) -> None:
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        class Completed:
+            returncode = 0
+            stdout = "{}"
+            stderr = ""
+        return Completed()
+
+    monkeypatch.setattr("soarm101_motion.broker.subprocess.run", fake_run)
+    executor = AgentCommandExecutor(rates=AgentMotionRates(
+        joint_speed_deg_s=15.0, joint_acceleration_deg_s2=150.0,
+    ))
+    service = RobotBrokerService(
+        executor=executor, token="test-token",
+        event_path=tmp_path / "events.jsonl",
+    )
+    response = service.dispatch("POST", path, body)
+    assert response.status == 200, response.body
+    assert commands, action
+    command = commands[-1]
+    for flag, expected in expected_flags.items():
+        assert command[command.index(flag) + 1] == expected
+    assert command[command.index("--max-joint-speed-deg-s") + 1] == "15"
+    assert command[command.index("--max-joint-acceleration-deg-s2") + 1] == "150"
+
+
+@pytest.mark.parametrize("action,path,body", [
+    ("go_pose", "/v1/go-pose", {"name": "agent_start_overhead", "speed_deg_s": 15.01}),
+    ("sleep", "/v1/sleep", {"acceleration_deg_s2": 151}),
+    ("joint", "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 2,
+                             "speed_deg_s": 16}),
+    ("jog", "/v1/jog", {"x_mm": 1, "speed_mm_s": 11}),
+    ("gripper", "/v1/gripper", {"target": "open", "gripper_speed_raw": 251}),
+    ("sleep_up", "/v1/sleep-up", {"gripper_acceleration_raw": 21}),
+])
+def test_motion_faster_than_human_policy_rejected_without_execution(
+    monkeypatch, tmp_path, action, path, body,
+) -> None:
+    commands = []
+    monkeypatch.setattr(
+        "soarm101_motion.broker.subprocess.run",
+        lambda cmd, **kw: commands.append(cmd),
+    )
+    service = RobotBrokerService(
+        executor=AgentCommandExecutor(rates=AgentMotionRates(
+            joint_speed_deg_s=15, joint_acceleration_deg_s2=150,
+        )), token="test-token", event_path=tmp_path / "events.jsonl",
+    )
+    result = service.dispatch("POST", path, body)
+    assert result.status == 400, (action, result.body)
+    assert not commands
+
+
+def test_agent_may_request_lower_rates_on_saved_pose_and_sleep(monkeypatch, tmp_path) -> None:
+    commands = []
+    class Completed:
+        returncode = 0
+        stdout = "{}"
+        stderr = ""
+    monkeypatch.setattr(
+        "soarm101_motion.broker.subprocess.run",
+        lambda cmd, **kw: (commands.append(cmd), Completed())[1],
+    )
+    service = RobotBrokerService(
+        executor=AgentCommandExecutor(rates=AgentMotionRates(
+            joint_speed_deg_s=15, joint_acceleration_deg_s2=150,
+        )), token="test-token", event_path=tmp_path / "events.jsonl",
+    )
+    for path, extra in (
+        ("/v1/go-pose", {"name": "agent_start_overhead"}),
+        ("/v1/sleep", {}),
+        ("/v1/sleep-up", {}),
+    ):
+        body = {**extra, "speed_deg_s": 5, "acceleration_deg_s2": 30,
+                "gripper_speed_raw": 100, "gripper_acceleration_raw": 10}
+        assert service.dispatch("POST", path, body).status == 200
+        cmd = commands[-1]
+        for flag, expected in (("--speed-deg-s", "5"),
+                               ("--acceleration-deg-s2", "30"),
+                               ("--gripper-speed-raw", "100"),
+                               ("--gripper-acceleration-raw", "10")):
+            assert cmd[cmd.index(flag) + 1] == expected
+
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), True])
+def test_bad_requested_joint_rates_fail_closed(value) -> None:
+    rates = AgentMotionRates(joint_speed_deg_s=15, joint_acceleration_deg_s2=150)
+    with pytest.raises(ValueError):
+        rates.selected("sleep", {"speed_deg_s": value})
+
+
+def test_operator_rate_exactly_matches_roundtrip_human_limit() -> None:
+    """Regression: 15 deg/s -> radians -> 14.999999999999998 deg/s."""
+    import math
+
+    from soarm101_motion.config import rate_within_ceiling
+
+    config = SOARM101Config.from_motion_limits(
+        max_joint_speed_deg_s=15,
+        max_joint_acceleration_deg_s2=150,
+        default_joint_speed=math.radians(15),
+        default_joint_acceleration=math.radians(150),
+    )
+    rounded_limit = config.motion_limits_human["max_joint_speed_deg_s"]
+    assert rounded_limit < 15.0  # Document the exact original failure.
+    rates = AgentMotionRates(
+        joint_speed_deg_s=15.0, joint_acceleration_deg_s2=150.0,
+    ).validated(config)
+    assert rates.joint_speed_deg_s == 15.0
+    assert rate_within_ceiling(15.0, rounded_limit)
+    assert not rate_within_ceiling(15.000001, rounded_limit)
+    with pytest.raises(ValueError, match="joint_speed_deg_s"):
+        AgentMotionRates(
+            joint_speed_deg_s=15.000001, joint_acceleration_deg_s2=150.0,
+        ).validated(config)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
+def test_ceiling_roundtrip_helper_never_accepts_invalid_rates(value: float) -> None:
+    from soarm101_motion.config import rate_within_ceiling
+
+    assert not rate_within_ceiling(value, 15.0)

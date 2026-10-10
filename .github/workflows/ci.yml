@@ -19,6 +19,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libegl1
       - run: uv sync --extra dev --extra gui
       - run: uv run ruff check .
+      - run: bash -n scripts/test_broker_pr88.sh
       - run: bash -n scripts/test_registry_pr87.sh
       - run: uv run python -m compileall -q src
       - run: uv run pytest

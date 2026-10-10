@@ -1,11 +1,17 @@
-# Shared SDK capability registry migration (design only)
+# Shared SDK capability registry and broker migration
 
-**Status:** PR #86 merged; PR #87 implements the first, typed SDK registry
-phase, with Python 3.10 and 3.12 CI green (586 tests). Verify the GitHub
-PR state before treating PR #87 as merged into `main`. PRs 2 and 3 are
-still design-only. The checked-in broker remains a subprocess client of
-the bounded `soarm101 agent` CLI until a separately reviewed broker
-migration passes its own safety and physical validation gates.
+**Status:** PR #86 and registry/ordinary-CLI PR #87 are merged into
+`main` (registry merge `e941e2686d2fd87569cdf1e91d6e508b228787ee`).
+PR #88 is an open **draft**, not on `main`. It stages a persistent SDK
+session through an opt-in **read-only simulation** broker and internal
+fake/simulation HTTP tests for profile enforcement, concurrent STOP,
+queued-request invalidation, lease revocation and camera evidence.
+The deployed broker **still invokes the bounded `soarm101 agent` CLI**.
+Physical device exclusivity, bus-level interruptibility, calibrated motion
+and supervised STOP/2 mm trace validation remain **production-cutover**
+gates, to be completed after the staged #88 merge. The restricted five-leg
+operator trial has passed; no agent-controlled physical path was validated.
+Dependent wrapper retirement is not started.
 
 ## Purpose and ownership
 
@@ -58,6 +64,20 @@ raw serial writes, or unrecognized action parameters as a generic dispatch capab
 Before replacing any existing route, characterize the present outputs and errors in
 hardware-free tests; take behavior from today's SDK/CLI, not documentation assumptions.
 
+## Implementation sequence update (2026-10-10)
+
+The original PR 2/3 descriptions below remain authoritative *requirements*,
+not current integration status. PR #88 now merges only a staged persistent
+SDK executor, read-only simulation preview, and restricted operator-owned
+physical benchmark; it does not cut over the normal CLI-backed broker.
+Proposed follow-ups (numbers not yet assigned): device ownership/session
+lifecycle, independent STOP/fault handling, native action/camera parity,
+physical acceptance and production cutover, and duplicate wrapper retirement.
+See `PLAN.md` for the sequential #88–#93 release train. In particular,
+the physical STOP, calibrated 2 mm jog and exclusivity gates below apply
+**before the production cutover**, not as implied prerequisites for merging
+an explicitly non-production read-only staging path.
+
 ## Broker dispatch and session migration in PR 2
 
 1. A trusted operator selects a capability profile at startup; validate once, pin
@@ -100,14 +120,15 @@ and leaves no false success; missing/expired lease or changed calibration is rej
 workspace/current-pose TOCTOU is revalidated; session ownership/reconnect and camera
 hash evidence are preserved; errors have stable externally visible classifications.
 
-**Physical gate before PR 2 merge:** supervised, unloaded, externally observed 2 mm
+**Physical gate before production cutover (proposed PR #92):** supervised,
+unloaded, externally observed 2 mm
 Cartesian trial at already validated conservative rates, with existing calibration
 and physical-clearance prerequisites verified first. Compare command, encoder, raw HOLD
 goal and post-HOLD drift traces against the PR #86 subprocess baseline; do not infer
 real clearance from the model. Stop immediately on an unexpected physical direction,
 table approach, jerk/shake, command discrepancy or failed safety guard.
 
-## Retiring agent execution wrappers in PR 3
+## Retiring agent execution wrappers (proposed PR #93)
 
 Remove duplicate `soarm101 agent` motion methods and its broker subprocess executor
 only **after** the direct-SDK path proves equivalent and safe. Keep the ordinary human
@@ -121,9 +142,11 @@ second implementation of rate limits, pose semantics, calibration or STOP remain
 
 - First: PR #86 green CI **and** review of its local trace/physical gate, then merge.
 - Second: PR 1 (registry/ordinary CLI parity), CI/test, merge.
-- Third: PR 2 (broker direct dispatch/persistent session), CI plus physical safety
-  validation, merge.
-- Fourth: PR 3 (retirement/cleanup), CI and contract regression, merge.
+- Third: staged PR #88, CI plus local read-only MCP/OpenShell validation, merge.
+- Fourth: complete ownership, STOP, parity and production physical validation in
+  sequential follow-ups (proposed #89–#92); do not enable the new production
+  backend before their software/physical gates pass.
+- Fifth: retire agent duplicate wrappers (proposed #93) after cutover merges.
 
 Do not create dependent branches from `main` ahead of these merges.
 Inspect Robots and Forge Bench are prospective **consumers/evaluators** of

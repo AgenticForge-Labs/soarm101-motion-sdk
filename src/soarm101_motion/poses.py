@@ -22,6 +22,11 @@ if TYPE_CHECKING:
 HOME_POSE_NAME = "home"
 REST_POSE_NAME = "rest"
 
+# Sleep is a commanded, powered posture, not a measured mechanical stop.
+# Keep its selected lower/upper endpoints inside the *effective* joint limits,
+# which already include the independent calibrated mechanical-stop margin.
+SLEEP_EXECUTABLE_ENDPOINT_INSET_RAD = math.radians(2.0)
+
 
 def _calibration_relative_joint_positions(
     limits: Mapping[str, tuple[float, float]],
@@ -38,10 +43,16 @@ def _calibration_relative_joint_positions(
         if not math.isfinite(lower) or not math.isfinite(upper) or lower >= upper:
             raise ValueError(f"invalid {label} joint limits for {name}: {lower}..{upper}")
         selector = selectors[name]
+        # Use the full 2-degree inset on ordinary ranges, but preserve a
+        # strictly interior target even for an unusually narrow calibration.
+        endpoint_inset = min(
+            SLEEP_EXECUTABLE_ENDPOINT_INSET_RAD,
+            0.1 * (upper - lower),
+        )
         if selector == "lower":
-            result[name] = lower
+            result[name] = lower + endpoint_inset
         elif selector == "upper":
-            result[name] = upper
+            result[name] = upper - endpoint_inset
         elif selector == "midpoint":
             result[name] = (lower + upper) / 2.0
         elif selector == "three_quarters":

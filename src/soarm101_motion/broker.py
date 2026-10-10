@@ -26,8 +26,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
-from soarm101_motion.config import SOARM101Config
+from soarm101_motion.config import SOARM101Config, rate_within_ceiling
 from soarm101_motion.constants import (
     DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
     DEFAULT_MAX_JOINT_SPEED_DEG_S,
@@ -55,12 +56,71 @@ class BrokerResponse:
 
 @dataclass(frozen=True, slots=True)
 class AgentMotionRates:
-    """Operator-selected requested rates; separate from the SDK's hard ceilings."""
+    """Operator-pinned rate ceilings shared by every agent movement route."""
 
     joint_speed_deg_s: float = 8.0
     joint_acceleration_deg_s2: float = 25.0
     cartesian_speed_mm_s: float = 10.0
     cartesian_acceleration_mm_s2: float = 40.0
+    gripper_speed_raw: int = 250
+    gripper_acceleration_raw: int = 20
+
+    _ACTION_FIELDS = {
+        "go_pose": ("joint_speed_deg_s", "joint_acceleration_deg_s2",
+                    "gripper_speed_raw", "gripper_acceleration_raw"),
+        "joint": ("joint_speed_deg_s", "joint_acceleration_deg_s2"),
+        "jog": ("cartesian_speed_mm_s", "cartesian_acceleration_mm_s2"),
+        "gripper": ("gripper_speed_raw", "gripper_acceleration_raw"),
+        "sleep": ("joint_speed_deg_s", "joint_acceleration_deg_s2",
+                  "gripper_speed_raw", "gripper_acceleration_raw"),
+        "sleep_up": ("joint_speed_deg_s", "joint_acceleration_deg_s2",
+                     "gripper_speed_raw", "gripper_acceleration_raw"),
+    }
+
+    _REQUEST_FIELDS = {
+        "joint_speed_deg_s": ("speed_deg_s", "--speed-deg-s"),
+        "joint_acceleration_deg_s2": ("acceleration_deg_s2", "--acceleration-deg-s2"),
+        "cartesian_speed_mm_s": ("speed_mm_s", "--speed-mm-s"),
+        "cartesian_acceleration_mm_s2": ("acceleration_mm_s2", "--acceleration-mm-s2"),
+        "gripper_speed_raw": ("gripper_speed_raw", "--gripper-speed-raw"),
+        "gripper_acceleration_raw": ("gripper_acceleration_raw", "--gripper-acceleration-raw"),
+    }
+
+    def selected(self, action: str, request: Mapping[str, object]) -> dict[str, float | int]:
+        """Resolve optional lower requested rates under pinned trusted-host limits."""
+        names = self._ACTION_FIELDS.get(action, ())
+        allowed = {self._REQUEST_FIELDS[name][0] for name in names}
+        unexpected = set(request) & {
+            spec[0] for spec in self._REQUEST_FIELDS.values()
+        } - allowed
+        if unexpected:
+            raise ValueError(f"{action} does not support motion rate fields {sorted(unexpected)}")
+        result: dict[str, float | int] = {}
+        for name in names:
+            key, _ = self._REQUEST_FIELDS[name]
+            ceiling = getattr(self, name)
+            raw = request.get(key, ceiling)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise ValueError(f"{key} must be a finite positive number")
+            value = float(raw)
+            if not math.isfinite(value) or value <= 0 or value > ceiling:
+                raise ValueError(f"{key} must be within (0, {ceiling:g}]")
+            if name.startswith("gripper_"):
+                if type(raw) is not int:
+                    raise ValueError(f"{key} must be a positive integer")
+                result[key] = raw
+            else:
+                result[key] = value
+        return result
+
+    def arguments(self, action: str, request: Mapping[str, object]) -> list[str]:
+        selected = self.selected(action, request)
+        result: list[str] = []
+        for key, value in selected.items():
+            attr = next(name for name, (field, _) in self._REQUEST_FIELDS.items()
+                        if field == key)
+            result.extend([self._REQUEST_FIELDS[attr][1], f"{value:g}"])
+        return result
 
     def validated(self, config: SOARM101Config) -> "AgentMotionRates":
         limits = config.motion_limits_human
@@ -72,10 +132,15 @@ class AgentMotionRates:
         }
         for name, ceiling in ceilings.items():
             value = getattr(self, name)
-            if not math.isfinite(value) or value <= 0 or value > ceiling:
+            if isinstance(value, bool) or not rate_within_ceiling(float(value), ceiling):
                 raise ValueError(
                     f"{name} must be finite, positive and at most {ceiling:g}"
                 )
+        for name, maximum in (("gripper_speed_raw", 3400),
+                              ("gripper_acceleration_raw", 254)):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be an integer in [1, {maximum}]")
         return self
 
 
@@ -112,13 +177,13 @@ class AgentCommandExecutor:
         limits = self.config.motion_limits_human
         return [
             "--max-joint-speed-deg-s",
-            f"{limits['max_joint_speed_deg_s']:g}",
+            f"{min(limits['max_joint_speed_deg_s'], self.rates.joint_speed_deg_s):g}",
             "--max-joint-acceleration-deg-s2",
-            f"{limits['max_joint_acceleration_deg_s2']:g}",
+            f"{min(limits['max_joint_acceleration_deg_s2'], self.rates.joint_acceleration_deg_s2):g}",
             "--max-linear-speed-mm-s",
-            f"{limits['max_linear_speed_mm_s']:g}",
+            f"{min(limits['max_linear_speed_mm_s'], self.rates.cartesian_speed_mm_s):g}",
             "--max-linear-acceleration-mm-s2",
-            f"{limits['max_linear_acceleration_mm_s2']:g}",
+            f"{min(limits['max_linear_acceleration_mm_s2'], self.rates.cartesian_acceleration_mm_s2):g}",
             "--max-tool-angular-speed-deg-s",
             f"{limits['max_tool_angular_speed_deg_s']:g}",
             "--max-tool-angular-acceleration-deg-s2",
@@ -128,16 +193,26 @@ class AgentCommandExecutor:
     def run(self, arguments: Sequence[str]) -> dict[str, object]:
         bounded_arguments = list(arguments)
         if bounded_arguments:
-            if bounded_arguments[0] == "joint":
-                bounded_arguments.extend([
-                    "--speed-deg-s", f"{self.rates.joint_speed_deg_s:g}",
-                    "--acceleration-deg-s2", f"{self.rates.joint_acceleration_deg_s2:g}",
-                ])
-            elif bounded_arguments[0] == "jog":
-                bounded_arguments.extend([
-                    "--speed-mm-s", f"{self.rates.cartesian_speed_mm_s:g}",
-                    "--acceleration-mm-s2", f"{self.rates.cartesian_acceleration_mm_s2:g}",
-                ])
+            action = bounded_arguments[0].replace("-", "_")
+            # Broker callers can append selected rate arguments after
+            # authorization; parse only known rate switches and revalidate.
+            request_rates: dict[str, float | int] = {}
+            for name in self.rates._ACTION_FIELDS.get(action, ()):
+                key, flag = self.rates._REQUEST_FIELDS[name]
+                if flag in bounded_arguments:
+                    index = bounded_arguments.index(flag)
+                    if index + 1 >= len(bounded_arguments):
+                        raise BrokerCommandError(f"missing {flag} value")
+                    raw = bounded_arguments[index + 1]
+                    try:
+                        request_rates[key] = (int(raw) if name.startswith("gripper_") else float(raw))
+                    except ValueError as exc:
+                        raise BrokerCommandError(f"invalid {flag} value") from exc
+            validated = self.rates.selected(action, request_rates)
+            for name in self.rates._ACTION_FIELDS.get(action, ()):
+                key, flag = self.rates._REQUEST_FIELDS[name]
+                if flag not in bounded_arguments:
+                    bounded_arguments.extend([flag, f"{validated[key]:g}"])
             if bounded_arguments[0] in self._MOTION_LIMIT_COMMANDS:
                 bounded_arguments.extend(self._motion_limit_arguments())
         command = [
@@ -183,18 +258,48 @@ class RobotBrokerService:
     def __init__(
         self,
         *,
-        executor: AgentCommandExecutor | None = None,
+        executor: AgentCommandExecutor | SDKAgentExecutor | None = None,
         token: str,
         event_path: str | Path = DEFAULT_EVENT_PATH,
         profile: CapabilityProfile | None = None,
+        allow_simulated_sdk_posts: bool = False,
+        allow_physical_sdk_trial: bool = False,
     ) -> None:
+        if allow_simulated_sdk_posts and not (
+            isinstance(executor, SDKAgentExecutor) and executor.simulation
+        ):
+            raise ValueError(
+                "simulated SDK POST tests require an explicitly simulated SDK executor"
+            )
+        if allow_physical_sdk_trial and not (
+            isinstance(executor, SDKAgentExecutor) and executor.physical_trial
+            and not executor.simulation
+        ):
+            raise ValueError("physical trial requires a real explicitly provisioned SDK executor")
+        if allow_simulated_sdk_posts and allow_physical_sdk_trial:
+            raise ValueError("cannot combine simulated and physical broker modes")
+        if allow_physical_sdk_trial:
+            if profile is None or profile.allowed_tools != frozenset({
+                "robot_health", "robot_capabilities", "robot_state",
+                "go_pose", "sleep", "stop",
+            }) or profile.allowed_cameras:
+                raise ValueError("physical trial profile must restrict actions to state, pose, Sleep and STOP")
         if not str(token):
             raise ValueError("broker token cannot be empty")
         self.executor = executor or AgentCommandExecutor()
+        # Not exposed by the broker CLI. The real broker keeps native POST
+        # disabled until physical STOP/ownership/workspace gates are passed.
+        self._allow_simulated_sdk_posts = allow_simulated_sdk_posts
+        self._allow_physical_sdk_trial = allow_physical_sdk_trial
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
         self.profile = profile if profile is not None else CapabilityProfile.full()
+        self._profile_provenance = self.profile.public()
         self._operation_lock = threading.Lock()
+        # Native-session queued actions admitted before STOP must never run
+        # after it, even if an action was waiting for this dispatch lock.
+        self._sdk_stop_epoch = 0
+        self._sdk_epoch_lock = threading.Lock()
         self._event_lock = threading.Lock()
 
     def authorized(self, authorization: str | None) -> bool:
@@ -235,6 +340,7 @@ class RobotBrokerService:
             "request_id": request_id,
             "timestamp": time.time(),
             "action": action,
+            "profile_sha256": self._profile_provenance["sha256"],
             "request": dict(request),
             "ok": ok,
             "duration_s": duration_s,
@@ -256,10 +362,40 @@ class RobotBrokerService:
         arguments: Sequence[str],
     ) -> BrokerResponse:
         started = time.monotonic()
+        if isinstance(self.executor, (AgentCommandExecutor, SDKAgentExecutor)):
+            rates = self.executor.rates.selected(action, request)
+            request = {**request, **rates}
+            arguments = [*arguments, *self.executor.rates.arguments(action, request)]
+        with self._sdk_epoch_lock:
+            admitted_epoch = self._sdk_stop_epoch
         try:
-            with self._operation_lock:
-                result = self.executor.run(arguments)
-        except (BrokerCommandError, ValueError, KeyError, PermissionError) as exc:
+            if isinstance(self.executor, SDKAgentExecutor) and action == "stop":
+                if not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial):
+                    raise PermissionError("native SDK STOP is not available in read-only preview")
+                # An authorized STOP must not queue behind the synchronous
+                # broker command lock. Invalidate previously admitted actions
+                # even if the backend STOP itself raises.
+                with self._sdk_epoch_lock:
+                    self._sdk_stop_epoch += 1
+                result = self.executor.execute(action, request)
+            else:
+                with self._operation_lock:
+                    if isinstance(self.executor, SDKAgentExecutor):
+                        with self._sdk_epoch_lock:
+                            if admitted_epoch != self._sdk_stop_epoch:
+                                raise BrokerCommandError(
+                                    "request cancelled by a newer STOP"
+                                )
+                        if (
+                            action not in {"state", "capabilities"}
+                            and not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial)
+                        ):
+                            raise PermissionError("SDK preview currently permits only read-only routes")
+                        result = self.executor.execute(action, request)
+                    else:
+                        result = self.executor.run(arguments)
+        except (BrokerCommandError, RuntimeError, ValueError, KeyError,
+                OSError, PermissionError) as exc:
             duration = time.monotonic() - started
             self._record(
                 request_id=request_id,
@@ -323,8 +459,9 @@ class RobotBrokerService:
                 ]
             visible["actions"] = actions
         visible["broker_profile"] = self.profile.public()
-        if isinstance(self.executor, AgentCommandExecutor):
+        if isinstance(self.executor, (AgentCommandExecutor, SDKAgentExecutor)):
             visible["broker_requested_motion"] = asdict(self.executor.rates)
+            visible["broker_motion_rate_limits"] = asdict(self.executor.rates)
         return BrokerResponse(response.status, {**response.body, "result": visible})
 
     def dispatch(
@@ -340,7 +477,7 @@ class RobotBrokerService:
         if method == "GET" and path == "/v1/profile":
             return BrokerResponse(
                 HTTPStatus.OK,
-                {"ok": True, "request_id": request_id, "result": self.profile.public()},
+                {"ok": True, "request_id": request_id, "result": dict(self._profile_provenance)},
             )
         try:
             self.profile.check(method, path, request)
@@ -382,6 +519,14 @@ class RobotBrokerService:
                 request=request,
                 arguments=["state", "--robot-id", self.executor.robot_id],
             )
+        if isinstance(self.executor, SDKAgentExecutor) and not (
+            self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
+        ):
+            return BrokerResponse(
+                HTTPStatus.FORBIDDEN,
+                {"ok": False, "request_id": request_id,
+                 "error": "SDK simulation preview is read-only"},
+            )
         if method != "POST":
             return BrokerResponse(
                 HTTPStatus.NOT_FOUND,
@@ -397,11 +542,15 @@ class RobotBrokerService:
                     # operation. Otherwise a second capture could race the first request's
                     # evidence read after the device command returns.
                     with self._operation_lock:
-                        result = self.executor.run(["capture", name])
+                        if isinstance(self.executor, SDKAgentExecutor):
+                            result = self.executor.execute("capture", request)
+                        else:
+                            result = self.executor.run(["capture", name])
                         capture_path = Path(str(result["path"])).expanduser()
                         image_bytes = capture_path.read_bytes()
                         image_sha256 = hashlib.sha256(image_bytes).hexdigest()
-                except (BrokerCommandError, ValueError, KeyError, OSError) as exc:
+                except (BrokerCommandError, RuntimeError, ValueError, KeyError,
+                        OSError, PermissionError) as exc:
                     duration = time.monotonic() - started
                     self._record(
                         request_id=request_id,
@@ -620,6 +769,8 @@ class RobotBrokerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], service: RobotBrokerService) -> None:
+        if service._allow_physical_sdk_trial and address[0] != "127.0.0.1":
+            raise ValueError("physical broker trial must bind to IPv4 loopback only")
         self.service = service
         super().__init__(address, _BrokerHandler)
 
@@ -629,6 +780,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_BROKER_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_BROKER_PORT)
     parser.add_argument("--robot-id", default="so101")
+    parser.add_argument(
+        "--sdk-simulation-preview", action="store_true",
+        help="read-only persistent simulated SDK session; no serial or motion endpoints",
+    )
     parser.add_argument("--events", type=Path, default=DEFAULT_EVENT_PATH)
     parser.add_argument(
         "--profile", type=Path,
@@ -665,22 +820,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
     )
-    requests = parser.add_argument_group("trusted host agent motion requests")
+    requests = parser.add_argument_group("trusted host agent motion ceilings")
     requests.add_argument(
         "--agent-joint-speed-deg-s", type=float, default=8.0,
-        help="requested speed for bounded single-joint jogs (default 8 deg/s)",
+        help="maximum joint speed for all broker joint actions (default 8 deg/s)",
     )
     requests.add_argument(
         "--agent-joint-acceleration-deg-s2", type=float, default=25.0,
-        help="requested acceleration for bounded joint jogs (default 25 deg/s^2)",
+        help="maximum joint acceleration for all broker joint actions (default 25 deg/s^2)",
     )
     requests.add_argument(
         "--agent-cartesian-speed-mm-s", type=float, default=10.0,
-        help="requested Cartesian jog speed (default 10 mm/s)",
+        help="maximum Cartesian jog speed (default 10 mm/s)",
     )
     requests.add_argument(
         "--agent-cartesian-acceleration-mm-s2", type=float, default=40.0,
-        help="requested Cartesian jog acceleration (default 40 mm/s^2)",
+        help="requested Cartesian acceleration ceiling (default 40 mm/s^2)",
+    )
+    requests.add_argument(
+        "--agent-gripper-speed-raw", type=int, default=250,
+        help="maximum gripper servo speed register (1..3400; default 250)",
+    )
+    requests.add_argument(
+        "--agent-gripper-acceleration-raw", type=int, default=20,
+        help="maximum gripper servo acceleration register (1..254; default 20)",
     )
     return parser
 
@@ -706,12 +869,28 @@ def main(argv: list[str] | None = None) -> int:
         joint_acceleration_deg_s2=args.agent_joint_acceleration_deg_s2,
         cartesian_speed_mm_s=args.agent_cartesian_speed_mm_s,
         cartesian_acceleration_mm_s2=args.agent_cartesian_acceleration_mm_s2,
+        gripper_speed_raw=args.agent_gripper_speed_raw,
+        gripper_acceleration_raw=args.agent_gripper_acceleration_raw,
     ).validated(config)
+    if args.sdk_simulation_preview:
+        preview = CapabilityProfile.from_document({
+            "schema_version": 1,
+            "name": "sdk-preview-read-only",
+            "tools": ["robot_health", "robot_capabilities", "robot_state"],
+            "cameras": [],
+            "limits": {},
+        })
+        if args.profile is not None:
+            raise SystemExit("--profile is not supported in read-only SDK simulation preview")
+        executor = SDKAgentExecutor(config=config, rates=rates, simulation=True)
+    else:
+        preview = CapabilityProfile.from_file(args.profile) if args.profile else None
+        executor = AgentCommandExecutor(config=config, rates=rates)
     service = RobotBrokerService(
-        executor=AgentCommandExecutor(config=config, rates=rates),
+        executor=executor,
         token=token,
         event_path=args.events,
-        profile=CapabilityProfile.from_file(args.profile) if args.profile else None,
+        profile=preview,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     limits = config.motion_limits_human
@@ -724,7 +903,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{limits['max_linear_acceleration_mm_s2']:g} mm/s^2; "
         f"tool angular={limits['max_tool_angular_speed_deg_s']:g} deg/s, "
         f"{limits['max_tool_angular_acceleration_deg_s2']:g} deg/s^2; "
-        f"agent requests joint={rates.joint_speed_deg_s:g} deg/s, "
+        f"agent ceilings joint={rates.joint_speed_deg_s:g} deg/s, "
         f"{rates.joint_acceleration_deg_s2:g} deg/s^2; "
         f"Cartesian={rates.cartesian_speed_mm_s:g} mm/s, "
         f"{rates.cartesian_acceleration_mm_s2:g} mm/s^2"
@@ -735,6 +914,8 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         server.server_close()
+        if isinstance(executor, SDKAgentExecutor):
+            executor.close()
     return 0
 
 

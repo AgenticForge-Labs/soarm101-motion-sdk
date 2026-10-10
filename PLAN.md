@@ -4,7 +4,155 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
+## 2026-10-10 operator gripper fault and joint-only tracing
+
+A supervised Sleep/Overhead/Left/Right/Sleep run reported Feetech
+`so101_gripper` overload status 0x20; visual inspection alone cannot
+determine whether the fault was sustained overload or a prior protection
+status. The normal SDK correctly aborted motion, but the old hardware
+STOP/HOLD read all six motors before requesting a hold. An unreadable
+gripper therefore blocked the arm-motor hold command, and cleanup hid
+the original failure. PR #88 now attempts live-position HOLD on each
+readable motor, still reports partial failure, always tries disconnect,
+and preserves the initiating exception. The route gains `--joint-only`
+to avoid the post-Sleep gripper close during arm-joint characterization.
+These software fixes require local hardware validation. Motor protection
+is not suppressed. A separate trusted operator-only loopback bench experiment
+is now available; physical persistent SDK execution is still not enabled for
+the production broker or OpenShell agents.
+
+## 2026-10-10 persistent physical broker route experiment (PR #88, pending)
+
+The trusted operator-only `examples/persistent_broker_motion_trace.py`
+exercises five existing poses through the **real HTTP broker** with one
+persistent SDK session: Sleep → Overhead → Left → Right → Sleep.
+It uses joint-only requests by default (the earlier gripper overload
+was transient), pinned joint speed/acceleration rates, a
+calibration-bound human lease, a profile restricted to state, pose,
+Sleep and STOP, and a loopback-only bearer-token service.
+Evidence includes a session UUID, SDK connection count, passive motor
+trace, broker event JSONL, and summary. A cooperative Linux tty
+file lock prevents another updated SDK process from opening the same
+real serial port, though older uncooperative software remains a risk.
+
+**The supervised five-leg joint-only route completed on real hardware on
+2026-10-10**, with one SDK connection, 1,677 commands, 444 feedback samples,
+and five completed legs (operator-supplied JSONL trace, broker events and
+summary). This narrowly validates that route, not interruptible physical
+STOP, cross-process fault recovery or OpenShell agent motion. The experiment
+does not authorize agent/OpenShell motion or the general physical SDK broker.
+Production continues with the existing bounded CLI. The open merge
+gates remain physical STOP/HOLD, device exclusivity, fault recovery,
+camera/trace parity, and supervised calibrated Cartesian movement.
+Keep hardware revisions and test results on this PR.
+
+## Milestone B integration sequence (proposed; only PR #88 exists)
+
+GitHub `main` is authoritative. Do not create a dependent branch until the
+preceding PR is merged. Preserve the extensive #88 staged work rather than
+starting a competing SDK executor.
+
+1. **PR #88 — staged SDK/broker foundation (current draft):** merge only after
+   full software CI and local read-only OpenShell/MCP preflight pass. Production
+   still uses the bounded CLI subprocess broker; the public SDK preview is
+   read-only simulation. The operator-only physical route requires a terminal,
+   human arming, explicit RUN confirmation and a separate narrow loopback profile.
+   The completed 2026-10-10 five-leg experiment is evidence for *that route*
+   only, not generalized robot safety.
+2. **Proposed PR #89 — exclusive hardware ownership/session lifecycle:**
+   one broker-owned persistent SDK session; fail-closed disconnect, restart,
+   authority expiry and calibration changes; confirm GUI/CLI/second-broker
+   exclusivity, including cooperative lock limitations.
+3. **Proposed PR #90 — independent STOP and fault handling:** true active-motion
+   cancellation, generation-based queued-request invalidation, incomplete HOLD
+   and servo faults; hardware-free race tests followed by a supervised STOP
+   while moving with physical power cutoff accessible.
+4. **Proposed PR #91 — native registry dispatch and camera evidence parity:**
+   bounded joint/Cartesian/pose/Sleep/gripper/camera operations through the
+   shared SDK; retain MCP/robotctl contracts, immutable profile, human lease,
+   camera SHA evidence and complete auditable errors. Reject any duplicate
+   untrusted host paths or direct agent hardware entrypoints.
+5. **Proposed PR #92 — supervised physical qualification and cutover:**
+   conservative 20 Hz trial candidate, observed 2 mm calibrated jog, STOP,
+   stale position/workspace checks, fault recovery, camera capture and
+   attended Codex/MCP run. Switch the production broker only after the
+   documented physical gate passes. Do not infer clearance from model FK.
+6. **Proposed PR #93 — retire duplicate agent CLI execution paths:**
+   remove only the superseded bounded-agent motion executor and duplicate
+   code; retain the human CLI, calibration/diagnostics and stable external
+   capability contracts, update source-controlled architecture docs.
+
+These PR numbers are tentative. This sequence **supersedes the original
+three-PR cutover schedule below**, but keeps its original acceptance gates.
+After Milestone B has merged, implement the persistent interactive Codex/Hermes
+OpenShell terminal separately. Read-only interactive tests may be designed
+earlier, but must not create a parallel robot controller. Ordinary real robot
+usage is not a replacement for fault-injection and independently observed
+STOP/ownership testing.
+
+## Next milestone — interactive, sandboxed Codex/Hermes (design only)
+
+The existing `soarm101 agent sandbox run` executes a one-shot harness process
+(`codex exec --json --ephemeral` for Codex) then tears down its sandbox
+and trusted broker. Running the interactive host `codex` with MCP is *not*
+equivalent to OpenShell confinement: host tools can discover uncontrolled
+device, subprocess, or network routes even when MCP tools are profile-limited.
+Do not treat a prompt's instruction to stay within MCP as a security control.
+
+**After the Milestone B production-broker safety gates are merged**,
+implement a persistent interactive OpenShell terminal as a dedicated
+follow-on change. Reuse the packaged Codex/Hermes adapters and current
+MCP/broker/lease/profile primitives; never invent a second robot transport.
+Proposed CLI UX (not yet implemented): `soarm101 agent sandbox interactive
+--agent codex --auth installed --interface mcp --capability-profile FILE`,
+plus explicit attach/status/close, selectable read-only or human-authorized
+control, and predictable teardown/evidence. Preserve a single broker-owned
+device session across prompts, with no host Codex shell fallback.
+
+Acceptance requirements: per-session immutable broker profile/digest and
+one-time bearer-token handling; sandbox unable to reach serial/camera nodes,
+unrestricted SDK/host CLI, Docker socket, host code tree or unrelated credentials;
+MCP tool denials enforced in the broker even when an agent attempts direct HTTP
+or alternate shell paths; explicit human arming outside sandbox; lease expiry
+and broker loss fail closed; independently interruptible STOP/HOLD; authenticated
+named camera capture with SHA evidence; interactive attach/reconnect and
+process cleanup without leaving torque or open hardware ownership ambiguous.
+Use fake OpenShell/broker tests and real read-only Codex/Hermes interactive
+trials *before* supervised physical motion. A narrow shipped joint-only
+profile should be easy to select in one command, not require editing SDK code.
+Physical validation and independent human power cutoff remain mandatory.
+
 ## Shared SDK registry and broker migration plan
+
+**PR 2 work in progress (branch `feature/broker-persistent-sdk-session`):**
+PR #87 merged into `main` at `e941e2686d2fd87569cdf1e91d6e508b228787ee`.
+The new `broker_sdk.py` contains a persistent SDK session and strict typed
+action adapter, initially exposed through an explicitly opted-in
+`soarm101-broker --sdk-simulation-preview` **read-only simulation mode**.
+In the public preview, `GET /v1/state` and `GET /v1/capabilities` use the
+SDK session and **all POST routes remain denied**. An internal,
+explicitly simulated test-only service setting permits HTTP regression
+coverage for pinned profiles, expired authority, serialized commands and
+concurrent STOP. A native STOP also invalidates already-queued requests
+and revokes the simulated motion authority even if HOLD fails. It is not
+a CLI option and cannot activate a physical SDK session. Production broker
+operation still uses the existing bounded agent CLI subprocesses by default.
+The preview intentionally does not authorize real hardware; tests of the
+session adapter do not establish STOP interruptibility at the physical bus,
+cross-process exclusivity, calibrated jog safety, or live reliability.
+The internal fake-capture tests also verify image hashing, response
+redaction and failure evidence without opening a camera device.
+
+**Original PR 2 production cutover blockers (now sequenced across proposed
+PRs #89–#92):** before replacing the production broker, complete
+profile/lease enforcement at execution, direct SDK HTTP motion and evidence
+parity, reliable concurrent STOP independent of the operation lock, shared
+cross-process hardware ownership with ordinary CLI/GUI, session fault/
+disconnect handling, simulated/fake-transport regression, and a supervised,
+traced physical 2 mm jog with clear operator observation. Keep all fixes on
+the sequential follow-up PRs; no new dependent branch before its prerequisite merges.
+
+
 
 **Implementation update:** PR #86 merged into `main` at
 `dfa2cbd128cf6cb4e37f9742333a63c0fc249cbc`.
@@ -15,7 +163,9 @@ Software CI passed on Python 3.10 and 3.12 with 586 tests; the GitHub
 PR state is authoritative for whether #87 has merged. Operator-only
 configuration, calibration, sequence/trajectory execution and the
 agent-specific bounded subprocess remain deliberately unchanged.
-PRs 2 and 3 remain strictly dependent and unimplemented.
+The original PR 2/3 wording above is historical. The current staged #88
+branch is implemented but unmerged; production cutover and wrapper retirement
+are separated into the proposed #89–#93 sequence.
 
 
 Detailed design, authority boundaries, STOP/cancellation acceptance tests, and

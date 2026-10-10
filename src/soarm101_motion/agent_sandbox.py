@@ -25,6 +25,7 @@ from typing import Mapping, Sequence
 from .agent_adapters import HERMES
 from .agent_mcp_runtime import MCP_PYTHON, client_files as mcp_client_files
 from .agent_mcp_runtime import config_file as mcp_config_file, skill_text as mcp_skill_text
+from .config import SOARM101Config
 from .capability_profile import CapabilityProfile
 from .agent_adapters import get_agent_adapter
 from .agent_adapters import resolve_agent_adapter
@@ -338,6 +339,12 @@ def broker_policy_text(
         "  read_only:",
     ]
     lines.extend(f"    - {path}" for path in adapter.read_only_paths)
+    if interface == "mcp":
+        # Network binary permission only authorizes executing the interpreter.
+        # Landlock also needs read access to its pyvenv.cfg and site-packages;
+        # otherwise Python fails before the MCP server can even initialize.
+        # Scope this to the fixed SDK-owned client-only venv in MCP runs.
+        lines.append("    - /opt/soarm101-mcp")
     lines.extend(
         (
             "  read_write:",
@@ -570,8 +577,10 @@ class BrokerProcess:
         token: str,
         event_path: Path,
         profile_path: Path | None = None,
+        rates: object | None = None,
     ) -> None:
         self.profile_path = profile_path
+        self.rates = rates
         self.port = int(port)
         self.token = token
         self.event_path = event_path
@@ -588,6 +597,16 @@ class BrokerProcess:
         ]
         if self.profile_path is not None:
             command.extend(["--profile", str(self.profile_path)])
+        if self.rates is not None:
+            for key, flag in (
+                ("joint_speed_deg_s", "--agent-joint-speed-deg-s"),
+                ("joint_acceleration_deg_s2", "--agent-joint-acceleration-deg-s2"),
+                ("cartesian_speed_mm_s", "--agent-cartesian-speed-mm-s"),
+                ("cartesian_acceleration_mm_s2", "--agent-cartesian-acceleration-mm-s2"),
+                ("gripper_speed_raw", "--agent-gripper-speed-raw"),
+                ("gripper_acceleration_raw", "--agent-gripper-acceleration-raw"),
+            ):
+                command.extend([flag, f"{getattr(self.rates, key):g}"])
         self.process = subprocess.Popen(
             command,
             env=env,
@@ -1067,6 +1086,7 @@ def run_agent(
     capability_profile: Path | None = None,
     adapter_manifest: Path | None = None,
     openshell: OpenShellClient | None = None,
+    broker_rates: object | None = None,
 ) -> RunResult:
     adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
@@ -1151,6 +1171,13 @@ def run_agent(
         }
         if read_only or capability_profile is not None or interface == "mcp":
             broker_kwargs["profile_path"] = profile_file
+        if broker_rates is not None:
+            from soarm101_motion.broker import AgentMotionRates
+            if not isinstance(broker_rates, AgentMotionRates):
+                raise AgentSandboxError("broker_rates must be an AgentMotionRates policy")
+            broker_kwargs["rates"] = broker_rates.validated(
+                SOARM101Config(robot_id="so101")
+            )
         broker = BrokerProcess(**broker_kwargs)
         policy = root / "policy.yaml"
         skill = root / "SKILL.md"
@@ -1370,9 +1397,25 @@ def run_agent(
                     timeout=30,
                 )
                 if probe.returncode != 0 or "soarm101-mcp-ready" not in probe.stdout:
+                    # Preserve the actual preflight failure while keeping the
+                    # one-run broker token out of CLI output and artifacts.
+                    # An installed image is not proof the MCP import/network
+                    # handshake succeeds inside an OpenShell sandbox.
+                    def diagnostic(value: str) -> str:
+                        safe = (value or "").replace(
+                            token, "<redacted-soarm101-broker-token>"
+                        ).strip()
+                        return safe[:2000] or "<empty>"
+
                     raise AgentSandboxError(
-                        "isolated MCP tool handshake failed; verify image build, broker "
-                        "profile and OpenShell policy before agent handoff"
+                        "isolated MCP tool handshake failed before Codex started "
+                        f"(exit={probe.returncode});\n"
+                        f"stdout:\n{diagnostic(probe.stdout)}\n"
+                        f"stderr:\n{diagnostic(probe.stderr)}\n"
+                        "If the MCP Python executable or dependency is absent, "
+                        "rebuild with 'soarm101 agent sandbox setup --agent codex "
+                        "--auth installed'. Otherwise inspect the preflight error "
+                        "and the retained openshell-effective-policy.yaml."
                     )
             process = client.exec(
                 sandbox,

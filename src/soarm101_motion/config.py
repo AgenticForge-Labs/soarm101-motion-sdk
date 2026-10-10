@@ -33,6 +33,22 @@ from soarm101_motion.constants import (
 )
 from soarm101_motion.exceptions import ConfigurationError
 
+def rate_within_ceiling(value: float, ceiling: float) -> bool:
+    """Compare converted human-unit rates without permitting meaningful excess.
+
+    Converting an exact degree/s limit to radians and back can yield a value
+    one ULP below the original (15 -> 14.999999999999998). Allow only a
+    four-ULP representation difference, not an operational rate increase.
+    SDK SI-unit motion bounds remain authoritative.
+    """
+    return (
+        math.isfinite(value)
+        and math.isfinite(ceiling)
+        and value > 0
+        and ceiling > 0
+        and (value <= ceiling or value - ceiling <= 4 * math.ulp(ceiling))
+    )
+
 
 @dataclass(frozen=True)
 class SOARM101Config:
