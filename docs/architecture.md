@@ -25,6 +25,17 @@ commands. Hardware safety remains in the existing SDK. See
 
 
 
+## OpenShell MCP client runtime boundary
+
+The Codex/Hermes OpenShell MCP client uses the fixed, client-only
+`/opt/soarm101-mcp` Python environment. Its Landlock `read_only` policy
+includes that tree only in MCP mode because Python must read `pyvenv.cfg` and
+installed packages before it can connect to the authenticated broker. The
+network binary allowlist remains separate; `/opt/soarm101-mcp` is never a
+writable mount or a robot SDK/hardware transport. The broker and deterministic
+SDK still own all physical authority, and `robotctl`-only runs retain their
+previous filesystem policy.
+
 ## Shared SDK capability registry (PR #87)
 
 `sdk_capabilities.py` introduces pure action metadata and explicit,
