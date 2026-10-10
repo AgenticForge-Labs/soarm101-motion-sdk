@@ -1370,9 +1370,25 @@ def run_agent(
                     timeout=30,
                 )
                 if probe.returncode != 0 or "soarm101-mcp-ready" not in probe.stdout:
+                    # Preserve the actual preflight failure while keeping the
+                    # one-run broker token out of CLI output and artifacts.
+                    # An installed image is not proof the MCP import/network
+                    # handshake succeeds inside an OpenShell sandbox.
+                    def diagnostic(value: str) -> str:
+                        safe = (value or "").replace(
+                            token, "<redacted-soarm101-broker-token>"
+                        ).strip()
+                        return safe[:2000] or "<empty>"
+
                     raise AgentSandboxError(
-                        "isolated MCP tool handshake failed; verify image build, broker "
-                        "profile and OpenShell policy before agent handoff"
+                        "isolated MCP tool handshake failed before Codex started "
+                        f"(exit={probe.returncode});\n"
+                        f"stdout:\n{diagnostic(probe.stdout)}\n"
+                        f"stderr:\n{diagnostic(probe.stderr)}\n"
+                        "If the MCP Python executable or dependency is absent, "
+                        "rebuild with 'soarm101 agent sandbox setup --agent codex "
+                        "--auth installed'. Otherwise inspect the preflight error "
+                        "and the retained openshell-effective-policy.yaml."
                     )
             process = client.exec(
                 sandbox,
