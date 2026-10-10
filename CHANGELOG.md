@@ -1,5 +1,17 @@
 # Changelog
 
+- PR #88: Add a restricted **physical persistent-SDK broker bench trial**
+  for Sleep → Overhead → Left → Right → Sleep. The trusted loopback HTTP
+  client uses the actual broker dispatch, calibration-bound human lease,
+  canonical saved-pose/Sleep operations, pinned speed/acceleration
+  ceilings, optional joint-only gripper omission, independently requested
+  STOP, and a single persistent SDK connection. Expose connection-count
+  identity and passive motor/broker event traces. Enforce cooperative
+  Linux tty ownership with a per-device advisory lock across updated
+  SDK processes. This is **not** a production broker or OpenShell agent
+  cutover; physical validation and comprehensive CI are still required.
+
+
 - PR #88: Introduce one human-pinned broker motion pacing policy with
   joint, Cartesian and gripper speed/acceleration ceilings. Apply joint
   rates equally to `go_pose`, both Sleep postures and joint jogs;
