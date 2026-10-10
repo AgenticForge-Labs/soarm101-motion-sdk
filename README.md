@@ -31,6 +31,11 @@ python examples/persistent_broker_motion_trace.py \
   --output "$HOME/soarm-motion-tests/persistent-broker-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 
+The script requires a real interactive operator terminal and a literal `RUN`
+confirmation; unattended `--yes` bypass is not supported. Reusing an existing
+human arm lease does not bypass this separate physical-trial confirmation.
+It never runs from the ordinary OpenShell agent sandbox.
+
 The script checks saved-pose calibration, requires typing `RUN`,
 reports a constant broker-session UUID and connection count of **1**
 for every leg, writes one passive motor trace plus an audited broker
