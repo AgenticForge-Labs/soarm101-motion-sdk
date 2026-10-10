@@ -249,3 +249,25 @@ def test_stop_can_reach_owned_arm_while_close_waits_for_active_action(
     assert not motion_error
     assert not closing.is_alive() and not t.is_alive()
     assert sdk.session_evidence["lifecycle"] == "closed"
+
+
+def test_factory_failure_latches_without_retry(tmp_path) -> None:
+    config = SOARM101Config(robot_id="so101")
+    attempts = []
+
+    def unavailable_factory():
+        attempts.append(1)
+        raise RobotConnectionError("factory cannot acquire device")
+
+    sdk = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(), simulation=True,
+        authority_store=AgentAuthorityStore(tmp_path / "authority.json"),
+        arm_factory=unavailable_factory,
+    )
+    with pytest.raises(RobotConnectionError, match="cannot acquire device"):
+        sdk._arm()
+    assert sdk.session_evidence["lifecycle"] == "faulted"
+    with pytest.raises(RuntimeError, match="human restart required"):
+        sdk._arm()
+    assert len(attempts) == 1
+    sdk.close()
