@@ -715,3 +715,37 @@ def test_sleep_cli_requires_confirmation_and_runs_in_simulation(
     assert payload["completed"] is True
     assert payload["final_positions"]["so101_gripper"] == pytest.approx(0.0)
     assert "Press ENTER to relax" in captured.err
+
+
+@pytest.mark.parametrize("command", ["go-pose", "sleep", "sleep-up"])
+def test_agent_pose_and_sleep_parsers_accept_trusted_motion_rates(command) -> None:
+    args = ["agent", command]
+    if command == "go-pose":
+        args.append("agent_start_overhead")
+    args += [
+        "--speed-deg-s", "15",
+        "--acceleration-deg-s2", "150",
+        "--gripper-speed-raw", "100",
+        "--gripper-acceleration-raw", "10",
+    ]
+    parsed = build_parser().parse_args(args)
+    assert parsed.speed_deg_s == 15
+    assert parsed.acceleration_deg_s2 == 150
+    assert parsed.gripper_speed_raw == 100
+    assert parsed.gripper_acceleration_raw == 10
+
+
+def test_openshell_run_parser_accepts_human_broker_rate_ceiling_options() -> None:
+    parsed = build_parser().parse_args([
+        "agent", "sandbox", "run",
+        "--agent", "codex", "--auth", "installed", "--interface", "mcp",
+        "--agent-joint-speed-deg-s", "15",
+        "--agent-joint-acceleration-deg-s2", "150",
+        "--agent-cartesian-speed-mm-s", "10",
+        "--agent-cartesian-acceleration-mm-s2", "40",
+        "--agent-gripper-speed-raw", "250",
+        "--agent-gripper-acceleration-raw", "20",
+    ])
+    assert parsed.agent_joint_speed_deg_s == 15
+    assert parsed.agent_joint_acceleration_deg_s2 == 150
+    assert parsed.agent_gripper_speed_raw == 250
