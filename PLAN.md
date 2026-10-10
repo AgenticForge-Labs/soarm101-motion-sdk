@@ -16,9 +16,31 @@ the original failure. PR #88 now attempts live-position HOLD on each
 readable motor, still reports partial failure, always tries disconnect,
 and preserves the initiating exception. The route gains `--joint-only`
 to avoid the post-Sleep gripper close during arm-joint characterization.
-These software fixes await focused/full CI and supervised workstation
-revalidation; motor protection is not suppressed and no new physical
-broker path is authorized.
+These software fixes require local hardware validation. Motor protection
+is not suppressed. A separate trusted operator-only loopback bench experiment
+is now available; physical persistent SDK execution is still not enabled for
+the production broker or OpenShell agents.
+
+## 2026-10-10 persistent physical broker route experiment (PR #88, pending)
+
+The trusted operator-only `examples/persistent_broker_motion_trace.py`
+exercises five existing poses through the **real HTTP broker** with one
+persistent SDK session: Sleep → Overhead → Left → Right → Sleep.
+It uses joint-only requests by default (the earlier gripper overload
+was transient), pinned joint speed/acceleration rates, a
+calibration-bound human lease, a profile restricted to state, pose,
+Sleep and STOP, and a loopback-only bearer-token service.
+Evidence includes a session UUID, SDK connection count, passive motor
+trace, broker event JSONL, and summary. A cooperative Linux tty
+file lock prevents another updated SDK process from opening the same
+real serial port, though older uncooperative software remains a risk.
+
+**This experiment is not yet physically validated** and does not
+authorize agent/OpenShell motion or the general physical SDK broker.
+Production continues with the existing bounded CLI. The open merge
+gates remain physical STOP/HOLD, device exclusivity, fault recovery,
+camera/trace parity, and supervised calibrated Cartesian movement.
+Keep hardware revisions and test results on this PR.
 
 ## Shared SDK registry and broker migration plan
 
