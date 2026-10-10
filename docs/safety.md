@@ -78,6 +78,18 @@ This is experimental software for a low-cost hobby/educational robot arm, not a 
   command target.
 - Inspect voltage, temperature, current, and status using `soarm101 diagnose`.
 
+## Generated Sleep posture endpoints
+
+Sleep and sleep_up derive their lower/upper joint targets inside the active
+executable range rather than commanding its exact numerical endpoints.
+The 2° ordinary-range Sleep inset is additional to the mechanical-stop
+margin already used to compute effective limits; it does not change
+normal limits or permit operating outside them. Exceptionally narrow ranges
+use a smaller proportional inset so the resulting target stays interior.
+Do not confuse a verified-recovered Feetech `Lock` write status-reply warning
+with endpoint target rejection. Neither result independently proves safe
+Cartesian clearance or physical STOP behavior.
+
 ## Transient torque-control replies
 
 The Feetech transport may occasionally lose or corrupt the status reply to an idempotent
