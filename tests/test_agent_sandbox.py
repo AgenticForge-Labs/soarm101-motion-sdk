@@ -1764,3 +1764,53 @@ def test_read_only_task_uses_matching_interface() -> None:
     assert "robot_capabilities" in mcp
     assert "image content" in mcp
     assert "robotctl.py" not in mcp
+
+
+@pytest.mark.parametrize(
+    ("code", "stdout"),
+    [(1, "partial"), (0, "missing readiness marker")],
+)
+def test_mcp_probe_failure_reports_redacted_diagnostics_before_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int, stdout: str,
+) -> None:
+    from soarm101_motion.agent_mcp_runtime import MCP_PYTHON
+
+    class FailedMcp(FakeOpenShell):
+        leaked_token: str = ""
+
+        def exec(self, name, command, *, workdir="/sandbox", env=None, timeout=1800):
+            if command and command[0] == MCP_PYTHON:
+                self.leaked_token = env["SOARM101_BROKER_TOKEN"]
+                return subprocess.CompletedProcess(
+                    command, code,
+                    stdout=stdout + " " + self.leaked_token,
+                    stderr="MCP import or broker policy failed: " + self.leaked_token,
+                )
+            return super().exec(
+                name, command, workdir=workdir, env=env, timeout=timeout,
+            )
+
+    fake = FailedMcp()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    task = tmp_path / "task.md"
+    task.write_text("Inspect without motion.", encoding="utf-8")
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="handshake failed") as exc:
+        agent_sandbox.run_agent(
+            agent="codex", auth="api-key", task=task,
+            output_dir=tmp_path / "failed-run", interface="mcp",
+            openshell=fake,
+        )
+    message = str(exc.value)
+    assert f"exit={code}" in message
+    assert "MCP import or broker policy failed" in message
+    assert fake.leaked_token not in message
+    assert "<redacted-soarm101-broker-token>" in message
+    assert not any(call["command"][0] == "codex" for call in fake.exec_calls)
+    assert fake.deleted
