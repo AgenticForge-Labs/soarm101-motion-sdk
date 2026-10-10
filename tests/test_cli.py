@@ -759,3 +759,63 @@ def test_cli_operator_rate_exactly_at_converted_ceiling() -> None:
     assert _agent_requested_rate(15, "joint speed deg/s", ceiling) == 15
     with pytest.raises(ValueError, match="exceeds"):
         _agent_requested_rate(15.000001, "joint speed deg/s", ceiling)
+
+
+def test_broker_pinned_low_motion_envelope_allows_capabilities_without_hardware(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    """The broker's 8/25/10/40 envelope must not conflict with SDK defaults."""
+    from soarm101_motion.cli.main import _hardware_config
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    limits = [
+        "--max-joint-speed-deg-s", "8",
+        "--max-joint-acceleration-deg-s2", "25",
+        "--max-linear-speed-mm-s", "10",
+        "--max-linear-acceleration-mm-s2", "40",
+        "--max-tool-angular-speed-deg-s", "10",
+        "--max-tool-angular-acceleration-deg-s2", "20",
+    ]
+    args = build_parser().parse_args(["agent", "state", "--simulation", *limits])
+    config = _hardware_config(args)
+    for name in ("joint_speed", "joint_acceleration", "linear_speed",
+                 "linear_acceleration", "angular_speed", "angular_acceleration"):
+        assert getattr(config, f"default_{name}") <= getattr(config, f"max_{name}")
+    assert config.default_joint_speed == pytest.approx(math.radians(8))
+    assert config.default_joint_acceleration == pytest.approx(math.radians(25))
+    assert config.default_linear_speed == pytest.approx(0.010)
+    assert config.default_linear_acceleration == pytest.approx(0.040)
+    assert config.default_angular_speed == pytest.approx(math.radians(10))
+    assert config.default_angular_acceleration == pytest.approx(math.radians(20))
+
+    # Exercise the same read-only bounded CLI route used by the OpenShell
+    # broker's GET /v1/capabilities preflight. No serial port is opened.
+    assert main(["agent", "capabilities", "--robot-id", "so101", *limits]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    envelope = payload["motion_envelope"]
+    assert envelope["max_joint_speed_deg_s"] == pytest.approx(8)
+    assert envelope["max_joint_acceleration_deg_s2"] == pytest.approx(25)
+    assert envelope["max_linear_speed_mm_s"] == pytest.approx(10)
+    assert envelope["max_linear_acceleration_mm_s2"] == pytest.approx(40)
+
+
+def test_cli_narrow_ceiling_never_raises_default_or_absolute_limit() -> None:
+    from soarm101_motion.cli.main import _hardware_config
+
+    args = build_parser().parse_args([
+        "agent", "state", "--simulation",
+        "--max-joint-speed-deg-s", "8",
+        "--max-joint-acceleration-deg-s2", "25",
+    ])
+    config = _hardware_config(args)
+    assert config.max_joint_speed == pytest.approx(math.radians(8))
+    assert config.max_joint_acceleration == pytest.approx(math.radians(25))
+    assert config.default_joint_speed <= config.max_joint_speed
+    assert config.default_joint_acceleration <= config.max_joint_acceleration
+
+    # An operator's generous ceiling must not change ordinary SDK defaults.
+    normal = _hardware_config(build_parser().parse_args([
+        "agent", "state", "--simulation", "--max-joint-speed-deg-s", "80",
+    ]))
+    assert normal.default_joint_speed == SOARM101Config().default_joint_speed
