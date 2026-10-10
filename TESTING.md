@@ -1,5 +1,18 @@
 # Testing
 
+## 2026-10-10 physical broker 15/150 precision regression
+
+User's first physical persistent-broker route failed *before opening hardware*
+at `AgentMotionRates.validated()`: 15°/s was strictly greater than
+the radians->degrees output 14.999999999999998°/s. The shared
+`rate_within_ceiling()` comparator accepts only 4 ULPs of format
+rounding and still rejects any meaningful speed increase. Test
+`tests/test_broker.py::test_operator_rate_exactly_matches_roundtrip_human_limit`
+and `tests/test_cli.py::test_cli_operator_rate_exactly_at_converted_ceiling`;
+run full CI before supervised retry. A successful startup does not by itself
+prove physical STOP/HOLD, port exclusivity, or all five motion legs.
+
+
 ## Persistent SDK broker five-pose physical experiment (PR #88)
 
 The new `examples/persistent_broker_motion_trace.py` is an
