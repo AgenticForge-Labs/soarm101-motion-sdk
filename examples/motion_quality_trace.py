@@ -76,6 +76,11 @@ def _parser() -> argparse.ArgumentParser:
         default=0.5,
         help="automatic hold time between route legs; no ENTER prompts are used",
     )
+    parser.add_argument(
+        "--joint-only",
+        action="store_true",
+        help="do not request gripper closure on Sleep legs",
+    )
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -153,6 +158,7 @@ def main() -> int:
                 "acceleration_deg_s2": args.acceleration_deg_s2,
                 "command_frequency_hz": cfg.command_frequency_hz,
                 "execution_mode": args.execution_mode,
+                "joint_only": bool(args.joint_only),
                 "hardware_speed_raw": cfg.hardware_speed_raw,
                 "hardware_acceleration_raw": cfg.hardware_acceleration_raw,
                 "route": ["SLEEP", "OVERHEAD", "LEFT", "RIGHT", "SLEEP"],
@@ -165,6 +171,7 @@ def main() -> int:
                     speed=speed,
                     acceleration=acceleration,
                     execution_mode=args.execution_mode,
+                    close_gripper=not args.joint_only,
                 )
                 arm.hold()
                 trace.mark(
@@ -218,6 +225,7 @@ def main() -> int:
             "acceleration_deg_s2": args.acceleration_deg_s2,
             "command_frequency_hz": cfg.command_frequency_hz,
             "execution_mode": args.execution_mode,
+            "joint_only": bool(args.joint_only),
             "hardware_speed_raw": cfg.hardware_speed_raw,
             "hardware_acceleration_raw": cfg.hardware_acceleration_raw,
             "route": ["SLEEP", "OVERHEAD", "LEFT", "RIGHT", "SLEEP"],
