@@ -214,6 +214,8 @@ _SPECS = (
         _number("acceleration_mm_s2", "mm/s^2", "Linear playback acceleration", 40.0),
         _number("gripper_speed_raw", "raw", "Saved gripper speed", 250.0),
         _number("gripper_acceleration_raw", "raw", "Saved gripper acceleration", 20.0),
+        ArgumentSpec("include_gripper", "bool", "Replay saved gripper target",
+                     required=False, default=True),
     )),
     ActionSpec("camera_profiles", "Read persisted named camera profiles", "read", (
         ArgumentSpec("name", "text", "Specific saved camera name", required=False),
@@ -233,6 +235,8 @@ _SPECS = (
                 25.0 * pi / 180.0),
         _number("gripper_speed_raw", "raw", "Sleep gripper speed", 250.0),
         _number("gripper_acceleration_raw", "raw", "Sleep gripper acceleration", 20.0),
+        ArgumentSpec("close_gripper", "bool", "Also close gripper during Sleep",
+                     required=False, default=True),
     )),
     ActionSpec("sleep_up", "Move to guarded folded Sleep-up posture", "motion", (
         _number("speed_rad_s", "rad/s", "Sleep-up joint speed", 8.0 * pi / 180.0),
@@ -338,13 +342,15 @@ class CapabilityRegistry:
                     speed=float(args["speed_mm_s"]) / 1000.0,
                     acceleration=float(args["acceleration_mm_s2"]) / 1000.0,
                 )
-            gripper_result = arm.tool.move(
-                saved.gripper,
-                speed_raw=_checked_gripper_raw(args["gripper_speed_raw"], "speed", 3400),
-                acceleration_raw=_checked_gripper_raw(
-                    args["gripper_acceleration_raw"], "acceleration", 254
-                ),
-            )
+            gripper_result = None
+            if args["include_gripper"]:
+                gripper_result = arm.tool.move(
+                    saved.gripper,
+                    speed_raw=_checked_gripper_raw(args["gripper_speed_raw"], "speed", 3400),
+                    acceleration_raw=_checked_gripper_raw(
+                        args["gripper_acceleration_raw"], "acceleration", 254
+                    ),
+                )
             arm.hold()
             return result, gripper_result
         if name == "capture_saved_pose":
@@ -414,6 +420,9 @@ class CapabilityRegistry:
             )
         if name in ("sleep", "sleep_up"):
             motion = arm.move_sleep if name == "sleep" else arm.move_sleep_up
+            options: dict[str, object] = {}
+            if name == "sleep":
+                options["close_gripper"] = bool(args["close_gripper"])
             return motion(
                 speed=float(args["speed_rad_s"]),
                 acceleration=float(args["acceleration_rad_s2"]),
@@ -423,6 +432,7 @@ class CapabilityRegistry:
                 gripper_acceleration_raw=_checked_gripper_raw(
                     args["gripper_acceleration_raw"], "acceleration", 254
                 ),
+                **options,
             )
         if name == "stop":
             return arm.stop()
