@@ -38,12 +38,16 @@ _ACTION_FIELDS: Mapping[str, frozenset[str]] = {
     "capabilities": frozenset(),
     "state": frozenset(),
     "capture": frozenset({"camera"}),
-    "go_pose": frozenset({"name"}),
-    "joint": frozenset({"joint", "delta_deg"}),
-    "jog": frozenset({"frame", "x_mm", "y_mm", "z_mm"}),
-    "gripper": frozenset({"target"}),
-    "sleep": frozenset(),
-    "sleep_up": frozenset(),
+    "go_pose": frozenset({"name", "speed_deg_s", "acceleration_deg_s2",
+                           "gripper_speed_raw", "gripper_acceleration_raw"}),
+    "joint": frozenset({"joint", "delta_deg", "speed_deg_s", "acceleration_deg_s2"}),
+    "jog": frozenset({"frame", "x_mm", "y_mm", "z_mm",
+                        "speed_mm_s", "acceleration_mm_s2"}),
+    "gripper": frozenset({"target", "gripper_speed_raw", "gripper_acceleration_raw"}),
+    "sleep": frozenset({"speed_deg_s", "acceleration_deg_s2",
+                          "gripper_speed_raw", "gripper_acceleration_raw"}),
+    "sleep_up": frozenset({"speed_deg_s", "acceleration_deg_s2",
+                             "gripper_speed_raw", "gripper_acceleration_raw"}),
     "stop": frozenset(),
 }
 
@@ -142,6 +146,9 @@ class SDKAgentExecutor:
         unexpected = set(request) - fields
         if unexpected:
             raise ValueError(f"unknown {action} fields: {sorted(unexpected)!r}")
+        # Direct in-process calls receive the same trusted ceiling enforcement
+        # as the HTTP/CLI adapter. Validation happens before device activity.
+        self.rates.selected(action, request)
 
     def execute(self, action: str, request: Mapping[str, object]) -> dict[str, object]:
         """Validate and serialize ordinary SDK actions; do not block STOP."""
@@ -240,6 +247,7 @@ class SDKAgentExecutor:
         # Physical state changes always re-evaluate the current human lease.
         # No preflight on a cached state or static profile grants motion.
         authority = self._require_authority(arm)
+        rates = self.rates.selected(action, request)
         if action == "go_pose":
             name = self._text(request, "name")
             if not name.startswith(AGENT_POSE_PREFIX):
@@ -252,7 +260,8 @@ class SDKAgentExecutor:
             arm.enable()
             moved, gripper = SDK_CAPABILITIES.dispatch(
                 "replay_saved_pose", arm,
-                {"robot_id": self.robot_id, "name": name},
+                {"robot_id": self.robot_id, "name": name,
+                 **rates},
             )
             if not (moved.accepted and moved.completed
                     and gripper.accepted and gripper.completed):
@@ -269,10 +278,8 @@ class SDKAgentExecutor:
                 raise PermissionError("agent joint delta must be nonzero and within bounded policy")
             arguments = {
                 "joint": joint, "delta_rad": delta * pi / 180.0,
-                "speed_rad_s": float(getattr(self.rates, "joint_speed_deg_s")) * pi / 180.0,
-                "acceleration_rad_s2": (
-                    float(getattr(self.rates, "joint_acceleration_deg_s2")) * pi / 180.0
-                ),
+                "speed_rad_s": float(rates["speed_deg_s"]) * pi / 180.0,
+                "acceleration_rad_s2": float(rates["acceleration_deg_s2"]) * pi / 180.0,
             }
             SDK_CAPABILITIES.get("jog_joint").validate(arguments)
             before = dict(arm.get_joint_positions().positions)
@@ -318,8 +325,8 @@ class SDKAgentExecutor:
                 "target_xyz_mm": [x * 1000.0, y * 1000.0, z * 1000.0],
                 "target_rpy_deg": [roll * 180 / pi, pitch * 180 / pi, yaw * 180 / pi],
                 "orientation_mode": "compatible",
-                "speed_mm_s": getattr(self.rates, "cartesian_speed_mm_s"),
-                "acceleration_mm_s2": getattr(self.rates, "cartesian_acceleration_mm_s2"),
+                "speed_mm_s": rates["speed_mm_s"],
+                "acceleration_mm_s2": rates["acceleration_mm_s2"],
             })
             arm.hold()
             if not result.accepted or not result.completed:
@@ -338,7 +345,7 @@ class SDKAgentExecutor:
             position = closed if target == "close" else 1.0 - closed
             arm.enable()
             result = SDK_CAPABILITIES.dispatch(
-                "move_gripper", arm, {"position": position}
+                "move_gripper", arm, {"position": position, **rates}
             )
             arm.hold()
             if not result.accepted or not result.completed:
@@ -354,8 +361,10 @@ class SDKAgentExecutor:
             arm.enable()
             result = SDK_CAPABILITIES.dispatch(
                 action, arm, {
-                    "speed_rad_s": 8.0 * pi / 180.0,
-                    "acceleration_rad_s2": 25.0 * pi / 180.0,
+                    "speed_rad_s": float(rates["speed_deg_s"]) * pi / 180.0,
+                    "acceleration_rad_s2": float(rates["acceleration_deg_s2"]) * pi / 180.0,
+                    "gripper_speed_raw": rates["gripper_speed_raw"],
+                    "gripper_acceleration_raw": rates["gripper_acceleration_raw"],
                 }
             )
             arm.hold()
