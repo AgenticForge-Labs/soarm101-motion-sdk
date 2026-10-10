@@ -1602,6 +1602,7 @@ def test_mcp_policy_allows_reading_only_its_isolated_venv(
         assert "path: /v1/gripper" not in policy
         assert "path: /v1/stop" not in policy
 
+
 @pytest.mark.parametrize("agent", ["hermes", "codex"])
 def test_mcp_run_uses_pinned_broker_and_temporary_client_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str,
