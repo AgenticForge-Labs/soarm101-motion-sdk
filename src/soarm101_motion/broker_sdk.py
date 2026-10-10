@@ -154,7 +154,13 @@ class SDKAgentExecutor:
             with self._lifecycle_lock:
                 self._require_active()
                 if self._session is None:
-                    arm = self._arm_factory()
+                    try:
+                        arm = self._arm_factory()
+                    except BaseException as exc:
+                        # Factory failure is not an invitation to reconnect on
+                        # the next agent request.
+                        self._fault(exc)
+                        raise
                     try:
                         if arm.config.robot_id != self.robot_id:
                             raise RobotConnectionError(
