@@ -33,6 +33,14 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+For joint-only characterization, use the canonical Sleep primitive with
+`close_gripper=False` via the opt-in test flag; do not approximate Sleep by
+unvalidated external servo goals or disable the motor effort/status guards.
+A Feetech servo status error, including gripper overload, still aborts
+movement. STOP/HOLD attempts live encoder latching on each readable motor
+but reports incomplete when any motor's hold could not be verified.
+Secondary cleanup errors must not erase the original motion fault.
+
 For the bundled Codex/Hermes MCP interface, OpenShell's filesystem Landlock
 rules must include read-only access to the SDK's fixed client-only
 `/opt/soarm101-mcp` virtualenv (Python reads `pyvenv.cfg` and site-packages).
