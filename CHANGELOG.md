@@ -1,5 +1,15 @@
 # Changelog
 
+- PR #88: Introduce one human-pinned broker motion pacing policy with
+  joint, Cartesian and gripper speed/acceleration ceilings. Apply joint
+  rates equally to `go_pose`, both Sleep postures and joint jogs;
+  apply gripper raw rates to standalone and embedded gripper commands.
+  MCP, robotctl and OpenShell accept optional **slower** action rates,
+  with pre-execution rejection above the operator limits. Update typed
+  direct-SDK preview parity, tests and docs; the preview remains
+  simulation-only and hardware motion is not yet MCP-validated.
+
+
 - PR #88 follow-up to operator-reported 2026-10-10 gripper servo `Overload` status:
   retained fail-closed fault reporting while allowing STOP/HOLD to latch all
   *readable* motors even if the gripper position cannot be read. STOP still
