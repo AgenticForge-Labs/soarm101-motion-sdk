@@ -1,5 +1,29 @@
 # Architecture
 
+## Supervised direct physical SDK broker trial (PR #88, not released)
+
+An explicit *trusted-host-only* example can construct a narrowly
+profiled `RobotBrokerService` and physical `SDKAgentExecutor`
+using a single persistent `SOARM101` object. Each route leg
+traverses authenticated loopback HTTP and the same typed
+registry primitives as the human CLI, not an agent subprocess.
+A canonical SDK calibration-bound human lease, per-run broker
+rates, and motor fault/STOP checks remain active. A passive
+tracer and broker JSONL capture command/feedback and action
+provenance with a stable session UUID and connection counter.
+A POSIX advisory device-file lock in Feetech stops concurrent
+updated SDK processes using the same actual Linux tty. It
+cannot exclude legacy applications not respecting this lock.
+
+This is a **narrow local hardware experiment only**, not a production
+physical direct-broker release, not an OpenShell MCP/Codex live-motion
+test, and not physical proof of independent STOP or all workspace
+guards. The ordinary public broker is still CLI-subprocess-backed;
+its opt-in SDK preview remains read-only simulation. Do not
+relax those boundaries before physical STOP, ownership and
+calibrated 2 mm jog evidence is reviewed.
+
+
 ## Broker-owned rate limits across all movement (PR #88, unmerged)
 
 The trusted host selects fixed motion rate ceilings for its broker
