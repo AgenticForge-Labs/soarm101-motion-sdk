@@ -45,6 +45,14 @@ programs that ignore the lock can still compete.
 
 ## Uniform operator motion policy (PR #88 — unmerged)
 
+The experimental pinned-rate broker now constructs internally consistent
+bounded-CLI SDK defaults whenever an operator ceiling is below the ordinary
+SDK default. This repairs a read-only broker capability-discovery HTTP 409
+at 8 deg/s without increasing any authorized motion rate. Interactive
+OpenShell agents and production persistent-SDK dispatch are **not**
+enabled by this fix.
+
+
 For a trusted broker or an OpenShell sandbox run, the human now sets
 agent motion speed and acceleration ceilings. Joint rates in deg/s and
 deg/s² apply to **all** broker joint movement: `go_pose`,
