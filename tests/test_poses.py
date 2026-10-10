@@ -211,3 +211,32 @@ def test_sleep_optional_gripper_close_preserves_arm_execution(
     assert joint_calls[0][1]["workspace_check"] == "off"
     assert joint_calls[0][1]["wait"] is False
     assert tool_calls == ([(0.025, False)] if close_gripper else [])
+
+
+def test_disconnect_closes_transport_after_failed_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arm = SOARM101.simulated()
+    arm.connect()
+
+    def failed_hold(*, wait=True):
+        raise RuntimeError("failed HOLD")
+
+    monkeypatch.setattr(arm.motion, "stop", failed_hold)
+    with pytest.raises(RuntimeError, match="failed HOLD"):
+        arm.disconnect()
+    assert not arm.backend.is_connected
+
+
+def test_context_preserves_original_fault_when_cleanup_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arm = SOARM101.simulated()
+
+    def failed_cleanup():
+        raise RuntimeError("secondary STOP failure")
+
+    monkeypatch.setattr(arm, "disconnect", failed_cleanup)
+    with pytest.raises(ValueError, match="initial servo status"):
+        with arm:
+            raise ValueError("initial servo status")
