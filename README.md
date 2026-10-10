@@ -1,5 +1,48 @@
 # SO-ARM101 Motion SDK
 
+## Physical persistent-SDK broker route trial (PR #88; **not production**)
+
+The trusted-host example `examples/persistent_broker_motion_trace.py` exercises
+the actual authenticated loopback **HTTP broker → one persistent SDK connection
+→ hardware** for the five-leg
+**Sleep → Overhead → Left → Right → Sleep** route. Unlike the original
+`examples/motion_quality_trace.py`, the script itself **never calls**
+`arm.move_*`; every movement is a broker POST. Its default is the
+previously exercised **joint-only** variant to avoid commanding the gripper
+close. An explicit `--include-gripper` opts into the full saved tool goals.
+
+This is **not** Codex/OpenShell motion or a production broker migration.
+The regular `soarm101-broker` CLI still launches bounded CLI processes;
+`--sdk-simulation-preview` remains read-only. The new physical path is
+available only to the dedicated trusted-host example using an explicit
+narrow profile, localhost binding, human-issued calibration-bound lease,
+and real hardware port. STOP can be issued by the independent broker
+HTTP handler; physical interruptibility and exclusive ownership still
+require supervised validation.
+
+On a clean physical workstation with no GUI/CLI owning the follower:
+
+```bash
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_motion_trace.py \
+  --port /dev/ttyACM1 --robot-id so101 \
+  --speed-deg-s 15 --acceleration-deg-s2 150 \
+  --command-frequency-hz 50 --pause-s 0.5 \
+  --output "$HOME/soarm-motion-tests/persistent-broker-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+The script checks saved-pose calibration, requires typing `RUN`,
+reports a constant broker-session UUID and connection count of **1**
+for every leg, writes one passive motor trace plus an audited broker
+event JSONL and a summary JSON, and keeps the arm torque-held.
+On error/interrupt it attempts broker STOP/HOLD, records any failure
+and closes the SDK session. Hardware power must be reachable; software
+STOP is not a substitute for a real cutoff. Do not run this next to
+another controller. The Feetech backend now uses a cooperative
+cross-process advisory lock on actual Linux tty ports, but older
+programs that ignore the lock can still compete.
+
+
 ## Uniform operator motion policy (PR #88 — unmerged)
 
 For a trusted broker or an OpenShell sandbox run, the human now sets
