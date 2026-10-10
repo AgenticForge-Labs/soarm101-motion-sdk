@@ -62,6 +62,20 @@ raw serial writes, or unrecognized action parameters as a generic dispatch capab
 Before replacing any existing route, characterize the present outputs and errors in
 hardware-free tests; take behavior from today's SDK/CLI, not documentation assumptions.
 
+## Implementation sequence update (2026-10-10)
+
+The original PR 2/3 descriptions below remain authoritative *requirements*,
+not current integration status. PR #88 now merges only a staged persistent
+SDK executor, read-only simulation preview, and restricted operator-owned
+physical benchmark; it does not cut over the normal CLI-backed broker.
+Proposed follow-ups (numbers not yet assigned): device ownership/session
+lifecycle, independent STOP/fault handling, native action/camera parity,
+physical acceptance and production cutover, and duplicate wrapper retirement.
+See `PLAN.md` for the sequential #88–#93 release train. In particular,
+the physical STOP, calibrated 2 mm jog and exclusivity gates below apply
+**before the production cutover**, not as implied prerequisites for merging
+an explicitly non-production read-only staging path.
+
 ## Broker dispatch and session migration in PR 2
 
 1. A trusted operator selects a capability profile at startup; validate once, pin
