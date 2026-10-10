@@ -1,5 +1,12 @@
 # Changelog
 
+- Preserve redacted stdout/stderr and the subprocess exit status when an isolated
+  OpenShell MCP preflight fails before the Codex/Hermes agent starts. Doctor's
+  image-present result alone does not establish that an image contains a working
+  MCP runtime. Failure messages scrub the run's broker bearer token and retain
+  the strict fail-closed broker/profile permissions; regression tests cover
+  missing readiness markers and nonzero exits.
+
 - Avoid exact executable joint-limit targets in the generated Sleep and
   sleep_up postures: lower/upper selectors are inset by up to 2° (or 10%
   of a narrow joint's range), on top of the calibrated mechanical-stop
