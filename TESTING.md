@@ -1,5 +1,30 @@
 # Testing
 
+## Global trusted broker motion profile regression (PR #88)
+
+Run `python -m pytest --no-cov -q tests/test_broker.py
+tests/test_broker_sdk.py tests/test_mcp_server.py tests/test_robotctl.py
+tests/test_agent_sandbox.py tests/test_poses.py`, then the complete
+suite and `ruff check .`. Tests must confirm a single operator-selected
+joint pacing limit is forwarded to saved poses, Sleep, Sleep-up and
+single-joint jogs, not only jogs. Cartesian jogs must use mm/s and
+mm/s² limits, and gripper portions must use independent raw Feetech
+rate caps. MCP/robotctl may request lower rates, but rejected
+above-cap/nonfinite/zero rates must issue no hardware command.
+OpenShell's host process must pass the selected policy to the broker;
+it must never be granted to an agent as a mutable privileged setting.
+Check the agent's `robot_capabilities` projection for the selected
+broker rate limits.
+
+Local Codex handoff: test the exact PR SHA on the existing
+`soarm101-motion-sdk` checkout with the above commands. No live
+motion, broker switch-over, or service restart is part of automated
+CI. Later run an attended 15°/s, 150°/s² joint-only route,
+then a single small motion via a separately authorized Codex/MCP
+profile, recording traces and STOP/HOLD. The native persistent SDK
+path remains simulation-only pending its independent hardware gates.
+
+
 ## Gripper overload and joint-only Sleep regression (PR #88)
 
 The 2026-10-10 local supervised route failed with `[ServoStatus] Overload`
