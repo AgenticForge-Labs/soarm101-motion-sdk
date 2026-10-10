@@ -625,10 +625,13 @@ class SOARM101:
         gripper = self._sleep_gripper() if close_gripper else None
         gripper_target = self.get_sleep_gripper_position() if close_gripper else None
         if gripper is not None and gripper_target is not None:
+            gripper_options: dict[str, int] = {}
+            if gripper_speed_raw is not None:
+                gripper_options["speed_raw"] = gripper_speed_raw
+            if gripper_acceleration_raw is not None:
+                gripper_options["acceleration_raw"] = gripper_acceleration_raw
             gripper_handle = gripper.move(
-                gripper_target, wait=False,
-                speed_raw=gripper_speed_raw,
-                acceleration_raw=gripper_acceleration_raw,
+                gripper_target, wait=False, **gripper_options
             )
             assert isinstance(gripper_handle, MotionHandle)
             gripper_result = self._wait_sleep_child(gripper_handle, cancel_event)
