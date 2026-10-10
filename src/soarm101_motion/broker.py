@@ -62,6 +62,65 @@ class AgentMotionRates:
     joint_acceleration_deg_s2: float = 25.0
     cartesian_speed_mm_s: float = 10.0
     cartesian_acceleration_mm_s2: float = 40.0
+    gripper_speed_raw: int = 250
+    gripper_acceleration_raw: int = 20
+
+    _ACTION_FIELDS = {
+        "go_pose": ("joint_speed_deg_s", "joint_acceleration_deg_s2",
+                    "gripper_speed_raw", "gripper_acceleration_raw"),
+        "joint": ("joint_speed_deg_s", "joint_acceleration_deg_s2"),
+        "jog": ("cartesian_speed_mm_s", "cartesian_acceleration_mm_s2"),
+        "gripper": ("gripper_speed_raw", "gripper_acceleration_raw"),
+        "sleep": ("joint_speed_deg_s", "joint_acceleration_deg_s2",
+                  "gripper_speed_raw", "gripper_acceleration_raw"),
+        "sleep_up": ("joint_speed_deg_s", "joint_acceleration_deg_s2",
+                     "gripper_speed_raw", "gripper_acceleration_raw"),
+    }
+
+    _REQUEST_FIELDS = {
+        "joint_speed_deg_s": ("speed_deg_s", "--speed-deg-s"),
+        "joint_acceleration_deg_s2": ("acceleration_deg_s2", "--acceleration-deg-s2"),
+        "cartesian_speed_mm_s": ("speed_mm_s", "--speed-mm-s"),
+        "cartesian_acceleration_mm_s2": ("acceleration_mm_s2", "--acceleration-mm-s2"),
+        "gripper_speed_raw": ("gripper_speed_raw", "--gripper-speed-raw"),
+        "gripper_acceleration_raw": ("gripper_acceleration_raw", "--gripper-acceleration-raw"),
+    }
+
+    def selected(self, action: str, request: Mapping[str, object]) -> dict[str, float | int]:
+        """Resolve optional lower requested rates under pinned trusted-host limits."""
+        names = self._ACTION_FIELDS.get(action, ())
+        allowed = {self._REQUEST_FIELDS[name][0] for name in names}
+        unexpected = set(request) & {
+            spec[0] for spec in self._REQUEST_FIELDS.values()
+        } - allowed
+        if unexpected:
+            raise ValueError(f"{action} does not support motion rate fields {sorted(unexpected)}")
+        result: dict[str, float | int] = {}
+        for name in names:
+            key, _ = self._REQUEST_FIELDS[name]
+            ceiling = getattr(self, name)
+            raw = request.get(key, ceiling)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise ValueError(f"{key} must be a finite positive number")
+            value = float(raw)
+            if not math.isfinite(value) or value <= 0 or value > ceiling:
+                raise ValueError(f"{key} must be within (0, {ceiling:g}]")
+            if name.startswith("gripper_"):
+                if type(raw) is not int:
+                    raise ValueError(f"{key} must be a positive integer")
+                result[key] = raw
+            else:
+                result[key] = value
+        return result
+
+    def arguments(self, action: str, request: Mapping[str, object]) -> list[str]:
+        selected = self.selected(action, request)
+        result: list[str] = []
+        for key, value in selected.items():
+            attr = next(name for name, (field, _) in self._REQUEST_FIELDS.items()
+                        if field == key)
+            result.extend([self._REQUEST_FIELDS[attr][1], f"{value:g}"])
+        return result
 
     def validated(self, config: SOARM101Config) -> "AgentMotionRates":
         limits = config.motion_limits_human
@@ -73,10 +132,15 @@ class AgentMotionRates:
         }
         for name, ceiling in ceilings.items():
             value = getattr(self, name)
-            if not math.isfinite(value) or value <= 0 or value > ceiling:
+            if isinstance(value, bool) or not math.isfinite(value) or value <= 0 or value > ceiling:
                 raise ValueError(
                     f"{name} must be finite, positive and at most {ceiling:g}"
                 )
+        for name, maximum in (("gripper_speed_raw", 3400),
+                              ("gripper_acceleration_raw", 254)):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be an integer in [1, {maximum}]")
         return self
 
 
@@ -113,13 +177,13 @@ class AgentCommandExecutor:
         limits = self.config.motion_limits_human
         return [
             "--max-joint-speed-deg-s",
-            f"{limits['max_joint_speed_deg_s']:g}",
+            f"{min(limits['max_joint_speed_deg_s'], self.rates.joint_speed_deg_s):g}",
             "--max-joint-acceleration-deg-s2",
-            f"{limits['max_joint_acceleration_deg_s2']:g}",
+            f"{min(limits['max_joint_acceleration_deg_s2'], self.rates.joint_acceleration_deg_s2):g}",
             "--max-linear-speed-mm-s",
-            f"{limits['max_linear_speed_mm_s']:g}",
+            f"{min(limits['max_linear_speed_mm_s'], self.rates.cartesian_speed_mm_s):g}",
             "--max-linear-acceleration-mm-s2",
-            f"{limits['max_linear_acceleration_mm_s2']:g}",
+            f"{min(limits['max_linear_acceleration_mm_s2'], self.rates.cartesian_acceleration_mm_s2):g}",
             "--max-tool-angular-speed-deg-s",
             f"{limits['max_tool_angular_speed_deg_s']:g}",
             "--max-tool-angular-acceleration-deg-s2",
@@ -129,16 +193,26 @@ class AgentCommandExecutor:
     def run(self, arguments: Sequence[str]) -> dict[str, object]:
         bounded_arguments = list(arguments)
         if bounded_arguments:
-            if bounded_arguments[0] == "joint":
-                bounded_arguments.extend([
-                    "--speed-deg-s", f"{self.rates.joint_speed_deg_s:g}",
-                    "--acceleration-deg-s2", f"{self.rates.joint_acceleration_deg_s2:g}",
-                ])
-            elif bounded_arguments[0] == "jog":
-                bounded_arguments.extend([
-                    "--speed-mm-s", f"{self.rates.cartesian_speed_mm_s:g}",
-                    "--acceleration-mm-s2", f"{self.rates.cartesian_acceleration_mm_s2:g}",
-                ])
+            action = bounded_arguments[0].replace("-", "_")
+            # Broker callers can append selected rate arguments after
+            # authorization; parse only known rate switches and revalidate.
+            request_rates: dict[str, float | int] = {}
+            for name in self.rates._ACTION_FIELDS.get(action, ()):
+                key, flag = self.rates._REQUEST_FIELDS[name]
+                if flag in bounded_arguments:
+                    index = bounded_arguments.index(flag)
+                    if index + 1 >= len(bounded_arguments):
+                        raise BrokerCommandError(f"missing {flag} value")
+                    raw = bounded_arguments[index + 1]
+                    try:
+                        request_rates[key] = (int(raw) if name.startswith("gripper_") else float(raw))
+                    except ValueError as exc:
+                        raise BrokerCommandError(f"invalid {flag} value") from exc
+            validated = self.rates.selected(action, request_rates)
+            for name in self.rates._ACTION_FIELDS.get(action, ()):
+                key, flag = self.rates._REQUEST_FIELDS[name]
+                if flag not in bounded_arguments:
+                    bounded_arguments.extend([flag, f"{validated[key]:g}"])
             if bounded_arguments[0] in self._MOTION_LIMIT_COMMANDS:
                 bounded_arguments.extend(self._motion_limit_arguments())
         command = [
@@ -273,6 +347,10 @@ class RobotBrokerService:
         arguments: Sequence[str],
     ) -> BrokerResponse:
         started = time.monotonic()
+        if isinstance(self.executor, (AgentCommandExecutor, SDKAgentExecutor)):
+            rates = self.executor.rates.selected(action, request)
+            request = {**request, **rates}
+            arguments = [*arguments, *self.executor.rates.arguments(action, request)]
         with self._sdk_epoch_lock:
             admitted_epoch = self._sdk_stop_epoch
         try:
@@ -368,6 +446,7 @@ class RobotBrokerService:
         visible["broker_profile"] = self.profile.public()
         if isinstance(self.executor, (AgentCommandExecutor, SDKAgentExecutor)):
             visible["broker_requested_motion"] = asdict(self.executor.rates)
+            visible["broker_motion_rate_limits"] = asdict(self.executor.rates)
         return BrokerResponse(response.status, {**response.body, "result": visible})
 
     def dispatch(
@@ -737,7 +816,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     requests.add_argument(
         "--agent-cartesian-acceleration-mm-s2", type=float, default=40.0,
-        help="requested Cartesian jog acceleration (default 40 mm/s^2)",
+        help="requested Cartesian acceleration ceiling (default 40 mm/s^2)",
+    )
+    requests.add_argument(
+        "--agent-gripper-speed-raw", type=int, default=250,
+        help="maximum gripper servo speed register (1..3400; default 250)",
+    )
+    requests.add_argument(
+        "--agent-gripper-acceleration-raw", type=int, default=20,
+        help="maximum gripper servo acceleration register (1..254; default 20)",
     )
     return parser
 
@@ -763,6 +850,8 @@ def main(argv: list[str] | None = None) -> int:
         joint_acceleration_deg_s2=args.agent_joint_acceleration_deg_s2,
         cartesian_speed_mm_s=args.agent_cartesian_speed_mm_s,
         cartesian_acceleration_mm_s2=args.agent_cartesian_acceleration_mm_s2,
+        gripper_speed_raw=args.agent_gripper_speed_raw,
+        gripper_acceleration_raw=args.agent_gripper_acceleration_raw,
     ).validated(config)
     if args.sdk_simulation_preview:
         preview = CapabilityProfile.from_document({
