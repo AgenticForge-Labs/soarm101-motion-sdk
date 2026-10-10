@@ -4,6 +4,35 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
+## PR #89 — Broker-owned SDK session lifecycle (open, unmerged)
+
+Following staged PR #88 merged into `main` at
+`957e86fb1f090a52960a593ce5b07caeaffb7ec6`, PR #89 hardens the
+**opt-in SDK executor and existing Feetech device-locking implementation**.
+The session is deliberately one-shot: lazy connection is permitted once, but
+shutdown is terminal, and connection, calibration drift, serial faults, or
+hardware faults latch a `faulted` state rather than reconnecting behind an
+agent's back. Physical trial fault/shutdown revokes its human lease; STOP/HOLD
+remains reachable against an *existing* arm while it is faulted or closing,
+but STOP never opens a new device. Shutdown serializes with ordinary actions
+and any active STOP. Serial open failure closes any partially opened transport
+**before** releasing the cooperative lock.
+
+This is **not** a production physical broker cutover. The normal
+`soarm101-broker` stays CLI-backed; `--sdk-simulation-preview` continues
+to deny physical and POST operations; the only real native-SDK entrypoint
+remains the restricted operator-confirmed #88 trial. No automatic reconnect,
+authority rearming, or failure retry is introduced.
+
+Software gates: `ruff check .`, the new
+`tests/test_broker_session_lifecycle.py`, real-tty advisory lock/failed-open
+regressions in `tests/test_feetech_backend.py`, full suite, and simulated
+concurrency/STOP regression. Hardware gates: local Codex/read-only
+verification of one-owner GUI/CLI/second-broker exclusion and shutdown
+with power cutoff accessible; no unintended motion. Complete physical STOP,
+fault injection, native camera parity and 2 mm Cartesian qualifications belong
+to proposed #90–#92. Keep #89 open until local validation and CI pass.
+
 ## 2026-10-10 operator gripper fault and joint-only tracing
 
 A supervised Sleep/Overhead/Left/Right/Sleep run reported Feetech
@@ -21,7 +50,7 @@ is not suppressed. A separate trusted operator-only loopback bench experiment
 is now available; physical persistent SDK execution is still not enabled for
 the production broker or OpenShell agents.
 
-## 2026-10-10 persistent physical broker route experiment (PR #88, pending)
+## 2026-10-10 persistent physical broker route experiment (merged PR #88)
 
 The trusted operator-only `examples/persistent_broker_motion_trace.py`
 exercises five existing poses through the **real HTTP broker** with one
@@ -46,7 +75,7 @@ gates remain physical STOP/HOLD, device exclusivity, fault recovery,
 camera/trace parity, and supervised calibrated Cartesian movement.
 Keep hardware revisions and test results on this PR.
 
-## Milestone B integration sequence (proposed; only PR #88 exists)
+## Milestone B integration sequence (#88 merged; #89 in progress)
 
 GitHub `main` is authoritative. Do not create a dependent branch until the
 preceding PR is merged. Preserve the extensive #88 staged work rather than
@@ -59,7 +88,7 @@ starting a competing SDK executor.
    human arming, explicit RUN confirmation and a separate narrow loopback profile.
    The completed 2026-10-10 five-leg experiment is evidence for *that route*
    only, not generalized robot safety.
-2. **Proposed PR #89 — exclusive hardware ownership/session lifecycle:**
+2. **PR #89 — exclusive hardware ownership/session lifecycle (open):**
    one broker-owned persistent SDK session; fail-closed disconnect, restart,
    authority expiry and calibration changes; confirm GUI/CLI/second-broker
    exclusivity, including cooperative lock limitations.
