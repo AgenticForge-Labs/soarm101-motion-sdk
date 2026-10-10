@@ -786,6 +786,18 @@ def test_loopback_trial_sleep_http_reuses_one_sdk_connection_without_cli(
     # Test uses the real simulation backend behind an explicitly physical
     # *trial service*. It never opens the requested fake tty device.
     monkeypatch.setattr(sdk, "_calibration_id", lambda arm: "simulation")
+    from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
+    import soarm101_motion.poses as poses
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}-trial-poses.json",
+    )
+    for pose_name in ("agent_start_overhead",
+                      "agent_start_overhead_left", "agent_start_overhead_right"):
+        SDK_CAPABILITIES.dispatch(
+            "capture_saved_pose", sdk._arm(),
+            {"robot_id": "so101", "name": pose_name, "source": "follower"},
+        )
     monkeypatch.setattr(
         AgentCommandExecutor, "run",
         lambda *a, **k: pytest.fail("physical persistent broker invoked CLI"),
@@ -819,10 +831,21 @@ def test_loopback_trial_sleep_http_reuses_one_sdk_connection_without_cli(
         first = request("GET", "/v1/state")["result"]
         assert first["broker_session"]["sdk_connect_count"] == 1
         assert first["broker_session"]["mode"] == "physical_trial"
-        one = request("POST", "/v1/sleep", {"joint_only": True})["result"]
-        two = request("POST", "/v1/sleep", {"joint_only": True})["result"]
-        assert one["completed"] and two["completed"]
-        assert one["broker_session"] == two["broker_session"] == first["broker_session"]
+        results = []
+        for route, payload in (
+            ("/v1/sleep", {"joint_only": True}),
+            ("/v1/go-pose", {"name": "agent_start_overhead", "joint_only": True}),
+            ("/v1/go-pose", {"name": "agent_start_overhead_left", "joint_only": True}),
+            ("/v1/go-pose", {"name": "agent_start_overhead_right", "joint_only": True}),
+            ("/v1/sleep", {"joint_only": True}),
+        ):
+            reply = request("POST", route, payload)["result"]
+            results.append(reply)
+            assert reply["completed"] and reply["accepted"]
+            assert reply["broker_session"] == first["broker_session"]
+        assert [item["action"] for item in results] == [
+            "sleep", "go_pose", "go_pose", "go_pose", "sleep",
+        ]
         assert sdk.connection_count == 1
         stop = request("POST", "/v1/stop", {})["result"]
         assert stop["completed"]
