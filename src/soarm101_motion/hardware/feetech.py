@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -74,6 +76,7 @@ class FeetechBackend(SO101HardwareBackend):
         self._packet_handler: Any = None
         self._comm_success: int = 0
         self._io_lock = threading.RLock()
+        self._port_lock_fd: int | None = None
         self.last_torque_latch_adjustments: dict[str, tuple[int, int]] = {}
 
     @property
@@ -111,55 +114,95 @@ class FeetechBackend(SO101HardwareBackend):
         if not self._connected:
             raise RobotConnectionError("SO-ARM101 is not connected")
 
+    def _acquire_port_lock(self) -> None:
+        """Prevent a second updated SDK process from opening the same real tty."""
+        if self._port_lock_fd is not None:
+            return
+        device = Path(str(self.config.port)).resolve()
+        if os.name != "posix" or not device.is_char_device():
+            return  # Unit-test fake ports; real Linux tty paths require the lock.
+        import fcntl
+
+        lock_dir = Path.home() / ".local" / "state" / "soarm101" / "locks"
+        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        name = hashlib.sha256(os.fsencode(str(device))).hexdigest()[:24]
+        fd = os.open(lock_dir / f"{name}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            raise RobotConnectionError(
+                f"serial device {device} is already owned by another Motion SDK process"
+            ) from exc
+        except BaseException:
+            os.close(fd)
+            raise
+        self._port_lock_fd = fd
+
+    def _release_port_lock(self) -> None:
+        fd = self._port_lock_fd
+        self._port_lock_fd = None
+        if fd is not None:
+            os.close(fd)
+
     def connect(self) -> None:
         with self._io_lock:
             if self._connected:
                 return
-            PortHandler, sms_sts, self._comm_success = self._load_sdk()
-            self._port_handler = PortHandler(self.config.port)
-            self._packet_handler = sms_sts(self._port_handler)
-            if not self._port_handler.openPort():
-                raise RobotConnectionError(f"could not open serial port {self.config.port}")
-            if not self._port_handler.setBaudRate(self.config.baudrate):
-                self._port_handler.closePort()
-                self._port_handler = None
-                self._packet_handler = None
-                raise RobotConnectionError(f"could not set baud rate {self.config.baudrate}")
+            self._acquire_port_lock()
             try:
-                self._verify_motors()
-                motor_calibration = self.read_calibration_from_motors()
-                if self.calibration is None:
-                    self.calibration = motor_calibration
-                else:
-                    self.calibration.validate()
-                    if self.config.verify_calibration_on_connect:
-                        self._verify_calibration_matches_motors(self.calibration, motor_calibration)
-                uncalibrated = self.calibration.uncalibrated_motors
-                if uncalibrated and not self.config.allow_uncalibrated:
-                    raise CalibrationError(
-                        "motors appear uncalibrated: "
-                        + ", ".join(uncalibrated)
-                        + "; run 'soarm101 calibrate --port PORT'"
-                    )
-                if self.config.configure_motors_on_connect:
-                    self.configure_motors()
-                if self.calibration is not None and not self.calibration.uncalibrated_motors:
-                    archive_calibration(
-                        self.calibration,
-                        robot_id=self.config.robot_id,
-                    )
-                self._connected = True
-            except Exception:
-                self._connected = False
-                self._port_handler.closePort()
-                self._port_handler = None
-                self._packet_handler = None
+                self._connect_locked()
+            except BaseException:
+                self._release_port_lock()
                 raise
+
+    def _connect_locked(self) -> None:
+        PortHandler, sms_sts, self._comm_success = self._load_sdk()
+        self._port_handler = PortHandler(self.config.port)
+        self._packet_handler = sms_sts(self._port_handler)
+        if not self._port_handler.openPort():
+            raise RobotConnectionError(f"could not open serial port {self.config.port}")
+        if not self._port_handler.setBaudRate(self.config.baudrate):
+            self._port_handler.closePort()
+            self._port_handler = None
+            self._packet_handler = None
+            raise RobotConnectionError(f"could not set baud rate {self.config.baudrate}")
+        try:
+            self._verify_motors()
+            motor_calibration = self.read_calibration_from_motors()
+            if self.calibration is None:
+                self.calibration = motor_calibration
+            else:
+                self.calibration.validate()
+                if self.config.verify_calibration_on_connect:
+                    self._verify_calibration_matches_motors(self.calibration, motor_calibration)
+            uncalibrated = self.calibration.uncalibrated_motors
+            if uncalibrated and not self.config.allow_uncalibrated:
+                raise CalibrationError(
+                    "motors appear uncalibrated: "
+                    + ", ".join(uncalibrated)
+                    + "; run 'soarm101 calibrate --port PORT'"
+                )
+            if self.config.configure_motors_on_connect:
+                self.configure_motors()
+            if self.calibration is not None and not self.calibration.uncalibrated_motors:
+                archive_calibration(
+                    self.calibration,
+                    robot_id=self.config.robot_id,
+                )
+            self._connected = True
+        except Exception:
+            self._connected = False
+            self._port_handler.closePort()
+            self._port_handler = None
+            self._packet_handler = None
+            raise
 
     def disconnect(self) -> None:
         pending_error: BaseException | None = None
         with self._io_lock:
             if self._port_handler is None:
+                self._release_port_lock()
                 return
             try:
                 if self._connected and self.config.disable_torque_on_disconnect:
@@ -175,6 +218,7 @@ class FeetechBackend(SO101HardwareBackend):
                     self._torque_enabled = False
                     self._port_handler = None
                     self._packet_handler = None
+                    self._release_port_lock()
         if pending_error is not None:
             raise pending_error
 
