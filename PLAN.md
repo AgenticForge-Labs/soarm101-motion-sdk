@@ -4,7 +4,74 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
+## 2026-10-10 operator gripper fault and joint-only tracing
+
+A supervised Sleep/Overhead/Left/Right/Sleep run reported Feetech
+`so101_gripper` overload status 0x20; visual inspection alone cannot
+determine whether the fault was sustained overload or a prior protection
+status. The normal SDK correctly aborted motion, but the old hardware
+STOP/HOLD read all six motors before requesting a hold. An unreadable
+gripper therefore blocked the arm-motor hold command, and cleanup hid
+the original failure. PR #88 now attempts live-position HOLD on each
+readable motor, still reports partial failure, always tries disconnect,
+and preserves the initiating exception. The route gains `--joint-only`
+to avoid the post-Sleep gripper close during arm-joint characterization.
+These software fixes require local hardware validation. Motor protection
+is not suppressed. A separate trusted operator-only loopback bench experiment
+is now available; physical persistent SDK execution is still not enabled for
+the production broker or OpenShell agents.
+
+## 2026-10-10 persistent physical broker route experiment (PR #88, pending)
+
+The trusted operator-only `examples/persistent_broker_motion_trace.py`
+exercises five existing poses through the **real HTTP broker** with one
+persistent SDK session: Sleep → Overhead → Left → Right → Sleep.
+It uses joint-only requests by default (the earlier gripper overload
+was transient), pinned joint speed/acceleration rates, a
+calibration-bound human lease, a profile restricted to state, pose,
+Sleep and STOP, and a loopback-only bearer-token service.
+Evidence includes a session UUID, SDK connection count, passive motor
+trace, broker event JSONL, and summary. A cooperative Linux tty
+file lock prevents another updated SDK process from opening the same
+real serial port, though older uncooperative software remains a risk.
+
+**This experiment is not yet physically validated** and does not
+authorize agent/OpenShell motion or the general physical SDK broker.
+Production continues with the existing bounded CLI. The open merge
+gates remain physical STOP/HOLD, device exclusivity, fault recovery,
+camera/trace parity, and supervised calibrated Cartesian movement.
+Keep hardware revisions and test results on this PR.
+
 ## Shared SDK registry and broker migration plan
+
+**PR 2 work in progress (branch `feature/broker-persistent-sdk-session`):**
+PR #87 merged into `main` at `e941e2686d2fd87569cdf1e91d6e508b228787ee`.
+The new `broker_sdk.py` contains a persistent SDK session and strict typed
+action adapter, initially exposed through an explicitly opted-in
+`soarm101-broker --sdk-simulation-preview` **read-only simulation mode**.
+In the public preview, `GET /v1/state` and `GET /v1/capabilities` use the
+SDK session and **all POST routes remain denied**. An internal,
+explicitly simulated test-only service setting permits HTTP regression
+coverage for pinned profiles, expired authority, serialized commands and
+concurrent STOP. A native STOP also invalidates already-queued requests
+and revokes the simulated motion authority even if HOLD fails. It is not
+a CLI option and cannot activate a physical SDK session. Production broker
+operation still uses the existing bounded agent CLI subprocesses by default.
+The preview intentionally does not authorize real hardware; tests of the
+session adapter do not establish STOP interruptibility at the physical bus,
+cross-process exclusivity, calibrated jog safety, or live reliability.
+The internal fake-capture tests also verify image hashing, response
+redaction and failure evidence without opening a camera device.
+
+**PR 2 merge blockers:** before replacing the production broker, complete
+profile/lease enforcement at execution, direct SDK HTTP motion and evidence
+parity, reliable concurrent STOP independent of the operation lock, shared
+cross-process hardware ownership with ordinary CLI/GUI, session fault/
+disconnect handling, simulated/fake-transport regression, and a supervised,
+traced physical 2 mm jog with clear operator observation. Keep all fixes on
+this same PR. No dependent PR 3 branch until this PR merges.
+
+
 
 **Implementation update:** PR #86 merged into `main` at
 `dfa2cbd128cf6cb4e37f9742333a63c0fc249cbc`.

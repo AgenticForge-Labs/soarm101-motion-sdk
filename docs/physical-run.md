@@ -1,5 +1,29 @@
 # First physical run — bench card
 
+## Operator-observed follower gate evidence — 2026-10-09 (not broker validation)
+
+On `so101` at `/dev/ttyACM1`, operator-reported read-only diagnostics
+found all six motors connected, with no status faults, and a calibration ID
+of `sha256:9adfd2e026e7654b5365579f7df76d8ed514df61dc1bf37cbb236b2f4784ee1a`.
+A supervised 2-second torque latch had zero measured joint displacement,
+no reported shaking or faults, and ended relaxed. Individual 2° out-and-back
+`shoulder_pan` and `wrist_roll` CLI smoke tests subsequently completed;
+the operator reported normal movement. One wrist-roll run reported an
+intermittent `Lock` communication reply on `shoulder_lift`, **with verified
+successful readback**; another wrist-roll run completed without a warning.
+That recovered reply is not itself a joint-limit rejection, and repeat
+communication abnormalities should still be investigated.
+
+The manually measured paper workspace remains **unvalidated** (recorded affine
+fit RMS ~5.96 mm; estimated TCP height near that capture was ~19.3 mm).
+The remaining joint directions, gripper, STOP/HOLD, physical clearance,
+Cartesian displacement/trace, and exclusive-session broker tests remain
+unverified in this operator series. This is **not** evidence that draft PR #88
+is safe for direct physical SDK broker execution. Generated Sleep targets
+previously selected exact executable endpoints; the draft's interior-inset
+correction requires hardware-free CI and separate physical confirmation.
+
+
 This is the short, ordered checklist for the first real SO-ARM101 follower session.
 `TESTING.md` remains the complete validation record.
 

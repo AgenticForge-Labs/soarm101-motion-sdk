@@ -1,5 +1,101 @@
 # Architecture
 
+## Supervised direct physical SDK broker trial (PR #88, not released)
+
+An explicit *trusted-host-only* example can construct a narrowly
+profiled `RobotBrokerService` and physical `SDKAgentExecutor`
+using a single persistent `SOARM101` object. Each route leg
+traverses authenticated loopback HTTP and the same typed
+registry primitives as the human CLI, not an agent subprocess.
+A canonical SDK calibration-bound human lease, per-run broker
+rates, and motor fault/STOP checks remain active. A passive
+tracer and broker JSONL capture command/feedback and action
+provenance with a stable session UUID and connection counter.
+A POSIX advisory device-file lock in Feetech stops concurrent
+updated SDK processes using the same actual Linux tty. It
+cannot exclude legacy applications not respecting this lock.
+
+This is a **narrow local hardware experiment only**, not a production
+physical direct-broker release, not an OpenShell MCP/Codex live-motion
+test, and not physical proof of independent STOP or all workspace
+guards. The ordinary public broker is still CLI-subprocess-backed;
+its opt-in SDK preview remains read-only simulation. Do not
+relax those boundaries before physical STOP, ownership and
+calibrated 2 mm jog evidence is reviewed.
+
+
+## Broker-owned rate limits across all movement (PR #88, unmerged)
+
+The trusted host selects fixed motion rate ceilings for its broker
+process via `AgentMotionRates`. These are *requested action limits*
+underneath the SDK's absolute motion envelope. One joint speed and
+acceleration pair applies to every agent joint motion, including
+single-joint jog, calibration-bound saved-pose replay and both Sleep
+postures; no fixed-rate carveout exists. Cartesian translation uses
+separate physical mm/s and mm/s² ceilings, while gripper movements
+use separate Feetech raw speed and acceleration bounds (also for
+gripper phases of saved poses and Sleep). MCP and robotctl may pass
+per-call lower values; broker-side validation rejects higher rates.
+The pinned rates travel into the bounded CLI and the typed SDK
+operation path; they remain immutable throughout a sandbox run
+and are advertised in the broker capabilities. The existing
+absolute SDK limits, calibration, path/effort/fault guards and
+human lease remain additional independent restrictions. Direct SDK
+broker execution is still only a read-only public simulation
+preview; this policy does not authorize a physical persistent
+session.
+
+
+## PR 2 staged persistent SDK broker (open branch; simulation-only)
+
+The new `broker_sdk.SDKAgentExecutor` provides a typed SDK operation path
+with a lazily established persistent session. The `--sdk-simulation-preview`
+broker option exposes read-only state/capability requests through that session
+and rejects **every POST action**; it creates a SimulationBackend, not a
+physical Feetech/serial connection. The unflagged production broker still
+uses the existing bounded `soarm101 agent` subprocess path and its profile,
+authority and motion checks unchanged. The new executor also includes
+prototype motion adapters. An explicitly simulated programmatic test-only
+broker setting can exercise these through the real HTTP handler for
+concurrency and STOP regression tests, with profile/lease enforcement,
+queued-command invalidation and native lease revocation on STOP.
+No command-line option exposes that mode; public preview and production
+HTTP continue to reject direct-SDK motion. This is neither a released robot-control migration nor
+hardware-validated STOP, calibrated-jog, or device exclusivity.
+
+The eventual production path must preserve the same MCP/robotctl API, per-run
+profile and human authority, use one exclusive persistent SDK session, and
+support STOP interrupting active motion without ordinary concurrent motor
+commands. Hardware safety remains in the existing SDK. See
+`docs/capability-registry-migration.md`.
+
+
+
+## Fault handling in the physical arm backend (PR #88, unmerged)
+
+The Feetech backend must treat a nonzero servo status packet as a
+motion-aborting fault, not as proof that the instantaneous measured current
+is high. In STOP/HOLD, the deterministic backend independently reads
+encoder positions and issues a hold to the subset of actuators with valid
+fresh measurements. Any unreadable servo leaves HOLD explicitly incomplete;
+no stale position or old goal is silently substituted. Arm disconnect
+attempts serial closure even if HOLD errors, and context cleanup retains
+the originating motion error. The default Sleep includes its stock gripper
+close; `close_gripper=False` is an explicit SDK option for joint-only
+testing, not a new agent authority or safety bypass. These changes do not
+validate an interruptible physical persistent broker STOP.
+
+## OpenShell MCP client runtime boundary
+
+The Codex/Hermes OpenShell MCP client uses the fixed, client-only
+`/opt/soarm101-mcp` Python environment. Its Landlock `read_only` policy
+includes that tree only in MCP mode because Python must read `pyvenv.cfg` and
+installed packages before it can connect to the authenticated broker. The
+network binary allowlist remains separate; `/opt/soarm101-mcp` is never a
+writable mount or a robot SDK/hardware transport. The broker and deterministic
+SDK still own all physical authority, and `robotctl`-only runs retain their
+previous filesystem policy.
+
 ## Shared SDK capability registry (PR #87)
 
 `sdk_capabilities.py` introduces pure action metadata and explicit,

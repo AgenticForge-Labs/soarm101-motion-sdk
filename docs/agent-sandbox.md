@@ -1,5 +1,22 @@
 # Self-contained agent sandbox
 
+## Human-pinned motion rate ceilings (PR #88, unmerged)
+
+The OpenShell runner starts the broker itself. For full-control Codex/Hermes
+sessions, the human can now choose a per-run upper bound on joint speed
+and acceleration using `--agent-joint-speed-deg-s 15` and
+`--agent-joint-acceleration-deg-s2 150`. The same caps cover
+`go_pose`, `sleep`, `sleep_up` and `jog_joint`; there are
+no hard-coded saved-pose exceptions. The runner also accepts
+`--agent-cartesian-speed-mm-s`, `--agent-cartesian-acceleration-mm-s2`,
+`--agent-gripper-speed-raw`, and `--agent-gripper-acceleration-raw`.
+Each action may request slower rates, but cannot increase them.
+The flags are host-side trusted settings, not arguments an agent can
+change inside the sandbox. A human still must arm the robot and select
+a motion-capable profile. This has not yet been validated through
+Codex-controlled physical motion.
+
+
 The Motion SDK ships a canonical OpenShell environment for operating an SO-ARM101 with a
 reasoning agent without exposing the unrestricted SDK, serial bus, or camera devices to that
 agent.
@@ -33,6 +50,22 @@ and the packaged Hermes/Codex recipes. An external manifest selects an existing 
 image/provider and direct harness argv; it does not define robot behavior.
 
 ## Native MCP agent interface (PR 4)
+
+If the read-only MCP run reports an **isolated MCP tool handshake** failure,
+inspect its redacted subprocess exit code and stdout/stderr before repeating.
+The doctor command checks image existence, not the MCP runtime's import or
+broker connectivity. In particular, `PermissionError` reading
+`/opt/soarm101-mcp/pyvenv.cfg` means the Python interpreter was executable but
+Landlock denied its virtual environment. The canonical MCP policy now adds
+only `/opt/soarm101-mcp` under filesystem `read_only`, in both Codex and Hermes
+MCP runs; `robotctl`-only runs do not need this exception. Pull the policy fix
+and retry with a **new** output directory; rebuilding the same Docker image
+cannot repair that Landlock denial. If the interpreter or module really is
+missing, rebuild with `soarm101 agent sandbox setup --agent codex --auth installed`
+(or the analogous Hermes setup). If broker access is denied, inspect the
+generated `openshell-effective-policy.yaml` and broker profile, never bypass
+the policy. This permission grants no writes, device access, or physical motion.
+
 
 The built-in Hermes and Codex agents now support an **opt-in** MCP interface.
 The default `robotctl` mode remains the original comparison baseline.

@@ -8,7 +8,7 @@ import pytest
 
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import MOTOR_IDS
-from soarm101_motion.exceptions import CalibrationError, CommunicationError, SafetyViolationError
+from soarm101_motion.exceptions import CalibrationError, CommunicationError, RobotConnectionError, SafetyViolationError
 from soarm101_motion.hardware.feetech import FeetechBackend
 from soarm101_motion.tools import SO101Gripper
 
@@ -436,3 +436,59 @@ def test_joint_sync_write_accepts_per_motor_speed_limits(
     assert packet.sync_speeds[MOTOR_IDS["shoulder_pan"]] == 300
     assert packet.sync_speeds[MOTOR_IDS["shoulder_lift"]] == 150
     backend.disconnect()
+
+
+def test_partial_stop_still_holds_readable_arm_motors_on_gripper_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False, verify_model_numbers=True)
+    )
+    backend.connect()
+    backend.enable_torque()
+    original_read = backend.read_raw_position
+    original_write = backend._write_raw_positions
+    held = []
+
+    def faulty_position(motor: str) -> int:
+        if motor == "so101_gripper":
+            raise CommunicationError("gripper overload status 0x20")
+        return original_read(motor)
+
+    def observe_hold(positions, *, speed_raw, acceleration_raw):
+        held.append(dict(positions))
+        return original_write(
+            positions, speed_raw=speed_raw, acceleration_raw=acceleration_raw
+        )
+
+    monkeypatch.setattr(backend, "read_raw_position", faulty_position)
+    monkeypatch.setattr(backend, "_write_raw_positions", observe_hold)
+    try:
+        with pytest.raises(CommunicationError, match="STOP/HOLD incomplete"):
+            backend.stop()
+        assert len(held) == 1
+        assert set(held[0]) == set(MOTOR_IDS) - {"so101_gripper"}
+        assert backend._torque_enabled
+    finally:
+        backend.disconnect()
+
+
+def test_real_linux_port_lock_blocks_second_sdk_process_descriptor(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    if os.name != "posix":
+        pytest.skip("physical port ownership locking currently requires POSIX")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = SOARM101Config(port="/dev/null", use_stored_calibration=False)
+    first = FeetechBackend(config)
+    second = FeetechBackend(config)
+    first._acquire_port_lock()
+    try:
+        with pytest.raises(RobotConnectionError, match="already owned"):
+            second._acquire_port_lock()
+    finally:
+        first._release_port_lock()
+    second._acquire_port_lock()
+    second._release_port_lock()

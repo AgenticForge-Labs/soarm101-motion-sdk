@@ -1,5 +1,124 @@
 # SO-ARM101 Motion SDK
 
+## Physical persistent-SDK broker route trial (PR #88; **not production**)
+
+The trusted-host example `examples/persistent_broker_motion_trace.py` exercises
+the actual authenticated loopback **HTTP broker → one persistent SDK connection
+→ hardware** for the five-leg
+**Sleep → Overhead → Left → Right → Sleep** route. Unlike the original
+`examples/motion_quality_trace.py`, the script itself **never calls**
+`arm.move_*`; every movement is a broker POST. Its default is the
+previously exercised **joint-only** variant to avoid commanding the gripper
+close. An explicit `--include-gripper` opts into the full saved tool goals.
+
+This is **not** Codex/OpenShell motion or a production broker migration.
+The regular `soarm101-broker` CLI still launches bounded CLI processes;
+`--sdk-simulation-preview` remains read-only. The new physical path is
+available only to the dedicated trusted-host example using an explicit
+narrow profile, localhost binding, human-issued calibration-bound lease,
+and real hardware port. STOP can be issued by the independent broker
+HTTP handler; physical interruptibility and exclusive ownership still
+require supervised validation.
+
+On a clean physical workstation with no GUI/CLI owning the follower:
+
+```bash
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_motion_trace.py \
+  --port /dev/ttyACM1 --robot-id so101 \
+  --speed-deg-s 15 --acceleration-deg-s2 150 \
+  --command-frequency-hz 50 --pause-s 0.5 \
+  --output "$HOME/soarm-motion-tests/persistent-broker-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+The script checks saved-pose calibration, requires typing `RUN`,
+reports a constant broker-session UUID and connection count of **1**
+for every leg, writes one passive motor trace plus an audited broker
+event JSONL and a summary JSON, and keeps the arm torque-held.
+On error/interrupt it attempts broker STOP/HOLD, records any failure
+and closes the SDK session. Hardware power must be reachable; software
+STOP is not a substitute for a real cutoff. Do not run this next to
+another controller. The Feetech backend now uses a cooperative
+cross-process advisory lock on actual Linux tty ports, but older
+programs that ignore the lock can still compete.
+
+
+## Uniform operator motion policy (PR #88 — unmerged)
+
+For a trusted broker or an OpenShell sandbox run, the human now sets
+agent motion speed and acceleration ceilings. Joint rates in deg/s and
+deg/s² apply to **all** broker joint movement: `go_pose`,
+`jog_joint`, `sleep` and `sleep_up`, rather than only jogs.
+Cartesian translation has separate mm/s and mm/s² bounds; the stock
+gripper has separate Feetech raw pacing bounds, including the gripper
+portion of poses and Sleep. Each MCP/robotctl action can choose a lower
+speed or acceleration, never a higher one.
+
+Example for a *candidate* supervised profile (not yet agent-hardware-validated):
+
+```bash
+soarm101 agent sandbox run \
+  --agent codex --auth installed --interface mcp \
+  --capability-profile docs/examples/mcp-profile-supervised-manipulation.json \
+  --agent-joint-speed-deg-s 15 \
+  --agent-joint-acceleration-deg-s2 150 \
+  --task /path/to/operator-reviewed-task.md \
+  --output runs/agent-supervised-example
+```
+
+This changes trusted broker policy only; no profile can bypass human
+arming, saved calibration checks, joint/workspace limits, effort/fault
+guards or STOP/HOLD. The persistent native-SDK broker remains
+simulation/read-only only. See [broker rates](docs/agent-broker.md).
+
+
+## One-command software validation for PR #88
+
+On Ubuntu/Linux, copy and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AgenticForge-Labs/soarm101-motion-sdk/feature/broker-persistent-sdk-session/scripts/test_broker_pr88.sh -o /tmp/test_broker_pr88.sh && bash /tmp/test_broker_pr88.sh
+```
+
+The [repository test runner](scripts/test_broker_pr88.sh) clones or
+fast-forwards a clean checkout under
+`~/AgenticForge/soarm101-motion-sdk`, activates an isolated Python 3.12
+environment for the script, and runs Ruff, focused broker tests, the
+complete test suite, registry inspection and GUI simulation smoke checks.
+It refuses to overwrite uncommitted changes or pull a divergent branch.
+It never opens a real serial device or activates motor torque.
+
+Afterward, run `cd ~/AgenticForge/soarm101-motion-sdk && source .venv/bin/activate`
+to activate that environment in your current terminal.
+
+## PR #88 preview: direct SDK read-only broker session
+
+The packaged Codex/Hermes MCP sandbox preflight reports redacted subprocess
+exit status and stdout/stderr if initialization fails. A real Codex failure
+showed `PermissionError: /opt/soarm101-mcp/pyvenv.cfg`: the OpenShell policy
+had allowed the MCP Python executable but omitted read-only access to its
+virtual environment. MCP runs now explicitly allow **read-only** access to
+`/opt/soarm101-mcp` under Landlock; non-MCP runs do not. Updating the SDK
+policy and retrying with a new output directory is sufficient for this specific
+error; rebuilding the image does not repair missing Landlock access. The
+`sandbox doctor` check only establishes that the image exists and still does
+not prove the MCP dependencies work. Robot authority and other restrictions
+are unchanged.
+
+
+The production broker continues to use the existing bounded agent CLI
+subprocesses. A new opt-in `soarm101-broker --sdk-simulation-preview`
+mode exercises a persistent simulated SDK session for authenticated
+`GET /v1/state` and `GET /v1/capabilities`, but **all POST routes
+fail closed**. This mode opens no physical serial connection and cannot
+activate real motors. Internal simulated HTTP regression tests exercise
+interruption of a fake in-flight move, but the public preview continues to
+deny every POST. Do not confuse this with completed broker migration
+or verified real-arm STOP; the work remains in open PR #88 until additional
+safety tests and supervised physical validation.
+
+
+
 ## One-command PR #87 checkout and simulation validation
 
 From an Ubuntu/Linux terminal, run this **single copy-and-paste line**:
@@ -366,7 +485,7 @@ The GUI keeps common tasks separate so you can start with one step and add compl
 
 The follower has five pose joints; the stock gripper is a separate tool actuator. The SDK includes forward kinematics to estimate the tool pose from joint readings, inverse kinematics for finding joint targets, and Cartesian motion planning for linear moves. These calculations use the arm model and calibration, so check the TCP, joint directions, and coordinate frame against your own assembly before relying on Cartesian accuracy. The Manual workspace exposes this explicitly: its joint markers and TCP use the SDK FK model, while visible geometry is presentation-only and independent of the coarse safety polyline. The upper and lower printed members use the local offsets from the official mesh-based SO-101 model rather than being forced through the joint centers. Each STS3215 is shown as an oriented case envelope at the official mesh pose, so a joint pivot can sit inside a motor body while the adjoining printed member ends beside it instead of at it. Small markers still show the exact kinematic joint pivots. The gripper is rendered from the modeled wrist/gripper-link frame; its moving jaw uses a neutral dark, slightly heavier stroke, and the gripper controls remain visible below both angular and Cartesian modes. Each Cartesian jog reports the requested and achieved TCP so physical/model direction mismatches can be diagnosed rather than hidden.
 
-The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration. Teleoperation separately exposes **Tracking response**: Slow uses 0.6 rad/s and 3.0 rad/s², Medium is the previous/current behavior at 1.2 rad/s and 6.0 rad/s² and remains the default, and Fast is wrist-aware: all five joints may use the configured 100 deg/s speed ceiling, the four non-wrist-flex joints may use 1000 deg/s², and `wrist_flex` is capped at 500 deg/s² after hardware testing showed that 1000 deg/s² reversals outran the wrist's braking response. Tracking response limits how quickly the follower closes the leader gap; stream rate remains a separate control. The same per-joint ceilings are enforced by the deterministic stream guard, and the configured absolute motion envelope remains the hard upper bound. Live streaming also permits only a short, non-growing carry-through immediately after a commanded reversal, capped at 0.10 rad total wrong-way travel; ordinary planned motion retains the strict opposite-direction rule. A separate **Sleep** operation is derived from each follower's calibration, providing a stable folded posture for demos and power-down preparation without replacing user-saved Home/Rest. The default Sleep keeps shoulder pan at midpoint, shoulder lift at its lower executable limit, elbow flex at its upper executable limit, wrist roll at midpoint, and places **wrist flex 75% of the way from its lower executable limit to its upper limit** (`upper - 0.25 * (upper - lower)`). Physical testing showed this less wrist-up geometry settles substantially more smoothly than the historical fully folded posture. That original posture remains available as **sleep_up** / `move_sleep_up()`, with wrist flex at its lower executable limit. Both postures close the stock gripper to a target **1° inside its calibrated closed mechanical stop** by default. Sleep does not know whether the gripper is holding an object: a pen held during Sleep triggered the servo's overload protection, so remove held objects or otherwise account for the closing action before invoking Sleep. Because the shoulder/elbow fold is closer than the generic coarse 25 mm link-centerline self-clearance heuristic, these dedicated Sleep-family primitives skip only that coarse arm workspace-geometry check; calibrated joint/tool limits, trajectory, following-error, effort, fault, and completion guards remain active.
+The GUI's gripper speed preset is shared across Manual moves, Home/Rest moves that include the gripper, teleoperation alignment/live mirroring, sequence gripper steps, and recorded-trajectory replay. Changing the preset changes subsequent commands; it does not rewrite stored trajectory timing or calibration. Teleoperation separately exposes **Tracking response**: Slow uses 0.6 rad/s and 3.0 rad/s², Medium is the previous/current behavior at 1.2 rad/s and 6.0 rad/s² and remains the default, and Fast is wrist-aware: all five joints may use the configured 100 deg/s speed ceiling, the four non-wrist-flex joints may use 1000 deg/s², and `wrist_flex` is capped at 500 deg/s² after hardware testing showed that 1000 deg/s² reversals outran the wrist's braking response. Tracking response limits how quickly the follower closes the leader gap; stream rate remains a separate control. The same per-joint ceilings are enforced by the deterministic stream guard, and the configured absolute motion envelope remains the hard upper bound. Live streaming also permits only a short, non-growing carry-through immediately after a commanded reversal, capped at 0.10 rad total wrong-way travel; ordinary planned motion retains the strict opposite-direction rule. A separate **Sleep** operation is derived from each follower's calibration, providing a stable folded posture for demos and power-down preparation without replacing user-saved Home/Rest. The default Sleep keeps shoulder pan at midpoint, shoulder lift 2° inside its lower executable limit, elbow flex 2° inside its upper executable limit, wrist roll at midpoint, and places **wrist flex 75% of the way from its lower executable limit to its upper limit** (`upper - 0.25 * (upper - lower)`). Physical testing showed this less wrist-up geometry settles substantially more smoothly than the historical fully folded posture. That original posture remains available as **sleep_up** / `move_sleep_up()`, with wrist flex 2° inside its lower executable limit. These are additional Sleep-posture insets beyond the independent calibrated mechanical-stop margin, not expanded joint limits; unusually narrow executable ranges use a proportional interior inset. Both postures close the stock gripper to a target **1° inside its calibrated closed mechanical stop** by default. Sleep does not know whether the gripper is holding an object: a pen held during Sleep triggered the servo's overload protection, so remove held objects or otherwise account for the closing action before invoking Sleep. Because the shoulder/elbow fold is closer than the generic coarse 25 mm link-centerline self-clearance heuristic, these dedicated Sleep-family primitives skip only that coarse arm workspace-geometry check; calibrated joint/tool limits, trajectory, following-error, effort, fault, and completion guards remain active.
 
 The GUI automatically keeps displayed joint readings current and provides explicit controls for editing and moving to targets. During commanded arm or gripper motion, the sidebar now consumes measured feedback from the owning motion/tool thread, so the joint schematic, model-estimated TCP readout, and moving jaw update while the normal slower GUI state poll is intentionally paused. Ordinary arm and gripper moves reuse measurements already required for safety/progress; combined recorded/alignment paths sample the gripper only at the owning controller's existing feedback checkpoints. This adds no independent or competing serial poller and has no authority over motion or safety. A resizable workspace keeps the task tabs on the left and the persistent follower sidebar on the right, including Setup and Log, so robot state never disappears while changing workflows. If vertical space is tight, the model/readout area scrolls while Enable hold, STOP/HOLD, and Relax remain pinned and visible. Programs are stored using the existing `MotionSequence` format, so GUI Programs and SDK/CLI sequence execution share the same guarded runner and provenance rules. See [Programs and saved positions](docs/programs.md) for the simple position-program workflow. Session logs are enabled by default and stored under `~/.local/state/soarm101/gui/` on Linux.
 
@@ -458,7 +577,7 @@ step does not redo mechanical-stop calibration.
 
 Simulation and fake-transport tests cover the motion and hardware interfaces. Physical behavior depends on the specific arm, assembly, calibration, power supply, and payload; test cautiously before relying on a movement or saved trajectory. Leader parking and cross-arm pose matching enable torque and can move a physical arm; treat them as powered-motion operations even though the leader is normally back-drivable with torque off.
 
-Motion-quality debugging can use `scripts/run_motion_quality_study.sh` for the guided teleop-versus-programmed experiment. The runner updates the active diagnostic branch, launches the GUI, marks and extracts the operator's slow teleop reference interval, optionally replays the exact accepted teleop arm-joint commands through guarded streaming, then runs the same saved-pose Sleep/Overhead/Left/Right route automatically at 50 Hz and 20 Hz. It packages the complete evidence under `~/soarm-motion-tests/` for review. `examples/motion_quality_trace.py` remains the lower-level automatic programmed-route tracer. Passive traces record existing command writes, natural feedback reads, raw encoder targets, TCP positions, effective servo speed/acceleration parameters, hardware-state checks, and route markers without adding motion-time hardware polling. Detailed GUI teleoperation logging is enabled by default and writes `teleop_frame` evidence under `~/.local/state/soarm101/gui/`. If the in-run exact replay is skipped because the follower is not close enough to the first captured command, finish the study and run `scripts/run_motion_quality_replay.sh`. The post-study runner selects the latest study by default, uses the normal guarded joint-motion primitive to pre-position to the first recorded arm pose, verifies measured arrival, preflights every recorded stream sample against the active joint/step/speed/acceleration limits, then replays and appends its trace/summary back into the same study archive.
+Motion-quality debugging can use `scripts/run_motion_quality_study.sh` for the guided teleop-versus-programmed experiment. The runner updates the active diagnostic branch, launches the GUI, marks and extracts the operator's slow teleop reference interval, optionally replays the exact accepted teleop arm-joint commands through guarded streaming, then runs the same saved-pose Sleep/Overhead/Left/Right route automatically at 50 Hz and 20 Hz. It packages the complete evidence under `~/soarm-motion-tests/` for review. `examples/motion_quality_trace.py` remains the lower-level automatic programmed-route tracer. Its `--joint-only` flag preserves the entire five-joint Sleep → Overhead → Left → Right → Sleep route while omitting the separately requested Sleep gripper-close action, useful for isolating joint-motion tracking when gripper status is under investigation. It does not suppress servo faults, widen joint limits, or affect the default Sleep behavior. A faulted servo still blocks the next commanded motion; diagnose or clear the underlying condition before retrying. The older `scripts/run_joint_execution_comparison.sh` switches to a historical branch and does not pass `--joint-only`, so invoke the example directly for this focused trial. Passive traces record existing command writes, natural feedback reads, raw encoder targets, TCP positions, effective servo speed/acceleration parameters, hardware-state checks, and route markers without adding motion-time hardware polling. Detailed GUI teleoperation logging is enabled by default and writes `teleop_frame` evidence under `~/.local/state/soarm101/gui/`. If the in-run exact replay is skipped because the follower is not close enough to the first captured command, finish the study and run `scripts/run_motion_quality_replay.sh`. The post-study runner selects the latest study by default, uses the normal guarded joint-motion primitive to pre-position to the first recorded arm pose, verifies measured arrival, preflights every recorded stream sample against the active joint/step/speed/acceleration limits, then replays and appends its trace/summary back into the same study archive.
 
 Cartesian `move_linear()` trajectories are parameterized in Cartesian space with
 half-cosine acceleration/deceleration and optional cruise, then solved by sequential IK

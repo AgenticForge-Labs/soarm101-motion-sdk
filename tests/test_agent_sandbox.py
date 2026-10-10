@@ -1568,6 +1568,41 @@ def test_mcp_adapter_commands_and_policy_are_transport_specific() -> None:
         assert "path: /v1/sleep-up" not in limited
 
 
+
+@pytest.mark.parametrize("agent", ["hermes", "codex"])
+@pytest.mark.parametrize("read_only", [True, False])
+def test_mcp_policy_allows_reading_only_its_isolated_venv(
+    agent: str, read_only: bool,
+) -> None:
+    """The interpreter must read pyvenv.cfg/site-packages before MCP import.
+
+    Merely allowing /opt/soarm101-mcp/bin/python as a network binary does
+    not grant filesystem access under OpenShell's Landlock policy.
+    """
+    policy = agent_sandbox.broker_policy_text(
+        agent=agent, interface="mcp", read_only=read_only,
+    )
+    fs = policy.split("filesystem_policy:\n", 1)[1].split("landlock:\n", 1)[0]
+    allowed_read = fs.split("  read_only:\n", 1)[1].split("  read_write:\n", 1)[0]
+    allowed_write = fs.split("  read_write:\n", 1)[1]
+
+    assert "    - /opt/soarm101-mcp\n" in allowed_read
+    assert "/opt/soarm101-mcp" not in allowed_write
+    assert "      - path: /opt/soarm101-mcp/bin/python" in policy
+    assert "      - path: /opt/soarm101-mcp/bin/python3" in policy
+
+    baseline = agent_sandbox.broker_policy_text(
+        agent=agent, interface="robotctl", read_only=read_only,
+    )
+    assert "/opt/soarm101-mcp" not in baseline
+
+    if read_only:
+        assert "path: /v1/jog" not in policy
+        assert "path: /v1/joint" not in policy
+        assert "path: /v1/gripper" not in policy
+        assert "path: /v1/stop" not in policy
+
+
 @pytest.mark.parametrize("agent", ["hermes", "codex"])
 def test_mcp_run_uses_pinned_broker_and_temporary_client_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str,
@@ -1764,3 +1799,98 @@ def test_read_only_task_uses_matching_interface() -> None:
     assert "robot_capabilities" in mcp
     assert "image content" in mcp
     assert "robotctl.py" not in mcp
+
+
+@pytest.mark.parametrize(
+    ("code", "stdout"),
+    [(1, "partial"), (0, "missing readiness marker")],
+)
+def test_mcp_probe_failure_reports_redacted_diagnostics_before_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int, stdout: str,
+) -> None:
+    from soarm101_motion.agent_mcp_runtime import MCP_PYTHON
+
+    class FailedMcp(FakeOpenShell):
+        leaked_token: str = ""
+
+        def exec(self, name, command, *, workdir="/sandbox", env=None, timeout=1800):
+            if command and command[0] == MCP_PYTHON:
+                self.leaked_token = env["SOARM101_BROKER_TOKEN"]
+                return subprocess.CompletedProcess(
+                    command, code,
+                    stdout=stdout + " " + self.leaked_token,
+                    stderr="MCP import or broker policy failed: " + self.leaked_token,
+                )
+            return super().exec(
+                name, command, workdir=workdir, env=env, timeout=timeout,
+            )
+
+    fake = FailedMcp()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    task = tmp_path / "task.md"
+    task.write_text("Inspect without motion.", encoding="utf-8")
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="handshake failed") as exc:
+        agent_sandbox.run_agent(
+            agent="codex", auth="api-key", task=task,
+            output_dir=tmp_path / "failed-run", interface="mcp",
+            openshell=fake,
+        )
+    message = str(exc.value)
+    assert f"exit={code}" in message
+    assert "MCP import or broker policy failed" in message
+    assert fake.leaked_token not in message
+    assert "<redacted-soarm101-broker-token>" in message
+    # The preflight intentionally runs `codex --version` before MCP setup;
+    # a failed handshake must prevent the *task* command, not that version check.
+    assert [
+        call["command"] for call in fake.exec_calls
+        if call["command"] and call["command"][0] == "codex"
+    ] == [("codex", "--version")]
+    assert fake.deleted
+
+
+def test_openshell_broker_process_receives_human_pinned_rate_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from soarm101_motion.broker import AgentMotionRates
+    calls = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    def fake_popen(command, **kwargs):
+        calls.append((tuple(command), kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr(agent_sandbox.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        agent_sandbox.BrokerProcess, "request",
+        lambda self, method, path: {"ok": True},
+    )
+    broker = agent_sandbox.BrokerProcess(
+        port=9000, token="unit-token",
+        event_path=tmp_path / "broker.jsonl",
+        rates=AgentMotionRates(
+            joint_speed_deg_s=15,
+            joint_acceleration_deg_s2=150,
+            cartesian_speed_mm_s=10,
+            cartesian_acceleration_mm_s2=40,
+            gripper_speed_raw=250,
+            gripper_acceleration_raw=20,
+        ),
+    )
+    broker.start()
+    assert len(calls) == 1
+    command, _ = calls[0]
+    assert command[command.index("--agent-joint-speed-deg-s") + 1] == "15"
+    assert command[command.index("--agent-joint-acceleration-deg-s2") + 1] == "150"
+    assert command[command.index("--agent-gripper-speed-raw") + 1] == "250"
+    assert command[command.index("--agent-gripper-acceleration-raw") + 1] == "20"

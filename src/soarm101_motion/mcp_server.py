@@ -145,15 +145,38 @@ def create_server(
             ImageContent(type="image", data=encoded, mime_type="image/jpeg"),
         ]
 
-    @mcp.tool(annotations=action)
-    def go_pose(name: str) -> dict[str, object]:
-        """Move to an existing agent-approved saved pose (agent_* names only) through MCP."""
-        return call("POST", "/v1/go-pose", {"name": name})
+    def optional_rates(**values: float | int | None) -> dict[str, float | int]:
+        return {
+            key: _finite(value, key) if not key.endswith("_raw") else value
+            for key, value in values.items() if value is not None
+        }
 
     @mcp.tool(annotations=action)
-    def jog_joint(joint: JointName, delta_deg: float) -> dict[str, object]:
-        """Adjust one named joint by a bounded relative angle in degrees."""
-        return call("POST", "/v1/joint", {"joint": joint, "delta_deg": _finite(delta_deg, "delta_deg")})
+    def go_pose(
+        name: str, speed_deg_s: float | None = None,
+        acceleration_deg_s2: float | None = None,
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
+    ) -> dict[str, object]:
+        """Move to an approved saved pose, optionally slower than broker-owned limits."""
+        return call("POST", "/v1/go-pose", {"name": name, **optional_rates(
+            speed_deg_s=speed_deg_s, acceleration_deg_s2=acceleration_deg_s2,
+            gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
+        )})
+
+    @mcp.tool(annotations=action)
+    def jog_joint(
+        joint: JointName, delta_deg: float,
+        speed_deg_s: float | None = None,
+        acceleration_deg_s2: float | None = None,
+    ) -> dict[str, object]:
+        """Bounded joint jog; optional rates may only lower the broker ceiling."""
+        return call("POST", "/v1/joint", {
+            "joint": joint, "delta_deg": _finite(delta_deg, "delta_deg"),
+            **optional_rates(speed_deg_s=speed_deg_s,
+                             acceleration_deg_s2=acceleration_deg_s2),
+        })
 
     @mcp.tool(annotations=action)
     def jog_cartesian(
@@ -161,6 +184,8 @@ def create_server(
         x_mm: float = 0.0,
         y_mm: float = 0.0,
         z_mm: float = 0.0,
+        speed_mm_s: float | None = None,
+        acceleration_mm_s2: float | None = None,
     ) -> dict[str, object]:
         """Jog TCP translation in model/world or rotating tool coordinates (millimeters).
 
@@ -172,22 +197,49 @@ def create_server(
             "x_mm": _finite(x_mm, "x_mm"),
             "y_mm": _finite(y_mm, "y_mm"),
             "z_mm": _finite(z_mm, "z_mm"),
+            **optional_rates(speed_mm_s=speed_mm_s,
+                             acceleration_mm_s2=acceleration_mm_s2),
         })
 
     @mcp.tool(annotations=action)
-    def move_gripper(target: GripperTarget) -> dict[str, object]:
-        """Open or close the stock gripper within calibrated endpoint margins."""
-        return call("POST", "/v1/gripper", {"target": target})
+    def move_gripper(
+        target: GripperTarget,
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
+    ) -> dict[str, object]:
+        """Move gripper within calibrated limits and broker-pinned servo pacing."""
+        return call("POST", "/v1/gripper", {"target": target, **optional_rates(
+            gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
+        )})
 
     @mcp.tool(annotations=action)
-    def sleep() -> dict[str, object]:
-        """Move to the SDK's validated calibration-relative Sleep posture."""
-        return call("POST", "/v1/sleep", {})
+    def sleep(
+        speed_deg_s: float | None = None,
+        acceleration_deg_s2: float | None = None,
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
+    ) -> dict[str, object]:
+        """Sleep with optional slower joint and gripper rates."""
+        return call("POST", "/v1/sleep", optional_rates(
+            speed_deg_s=speed_deg_s, acceleration_deg_s2=acceleration_deg_s2,
+            gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
+        ))
 
     @mcp.tool(annotations=action)
-    def sleep_up() -> dict[str, object]:
-        """Move to the explicitly requested historical wrist-up Sleep posture."""
-        return call("POST", "/v1/sleep-up", {})
+    def sleep_up(
+        speed_deg_s: float | None = None,
+        acceleration_deg_s2: float | None = None,
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
+    ) -> dict[str, object]:
+        """Historical Sleep posture with broker-capped joint/gripper pacing."""
+        return call("POST", "/v1/sleep-up", optional_rates(
+            speed_deg_s=speed_deg_s, acceleration_deg_s2=acceleration_deg_s2,
+            gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
+        ))
 
     @mcp.tool(annotations=action)
     def stop() -> dict[str, object]:

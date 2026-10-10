@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -123,8 +124,8 @@ def test_sleep_joint_positions_use_smoother_calibration_relative_wrist() -> None
     assert sleep == pytest.approx(
         {
             "shoulder_pan": 0.0,
-            "shoulder_lift": -1.8,
-            "elbow_flex": 1.6,
+            "shoulder_lift": -1.8 + math.radians(2.0),
+            "elbow_flex": 1.6 - math.radians(2.0),
             "wrist_flex": -1.7 + 0.75 * 3.4,
             "wrist_roll": 0.1,
         }
@@ -132,9 +133,110 @@ def test_sleep_joint_positions_use_smoother_calibration_relative_wrist() -> None
     assert sleep_up == pytest.approx(
         {
             "shoulder_pan": 0.0,
-            "shoulder_lift": -1.8,
-            "elbow_flex": 1.6,
-            "wrist_flex": -1.7,
+            "shoulder_lift": -1.8 + math.radians(2.0),
+            "elbow_flex": 1.6 - math.radians(2.0),
+            "wrist_flex": -1.7 + math.radians(2.0),
             "wrist_roll": 0.1,
         }
     )
+
+
+def test_sleep_family_endpoint_targets_remain_inside_effective_limits() -> None:
+    # The previous implementation selected the effective limit exactly; a
+    # planned endpoint could then be rejected for rounding even though the
+    # advertised angle appeared to match that limit.
+    limits = {
+        "shoulder_pan": (-2.0, 2.0),
+        "shoulder_lift": (-1.816054, 1.816054),
+        "elbow_flex": (-1.674941, 1.674941),
+        "wrist_flex": (-1.8, 1.8),
+        "wrist_roll": (-2.9, 2.9),
+    }
+    for derived in (sleep_joint_positions(limits), sleep_up_joint_positions(limits)):
+        assert all(limits[name][0] < angle < limits[name][1]
+                   for name, angle in derived.items())
+        assert derived["shoulder_lift"] == pytest.approx(
+            limits["shoulder_lift"][0] + math.radians(2.0)
+        )
+        assert derived["elbow_flex"] == pytest.approx(
+            limits["elbow_flex"][1] - math.radians(2.0)
+        )
+
+
+def test_sleep_inset_scales_for_unusually_narrow_calibration() -> None:
+    limits = {name: (-0.01, 0.01) for name in (
+        "shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"
+    )}
+    for derived in (sleep_joint_positions(limits), sleep_up_joint_positions(limits)):
+        assert all(limits[name][0] < angle < limits[name][1]
+                   for name, angle in derived.items())
+        assert derived["shoulder_lift"] == pytest.approx(-0.008)
+        assert derived["elbow_flex"] == pytest.approx(0.008)
+
+
+@pytest.mark.parametrize("close_gripper", [False, True])
+def test_sleep_optional_gripper_close_preserves_arm_execution(
+    monkeypatch: pytest.MonkeyPatch, close_gripper: bool,
+) -> None:
+    from soarm101_motion.motion import MotionHandle
+    from soarm101_motion.types import MotionResult
+
+    arm = SOARM101.simulated()
+    joint_calls = []
+    tool_calls = []
+
+    def completed_handle() -> MotionHandle:
+        handle = MotionHandle(
+            lambda event: MotionResult(accepted=True, completed=True, final_positions={})
+        )
+        handle.start()
+        return handle
+
+    def move_joints(target, **kwargs):
+        joint_calls.append((dict(target), dict(kwargs)))
+        return completed_handle()
+
+    def move_tool(target, *, wait=True):
+        tool_calls.append((target, wait))
+        return completed_handle()
+
+    monkeypatch.setattr(arm, "get_sleep_joint_positions", lambda: {"shoulder_pan": 0.0})
+    monkeypatch.setattr(arm, "get_sleep_gripper_position", lambda: 0.025)
+    monkeypatch.setattr(arm, "move_joints", move_joints)
+    monkeypatch.setattr(arm.tool, "move", move_tool)
+
+    result = arm.move_sleep(close_gripper=close_gripper)
+    assert result.completed
+    assert len(joint_calls) == 1
+    assert joint_calls[0][1]["workspace_check"] == "off"
+    assert joint_calls[0][1]["wait"] is False
+    assert tool_calls == ([(0.025, False)] if close_gripper else [])
+
+
+def test_disconnect_closes_transport_after_failed_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arm = SOARM101.simulated()
+    arm.connect()
+
+    def failed_hold(*, wait=True):
+        raise RuntimeError("failed HOLD")
+
+    monkeypatch.setattr(arm.motion, "stop", failed_hold)
+    with pytest.raises(RuntimeError, match="failed HOLD"):
+        arm.disconnect()
+    assert not arm.backend.is_connected
+
+
+def test_context_preserves_original_fault_when_cleanup_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arm = SOARM101.simulated()
+
+    def failed_cleanup():
+        raise RuntimeError("secondary STOP failure")
+
+    monkeypatch.setattr(arm, "disconnect", failed_cleanup)
+    with pytest.raises(ValueError, match="initial servo status"):
+        with arm:
+            raise ValueError("initial servo status")

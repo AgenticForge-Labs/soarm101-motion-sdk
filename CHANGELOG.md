@@ -1,5 +1,90 @@
 # Changelog
 
+- Fix exact-ceiling 15°/s supervised persistent-broker startup. Human-unit
+  limits are converted deg/s -> rad/s -> deg/s for reporting; binary rounding
+  can return 14.999999999999998. The shared ceiling validator now tolerates
+  only four ULPs of representation error; actual rate increases still fail.
+  Both trusted broker and bounded CLI use the same validator, with regression
+  coverage for 15/150 and over-ceiling rejection.
+
+
+- PR #88: Add a restricted **physical persistent-SDK broker bench trial**
+  for Sleep → Overhead → Left → Right → Sleep. The trusted loopback HTTP
+  client uses the actual broker dispatch, calibration-bound human lease,
+  canonical saved-pose/Sleep operations, pinned speed/acceleration
+  ceilings, optional joint-only gripper omission, independently requested
+  STOP, and a single persistent SDK connection. Expose connection-count
+  identity and passive motor/broker event traces. Enforce cooperative
+  Linux tty ownership with a per-device advisory lock across updated
+  SDK processes. This is **not** a production broker or OpenShell agent
+  cutover; physical validation and comprehensive CI are still required.
+
+
+- PR #88: Introduce one human-pinned broker motion pacing policy with
+  joint, Cartesian and gripper speed/acceleration ceilings. Apply joint
+  rates equally to `go_pose`, both Sleep postures and joint jogs;
+  apply gripper raw rates to standalone and embedded gripper commands.
+  MCP, robotctl and OpenShell accept optional **slower** action rates,
+  with pre-execution rejection above the operator limits. Update typed
+  direct-SDK preview parity, tests and docs; the preview remains
+  simulation-only and hardware motion is not yet MCP-validated.
+
+
+- PR #88 follow-up to operator-reported 2026-10-10 gripper servo `Overload` status:
+  retained fail-closed fault reporting while allowing STOP/HOLD to latch all
+  *readable* motors even if the gripper position cannot be read. STOP still
+  reports incomplete and never substitutes stale/unverified encoder values.
+  Cleanup now attempts transport closure after HOLD errors and preserves the
+  initiating motion exception instead of replacing it with a secondary failure.
+  Added an opt-in `close_gripper=False` for the SDK default Sleep operation,
+  exposed as `--joint-only` in the existing programmed pose quality tracer.
+  This preserves the five-joint Sleep movement and normal fault checks without
+  requesting the extra gripper close. Software tests are not a physical pass.
+
+- Fix OpenShell MCP startup on Codex/Hermes after a real Codex read-only
+  preflight failed to read `/opt/soarm101-mcp/pyvenv.cfg` under Landlock.
+  Permit only read-only access to that fixed client-only Python environment
+  when `--interface mcp` is selected. Retain the original read-only policy
+  for robotctl-only runs, the explicit network executable allowlist, broker
+  capability restrictions, and all physical-motion gates. Add regression
+  tests for both interfaces, agents, and read-only/full broker profiles.
+
+- Preserve redacted stdout/stderr and the subprocess exit status when an isolated
+  OpenShell MCP preflight fails before the Codex/Hermes agent starts. Doctor's
+  image-present result alone does not establish that an image contains a working
+  MCP runtime. Failure messages scrub the run's broker bearer token and retain
+  the strict fail-closed broker/profile permissions; regression tests cover
+  missing readiness markers and nonzero exits.
+
+- Avoid exact executable joint-limit targets in the generated Sleep and
+  sleep_up postures: lower/upper selectors are inset by up to 2° (or 10%
+  of a narrow joint's range), on top of the calibrated mechanical-stop
+  margin. This addresses previously observed endpoint rounding rejection
+  without widening safety limits; physical Sleep replay remains to be
+  validated separately. A recovered Feetech `Lock` reply warning remains
+  independent of joint position and must not be masked as a limit issue.
+
+- PR #88 fake native-camera parity: exercise trusted-host image read,
+  SHA-256 evidence, sandbox path/device redaction and failure-before-success
+  auditing under the existing broker profile. No physical camera access
+  or production direct-SDK routing is activated.
+
+- PR #88 fake/HTTP cancellation hardening: test authorized, profile-limited
+  out-of-band STOP during a blocked fake movement; reject queued native
+  commands admitted before STOP, revoke simulated motion authority on
+  STOP (including failed HOLD), and retain profile-linked error evidence.
+  No physical broker control is enabled by these changes.
+
+- PR #88 work in progress: introduce a strictly typed persistent SDK broker
+  executor with a lazy simulated session and an opt-in **read-only**
+  `soarm101-broker --sdk-simulation-preview` mode. Existing production
+  broker/agent CLI execution remains unchanged. All preview POST endpoints
+  are forbidden; no physical port opens or torque enables. New session,
+  authority, profile and fake interrupt tests do not establish real-arm
+  STOP safety or physical Cartesian validity.
+
+
+
 - Extend PR 1 registry to saved-pose capture and provenance-checked joint/linear
   replay, named-camera still capture with trusted caller settings, and persisted
   camera profiles. Ordinary CLI continues to own confirmation and torque

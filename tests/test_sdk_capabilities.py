@@ -37,8 +37,9 @@ class FakeArm:
         self.calls.append(("ik", orientation_mode))
         return "solved"
 
-    def gripper_move(self, position):
+    def gripper_move(self, position, *, speed_raw=None, acceleration_raw=None):
         self.calls.append(("gripper", position))
+        self.last_gripper_rates = (speed_raw, acceleration_raw)
         return "gripper complete"
 
     def require_artifact_calibration(self, provenance, *, artifact_label):
@@ -68,7 +69,7 @@ def test_registry_inspection_is_pure_and_exposes_units() -> None:
             "jog_cartesian", "move_gripper", "list_saved_poses",
             "capture_saved_pose", "validate_saved_pose", "replay_saved_pose",
             "capture_camera", "camera_profiles", "read_effort_status",
-            "read_hardware_state", "stop"} == set(names)
+            "read_hardware_state", "sleep", "sleep_up", "stop"} == set(names)
     joint = SDK_CAPABILITIES.get("move_joints").describe()
     assert joint["effect"] == "motion"
     assert joint["agent_eligible"] is False
@@ -318,8 +319,15 @@ def test_operator_camera_capture_keeps_cli_profile_and_output_parity(
     monkeypatch, tmp_path, capsys,
 ) -> None:
     import soarm101_motion.camera as camera
+    import soarm101_motion.workstation as workstation
     from soarm101_motion.workstation import WorkstationProfileStore
 
+    # A local legacy camera.json would otherwise seed an extra "camera"
+    # profile in this temporary workstation. Keep this test deterministic
+    # without altering the production migration behavior.
+    monkeypatch.setattr(
+        workstation, "DEFAULT_CAMERA_CONFIG_PATH", tmp_path / "legacy-camera.json",
+    )
     monkeypatch.setenv(
         "SOARM101_WORKSTATION_CONFIG", str(tmp_path / "workstation.json"),
     )
@@ -472,3 +480,16 @@ def test_registry_saved_pose_linear_replay_retains_gripper_then_hold_order(
     assert target.xyz_rpy()[:3] == pytest.approx([0.1, 0.1, 0.2])
     assert options["speed"] == pytest.approx(0.005)
     assert options["acceleration"] == pytest.approx(0.020)
+
+
+def test_registry_forwards_explicit_gripper_pacing_to_sdk() -> None:
+    arm = FakeArm()
+    assert SDK_CAPABILITIES.dispatch("move_gripper", arm, {
+        "position": 0.35, "gripper_speed_raw": 100, "gripper_acceleration_raw": 10,
+    }) == "gripper complete"
+    assert arm.last_gripper_rates == (100, 10)
+    for bad in (0, 3401, -1, 4.5, float("inf")):
+        with pytest.raises(ValueError):
+            SDK_CAPABILITIES.dispatch("move_gripper", arm, {
+                "position": 0.35, "gripper_speed_raw": bad,
+            })

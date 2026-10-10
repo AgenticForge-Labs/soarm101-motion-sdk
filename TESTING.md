@@ -1,5 +1,178 @@
 # Testing
 
+## 2026-10-10 physical broker 15/150 precision regression
+
+User's first physical persistent-broker route failed *before opening hardware*
+at `AgentMotionRates.validated()`: 15°/s was strictly greater than
+the radians->degrees output 14.999999999999998°/s. The shared
+`rate_within_ceiling()` comparator accepts only 4 ULPs of format
+rounding and still rejects any meaningful speed increase. Test
+`tests/test_broker.py::test_operator_rate_exactly_matches_roundtrip_human_limit`
+and `tests/test_cli.py::test_cli_operator_rate_exactly_at_converted_ceiling`;
+run full CI before supervised retry. A successful startup does not by itself
+prove physical STOP/HOLD, port exclusivity, or all five motion legs.
+
+
+## Persistent SDK broker five-pose physical experiment (PR #88)
+
+The new `examples/persistent_broker_motion_trace.py` is an
+**operator-only physical bench procedure** and must never run as part
+of unit tests or GitHub CI. Automated CI uses a simulated SDK backend
+behind the *actual loopback HTTP broker*, issues the five Sleep/Overhead/
+Left/Right/Sleep POST requests, requires the same `broker_session.id`
+and `sdk_connect_count == 1` each leg, and confirms the ordinary
+CLI executor is never called. Additional regressions cover opt-in
+access, locked-down capability profile, reject-external bind, invalid
+`joint_only` request, human authority, STOP revocation and Linux tty
+advisory lock.
+
+Run `ruff check .` and
+`python -m pytest --no-cov -q tests/test_broker_sdk.py
+tests/test_broker.py tests/test_feetech_backend.py
+tests/test_sdk_capabilities.py tests/test_poses.py` before the full suite.
+
+Hardware handoff: verify a single real tty owner, calibrations, the
+lease and powered HOLD/STOP, then run
+`soarm101 agent arm --minutes 30` and
+`python examples/persistent_broker_motion_trace.py
+--port /dev/ttyACM1 --robot-id so101
+--speed-deg-s 15 --acceleration-deg-s2 150
+--command-frequency-hz 50 --pause-s 0.5
+--output ~/soarm-motion-tests/persistent-broker-local.jsonl`.
+Use a new unique output path. Operator must enter `RUN`.
+Do not use `--include-gripper` initially because an earlier
+almost-closed gripper triggered a transient overload status.
+The physical profile remains a *candidate* until inspected by the
+operator. Capture terminal output, `.summary.json`, motor trace
+JSONL, broker events JSONL, physical STOP result, and any shaking
+or tracking divergence. No Codex/OpenShell agent-controlled movement
+is established by this experiment.
+
+
+## Global trusted broker motion profile regression (PR #88)
+
+Run `python -m pytest --no-cov -q tests/test_broker.py
+tests/test_broker_sdk.py tests/test_mcp_server.py tests/test_robotctl.py
+tests/test_agent_sandbox.py tests/test_poses.py`, then the complete
+suite and `ruff check .`. Tests must confirm a single operator-selected
+joint pacing limit is forwarded to saved poses, Sleep, Sleep-up and
+single-joint jogs, not only jogs. Cartesian jogs must use mm/s and
+mm/s² limits, and gripper portions must use independent raw Feetech
+rate caps. MCP/robotctl may request lower rates, but rejected
+above-cap/nonfinite/zero rates must issue no hardware command.
+OpenShell's host process must pass the selected policy to the broker;
+it must never be granted to an agent as a mutable privileged setting.
+Check the agent's `robot_capabilities` projection for the selected
+broker rate limits.
+
+Local Codex handoff: test the exact PR SHA on the existing
+`soarm101-motion-sdk` checkout with the above commands. No live
+motion, broker switch-over, or service restart is part of automated
+CI. Later run an attended 15°/s, 150°/s² joint-only route,
+then a single small motion via a separately authorized Codex/MCP
+profile, recording traces and STOP/HOLD. The native persistent SDK
+path remains simulation-only pending its independent hardware gates.
+
+
+## Gripper overload and joint-only Sleep regression (PR #88)
+
+The 2026-10-10 local supervised route failed with `[ServoStatus] Overload`
+reported by `so101_gripper`. A status bit from the servo is not evidence
+of current joint load or a verified mechanical jam. The backend must **fail
+closed** for motion and report the servo status, but STOP/HOLD must attempt
+a live-position latch on every independently readable motor even if the tool
+motor is unreadable. Incomplete HOLD must not be reported as success.
+
+Run `python -m pytest --no-cov -q tests/test_feetech_backend.py tests/test_poses.py`
+and the complete test suite. The joint-only experiment path is
+`python examples/motion_quality_trace.py --joint-only ...`; it must
+retain the default five-leg Sleep/Overhead/Left/Right/Sleep trajectory,
+normal servo/fault checks, telemetry, and first-failure reporting, but
+avoid the separately commanded Sleep gripper close. The default
+`move_sleep()` behavior is unchanged. Before a physical retest,
+inspect the gripper status bit and existing trace, and determine whether
+the fault is still active. This is pending workstation/hardware validation.
+
+## Sleep executable endpoint regression (PR #88)
+
+Run `uv run pytest --no-cov tests/test_poses.py` plus the complete suite.
+`Sleep` and `sleep_up` must select powered target angles strictly inside
+calibrated effective joint limits (2° additional inset for ordinary ranges,
+proportionally inside exceptionally narrow ranges). Their baseline wrist
+orientation differences remain. Verify on a supervised unloaded arm only
+after the independent joint-direction and STOP/HOLD gates; automated tests
+must not invoke actual hardware motion. A Feetech control-bit reply warning
+with verified readback is a separate communication diagnostic, not evidence
+of a joint-limit failure.
+
+## MCP virtualenv Landlock regression (PR #88)
+
+The Codex workstation emitted `PermissionError: [Errno 13] Permission denied:
+'/opt/soarm101-mcp/pyvenv.cfg'` during the **read-only**, pre-agent MCP
+handshake. Run `python -m pytest --no-cov -q tests/test_agent_sandbox.py`;
+`test_mcp_policy_allows_reading_only_its_isolated_venv` must verify the fixed
+MCP venv is readable for both Hermes/Codex and both broker access profiles,
+but is never writable through the filesystem policy or exposed in `robotctl`
+mode. Physical OpenShell/virtualenv import must then be revalidated on the
+operator workstation, with no arming or motor movement.
+
+## Isolated MCP preflight diagnostics
+
+Run `python -m pytest --no-cov -q tests/test_agent_sandbox.py` and check
+that a failing mocked MCP preflight reports exit status and bounded stdout/stderr
+with the per-run broker token redacted. A nonzero probe exit or missing readiness
+marker must fail before the agent subprocess is launched. The real Codex image
+and OpenShell host policy still require separate local validation; `sandbox doctor`
+checking image existence does not prove MCP dependencies are present.
+
+## One-command software validation for PR #88
+
+On Ubuntu/Linux, copy and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AgenticForge-Labs/soarm101-motion-sdk/feature/broker-persistent-sdk-session/scripts/test_broker_pr88.sh -o /tmp/test_broker_pr88.sh && bash /tmp/test_broker_pr88.sh
+```
+
+The [repository test runner](scripts/test_broker_pr88.sh) clones or
+fast-forwards a clean checkout under
+`~/AgenticForge/soarm101-motion-sdk`, activates an isolated Python 3.12
+environment for the script, and runs Ruff, focused broker tests, the
+complete test suite, registry inspection and GUI simulation smoke checks.
+It refuses to overwrite uncommitted changes or pull a divergent branch.
+It never opens a real serial device or activates motor torque.
+
+Afterward, run `cd ~/AgenticForge/soarm101-motion-sdk && source .venv/bin/activate`
+to activate that environment in your current terminal.
+
+## PR #88 simulated persistent broker contract (not physical validation)
+
+Run `uv run ruff check .`, `uv run pytest --no-cov
+tests/test_broker_sdk.py tests/test_broker.py tests/test_capability_profile.py`,
+and the full `uv run pytest` suite. The native broker preview
+`--sdk-simulation-preview` should preserve bearer authentication, pin a
+read-only profile, reuse one simulated SDK session, and reject all POST
+routes. Contract tests cover unknown arguments, missing/expired leases,
+invalid joints, no automatic torque, and refusal to interpret model space
+as measured physical clearance. Additional internal simulation-only HTTP
+tests (not exposed by the broker CLI) verify bearer authentication, profile
+rate intersection, STOP racing an in-flight fake joint move, a 409 error
+rather than false success on cancellation, and observable failed HOLD
+with audit evidence. STOP also cancels requests already queued behind the
+broker dispatch lock and revokes the native lease, even on failed HOLD.
+Fake native camera capture tests also verify exact image-byte SHA-256,
+no disclosure of host capture paths or device nodes to broker clients,
+and no success evidence when a trusted capture file is missing.
+These tests do not validate servo-bus concurrency or real cameras.
+
+**Not validated or enabled:** the real servo bus, exclusive ownership
+across GUI/CLI/broker, interruptible HTTP STOP under a moving hardware SDK,
+full native capture evidence, stale-geometry retry and model/physical jog
+agreement. Before PR #88 can merge, these require fake-transport tests and
+supervised unloaded hardware testing under `docs/physical-run.md`.
+Software-only pytest never clears the physical gate.
+
+
+
 ## One-command PR #87 checkout and simulation validation
 
 From an Ubuntu/Linux terminal, run this **single copy-and-paste line**:

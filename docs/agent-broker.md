@@ -1,5 +1,51 @@
 # Agent robot broker
 
+## Operator-only direct physical session test (PR #88)
+
+A separate local example, `examples/persistent_broker_motion_trace.py`,
+can create a **narrow loopback-only physical trial broker** whose
+only moving routes are `/v1/go-pose`, `/v1/sleep`, and
+`/v1/stop`. Every request still requires the broker bearer
+token; motion also requires a valid human-issued calibration-bound
+lease. The client tests the full five-pose sequence, and the
+broker retains a stable in-process SDK connection throughout.
+The operator can set joint rates and choose `joint_only=True`
+for this trial to avoid commanded gripper closure; there are
+no speed-policy carveouts. Any larger agent surface or
+physical persistent production startup remains **disabled**.
+
+Normal broker startup remains `AgentCommandExecutor` (CLI
+subprocesses) and `--sdk-simulation-preview` continues to
+deny every POST. This experiment alone does not establish
+the required hardware STOP, ownership, and Cartesian tests.
+
+
+## PR 2 experimental read-only SDK session
+
+The normal broker still invokes the bounded agent CLI; do not deploy the
+SDK preview as a physical-motion service.
+
+For safe, local simulated inspection only (requires a broker token):
+```bash
+SOARM101_BROKER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(24))')" \
+  soarm101-broker --sdk-simulation-preview --host 127.0.0.1 --port 8765
+```
+
+This mode creates one simulated SDK session lazily and supports only the
+authenticated health, profile, state and capabilities GET endpoints. It
+rejects every POST, including STOP and all movement/camera actions; no serial
+port is opened and no torque is enabled. It exists to validate the persistent-session/transport approach.
+PR #88's internal simulated HTTP tests exercise authorization, STOP
+while a fake joint move is in progress, queued-command cancellation and
+lease revocation; this cannot establish safe Feetech
+bus cancellation, cross-process ownership, physical workspace correctness,
+or hardware HOLD success. Those require separate validation on this PR
+before activating a physical SDK executor.
+The standard broker behavior remains unchanged until a supervised
+physical validation and merge.
+
+
+
 MCP-capable local agents can optionally use the stdio adapter described in
 [agent-mcp.md](agent-mcp.md). MCP is another client of these routes, not a
 second motion or authorization implementation.
@@ -63,39 +109,60 @@ soarm101-broker \
 The remaining linear/tool-angular values stay at their broker defaults unless explicitly
 set by the trusted host.
 
-## Requested agent motion rates (trusted broker configuration)
+## Operator-owned motion rates (all broker movement)
 
-The envelope above is an absolute ceiling; the **requested** rate of an
-individual agent action is a separate choice. By default the bounded
-agent CLI jogs at 10 mm/s, 40 mm/s² (Cartesian) and 8 deg/s,
-25 deg/s² (single joint). The trusted broker can now pin different
-requested rates at startup and inject them into its internal
-`soarm101 agent jog` and `soarm101 agent joint` subprocess calls:
+The trusted human chooses one **maximum** speed and acceleration for each
+physical unit family at broker startup, separate from the SDK's absolute
+100/1000 hardware envelope. These rates are not per-agent privileges. Every
+broker movement uses them by default, with optional *slower* values:
+
+- Joint-space motion, including **saved poses, Sleep and sleep_up, and jog_joint**:
+  `--agent-joint-speed-deg-s` (default 8°/s) and
+  `--agent-joint-acceleration-deg-s2` (default 25°/s²).
+- TCP translation jog: `--agent-cartesian-speed-mm-s` (default 10 mm/s) and
+  `--agent-cartesian-acceleration-mm-s2` (default 40 mm/s²).
+- Stock gripper actions, including the gripper portion of saved poses and
+  Sleep: `--agent-gripper-speed-raw` (default 250) and
+  `--agent-gripper-acceleration-raw` (default 20).
+  These Feetech servo parameters are **not** joint degrees/s or mm/s.
+  Raw speed 0 means maximum and is deliberately rejected.
 
 ```bash
 soarm101-broker --host 127.0.0.1 --port 8765 \
   --profile docs/examples/mcp-profile-supervised-manipulation.json \
-  --agent-cartesian-speed-mm-s 20 \
-  --agent-cartesian-acceleration-mm-s2 80 \
-  --agent-joint-speed-deg-s 16 \
-  --agent-joint-acceleration-deg-s2 50
+  --agent-joint-speed-deg-s 15 \
+  --agent-joint-acceleration-deg-s2 150 \
+  --agent-cartesian-speed-mm-s 10 \
+  --agent-cartesian-acceleration-mm-s2 40 \
+  --agent-gripper-speed-raw 250 \
+  --agent-gripper-acceleration-raw 20
 ```
 
-These numbers are configuration examples, **not hardware-validated speed
-recommendations**. In particular, measured Cartesian height drift and repeat
-jog rejections have not been resolved; do not deploy a higher-rate profile
-to hardware before supervised characterization. The broker validates every
-rate against its trusted motion envelope at startup; the bounded CLI repeats
-that check before hardware access and the SDK retains motion/path/fault/
-following-error/settle guards. Agents have no RPC parameters to raise
-requested rates, which apply only to joint/Cartesian jog actions and do
-not alter saved pose, Sleep or gripper-specific pacing.
+The 15°/s / 150°/s² numbers are an **operator-selected candidate**,
+not an automatically validated physical profile. The observed successful
+joint-only supervised route ran at 8°/s and 25°/s². A broker's
+`GET /v1/capabilities` exposes both `broker_requested_motion`
+(for older clients) and `broker_motion_rate_limits`. The same rate
+ceilings are supplied as the bounded CLI's joint/linear motion limits,
+so a saved pose cannot silently revert to hard-coded 8/25 or exceed the
+human-selected limits.
 
-`GET /v1/capabilities` reports `broker_requested_motion` for the
-four pinned requested rates as well as the maximum motion envelope.
-The broker capability profile remains the owner of *which tools are
-allowed*, not a second motion-speed policy. Changing requested rates
-requires restarting the broker; it cannot be changed by a sandbox agent.
+An agent may omit rates and receive the broker defaults, or include
+lower positive rates. For instance, `go_pose`, `sleep`,
+`sleep_up` and `jog_joint` accept optional
+`speed_deg_s` and `acceleration_deg_s2`; `jog_cartesian` accepts
+`speed_mm_s` and `acceleration_mm_s2`. Saved poses, Sleep and
+`move_gripper` accept optional `gripper_speed_raw` and
+`gripper_acceleration_raw`. The broker validates each provided field
+before execution. A request above the human limit, nonfinite value,
+zero, or malformed integer is **rejected**, not clamped or ignored.
+
+MCP and robotctl use the same HTTP arguments. Capability profiles still
+determine *which* actions are available. The human remains responsible for
+arming the robot; agents cannot change the pinned policy. Changing global
+rates requires restarting the broker. The direct-SDK executor remains a
+**simulation-only read-only public preview**; physical motion still goes
+through the existing bounded CLI broker path.
 
 ## Start the broker
 

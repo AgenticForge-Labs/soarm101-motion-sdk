@@ -33,6 +33,59 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+For hardware validation on PR #88, there is a **separate trusted
+operator-only loopback HTTP broker trial**, not a general way to
+enable the native SDK broker. The example must use the normal
+`RobotBrokerService` dispatch with a fixed motion subset, the
+canonical `SDK_CAPABILITIES` pose/Sleep routines, a human-issued
+calibration-bound lease, one persistent device session, bounded
+operator rates, explicit STOP, trace evidence and a local-only bind.
+It must not launch the CLI for motion, expose raw motors or ports
+to OpenShell, authorize agent motions automatically, or claim that
+the production persistent broker cutover is complete.
+Do not perform physical hardware tests from CI. Exclusive tty
+cooperative locks protect updated SDK owners only; a legacy user
+may still have the port open.
+
+
+Broker motion pacing has one operator-owned source of truth:
+`AgentMotionRates` passed into the trusted broker at startup. Joint
+rate ceilings must reach **all** agent joint-space actions
+(`go_pose`, `jog_joint`, `sleep`, `sleep_up`);
+Cartesian jogs retain distinct mm/s units and embedded gripper moves
+retain distinct Feetech raw pacing. Clients may request slower
+parameters, not widen the broker's immutable bounds. The broker must
+validate before hardware interaction and inject SDK motion ceilings
+into bounded CLI subprocesses. Keep the direct-SDK simulated preview
+in parity without enabling physical sessions. Do not add agent-side
+speed authority or alternate saved-pose execution paths.
+
+
+For joint-only characterization, use the canonical Sleep primitive with
+`close_gripper=False` via the opt-in test flag; do not approximate Sleep by
+unvalidated external servo goals or disable the motor effort/status guards.
+A Feetech servo status error, including gripper overload, still aborts
+movement. STOP/HOLD attempts live encoder latching on each readable motor
+but reports incomplete when any motor's hold could not be verified.
+Secondary cleanup errors must not erase the original motion fault.
+
+For the bundled Codex/Hermes MCP interface, OpenShell's filesystem Landlock
+rules must include read-only access to the SDK's fixed client-only
+`/opt/soarm101-mcp` virtualenv (Python reads `pyvenv.cfg` and site-packages).
+Network `binaries` permission alone does **not** grant this. Do not grant
+write access, blanket `/opt` access, or SDK/hardware access to fix an MCP
+bootstrap error; non-MCP `robotctl` sandboxes remain unaffected.
+
+In PR #88 the broker has an explicitly opted-in, simulated **read-only**
+native SDK session. Its production default remains the existing bounded
+agent CLI executor. Do not enable a real-arm direct SDK session, open robot
+hardware from the preview, expose motion POST routes, or bypass current
+broker authority/camera/STOP semantics. STOP on a persistent session must be
+independently interruptible without competing uncontrolled serial writes
+and needs a supervised hardware gate before replacing the legacy backend.
+
+
+
 The shared `sdk_capabilities.py` action registry was introduced in
 PR #87. Its saved-pose playback validates calibration provenance before replay;
 the operator CLI also verifies the provenance before torque activation.

@@ -41,6 +41,7 @@ from soarm101_motion.constants import (
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
+from soarm101_motion.config import rate_within_ceiling
 from soarm101_motion.control import jog_linear_cli_units, relative_target_pose
 from soarm101_motion.discovery import discover_so101_arms
 from soarm101_motion.hardware import FeetechBackend, FeetechMotorSetup
@@ -1380,6 +1381,7 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
             f"agent pose names must begin with {AGENT_POSE_PREFIX!r}"
         )
     pose = PoseLibrary(args.robot_id).require(name)
+    rates = _agent_validated_pose_rates(args)
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         arm.require_artifact_calibration(
@@ -1394,10 +1396,12 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
         arm.enable()
         arm_result = arm.move_joints_from_saved_pose(
             pose.joints,
-            speed=8.0 * pi / 180.0,
-            acceleration=25.0 * pi / 180.0,
+            speed=rates[0] * pi / 180.0,
+            acceleration=rates[1] * pi / 180.0,
         )
-        gripper_result = arm.tool.move(pose.gripper)
+        gripper_result = arm.tool.move(
+            pose.gripper, speed_raw=rates[2], acceleration_raw=rates[3],
+        )
         arm.hold()
     print(
         json.dumps(
@@ -1422,9 +1426,33 @@ def _agent_requested_rate(value: float, name: str, ceiling: float) -> float:
     speed = float(value)
     if not np.isfinite(speed) or speed <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
-    if speed > ceiling:
+    if not rate_within_ceiling(speed, ceiling):
         raise ValueError(f"{name} exceeds the configured motion envelope ({ceiling:g})")
     return speed
+
+
+def _agent_gripper_rates(args: argparse.Namespace) -> tuple[int, int]:
+    speed = args.gripper_speed_raw
+    acceleration = args.gripper_acceleration_raw
+    if type(speed) is not int or not 1 <= speed <= 3400:
+        raise ValueError("gripper speed raw must be in [1, 3400]")
+    if type(acceleration) is not int or not 1 <= acceleration <= 254:
+        raise ValueError("gripper acceleration raw must be in [1, 254]")
+    return speed, acceleration
+
+
+def _agent_validated_pose_rates(args: argparse.Namespace) -> tuple[float, float, int, int]:
+    limits = SOARM101Config(
+        robot_id=args.robot_id, **_motion_limit_overrides(args)
+    ).motion_limits_human
+    speed = _agent_requested_rate(
+        args.speed_deg_s, "joint speed deg/s", limits["max_joint_speed_deg_s"]
+    )
+    acceleration = _agent_requested_rate(
+        args.acceleration_deg_s2, "joint acceleration deg/s^2",
+        limits["max_joint_acceleration_deg_s2"]
+    )
+    return speed, acceleration, *_agent_gripper_rates(args)
 
 
 def _cmd_agent_joint(args: argparse.Namespace) -> int:
@@ -1604,12 +1632,15 @@ def _cmd_agent_trace_summary(args: argparse.Namespace) -> int:
 
 
 def _cmd_agent_gripper(args: argparse.Namespace) -> int:
+    gripper_speed, gripper_accel = _agent_gripper_rates(args)
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         arm.enable()
         closed = float(arm.get_sleep_gripper_position())
         target = closed if args.target == "close" else 1.0 - closed
-        result = arm.tool.move(target)
+        result = arm.tool.move(
+            target, speed_raw=gripper_speed, acceleration_raw=gripper_accel,
+        )
         arm.hold()
     print(
         json.dumps(
@@ -1631,12 +1662,15 @@ def _cmd_agent_gripper(args: argparse.Namespace) -> int:
 
 
 def _cmd_agent_sleep(args: argparse.Namespace) -> int:
+    speed, acceleration, gripper_speed, gripper_accel = _agent_validated_pose_rates(args)
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         arm.enable()
         result = arm.move_sleep(
-            speed=8.0 * pi / 180.0,
-            acceleration=25.0 * pi / 180.0,
+            speed=speed * pi / 180.0,
+            acceleration=acceleration * pi / 180.0,
+            gripper_speed_raw=gripper_speed,
+            gripper_acceleration_raw=gripper_accel,
         )
         arm.hold()
     payload = asdict(result)
@@ -1652,12 +1686,15 @@ def _cmd_agent_sleep(args: argparse.Namespace) -> int:
 
 
 def _cmd_agent_sleep_up(args: argparse.Namespace) -> int:
+    speed, acceleration, gripper_speed, gripper_accel = _agent_validated_pose_rates(args)
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         arm.enable()
         result = arm.move_sleep_up(
-            speed=8.0 * pi / 180.0,
-            acceleration=25.0 * pi / 180.0,
+            speed=speed * pi / 180.0,
+            acceleration=acceleration * pi / 180.0,
+            gripper_speed_raw=gripper_speed,
+            gripper_acceleration_raw=gripper_accel,
         )
         arm.hold()
     payload = asdict(result)
@@ -1859,6 +1896,36 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         / f"{time.strftime('%Y%m%d-%H%M%S')}-{adapter.name}"
     )
     task = Path(args.task) if args.task else None
+    rates = None
+    if any(getattr(args, key) is not None for key in (
+        "agent_joint_speed_deg_s", "agent_joint_acceleration_deg_s2",
+        "agent_cartesian_speed_mm_s", "agent_cartesian_acceleration_mm_s2",
+        "agent_gripper_speed_raw", "agent_gripper_acceleration_raw",
+    )):
+        from soarm101_motion.broker import AgentMotionRates
+        rates = AgentMotionRates(
+            joint_speed_deg_s=(
+                args.agent_joint_speed_deg_s if args.agent_joint_speed_deg_s is not None else 8.0
+            ),
+            joint_acceleration_deg_s2=(
+                args.agent_joint_acceleration_deg_s2
+                if args.agent_joint_acceleration_deg_s2 is not None else 25.0
+            ),
+            cartesian_speed_mm_s=(
+                args.agent_cartesian_speed_mm_s if args.agent_cartesian_speed_mm_s is not None else 10.0
+            ),
+            cartesian_acceleration_mm_s2=(
+                args.agent_cartesian_acceleration_mm_s2
+                if args.agent_cartesian_acceleration_mm_s2 is not None else 40.0
+            ),
+            gripper_speed_raw=(
+                args.agent_gripper_speed_raw if args.agent_gripper_speed_raw is not None else 250
+            ),
+            gripper_acceleration_raw=(
+                args.agent_gripper_acceleration_raw
+                if args.agent_gripper_acceleration_raw is not None else 20
+            ),
+        ).validated(SOARM101Config(robot_id="so101"))
     result = run_agent(
         agent=adapter.name,
         auth=args.auth,
@@ -1874,6 +1941,7 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         interface=args.interface,
         capability_profile=Path(args.capability_profile) if args.capability_profile else None,
         adapter_manifest=manifest,
+        broker_rates=rates,
     )
     payload = result.as_dict()
     print(json.dumps(payload, indent=2))
@@ -2244,6 +2312,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_session_options(agent_pose)
     agent_pose.add_argument("name")
+    agent_pose.add_argument("--speed-deg-s", type=float, default=8.0)
+    agent_pose.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    agent_pose.add_argument("--gripper-speed-raw", type=int, default=250)
+    agent_pose.add_argument("--gripper-acceleration-raw", type=int, default=20)
     agent_pose.set_defaults(func=_cmd_agent_go_pose)
 
     agent_joint = agent_sub.add_parser(
@@ -2288,6 +2360,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_session_options(agent_gripper)
     agent_gripper.add_argument("target", choices=("open", "close"))
+    agent_gripper.add_argument("--gripper-speed-raw", type=int, default=250)
+    agent_gripper.add_argument("--gripper-acceleration-raw", type=int, default=20)
     agent_gripper.set_defaults(func=_cmd_agent_gripper)
 
     agent_sleep = agent_sub.add_parser(
@@ -2295,6 +2369,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="move to calibrated default Sleep and remain holding",
     )
     add_session_options(agent_sleep)
+    agent_sleep.add_argument("--speed-deg-s", type=float, default=8.0)
+    agent_sleep.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    agent_sleep.add_argument("--gripper-speed-raw", type=int, default=250)
+    agent_sleep.add_argument("--gripper-acceleration-raw", type=int, default=20)
     agent_sleep.set_defaults(func=_cmd_agent_sleep)
 
     agent_sleep_up = agent_sub.add_parser(
@@ -2303,6 +2381,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="move to the historical calibrated wrist-up Sleep and remain holding",
     )
     add_session_options(agent_sleep_up)
+    agent_sleep_up.add_argument("--speed-deg-s", type=float, default=8.0)
+    agent_sleep_up.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    agent_sleep_up.add_argument("--gripper-speed-raw", type=int, default=250)
+    agent_sleep_up.add_argument("--gripper-acceleration-raw", type=int, default=20)
     agent_sleep_up.set_defaults(func=_cmd_agent_sleep_up)
 
     agent_stop = agent_sub.add_parser(
@@ -2447,6 +2529,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--capability-profile", help="trusted host JSON tool/camera/limit profile for this run",
     )
     agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
+    agent_sandbox_run.add_argument("--agent-joint-speed-deg-s", type=float)
+    agent_sandbox_run.add_argument("--agent-joint-acceleration-deg-s2", type=float)
+    agent_sandbox_run.add_argument("--agent-cartesian-speed-mm-s", type=float)
+    agent_sandbox_run.add_argument("--agent-cartesian-acceleration-mm-s2", type=float)
+    agent_sandbox_run.add_argument("--agent-gripper-speed-raw", type=int)
+    agent_sandbox_run.add_argument("--agent-gripper-acceleration-raw", type=int)
     agent_sandbox_run.add_argument("--max-turns", type=int, default=100)
     agent_sandbox_run.add_argument("--timeout", type=int, default=1800)
     agent_sandbox_run.add_argument(
