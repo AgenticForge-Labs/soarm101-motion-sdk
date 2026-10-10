@@ -12,6 +12,17 @@ must not invoke actual hardware motion. A Feetech control-bit reply warning
 with verified readback is a separate communication diagnostic, not evidence
 of a joint-limit failure.
 
+## MCP virtualenv Landlock regression (PR #88)
+
+The Codex workstation emitted `PermissionError: [Errno 13] Permission denied:
+'/opt/soarm101-mcp/pyvenv.cfg'` during the **read-only**, pre-agent MCP
+handshake. Run `python -m pytest --no-cov -q tests/test_agent_sandbox.py`;
+`test_mcp_policy_allows_reading_only_its_isolated_venv` must verify the fixed
+MCP venv is readable for both Hermes/Codex and both broker access profiles,
+but is never writable through the filesystem policy or exposed in `robotctl`
+mode. Physical OpenShell/virtualenv import must then be revalidated on the
+operator workstation, with no arming or motor movement.
+
 ## Isolated MCP preflight diagnostics
 
 Run `python -m pytest --no-cov -q tests/test_agent_sandbox.py` and check
