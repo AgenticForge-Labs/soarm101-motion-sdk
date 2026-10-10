@@ -186,8 +186,10 @@ def test_shutdown_rejects_queued_requests_while_first_action_finishes(
                 break
             time.sleep(0.005)
         assert sdk.session_evidence["lifecycle"] == "closing"
+        # The direct owner gate fails immediately without queuing behind the
+        # long-running action's dispatch lock.
         with pytest.raises(RuntimeError, match="session is closed"):
-            sdk.execute("capabilities", {})
+            sdk._arm()
     finally:
         release.set()
         motion.join(timeout=3)
