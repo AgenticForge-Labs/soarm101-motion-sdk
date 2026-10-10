@@ -706,3 +706,25 @@ def test_native_camera_missing_evidence_fails_before_success_event(
     assert len(events) == 1
     assert events[0]["action"] == "capture"
     assert events[0]["ok"] is False
+
+
+@pytest.mark.parametrize("action,payload", [
+    ("go_pose", {"name": "agent_start_overhead", "speed_deg_s": 16}),
+    ("sleep", {"acceleration_deg_s2": 151}),
+    ("sleep_up", {"gripper_speed_raw": 251}),
+    ("joint", {"joint": "shoulder_pan", "delta_deg": 1, "speed_deg_s": 16}),
+    ("jog", {"x_mm": 1, "speed_mm_s": 11}),
+    ("gripper", {"target": "open", "gripper_acceleration_raw": 21}),
+])
+def test_direct_sdk_preview_rejects_faster_requests_before_device(
+    tmp_path, action, payload,
+) -> None:
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(robot_id="so101"),
+        rates=AgentMotionRates(joint_speed_deg_s=15, joint_acceleration_deg_s2=150),
+        simulation=True,
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
+    )
+    with pytest.raises(ValueError):
+        executor.execute(action, payload)
+    assert executor._session is None
