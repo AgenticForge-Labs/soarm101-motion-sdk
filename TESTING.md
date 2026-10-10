@@ -50,6 +50,11 @@ Run `ruff check .` and
 tests/test_broker.py tests/test_feetech_backend.py
 tests/test_sdk_capabilities.py tests/test_poses.py` before the full suite.
 
+The restricted physical trace CLI must reject non-TTY input and must not
+accept `--yes`. `tests/test_broker_sdk.py` verifies the unattended launch
+fails before starting the broker, writing output or opening a serial device.
+The full robot trace remains an operator-only, human-confirmed hardware test.
+
 Hardware handoff: verify a single real tty owner, calibrations, the
 lease and powered HOLD/STOP, then run
 `soarm101 agent arm --minutes 30` and
