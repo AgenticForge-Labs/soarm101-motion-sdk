@@ -85,10 +85,20 @@ def _motion_limit_overrides(args: argparse.Namespace) -> dict[str, float]:
             pi / 180.0,
         ),
     }
+    # A broker can deliberately narrow the host envelope below the SDK's
+    # ordinary motion defaults (for example, 8 deg/s and 25 deg/s^2).
+    # Keep the configuration internally valid without widening that ceiling.
+    # Otherwise even a read-only agent capabilities/state request fails before
+    # hardware access because its unused default_joint_speed exceeds max_joint_speed.
+    defaults = SOARM101Config()
     for cli_name, (config_name, scale) in conversions.items():
         raw = getattr(args, cli_name, None)
         if raw is not None:
-            values[config_name] = float(raw) * scale
+            ceiling = float(raw) * scale
+            values[config_name] = ceiling
+            default_name = config_name.replace("max_", "default_", 1)
+            if ceiling < getattr(defaults, default_name):
+                values[default_name] = ceiling
     return values
 
 
