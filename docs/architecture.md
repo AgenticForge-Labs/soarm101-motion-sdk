@@ -25,6 +25,20 @@ commands. Hardware safety remains in the existing SDK. See
 
 
 
+## Fault handling in the physical arm backend (PR #88, unmerged)
+
+The Feetech backend must treat a nonzero servo status packet as a
+motion-aborting fault, not as proof that the instantaneous measured current
+is high. In STOP/HOLD, the deterministic backend independently reads
+encoder positions and issues a hold to the subset of actuators with valid
+fresh measurements. Any unreadable servo leaves HOLD explicitly incomplete;
+no stale position or old goal is silently substituted. Arm disconnect
+attempts serial closure even if HOLD errors, and context cleanup retains
+the originating motion error. The default Sleep includes its stock gripper
+close; `close_gripper=False` is an explicit SDK option for joint-only
+testing, not a new agent authority or safety bypass. These changes do not
+validate an interruptible physical persistent broker STOP.
+
 ## OpenShell MCP client runtime boundary
 
 The Codex/Hermes OpenShell MCP client uses the fixed, client-only
