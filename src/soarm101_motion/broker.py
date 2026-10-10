@@ -56,7 +56,7 @@ class BrokerResponse:
 
 @dataclass(frozen=True, slots=True)
 class AgentMotionRates:
-    """Operator-selected requested rates; separate from the SDK's hard ceilings."""
+    """Operator-pinned rate ceilings shared by every agent movement route."""
 
     joint_speed_deg_s: float = 8.0
     joint_acceleration_deg_s2: float = 25.0
@@ -801,18 +801,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_MAX_TOOL_ANGULAR_ACCEL_DEG_S2,
     )
-    requests = parser.add_argument_group("trusted host agent motion requests")
+    requests = parser.add_argument_group("trusted host agent motion ceilings")
     requests.add_argument(
         "--agent-joint-speed-deg-s", type=float, default=8.0,
-        help="requested speed for bounded single-joint jogs (default 8 deg/s)",
+        help="maximum joint speed for all broker joint actions (default 8 deg/s)",
     )
     requests.add_argument(
         "--agent-joint-acceleration-deg-s2", type=float, default=25.0,
-        help="requested acceleration for bounded joint jogs (default 25 deg/s^2)",
+        help="maximum joint acceleration for all broker joint actions (default 25 deg/s^2)",
     )
     requests.add_argument(
         "--agent-cartesian-speed-mm-s", type=float, default=10.0,
-        help="requested Cartesian jog speed (default 10 mm/s)",
+        help="maximum Cartesian jog speed (default 10 mm/s)",
     )
     requests.add_argument(
         "--agent-cartesian-acceleration-mm-s2", type=float, default=40.0,
@@ -884,7 +884,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{limits['max_linear_acceleration_mm_s2']:g} mm/s^2; "
         f"tool angular={limits['max_tool_angular_speed_deg_s']:g} deg/s, "
         f"{limits['max_tool_angular_acceleration_deg_s2']:g} deg/s^2; "
-        f"agent requests joint={rates.joint_speed_deg_s:g} deg/s, "
+        f"agent ceilings joint={rates.joint_speed_deg_s:g} deg/s, "
         f"{rates.joint_acceleration_deg_s2:g} deg/s^2; "
         f"Cartesian={rates.cartesian_speed_mm_s:g} mm/s, "
         f"{rates.cartesian_acceleration_mm_s2:g} mm/s^2"
