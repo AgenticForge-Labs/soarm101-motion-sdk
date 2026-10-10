@@ -553,3 +553,47 @@ def test_failed_port_cleanup_still_releases_lock_and_preserves_primary_error(
     second = FeetechBackend(cfg)
     second._acquire_port_lock()
     second._release_port_lock()
+
+
+def test_port_ownership_blocks_separate_sdk_process_until_released() -> None:
+    """Actual OS flock contention across two processes, with no real arm I/O."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if os.name != "posix" or not Path("/dev/null").is_char_device():
+        pytest.skip("requires POSIX character-device locking")
+
+    probe = """
+import sys
+from soarm101_motion.config import SOARM101Config
+from soarm101_motion.exceptions import RobotConnectionError
+from soarm101_motion.hardware.feetech import FeetechBackend
+arm = FeetechBackend(SOARM101Config(port='/dev/null', use_stored_calibration=False))
+try:
+    arm._acquire_port_lock()
+except RobotConnectionError:
+    sys.exit(23)
+else:
+    arm._release_port_lock()
+    sys.exit(0)
+"""
+    def check_child():
+        return subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True,
+            text=True, timeout=10, check=False,
+        )
+
+    owner = FeetechBackend(
+        SOARM101Config(port="/dev/null", use_stored_calibration=False)
+    )
+    owner._acquire_port_lock()
+    try:
+        contender = check_child()
+        assert contender.returncode == 23, (contender.stdout, contender.stderr)
+    finally:
+        owner._release_port_lock()
+
+    released = check_child()
+    assert released.returncode == 0, (released.stdout, released.stderr)
