@@ -263,6 +263,7 @@ class RobotBrokerService:
         event_path: str | Path = DEFAULT_EVENT_PATH,
         profile: CapabilityProfile | None = None,
         allow_simulated_sdk_posts: bool = False,
+        allow_physical_sdk_trial: bool = False,
     ) -> None:
         if allow_simulated_sdk_posts and not (
             isinstance(executor, SDKAgentExecutor) and executor.simulation
@@ -270,12 +271,26 @@ class RobotBrokerService:
             raise ValueError(
                 "simulated SDK POST tests require an explicitly simulated SDK executor"
             )
+        if allow_physical_sdk_trial and not (
+            isinstance(executor, SDKAgentExecutor) and executor.physical_trial
+            and not executor.simulation
+        ):
+            raise ValueError("physical trial requires a real explicitly provisioned SDK executor")
+        if allow_simulated_sdk_posts and allow_physical_sdk_trial:
+            raise ValueError("cannot combine simulated and physical broker modes")
+        if allow_physical_sdk_trial:
+            if profile is None or profile.allowed_tools != frozenset({
+                "robot_health", "robot_capabilities", "robot_state",
+                "go_pose", "sleep", "stop",
+            }) or profile.allowed_cameras:
+                raise ValueError("physical trial profile must restrict actions to state, pose, Sleep and STOP")
         if not str(token):
             raise ValueError("broker token cannot be empty")
         self.executor = executor or AgentCommandExecutor()
         # Not exposed by the broker CLI. The real broker keeps native POST
         # disabled until physical STOP/ownership/workspace gates are passed.
         self._allow_simulated_sdk_posts = allow_simulated_sdk_posts
+        self._allow_physical_sdk_trial = allow_physical_sdk_trial
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
         self.profile = profile if profile is not None else CapabilityProfile.full()
@@ -355,7 +370,7 @@ class RobotBrokerService:
             admitted_epoch = self._sdk_stop_epoch
         try:
             if isinstance(self.executor, SDKAgentExecutor) and action == "stop":
-                if not self._allow_simulated_sdk_posts:
+                if not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial):
                     raise PermissionError("native SDK STOP is not available in read-only preview")
                 # An authorized STOP must not queue behind the synchronous
                 # broker command lock. Invalidate previously admitted actions
@@ -373,7 +388,7 @@ class RobotBrokerService:
                                 )
                         if (
                             action not in {"state", "capabilities"}
-                            and not self._allow_simulated_sdk_posts
+                            and not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial)
                         ):
                             raise PermissionError("SDK preview currently permits only read-only routes")
                         result = self.executor.execute(action, request)
@@ -504,7 +519,9 @@ class RobotBrokerService:
                 request=request,
                 arguments=["state", "--robot-id", self.executor.robot_id],
             )
-        if isinstance(self.executor, SDKAgentExecutor) and not self._allow_simulated_sdk_posts:
+        if isinstance(self.executor, SDKAgentExecutor) and not (
+            self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
+        ):
             return BrokerResponse(
                 HTTPStatus.FORBIDDEN,
                 {"ok": False, "request_id": request_id,
@@ -752,6 +769,8 @@ class RobotBrokerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], service: RobotBrokerService) -> None:
+        if service._allow_physical_sdk_trial and address[0] != "127.0.0.1":
+            raise ValueError("physical broker trial must bind to IPv4 loopback only")
         self.service = service
         super().__init__(address, _BrokerHandler)
 
