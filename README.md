@@ -21,6 +21,14 @@ to activate that environment in your current terminal.
 
 ## PR #88 preview: direct SDK read-only broker session
 
+The packaged Codex/Hermes MCP sandbox preflight now reports the redacted
+subprocess exit code and stdout/stderr if its isolated MCP import or broker
+profile handshake fails. `sandbox doctor` only verifies that the image exists,
+not that it was built with MCP dependencies. Rebuild stale images with
+`soarm101 agent sandbox setup --agent codex --auth installed`; retry with a
+new output directory. This does not relax read-only or hardware authority.
+
+
 The production broker continues to use the existing bounded agent CLI
 subprocesses. A new opt-in `soarm101-broker --sdk-simulation-preview`
 mode exercises a persistent simulated SDK session for authenticated
