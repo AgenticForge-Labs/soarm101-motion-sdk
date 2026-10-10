@@ -1,5 +1,16 @@
 # Changelog
 
+- PR #88 follow-up to operator-reported 2026-10-10 gripper servo `Overload` status:
+  retained fail-closed fault reporting while allowing STOP/HOLD to latch all
+  *readable* motors even if the gripper position cannot be read. STOP still
+  reports incomplete and never substitutes stale/unverified encoder values.
+  Cleanup now attempts transport closure after HOLD errors and preserves the
+  initiating motion exception instead of replacing it with a secondary failure.
+  Added an opt-in `close_gripper=False` for the SDK default Sleep operation,
+  exposed as `--joint-only` in the existing programmed pose quality tracer.
+  This preserves the five-joint Sleep movement and normal fault checks without
+  requesting the extra gripper close. Software tests are not a physical pass.
+
 - Fix OpenShell MCP startup on Codex/Hermes after a real Codex read-only
   preflight failed to read `/opt/soarm101-mcp/pyvenv.cfg` under Landlock.
   Permit only read-only access to that fixed client-only Python environment
