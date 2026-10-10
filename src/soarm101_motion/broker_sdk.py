@@ -116,7 +116,10 @@ class SDKAgentExecutor:
     def _require_active(self, *, stop: bool = False) -> None:
         """Never resurrect an explicitly closed or faulted hardware session."""
         with self._lifecycle_lock:
-            if self._lifecycle in {"closing", "closed"}:
+            if self._lifecycle == "closed" or (
+                self._lifecycle == "closing"
+                and not (stop and self._session is not None)
+            ):
                 raise RuntimeError("SDK broker session is closed")
             if self._lifecycle == "faulted" and not stop:
                 raise RuntimeError("SDK broker session faulted; human restart required")
