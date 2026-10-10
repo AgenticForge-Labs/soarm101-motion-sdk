@@ -870,3 +870,24 @@ def test_physical_trial_rejects_invalid_joint_only_types_before_connect(tmp_path
         assert sdk.connection_count == 0
     finally:
         sdk.close()
+
+
+def test_physical_broker_trace_requires_operator_tty_and_has_no_yes_bypass(
+    monkeypatch, tmp_path,
+) -> None:
+    """No connected robot, no broker, and no output file from unattended launch."""
+    import importlib.util
+    import io
+
+    script = Path(__file__).resolve().parents[1] / "examples" / "persistent_broker_motion_trace.py"
+    spec = importlib.util.spec_from_file_location("physical_broker_trace_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    command = ["--port", "/dev/ttyACM1", "--output", str(tmp_path / "trace.jsonl")]
+    with pytest.raises(SystemExit):
+        module.build_parser().parse_args([*command, "--yes"])
+    monkeypatch.setattr(module.sys, "stdin", io.StringIO(""))
+    with pytest.raises(PermissionError, match="interactive operator terminal"):
+        module.main(command)
+    assert not list(tmp_path.iterdir())
