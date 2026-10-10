@@ -27,6 +27,9 @@ from soarm101_motion.agent_control import (
 )
 from soarm101_motion.arm import SOARM101
 from soarm101_motion.control import relative_target_pose
+from soarm101_motion.exceptions import (
+    CommunicationError, HardwareFaultError, MotionTimeoutError, RobotConnectionError,
+)
 from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
 from soarm101_motion.workspace import WorkspaceCalibrationStore
@@ -103,49 +106,127 @@ class SDKAgentExecutor:
         self._authority = authority_store or AgentAuthorityStore()
         self._create_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
+        self._stop_lock = threading.Lock()
+        self._lifecycle_lock = threading.RLock()
+        self._lifecycle = "new"  # new -> open -> closing/closed; failure -> faulted
+        self._fault_kind: str | None = None
+        self._bound_calibration_id: str | None = None
         self._session: SOARM101 | None = None
+
+    def _require_active(self, *, stop: bool = False) -> None:
+        """Never resurrect an explicitly closed or faulted hardware session."""
+        with self._lifecycle_lock:
+            if self._lifecycle == "closed" or (
+                self._lifecycle == "closing"
+                and not (stop and self._session is not None)
+            ):
+                raise RuntimeError("SDK broker session is closed")
+            if self._lifecycle == "faulted" and not stop:
+                raise RuntimeError("SDK broker session faulted; human restart required")
+
+    def _fault(self, exc: BaseException) -> None:
+        """Latch transport/servo faults; a new executor is required for recovery."""
+        with self._lifecycle_lock:
+            if self._lifecycle not in {"closing", "closed"}:
+                self._lifecycle = "faulted"
+                self._fault_kind = type(exc).__name__
+        if self.physical_trial:
+            self._authority.clear()
+
+    def _assert_session_identity(self, arm: SOARM101) -> None:
+        if getattr(arm, "is_connected", True) is False:
+            error = RobotConnectionError("SDK broker device disconnected")
+            self._fault(error)
+            raise error
+        if arm.config.robot_id != self.robot_id:
+            error = RobotConnectionError("SDK broker robot identity changed")
+            self._fault(error)
+            raise error
+        observed_calibration = self._calibration_id(arm)
+        if (self._bound_calibration_id is not None
+                and observed_calibration != self._bound_calibration_id):
+            error = RobotConnectionError("SDK broker calibration identity changed")
+            self._fault(error)
+            raise error
 
     def _arm(self) -> SOARM101:
         with self._create_lock:
-            if self._session is None:
-                arm = self._arm_factory()
-                if arm.config.robot_id != self.robot_id:
-                    raise ValueError("SDK session robot ID differs from broker identity")
-                arm.connect()  # Connection only. No automatic torque enable.
-                try:
-                    if self.trace_path is not None:
-                        trace = PassiveBackendTrace(
-                            arm, self.trace_path,
-                            metadata={
-                                "kind": "persistent_sdk_broker_physical_trial",
-                                "session_id": self.session_id,
-                                "joint_speed_deg_s": self.rates.joint_speed_deg_s,
-                                "joint_acceleration_deg_s2": self.rates.joint_acceleration_deg_s2,
-                            },
-                        )
-                        trace.__enter__()
-                        self._trace = trace
-                except BaseException:
-                    arm.disconnect()
-                    raise
-                self.connection_count += 1
-                self._session = arm
-            return self._session
+            with self._lifecycle_lock:
+                self._require_active()
+                if self._session is None:
+                    try:
+                        arm = self._arm_factory()
+                    except BaseException as exc:
+                        # Factory failure is not an invitation to reconnect on
+                        # the next agent request.
+                        self._fault(exc)
+                        raise
+                    try:
+                        if arm.config.robot_id != self.robot_id:
+                            raise RobotConnectionError(
+                                "SDK session robot ID differs from broker identity"
+                            )
+                        arm.connect()  # Connection only; never auto-enable torque.
+                        observed = self._calibration_id(arm)
+                        if self.trace_path is not None:
+                            trace = PassiveBackendTrace(
+                                arm, self.trace_path,
+                                metadata={
+                                    "kind": "persistent_sdk_broker_physical_trial",
+                                    "session_id": self.session_id,
+                                    "joint_speed_deg_s": self.rates.joint_speed_deg_s,
+                                    "joint_acceleration_deg_s2": self.rates.joint_acceleration_deg_s2,
+                                },
+                            )
+                            trace.__enter__()
+                            self._trace = trace
+                    except BaseException as exc:
+                        self._fault(exc)
+                        try:
+                            arm.disconnect()
+                        except Exception:
+                            pass  # Preserve the original connection failure.
+                        raise
+                    self.connection_count += 1
+                    self._session = arm
+                    self._bound_calibration_id = observed
+                    self._lifecycle = "open"
+                self._assert_session_identity(self._session)
+                return self._session
 
     def close(self) -> None:
-        # Do not disconnect a session under an ordinary active SDK command.
-        with self._dispatch_lock:
-            with self._create_lock:
-                arm = self._session
-                self._session = None
-                try:
-                    if arm is not None:
-                        arm.disconnect()
-                finally:
-                    if self._trace is not None:
-                        trace = self._trace
-                        self._trace = None
-                        trace.__exit__(None, None, None)
+        """Terminal, idempotent shutdown; never permit implicit reconnection."""
+        with self._lifecycle_lock:
+            if self._lifecycle in {"closing", "closed"}:
+                return
+            self._lifecycle = "closing"  # Reject queued requests before waiting.
+        try:
+            # STOP may be independent of the ordinary dispatch lock. Do not
+            # disconnect the transport while an in-flight STOP is accessing it.
+            with self._dispatch_lock:
+                with self._stop_lock:
+                    with self._create_lock:
+                        arm = self._session
+                        try:
+                            if arm is not None:
+                                arm.disconnect()
+                        finally:
+                            self._session = None
+                            if self._trace is not None:
+                                trace = self._trace
+                                self._trace = None
+                                trace.__exit__(None, None, None)
+        except BaseException as exc:
+            with self._lifecycle_lock:
+                self._lifecycle = "faulted"
+                self._fault_kind = type(exc).__name__
+            raise
+        else:
+            with self._lifecycle_lock:
+                self._lifecycle = "closed"
+        finally:
+            if self.physical_trial:
+                self._authority.clear()
 
     @property
     def session_evidence(self) -> dict[str, object]:
@@ -154,6 +235,8 @@ class SDKAgentExecutor:
             "sdk_connect_count": self.connection_count,
             "mode": "physical_trial" if self.physical_trial else "simulation_preview",
             "robot_id": self.robot_id,
+            "lifecycle": self._lifecycle,
+            "fault_kind": self._fault_kind,
         }
 
     def _calibration_id(self, arm: SOARM101) -> str:
@@ -208,6 +291,7 @@ class SDKAgentExecutor:
         """Validate and serialize ordinary SDK actions; do not block STOP."""
         self._validate(action, request)
         def run() -> dict[str, object]:
+            self._require_active(stop=action == "stop")
             trace = self._trace
             if trace is not None:
                 trace.mark(
@@ -221,6 +305,13 @@ class SDKAgentExecutor:
             try:
                 result = self._execute_action(action, request)
             except BaseException as exc:
+                # Never re-open a silently disconnected/faulted transport on
+                # the next request. STOP remains possible on an existing arm.
+                if isinstance(exc, (
+                    CommunicationError, RobotConnectionError, HardwareFaultError,
+                    MotionTimeoutError, OSError, ConnectionError,
+                )):
+                    self._fault(exc)
                 if self._trace is not None:
                     self._trace.mark("broker_action_error", action=action, error=repr(exc))
                 raise
@@ -229,7 +320,8 @@ class SDKAgentExecutor:
             return {**result, "broker_session": self.session_evidence}
 
         if action == "stop":
-            return run()
+            with self._stop_lock:
+                return run()
         with self._dispatch_lock:
             return run()
 

@@ -33,6 +33,19 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+**PR #89 (not yet merged):** stage native broker session ownership and
+fail-closed lifecycle without changing the released CLI-backed broker.
+The SDK session must never silently reconnect after close, device fault,
+calibration change, or partial serial initialization failure. A physical
+trial fault revokes the human lease; STOP must retain access to an already
+connected device through fault/shutdown, without reopening hardware.
+Cooperative device locking applies only to updated code honoring the same
+lock namespace; physical GUI/CLI/second-broker exclusion requires local
+validation. Never turn on native physical POST routes or modify live
+system services as part of #89. The actual production STOP/cutover gates
+are separate, sequential PRs.
+
+
 For hardware validation on PR #88, there is a **separate trusted
 operator-only loopback HTTP broker trial**, not a general way to
 enable the native SDK broker. The example must use the normal

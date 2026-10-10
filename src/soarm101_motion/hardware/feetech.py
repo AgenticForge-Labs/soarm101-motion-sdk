@@ -153,7 +153,20 @@ class FeetechBackend(SO101HardwareBackend):
             try:
                 self._connect_locked()
             except BaseException:
-                self._release_port_lock()
+                # Serial open/baud/verification can fail at different stages.
+                # Never relinquish exclusive ownership while an opened port
+                # handler may still hold the device.
+                try:
+                    if self._port_handler is not None:
+                        self._port_handler.closePort()
+                except Exception:
+                    logger.exception("secondary serial cleanup failure during connect")
+                finally:
+                    self._connected = False
+                    self._torque_enabled = False
+                    self._port_handler = None
+                    self._packet_handler = None
+                    self._release_port_lock()
                 raise
 
     def _connect_locked(self) -> None:

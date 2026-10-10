@@ -1,5 +1,33 @@
 # Architecture
 
+## Persistent SDK lifecycle and serial ownership (PR #89; open, not production)
+
+The staged `SDKAgentExecutor` holds one lazy SDK session. It binds the
+robot/calibration identity at first successful connect. A subsequent
+mismatch, explicit backend disconnect, transport exception, hardware fault,
+or motion timeout latches a terminal **faulted** state. It revokes the
+human lease for an explicitly physical trial; ordinary control cannot
+silently reconnect or resume. A human must intentionally create a new
+trusted broker/session. `close()` is terminal and prevents queued device
+operations from starting; it waits for ordinary commands and an independent
+STOP before disconnecting. STOP is available against an already connected
+session even while faulted/closing, without creating a new connection.
+
+The Feetech backend retains the cooperative Linux tty advisory lock for
+updated same-lock-namespace SDK instances (GUI, CLI and trusted broker).
+A failed serial open/initialization now closes the partially opened
+handler before releasing that lock. It cannot exclude independently
+written/legacy programs that ignore advisory locks or processes using
+different lock namespaces. Local cross-process and device-fault evidence
+is required before treating ownership as verified on hardware.
+
+**Not a production switch:** normal broker => bounded CLI is unchanged;
+public SDK preview => read-only simulated state/capabilities only;
+physical SDK executor => explicitly constructed, operator-only restricted
+bench trial. Independent in-flight STOP, physical reconnect/fault response,
+native camera parity, and calibrated 2 mm jog are still later gates.
+
+
 ## Supervised direct physical SDK broker trial (PR #88, not released)
 
 An explicit *trusted-host-only* example can construct a narrowly
@@ -24,7 +52,7 @@ relax those boundaries before physical STOP, ownership and
 calibrated 2 mm jog evidence is reviewed.
 
 
-## Broker-owned rate limits across all movement (PR #88, unmerged)
+## Broker-owned rate limits across all movement (merged PR #88)
 
 The trusted host selects fixed motion rate ceilings for its broker
 process via `AgentMotionRates`. These are *requested action limits*
@@ -46,7 +74,7 @@ preview; this policy does not authorize a physical persistent
 session.
 
 
-## PR 2 staged persistent SDK broker (open branch; simulation-only)
+## PR #88 staged persistent SDK broker (merged; preview simulation-only)
 
 The new `broker_sdk.SDKAgentExecutor` provides a typed SDK operation path
 with a lazily established persistent session. The `--sdk-simulation-preview`

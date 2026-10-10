@@ -1,8 +1,19 @@
 # Shared SDK capability registry and broker migration
 
+**Integration update (2026-10-10):** staged PR #88 merged into `main` at
+`957e86fb1f090a52960a593ce5b07caeaffb7ec6`. Open PR #89 hardens
+persistent SDK session ownership, terminal close/fault behavior,
+calibration-binding and cooperative serial-lock cleanup. Native physical
+operation stays restricted to the separate attended bench experiment;
+public SDK preview remains read-only simulation, production broker is
+still bounded CLI-based. Subsequent independent STOP, native capability
+parity, physical qualification/cutover and duplicate wrapper retirement
+are planned after #89, not part of it.
+
+
 **Status:** PR #86 and registry/ordinary-CLI PR #87 are merged into
 `main` (registry merge `e941e2686d2fd87569cdf1e91d6e508b228787ee`).
-PR #88 is an open **draft**, not on `main`. It stages a persistent SDK
+PR #88 has **merged** into `main`. It stages a persistent SDK
 session through an opt-in **read-only simulation** broker and internal
 fake/simulation HTTP tests for profile enforcement, concurrent STOP,
 queued-request invalidation, lease revocation and camera evidence.
