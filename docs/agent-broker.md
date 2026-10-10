@@ -1,5 +1,25 @@
 # Agent robot broker
 
+## Operator-only direct physical session test (PR #88)
+
+A separate local example, `examples/persistent_broker_motion_trace.py`,
+can create a **narrow loopback-only physical trial broker** whose
+only moving routes are `/v1/go-pose`, `/v1/sleep`, and
+`/v1/stop`. Every request still requires the broker bearer
+token; motion also requires a valid human-issued calibration-bound
+lease. The client tests the full five-pose sequence, and the
+broker retains a stable in-process SDK connection throughout.
+The operator can set joint rates and choose `joint_only=True`
+for this trial to avoid commanded gripper closure; there are
+no speed-policy carveouts. Any larger agent surface or
+physical persistent production startup remains **disabled**.
+
+Normal broker startup remains `AgentCommandExecutor` (CLI
+subprocesses) and `--sdk-simulation-preview` continues to
+deny every POST. This experiment alone does not establish
+the required hardware STOP, ownership, and Cartesian tests.
+
+
 ## PR 2 experimental read-only SDK session
 
 The normal broker still invokes the bounded agent CLI; do not deploy the
