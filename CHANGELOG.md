@@ -1,5 +1,13 @@
 # Changelog
 
+- Fix OpenShell MCP startup on Codex/Hermes after a real Codex read-only
+  preflight failed to read `/opt/soarm101-mcp/pyvenv.cfg` under Landlock.
+  Permit only read-only access to that fixed client-only Python environment
+  when `--interface mcp` is selected. Retain the original read-only policy
+  for robotctl-only runs, the explicit network executable allowlist, broker
+  capability restrictions, and all physical-motion gates. Add regression
+  tests for both interfaces, agents, and read-only/full broker profiles.
+
 - Preserve redacted stdout/stderr and the subprocess exit status when an isolated
   OpenShell MCP preflight fails before the Codex/Hermes agent starts. Doctor's
   image-present result alone does not establish that an image contains a working
