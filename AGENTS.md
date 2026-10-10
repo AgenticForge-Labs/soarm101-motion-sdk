@@ -33,6 +33,21 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+For hardware validation on PR #88, there is a **separate trusted
+operator-only loopback HTTP broker trial**, not a general way to
+enable the native SDK broker. The example must use the normal
+`RobotBrokerService` dispatch with a fixed motion subset, the
+canonical `SDK_CAPABILITIES` pose/Sleep routines, a human-issued
+calibration-bound lease, one persistent device session, bounded
+operator rates, explicit STOP, trace evidence and a local-only bind.
+It must not launch the CLI for motion, expose raw motors or ports
+to OpenShell, authorize agent motions automatically, or claim that
+the production persistent broker cutover is complete.
+Do not perform physical hardware tests from CI. Exclusive tty
+cooperative locks protect updated SDK owners only; a legacy user
+may still have the port open.
+
+
 Broker motion pacing has one operator-owned source of truth:
 `AgentMotionRates` passed into the trusted broker at startup. Joint
 rate ceilings must reach **all** agent joint-space actions
