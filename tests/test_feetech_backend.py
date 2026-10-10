@@ -472,3 +472,23 @@ def test_partial_stop_still_holds_readable_arm_motors_on_gripper_fault(
         assert backend._torque_enabled
     finally:
         backend.disconnect()
+
+
+def test_real_linux_port_lock_blocks_second_sdk_process_descriptor(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    if os.name != "posix":
+        pytest.skip("physical port ownership locking currently requires POSIX")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = SOARM101Config(port="/dev/null", use_stored_calibration=False)
+    first = FeetechBackend(config)
+    second = FeetechBackend(config)
+    first._acquire_port_lock()
+    try:
+        with pytest.raises(RobotConnectionError, match="already owned"):
+            second._acquire_port_lock()
+    finally:
+        first._release_port_lock()
+    second._acquire_port_lock()
+    second._release_port_lock()
