@@ -35,12 +35,49 @@ trace, broker event JSONL, and summary. A cooperative Linux tty
 file lock prevents another updated SDK process from opening the same
 real serial port, though older uncooperative software remains a risk.
 
-**This experiment is not yet physically validated** and does not
+**The supervised five-leg joint-only route completed on real hardware on
+2026-10-10**, with one SDK connection, 1,677 commands, 444 feedback samples,
+and five completed legs (operator-supplied JSONL trace, broker events and
+summary). This narrowly validates that route, not interruptible physical
+STOP, cross-process fault recovery or OpenShell agent motion. The experiment
+does not
 authorize agent/OpenShell motion or the general physical SDK broker.
 Production continues with the existing bounded CLI. The open merge
 gates remain physical STOP/HOLD, device exclusivity, fault recovery,
 camera/trace parity, and supervised calibrated Cartesian movement.
 Keep hardware revisions and test results on this PR.
+
+## Next milestone — interactive, sandboxed Codex/Hermes (design only)
+
+The existing `soarm101 agent sandbox run` executes a one-shot harness process
+(`codex exec --json --ephemeral` for Codex) then tears down its sandbox
+and trusted broker. Running the interactive host `codex` with MCP is *not*
+equivalent to OpenShell confinement: host tools can discover uncontrolled
+device, subprocess, or network routes even when MCP tools are profile-limited.
+Do not treat a prompt's instruction to stay within MCP as a security control.
+
+**After completing and merging the necessary PR #88 production-broker safety
+gates**, implement a persistent interactive OpenShell terminal as a dedicated
+follow-on change. Reuse the packaged Codex/Hermes adapters and current
+MCP/broker/lease/profile primitives; never invent a second robot transport.
+Proposed CLI UX (not yet implemented): `soarm101 agent sandbox interactive
+--agent codex --auth installed --interface mcp --capability-profile FILE`,
+plus explicit attach/status/close, selectable read-only or human-authorized
+control, and predictable teardown/evidence. Preserve a single broker-owned
+device session across prompts, with no host Codex shell fallback.
+
+Acceptance requirements: per-session immutable broker profile/digest and
+one-time bearer-token handling; sandbox unable to reach serial/camera nodes,
+unrestricted SDK/host CLI, Docker socket, host code tree or unrelated credentials;
+MCP tool denials enforced in the broker even when an agent attempts direct HTTP
+or alternate shell paths; explicit human arming outside sandbox; lease expiry
+and broker loss fail closed; independently interruptible STOP/HOLD; authenticated
+named camera capture with SHA evidence; interactive attach/reconnect and
+process cleanup without leaving torque or open hardware ownership ambiguous.
+Use fake OpenShell/broker tests and real read-only Codex/Hermes interactive
+trials *before* supervised physical motion. A narrow shipped joint-only
+profile should be easy to select in one command, not require editing SDK code.
+Physical validation and independent human power cutoff remain mandatory.
 
 ## Shared SDK registry and broker migration plan
 
