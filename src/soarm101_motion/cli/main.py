@@ -1895,6 +1895,36 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         / f"{time.strftime('%Y%m%d-%H%M%S')}-{adapter.name}"
     )
     task = Path(args.task) if args.task else None
+    rates = None
+    if any(getattr(args, key) is not None for key in (
+        "agent_joint_speed_deg_s", "agent_joint_acceleration_deg_s2",
+        "agent_cartesian_speed_mm_s", "agent_cartesian_acceleration_mm_s2",
+        "agent_gripper_speed_raw", "agent_gripper_acceleration_raw",
+    )):
+        from soarm101_motion.broker import AgentMotionRates
+        rates = AgentMotionRates(
+            joint_speed_deg_s=(
+                args.agent_joint_speed_deg_s if args.agent_joint_speed_deg_s is not None else 8.0
+            ),
+            joint_acceleration_deg_s2=(
+                args.agent_joint_acceleration_deg_s2
+                if args.agent_joint_acceleration_deg_s2 is not None else 25.0
+            ),
+            cartesian_speed_mm_s=(
+                args.agent_cartesian_speed_mm_s if args.agent_cartesian_speed_mm_s is not None else 10.0
+            ),
+            cartesian_acceleration_mm_s2=(
+                args.agent_cartesian_acceleration_mm_s2
+                if args.agent_cartesian_acceleration_mm_s2 is not None else 40.0
+            ),
+            gripper_speed_raw=(
+                args.agent_gripper_speed_raw if args.agent_gripper_speed_raw is not None else 250
+            ),
+            gripper_acceleration_raw=(
+                args.agent_gripper_acceleration_raw
+                if args.agent_gripper_acceleration_raw is not None else 20
+            ),
+        ).validated(SOARM101Config(robot_id="so101"))
     result = run_agent(
         agent=adapter.name,
         auth=args.auth,
@@ -1910,6 +1940,7 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         interface=args.interface,
         capability_profile=Path(args.capability_profile) if args.capability_profile else None,
         adapter_manifest=manifest,
+        broker_rates=rates,
     )
     payload = result.as_dict()
     print(json.dumps(payload, indent=2))
@@ -2497,6 +2528,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--capability-profile", help="trusted host JSON tool/camera/limit profile for this run",
     )
     agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
+    agent_sandbox_run.add_argument("--agent-joint-speed-deg-s", type=float)
+    agent_sandbox_run.add_argument("--agent-joint-acceleration-deg-s2", type=float)
+    agent_sandbox_run.add_argument("--agent-cartesian-speed-mm-s", type=float)
+    agent_sandbox_run.add_argument("--agent-cartesian-acceleration-mm-s2", type=float)
+    agent_sandbox_run.add_argument("--agent-gripper-speed-raw", type=int)
+    agent_sandbox_run.add_argument("--agent-gripper-acceleration-raw", type=int)
     agent_sandbox_run.add_argument("--max-turns", type=int, default=100)
     agent_sandbox_run.add_argument("--timeout", type=int, default=1800)
     agent_sandbox_run.add_argument(
