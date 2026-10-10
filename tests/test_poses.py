@@ -172,3 +172,42 @@ def test_sleep_inset_scales_for_unusually_narrow_calibration() -> None:
                    for name, angle in derived.items())
         assert derived["shoulder_lift"] == pytest.approx(-0.008)
         assert derived["elbow_flex"] == pytest.approx(0.008)
+
+
+@pytest.mark.parametrize("close_gripper", [False, True])
+def test_sleep_optional_gripper_close_preserves_arm_execution(
+    monkeypatch: pytest.MonkeyPatch, close_gripper: bool,
+) -> None:
+    from soarm101_motion.motion import MotionHandle
+    from soarm101_motion.types import MotionResult
+
+    arm = SOARM101.simulated()
+    joint_calls = []
+    tool_calls = []
+
+    def completed_handle() -> MotionHandle:
+        handle = MotionHandle(
+            lambda event: MotionResult(accepted=True, completed=True, final_positions={})
+        )
+        handle.start()
+        return handle
+
+    def move_joints(target, **kwargs):
+        joint_calls.append((dict(target), dict(kwargs)))
+        return completed_handle()
+
+    def move_tool(target, *, wait=True):
+        tool_calls.append((target, wait))
+        return completed_handle()
+
+    monkeypatch.setattr(arm, "get_sleep_joint_positions", lambda: {"shoulder_pan": 0.0})
+    monkeypatch.setattr(arm, "get_sleep_gripper_position", lambda: 0.025)
+    monkeypatch.setattr(arm, "move_joints", move_joints)
+    monkeypatch.setattr(arm.tool, "move", move_tool)
+
+    result = arm.move_sleep(close_gripper=close_gripper)
+    assert result.completed
+    assert len(joint_calls) == 1
+    assert joint_calls[0][1]["workspace_check"] == "off"
+    assert joint_calls[0][1]["wait"] is False
+    assert tool_calls == ([(0.025, False)] if close_gripper else [])
