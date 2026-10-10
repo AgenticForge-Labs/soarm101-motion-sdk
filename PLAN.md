@@ -40,8 +40,7 @@ real serial port, though older uncooperative software remains a risk.
 and five completed legs (operator-supplied JSONL trace, broker events and
 summary). This narrowly validates that route, not interruptible physical
 STOP, cross-process fault recovery or OpenShell agent motion. The experiment
-does not
-authorize agent/OpenShell motion or the general physical SDK broker.
+does not authorize agent/OpenShell motion or the general physical SDK broker.
 Production continues with the existing bounded CLI. The open merge
 gates remain physical STOP/HOLD, device exclusivity, fault recovery,
 camera/trace parity, and supervised calibrated Cartesian movement.
@@ -100,7 +99,8 @@ equivalent to OpenShell confinement: host tools can discover uncontrolled
 device, subprocess, or network routes even when MCP tools are profile-limited.
 Do not treat a prompt's instruction to stay within MCP as a security control.
 
-**After the Milestone B production-broker safety gates are merged**, implement a persistent interactive OpenShell terminal as a dedicated
+**After the Milestone B production-broker safety gates are merged**,
+implement a persistent interactive OpenShell terminal as a dedicated
 follow-on change. Reuse the packaged Codex/Hermes adapters and current
 MCP/broker/lease/profile primitives; never invent a second robot transport.
 Proposed CLI UX (not yet implemented): `soarm101 agent sandbox interactive
@@ -150,7 +150,7 @@ parity, reliable concurrent STOP independent of the operation lock, shared
 cross-process hardware ownership with ordinary CLI/GUI, session fault/
 disconnect handling, simulated/fake-transport regression, and a supervised,
 traced physical 2 mm jog with clear operator observation. Keep all fixes on
-this same PR. No dependent PR 3 branch until this PR merges.
+the sequential follow-up PRs; no new dependent branch before its prerequisite merges.
 
 
 
@@ -163,7 +163,9 @@ Software CI passed on Python 3.10 and 3.12 with 586 tests; the GitHub
 PR state is authoritative for whether #87 has merged. Operator-only
 configuration, calibration, sequence/trajectory execution and the
 agent-specific bounded subprocess remain deliberately unchanged.
-PRs 2 and 3 remain strictly dependent and unimplemented.
+The original PR 2/3 wording above is historical. The current staged #88
+branch is implemented but unmerged; production cutover and wrapper retirement
+are separated into the proposed #89–#93 sequence.
 
 
 Detailed design, authority boundaries, STOP/cancellation acceptance tests, and
