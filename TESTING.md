@@ -21,6 +21,41 @@ that a partially opened port is closed before the advisory lock is
 released, including a secondary cleanup error. They **never** instantiate
 a real SO-ARM101 or command hardware.
 
+For an attended **read-only real tty ownership check** on the operator's
+actual workstation, first close the GUI, teleop and other port users,
+confirm calibration and motor diagnostic health, keep robot power accessible,
+and do not arm or enable torque.
+
+In Terminal A, hold a diagnostic-only Feetech session (no motor commands):
+
+```bash
+cd ~/AgenticForge/soarm101-motion-sdk
+source .venv/bin/activate
+python - <<'PY'
+from soarm101_motion.config import SOARM101Config
+from soarm101_motion.hardware.feetech import FeetechBackend
+config = SOARM101Config(
+    port="/dev/ttyACM1", robot_id="so101", auto_enable_torque=False,
+    configure_motors_on_connect=False, disable_torque_on_disconnect=False,
+)
+backend = FeetechBackend(config)
+backend.connect()
+try:
+    print("READ-ONLY SERIAL OWNER ACTIVE; press Enter to release", flush=True)
+    input()
+finally:
+    backend.disconnect()
+PY
+```
+
+In Terminal B while A is holding the tty, run `soarm101 read --port
+/dev/ttyACM1 --robot-id so101 --json`. Expect a device-ownership refusal,
+not any movement or successful second serial connection. Release Terminal A
+with Enter; rerun the same read command and expect ordinary read-only
+diagnostics. This is a test of cooperative same-lock-namespace processes, not
+a replacement for GUI/second-broker, out-of-process STOP, failure/crash,
+or multi-user hardware qualification. Save console logs and exact SHA.
+
 The human must separately validate that the current GUI, CLI and broker
 cannot simultaneously acquire the real follower, that failed initialization
 releases ownership, and that no motion resumes after reconnect. Preserve
