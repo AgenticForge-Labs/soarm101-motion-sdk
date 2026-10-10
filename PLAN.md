@@ -4,6 +4,22 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
+## 2026-10-10 operator gripper fault and joint-only tracing
+
+A supervised Sleep/Overhead/Left/Right/Sleep run reported Feetech
+`so101_gripper` overload status 0x20; visual inspection alone cannot
+determine whether the fault was sustained overload or a prior protection
+status. The normal SDK correctly aborted motion, but the old hardware
+STOP/HOLD read all six motors before requesting a hold. An unreadable
+gripper therefore blocked the arm-motor hold command, and cleanup hid
+the original failure. PR #88 now attempts live-position HOLD on each
+readable motor, still reports partial failure, always tries disconnect,
+and preserves the initiating exception. The route gains `--joint-only`
+to avoid the post-Sleep gripper close during arm-joint characterization.
+These software fixes await focused/full CI and supervised workstation
+revalidation; motor protection is not suppressed and no new physical
+broker path is authorized.
+
 ## Shared SDK registry and broker migration plan
 
 **PR 2 work in progress (branch `feature/broker-persistent-sdk-session`):**
