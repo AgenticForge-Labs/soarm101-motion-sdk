@@ -102,20 +102,25 @@ guarantee measured distance or object clearance. At a starting height only
 slightly above 100 mm, a 50 mm downward command may cross that threshold;
 plan smaller steps near obstacles or the threshold.
 
-The profile does not control movement speed. The trusted broker can
-now pin requested agent Cartesian and joint jog velocities/accelerations
-at startup with `--agent-cartesian-speed-mm-s`,
-`--agent-cartesian-acceleration-mm-s2`,
+The profile grants tools; **motion rates are owned by the human-configured
+broker**, not the agent or the tool profile. Set
 `--agent-joint-speed-deg-s` and
-`--agent-joint-acceleration-deg-s2`. Defaults preserve historical
-10 mm/s, 40 mm/s² and 8 deg/s, 25 deg/s² respectively. The broker
-passes these values into the bounded agent CLI adapter, which validates
-them again against the existing maximum motion envelope before hardware.
-`robot_capabilities` exposes the effective `broker_requested_motion`
-rates. See [agent-broker.md](agent-broker.md) for an example.
-This changes configuration ownership, **not** the default physical
-speed. Increasing it on hardware remains deferred pending investigation
-of measured physical-height drift and rejected repeat jogs.
+`--agent-joint-acceleration-deg-s2` at broker startup for every
+joint-space action, **including go_pose, sleep and sleep_up**. Cartesian
+jogs use their own mm/s and mm/s² settings; gripper moves (including
+gripper segments of poses and Sleep) use separate Feetech raw speed
+and acceleration ceilings. Defaults remain 8°/s, 25°/s²; 10 mm/s,
+40 mm/s²; and 250/20 raw respectively. All broker motion actions
+accept optional slower per-call values, rejected above pinned limits.
+
+For example, after the human has selected the 15°/s and 150°/s²
+joint ceilings, `go_pose(name="agent_start_overhead", speed_deg_s=5,
+acceleration_deg_s2=30)` is permitted by the rate policy while
+`sleep(speed_deg_s=20)` is rejected before motion. Calibration,
+lease, tool-profile and SDK checks still apply. See
+[agent-broker.md](agent-broker.md). The direct SDK broker preview
+is not physically enabled and the 15/150 profile still requires
+real hardware characterization.
 
 ## MCP tool surface (initial implementation)
 
