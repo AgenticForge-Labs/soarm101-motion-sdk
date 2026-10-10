@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import secrets
+import sys
 import threading
 import time
 import urllib.error
@@ -52,7 +53,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-gripper", action="store_true",
         help="also command saved gripper targets and Sleep close; default is joint-only",
     )
-    parser.add_argument("--yes", action="store_true", help="skip RUN confirmation")
     parser.add_argument(
         "--output", type=Path, required=True,
         help="local trusted-host motor trace JSONL (not an agent-controlled path)",
@@ -105,6 +105,11 @@ def _preflight_saved_poses(robot_id: str, calibration_id: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # A retained motion lease is not sufficient to run a physical experiment
+    # unattended. Reject redirected/agent-initiated invocation before opening
+    # a follower, creating an output file, or starting the trusted broker.
+    if not sys.stdin.isatty():
+        raise PermissionError("physical broker trial requires an interactive operator terminal")
     for name, value in (
         ("speed-deg-s", args.speed_deg_s),
         ("acceleration-deg-s2", args.acceleration_deg_s2),
@@ -201,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.acceleration_deg_s2:g} deg/s^2; "
             f"joint-only={not args.include_gripper}"
         )
-        if not args.yes and input("Type RUN to start supervised physical route: ").strip() != "RUN":
+        if input("Type RUN to start supervised physical route: ").strip() != "RUN":
             print("Not executed; operator declined.")
             return 1
 
