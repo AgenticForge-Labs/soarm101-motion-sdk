@@ -1,5 +1,13 @@
 # Changelog
 
+- Fix exact-ceiling 15°/s supervised persistent-broker startup. Human-unit
+  limits are converted deg/s -> rad/s -> deg/s for reporting; binary rounding
+  can return 14.999999999999998. The shared ceiling validator now tolerates
+  only four ULPs of representation error; actual rate increases still fail.
+  Both trusted broker and bounded CLI use the same validator, with regression
+  coverage for 15/150 and over-ceiling rejection.
+
+
 - PR #88: Add a restricted **physical persistent-SDK broker bench trial**
   for Sleep → Overhead → Left → Right → Sleep. The trusted loopback HTTP
   client uses the actual broker dispatch, calibration-bound human lease,
