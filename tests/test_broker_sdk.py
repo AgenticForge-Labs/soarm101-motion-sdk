@@ -728,3 +728,122 @@ def test_direct_sdk_preview_rejects_faster_requests_before_device(
     with pytest.raises(ValueError):
         executor.execute(action, payload)
     assert executor._session is None
+
+
+def test_physical_trial_is_explicitly_opted_in_and_strictly_profiled(tmp_path) -> None:
+    from soarm101_motion import SOARM101
+    config = SOARM101Config(port="/dev/fake-tty", robot_id="so101")
+    sdk = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: SOARM101.simulated(config=config),
+    )
+    full = CapabilityProfile.full()
+    narrow = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "trial",
+        "tools": ["robot_health", "robot_capabilities", "robot_state",
+                  "go_pose", "sleep", "stop"],
+        "cameras": [], "limits": {},
+    })
+    try:
+        with pytest.raises(ValueError, match="profile"):
+            RobotBrokerService(executor=sdk, token="token",
+                               profile=full, allow_physical_sdk_trial=True)
+        with pytest.raises(ValueError, match="loopback"):
+            RobotBrokerHTTPServer(
+                ("0.0.0.0", 0),
+                RobotBrokerService(executor=sdk, token="token",
+                                   profile=narrow, allow_physical_sdk_trial=True),
+            )
+        service = RobotBrokerService(executor=sdk, token="token", profile=narrow)
+        assert service.dispatch("POST", "/v1/sleep", {"joint_only": True}).status == 403
+    finally:
+        sdk.close()
+
+
+def test_loopback_trial_sleep_http_reuses_one_sdk_connection_without_cli(
+    tmp_path, monkeypatch,
+) -> None:
+    from soarm101_motion import SOARM101
+    import urllib.request
+    from soarm101_motion.broker import AgentCommandExecutor
+
+    config = SOARM101Config.from_motion_limits(
+        robot_id="so101", port="/dev/test-fake-tty",
+        default_joint_speed=0.10, default_joint_acceleration=0.50,
+        max_joint_speed_deg_s=15, max_joint_acceleration_deg_s2=150,
+    )
+    authority = AgentAuthorityStore(tmp_path / "lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    sdk = SDKAgentExecutor(
+        config=config,
+        rates=AgentMotionRates(joint_speed_deg_s=15,
+                               joint_acceleration_deg_s2=150),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: SOARM101.simulated(config=config),
+        authority_store=authority,
+    )
+    # Test uses the real simulation backend behind an explicitly physical
+    # *trial service*. It never opens the requested fake tty device.
+    monkeypatch.setattr(sdk, "_calibration_id", lambda arm: "simulation")
+    monkeypatch.setattr(
+        AgentCommandExecutor, "run",
+        lambda *a, **k: pytest.fail("physical persistent broker invoked CLI"),
+    )
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "trial",
+        "tools": ["robot_health", "robot_capabilities", "robot_state",
+                  "go_pose", "sleep", "stop"],
+        "cameras": [], "limits": {},
+    })
+    service = RobotBrokerService(
+        executor=sdk, token="test-token",
+        event_path=tmp_path / "events.jsonl",
+        profile=profile, allow_physical_sdk_trial=True,
+    )
+    server = RobotBrokerHTTPServer(("127.0.0.1", 0), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(method, route, payload=None):
+        data = json.dumps(payload or {}).encode() if method == "POST" else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}{route}",
+            data=data, method=method,
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return json.load(response)
+
+    try:
+        first = request("GET", "/v1/state")["result"]
+        assert first["broker_session"]["sdk_connect_count"] == 1
+        assert first["broker_session"]["mode"] == "physical_trial"
+        one = request("POST", "/v1/sleep", {"joint_only": True})["result"]
+        two = request("POST", "/v1/sleep", {"joint_only": True})["result"]
+        assert one["completed"] and two["completed"]
+        assert one["broker_session"] == two["broker_session"] == first["broker_session"]
+        assert sdk.connection_count == 1
+        stop = request("POST", "/v1/stop", {})["result"]
+        assert stop["completed"]
+        assert authority.status()["armed"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        sdk.close()
+
+
+def test_physical_trial_rejects_invalid_joint_only_types_before_connect(tmp_path) -> None:
+    config = SOARM101Config(port="/dev/fake-tty", robot_id="so101")
+    sdk = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(), physical_trial=True,
+        arm_factory=lambda: pytest.fail("should not connect"),
+    )
+    try:
+        with pytest.raises(ValueError, match="boolean"):
+            sdk.execute("sleep", {"joint_only": 1})
+        with pytest.raises(ValueError, match="unknown"):
+            sdk.execute("go_pose", {"name": "agent_test", "host_path": "/tmp"})
+        assert sdk.connection_count == 0
+    finally:
+        sdk.close()
