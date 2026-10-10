@@ -1,5 +1,27 @@
 # Architecture
 
+## Broker-owned rate limits across all movement (PR #88, unmerged)
+
+The trusted host selects fixed motion rate ceilings for its broker
+process via `AgentMotionRates`. These are *requested action limits*
+underneath the SDK's absolute motion envelope. One joint speed and
+acceleration pair applies to every agent joint motion, including
+single-joint jog, calibration-bound saved-pose replay and both Sleep
+postures; no fixed-rate carveout exists. Cartesian translation uses
+separate physical mm/s and mm/s² ceilings, while gripper movements
+use separate Feetech raw speed and acceleration bounds (also for
+gripper phases of saved poses and Sleep). MCP and robotctl may pass
+per-call lower values; broker-side validation rejects higher rates.
+The pinned rates travel into the bounded CLI and the typed SDK
+operation path; they remain immutable throughout a sandbox run
+and are advertised in the broker capabilities. The existing
+absolute SDK limits, calibration, path/effort/fault guards and
+human lease remain additional independent restrictions. Direct SDK
+broker execution is still only a read-only public simulation
+preview; this policy does not authorize a physical persistent
+session.
+
+
 ## PR 2 staged persistent SDK broker (open branch; simulation-only)
 
 The new `broker_sdk.SDKAgentExecutor` provides a typed SDK operation path
