@@ -36,15 +36,18 @@ script, `examples/persistent_broker_stop_trial.py`; it has no unattended
 verifies the actual Sleep starting posture from encoder readback,
 refuses to auto-move to Sleep, then completes and measures a joint-only
 Overhead -> Sleep baseline through the fixed restricted profile. Only
-after the baseline passes does it start a new Overhead leg and send
-authenticated STOP independently during measured active motion. It
+after the baseline passes it starts a new Overhead leg and **waits for
+operator ENTER while the arm is moving** before sending authenticated
+independent STOP. It
 requires an explicit human stationary check. It cannot guarantee that
 a failed USB/Feetech transport will physically brake or hold the mechanism. Keep the hardware cutoff
 within immediate reach and report partial or timed-out STOP as a **failed**
 qualification, not success. Because STOP revokes arming, the final arm
-position may remain between Sleep and Overhead; no automatic rearming
-or return-to-Sleep is allowed. A separate supervised human recovery
-is required. Never use this as an emergency-stop controller.
+position may remain between Sleep and Overhead. There is no automatic
+rearming: the supervised operator may deliberately type `REARM` only
+after stationary/HOLD verification, triggering a fresh, short
+calibration-bound lease and a **new** guarded joint-only Overhead
+movement. Declining leaves the arm stationary and held. Never use this as an emergency-stop controller.
 
 The Feetech serial transport uses a cooperative lock, not a separate
 safety channel. STOP can be delayed behind packet I/O or blocked by a
