@@ -93,9 +93,11 @@ def _execute_verified_roundtrip(
     expected_session_id: str,
     overhead_target: Mapping[str, float],
     sleep_target: Mapping[str, float],
+    legs: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Complete and measure Overhead -> Sleep without an initial Sleep write."""
-    legs: list[dict[str, Any]] = []
+    if legs is None:
+        legs = []
     for label, path, payload, target in (
         ("OVERHEAD", "/v1/go-pose",
          {"name": "agent_start_overhead", "joint_only": True}, overhead_target),
@@ -248,11 +250,12 @@ def main(argv: list[str] | None = None) -> int:
         if input("Type ROUNDTRIP to move Overhead and back to Sleep: ").strip() != "ROUNDTRIP":
             raise PermissionError("operator declined Overhead/Sleep baseline")
 
-        summary["baseline_legs"] = _execute_verified_roundtrip(
+        _execute_verified_roundtrip(
             lambda method, path, payload: _request(url, token, method, path, payload),
             expected_session_id=summary["broker_session"]["id"],
             overhead_target=overhead_target,
             sleep_target=sleep_target,
+            legs=summary["baseline_legs"],
         )
 
         print(
