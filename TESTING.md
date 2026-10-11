@@ -1,5 +1,25 @@
 # Testing
 
+## STOP qualification blocker from supplied 2026-10-11 logs
+
+**Do not repeat physical STOP-during-motion or REARM tests on the arm yet.**
+The supplied `stop-20261011-113611` motor trace + broker events show
+that 24 ms HTTP STOP completion was followed by measured physical
+elbow motion of 18.4° in approximately one second, even though no new
+host-streamed motion commands were issued. The old `passed=true`
+summary was a **false positive**. After the failed HOLD, extra physical
+STOP retries could compound movement; the trial now forbids a blind
+second position latch.
+
+Before another hardware test, inspect the Feetech STOP implementation,
+servo movement/goal/acceleration semantics, and the 1/1 physical-latch
+profile against the 0/254 streamed profile. Use the recorded traces as
+**evidence**, not a hardware safety acceptance. New software-only
+regressions replay the trace's elbow drift and verify a faulted session,
+revoked lease, HTTP error, and no automatic recovery. **No physical
+STOP qualification or production cutover is authorized until this
+failure is resolved with separately approved unloaded hardware tests.**
+
 ## PR #90 independent STOP and fault regression (open, unmerged)
 
 Hardware-free software verification at the exact PR SHA:
