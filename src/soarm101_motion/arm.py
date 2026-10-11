@@ -352,9 +352,20 @@ class SOARM101:
         self.disable()
 
     def stop(self) -> None:
-        """Cancel active host motion and hold the current arm/tool positions."""
-        self.motion.stop(wait=True)
-        self._stop_tool(wait=True)
+        """Attempt both arm HOLD and tool STOP, even when either fails.
+
+        A gripper command must not be left running just because the joint
+        controller reported an incomplete HOLD. Preserve the first failure;
+        never claim full STOP success if either component failed.
+        """
+        errors: list[Exception] = []
+        for action in (lambda: self.motion.stop(wait=True), lambda: self._stop_tool(wait=True)):
+            try:
+                action()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     software_stop = stop
 
