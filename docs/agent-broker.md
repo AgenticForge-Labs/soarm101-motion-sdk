@@ -2,8 +2,9 @@
 
 ## PR #90 independent STOP semantics (draft, unmerged)
 
-The operator-run `examples/persistent_broker_stop_trial.py` now
-qualifies this path without changing the public broker: it uses the
+The operator-run `examples/persistent_broker_stop_trial.py` supplies
+a physical qualification procedure, not completed qualification,
+without changing the public broker: it uses the
 restricted existing broker profile and per-run localhost token.
 It verifies measured initial Sleep without moving, performs a complete
 Overhead -> Sleep baseline, and interrupts a *subsequent* Overhead movement
