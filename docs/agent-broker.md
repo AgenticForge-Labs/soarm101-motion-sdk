@@ -2,6 +2,14 @@
 
 ## PR #90 independent STOP semantics (draft, unmerged)
 
+The operator-run `examples/persistent_broker_stop_trial.py` now
+qualifies this path without changing the public broker: it uses the
+restricted existing broker profile, a per-run localhost token and one
+measured active saved-pose movement, then issues independent authenticated
+STOP. The human must confirm the arm is stationary; JSONL motor/event
+traces and a summary preserve timing and denied completion. This script
+cannot run inside OpenShell or without an interactive operator terminal.
+
 The native SDK trial's authenticated STOP bypasses the ordinary broker
 motion queue. Queued native requests are cancelled by broker generation
 and late SDK responses are not allowed to report completed motion after
