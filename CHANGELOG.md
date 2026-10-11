@@ -1,5 +1,14 @@
 # Changelog
 
+- PR #90 (draft): complete both arm and tool/gripper STOP attempts even
+  on partial HOLD failure, reject stale in-flight native broker successes
+  after STOP, latch any failed existing-session HOLD and revoke physical
+  authority, and require connected/nonfaulted live feedback for STOP
+  acknowledgement. Add simulation-only cancellation, generic STOP fault,
+  gripper STOP and broker audit regression tests; real STOP latency and
+  physical interruption are **not yet qualified**.
+
+
 - PR #88 staging consolidation: remove the unattended `--yes` bypass from
   `examples/persistent_broker_motion_trace.py`; require a TTY and literal RUN
   confirmation in addition to the existing human lease. Add a hardware-free
