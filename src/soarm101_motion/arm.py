@@ -325,16 +325,24 @@ class SOARM101:
         operator is responsible for the accessible physical power cutoff.
         """
         errors: list[Exception] = []
-        actions = (
-            (lambda: self.stop(), self.backend.disconnect)
-            if stop_before_disconnect
-            else (self.backend.disconnect,)
-        )
-        for action in actions:
+        if stop_before_disconnect:
+            # Use the owned controller primitive, not a second public
+            # SOARM101.stop() dispatch. This retains the legacy independent
+            # cleanup behavior even if the public method was monkeypatched
+            # to emulate a failed broker STOP.
             try:
-                action()
+                self.motion.stop(wait=True)
             except Exception as exc:
                 errors.append(exc)
+            if errors or bool(getattr(self.tool, "is_moving", False)):
+                try:
+                    self._stop_tool(wait=True)
+                except Exception as exc:
+                    errors.append(exc)
+        try:
+            self.backend.disconnect()
+        except Exception as exc:
+            errors.append(exc)
         if errors:
             raise errors[0]
 
