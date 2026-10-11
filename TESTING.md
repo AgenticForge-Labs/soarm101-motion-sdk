@@ -54,17 +54,20 @@ poses**, verifies measured starting Sleep, then completes and measures
 **Overhead -> Sleep** using the trusted broker, recording both baseline
 leg results and their actual joint errors. No initial Sleep motion is
 commanded. Only after completing that return does it start a **new
-Overhead movement** and issue authenticated `POST /v1/stop` once SDK
-motion is active. It captures the independent STOP response time and
+Overhead movement** and displays a prompt to **press ENTER while the arm is moving**. Only that operator keystroke sends authenticated `POST /v1/stop`; if the arm finishes before ENTER the test fails rather than counting STOP. It captures the independent STOP response time and
 verifies the in-flight reply is a rejection, authority is revoked,
 and the SDK is no longer moving. It records the broker
 events, motor trace and summary. After 1 second it requires an explicit
 human observation of stationary posture before it can mark the trial
 passed. A timeout, readback or HOLD fault is **not** STOP success.
-**The STOP-interrupted Overhead leg intentionally ends between Sleep and
-Overhead.** STOP revokes authority: the script must not rearm itself or
-automatically finish moving to Sleep. Inspect the held arm and plan a
-separate, explicitly human-authorized recovery to Sleep if desired.
+**STOP leaves the arm between Sleep and Overhead and revokes the original
+lease.** After `STATIONARY`, the operator can decline further movement,
+or type `REARM` in the trusted host terminal to authorize a *separate*
+joint-only Overhead movement. This requires a fresh verified HOLD,
+calibration/robot identity checks, a new five-minute human lease and
+normal broker validation. No cancelled trajectory is resumed. The
+completed Overhead position is measured and the renewed authority is
+cleared. A recovery failure cannot turn a failed overall trial into success.
 Power cutoff must remain immediately accessible; discontinue on any
 unexpected behavior. Additional manual visual/trace review is required
 before merge regardless of script exit status.
@@ -77,8 +80,8 @@ explicit human `soarm101 agent arm` lease. Exercise a previously
 validated safe pose transition with an independent authenticated
 `POST /v1/stop` while **movement is visibly underway**. Verify:
 the STOP is admitted while movement is in progress rather than queued;
-no subsequent motion command executes; the in-flight response is a
-rejection, never success; the human lease is revoked; the robot
+no subsequent motion command executes *without a new explicit human
+REARM*; the in-flight response is a rejection, never success; the human lease is revoked; the robot
 settles safely; all five arm joint positions and gripper are inspected;
 and no further movement occurs. Record monotonic STOP request/response
 timestamps, physical observation, broker events, trace, failures and
