@@ -368,70 +368,94 @@ def main(argv: list[str] | None = None) -> int:
         calibration_id = state.get("calibration_id")
         if not calibration_id or calibration_id == "simulation":
             raise PermissionError("requires measured physical motor calibration")
-        # This minimal qualification uses only one saved pose. Do not
-        # require unrelated Left/Right calibration artifacts from the
-        # older five-leg characterization script.
-        overhead_pose = PoseLibrary(args.robot_id).require("agent_start_overhead")
-        require_calibration_compatibility(
-            {
-                "source_robot_id": overhead_pose.source_robot_id,
-                "source_calibration_id": overhead_pose.source_calibration_id,
-                "target_robot_id": overhead_pose.target_robot_id,
-                "target_calibration_id": overhead_pose.target_calibration_id,
-            },
-            current_robot_id=args.robot_id,
-            current_calibration_id=calibration_id,
-            artifact_label="agent_start_overhead",
-        )
         sdk_arm = executor._session
         if sdk_arm is None:
             raise RuntimeError("physical SDK connection disappeared")
         sleep_target = sdk_arm.get_sleep_joint_positions()
-        overhead_target = overhead_pose.joints
         summary["start_sleep_errors_deg"] = _verify_measured_pose(
             state["joint_positions_rad"], sleep_target, label="initial Sleep",
-        )
-        summary["overhead_separation_deg"] = _verify_meaningful_overhead_travel(
-            sleep_target, overhead_target,
         )
         summary["calibration_id"] = calibration_id
         summary["broker_session"] = state["broker_session"]
         if state["broker_session"]["sdk_connect_count"] != 1:
             raise RuntimeError("unexpected SDK connect count")
-        summary["route"] = [
-            "verify measured Sleep (no movement)", "Overhead (complete)",
-            "Sleep (complete)", "Overhead (STOP while moving)",
-        ]
+
         summary["baseline_legs"] = []
         print("Clear arm workspace; remove payload; keep power cutoff reachable.", flush=True)
         print("Starting pose verified as Sleep; no initial Sleep command will be sent.", flush=True)
-        print("Baseline route: Sleep -> Overhead -> Sleep, then interrupt Overhead.", flush=True)
         print("This is NOT an emergency-stop certification.", flush=True)
-        if input("Type ROUNDTRIP to move Overhead and back to Sleep: ").strip() != "ROUNDTRIP":
-            raise PermissionError("operator declined Overhead/Sleep baseline")
+        if args.trial == "short":
+            # The trial uses a fixed single-joint broker route, not an
+            # unchecked raw servo command or operator-selected direction.
+            # The canonical SDK is still responsible for motion validation.
+            limits = sdk_arm.motion._effective_limits()
+            summary["short_preflight"] = _preflight_short_joint(
+                state["joint_positions_rad"], limits,
+            )
+            summary["route"] = [
+                "verify measured Sleep (no movement)",
+                "shoulder_pan +8 deg (manual STOP while moving)",
+            ]
+            movement_path = "/v1/joint"
+            movement_payload = {
+                "joint": SHORT_JOINT,
+                "delta_deg": SHORT_DELTA_DEG,
+            }
+            print(
+                "SHORT STOP trial: one +8 deg shoulder-pan move at up to "
+                f"{args.speed_deg_s:g} deg/s. No baseline legs, no "
+                "automatic return or post-STOP REARM.",
+                flush=True,
+            )
+        else:
+            # The original higher-energy characterization is preserved but
+            # requires an explicit opt-in --trial overhead.
+            overhead_pose = PoseLibrary(args.robot_id).require("agent_start_overhead")
+            require_calibration_compatibility(
+                {
+                    "source_robot_id": overhead_pose.source_robot_id,
+                    "source_calibration_id": overhead_pose.source_calibration_id,
+                    "target_robot_id": overhead_pose.target_robot_id,
+                    "target_calibration_id": overhead_pose.target_calibration_id,
+                },
+                current_robot_id=args.robot_id,
+                current_calibration_id=calibration_id,
+                artifact_label="agent_start_overhead",
+            )
+            overhead_target = overhead_pose.joints
+            summary["overhead_separation_deg"] = _verify_meaningful_overhead_travel(
+                sleep_target, overhead_target,
+            )
+            summary["route"] = [
+                "verify measured Sleep (no movement)", "Overhead (complete)",
+                "Sleep (complete)", "Overhead (STOP while moving)",
+            ]
+            print("Baseline route: Sleep -> Overhead -> Sleep, then interrupt Overhead.", flush=True)
+            if input("Type ROUNDTRIP to move Overhead and back to Sleep: ").strip() != "ROUNDTRIP":
+                raise PermissionError("operator declined Overhead/Sleep baseline")
+            _execute_verified_roundtrip(
+                lambda method, path, payload: _request(url, token, method, path, payload),
+                expected_session_id=summary["broker_session"]["id"],
+                overhead_target=overhead_target,
+                sleep_target=sleep_target,
+                legs=summary["baseline_legs"],
+            )
+            print(
+                "Baseline complete. Next STOP will interrupt a NEW Overhead movement.",
+                flush=True,
+            )
+            movement_path = "/v1/go-pose"
+            movement_payload = {
+                "name": "agent_start_overhead", "joint_only": True,
+            }
 
-        _execute_verified_roundtrip(
-            lambda method, path, payload: _request(url, token, method, path, payload),
-            expected_session_id=summary["broker_session"]["id"],
-            overhead_target=overhead_target,
-            sleep_target=sleep_target,
-            legs=summary["baseline_legs"],
-        )
-
-        print(
-            "The baseline Overhead -> Sleep round trip is complete. "
-            "Next STOP will interrupt a NEW Overhead movement. "
-            "The arm may remain between poses afterward and will NOT auto-return.",
-            flush=True,
-        )
-        if input("Type START to begin the Overhead movement you will interrupt: ").strip() != "START":
+        if input("Type START to begin the movement you will interrupt: ").strip() != "START":
             raise PermissionError("operator declined manual STOP trial")
 
         def move():
             try:
                 interrupted_reply["body"] = _request(
-                    url, token, "POST", "/v1/go-pose",
-                    {"name": "agent_start_overhead", "joint_only": True},
+                    url, token, "POST", movement_path, movement_payload,
                 )
             except Exception as exc:
                 interrupted_reply["error"] = str(exc)
