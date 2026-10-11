@@ -1,5 +1,27 @@
 # SO-ARM101 Motion SDK
 
+## PR #90 short-motion physical STOP candidate (open, unmerged)
+
+The trusted-host `examples/persistent_broker_stop_trial.py` now defaults
+to a **single fixed +8° shoulder-pan movement** from encoder-verified Sleep
+at 2°/s and 10°/s², with hard caps of 3°/s and 15°/s².
+There is **no baseline Overhead roundtrip**, no gripper movement, no
+automatic return and **no REARM** in the short mode. The operator
+types `START`, presses ENTER while motion is underway to request STOP,
+then types `STATIONARY` only after directly observing a settled HOLD.
+A positive broker response must include measured post-STOP stability, and
+a subsequent readback must also remain within 1° of the STOP latch.
+The authority lease is revoked. The original bigger Overhead test is
+retained only under explicit `--trial overhead` after separate approval.
+
+This is **unmerged, software-tested candidate code only**. The original
+2026-10-11 trace had an 18.4° powered excursion after STOP; do not
+mistake a green CI result for proof of physical braking. Conduct any
+trial only on an unloaded, secured follower with a clear workspace,
+human observation, supported posture and immediately reachable cutoff.
+Do not use automated agent hardware control.
+
+
 ## STOP/HOLD hardware safety blocker (2026-10-11)
 
 Operator-supplied motor/broker traces show physical elbow travel of
