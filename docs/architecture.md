@@ -1,6 +1,6 @@
 # Architecture
 
-## Persistent SDK lifecycle and serial ownership (PR #89; open, not production)
+## Persistent SDK lifecycle and serial ownership (PR #89; merged, not production)
 
 The staged `SDKAgentExecutor` holds one lazy SDK session. It binds the
 robot/calibration identity at first successful connect. A subsequent
@@ -27,6 +27,30 @@ physical SDK executor => explicitly constructed, operator-only restricted
 bench trial. Independent in-flight STOP, physical reconnect/fault response,
 native camera parity, and calibrated 2 mm jog are still later gates.
 
+
+## Independent STOP and session fault authority (PR #90; open, unmerged)
+
+The host broker alone owns authenticated request admission and an epoch
+for queued/in-flight native SDK actions. The existing SDK motion controller
+owns cancellation and actual backend STOP/HOLD; the broker does not
+reimplement motor trajectory stopping. The native broker admits STOP without
+waiting for its ordinary action lock. All previously admitted requests are
+invalidated, including a request that returns nominal SDK success after STOP
+was issued. Never audit or respond to such an action as successfully completed.
+
+A STOP attempts both arm HOLD and tool/gripper cancellation, collecting and
+reporting incomplete results. A failed native STOP of an existing session
+latches a terminal fault, revokes physical trial arming, and never triggers
+implicit reconnect. Only a connected, nonfaulted hardware status with live
+joint readback permits an acknowledged software STOP response. This is not
+a safety-rated emergency-stop, and passing fake-transport tests does not
+demonstrate physical bus response time or deceleration.
+
+The physical SDK broker remains a separate trusted operator-only test path.
+The ordinary production broker continues using bounded subprocess CLI
+dispatch; public native simulation preview denies POST. Active-motion
+physical STOP evidence is required before merging #90; broader native
+physical production dispatch remains gated on #91/#92.
 
 ## Supervised direct physical SDK broker trial (PR #88, not released)
 
@@ -99,7 +123,7 @@ commands. Hardware safety remains in the existing SDK. See
 
 
 
-## Fault handling in the physical arm backend (PR #88, unmerged)
+## Fault handling in the physical arm backend (merged PR #88)
 
 The Feetech backend must treat a nonzero servo status packet as a
 motion-aborting fault, not as proof that the instantaneous measured current
