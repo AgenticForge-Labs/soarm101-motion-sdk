@@ -316,13 +316,21 @@ class SOARM101:
                 raise
             raise RobotConnectionError("failed to connect to SO-ARM101") from exc
 
-    def disconnect(self) -> None:
+    def disconnect(self, *, stop_before_disconnect: bool = True) -> None:
+        """Release transport; optionally avoid new commands after a failed STOP.
+
+        The default cleanup preserves the legacy stop-before-close behavior.
+        A broker session with an UNVERIFIED physical HOLD must not issue
+        fresh position goals as a side effect of closing the port. Its
+        operator is responsible for the accessible physical power cutoff.
+        """
         errors: list[Exception] = []
-        for action in (
-            lambda: self.motion.stop(wait=True),
-            lambda: self._stop_tool(wait=True),
-            self.backend.disconnect,
-        ):
+        actions = (
+            (lambda: self.stop(), self.backend.disconnect)
+            if stop_before_disconnect
+            else (self.backend.disconnect,)
+        )
+        for action in actions:
             try:
                 action()
             except Exception as exc:
