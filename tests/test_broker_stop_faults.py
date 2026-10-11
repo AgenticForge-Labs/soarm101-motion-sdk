@@ -14,7 +14,9 @@ from soarm101_motion.broker import AgentMotionRates, RobotBrokerService
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile
 from soarm101_motion.config import SOARM101Config
-from soarm101_motion.exceptions import HardwareFaultError, RobotConnectionError
+from soarm101_motion.exceptions import (
+    CommunicationError, HardwareFaultError, MotionCancelledError, RobotConnectionError,
+)
 
 
 class FakeStopArm:
@@ -232,4 +234,47 @@ def test_native_http_failed_hold_never_acks_or_allows_later_work(tmp_path) -> No
     assert entries[0]["action"] == "stop" and entries[0]["ok"] is False
     assert entries[0]["result"] == {}
     assert entries[1]["action"] == "joint" and entries[1]["ok"] is False
+    executor.close()
+
+
+@pytest.mark.parametrize("error_type", [
+    MotionCancelledError, HardwareFaultError, CommunicationError,
+])
+def test_sdk_specific_faults_are_authenticated_http_failures_with_audit(
+    tmp_path, monkeypatch, error_type,
+) -> None:
+    """SDK exceptions are not RuntimeError; they must not escape the HTTP worker."""
+    executor, arm, _ = _executor(tmp_path)
+    executor._arm()
+
+    def fail(action, request):
+        raise error_type("injected native SDK error")
+
+    monkeypatch.setattr(executor, "_execute_action", fail)
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "sdk-exception-audit",
+        "tools": ["jog_joint", "stop"], "cameras": [],
+        "limits": {"max_joint_delta_deg": 2},
+    })
+    audit = tmp_path / "audit.jsonl"
+    service = RobotBrokerService(
+        executor=executor, token="test", profile=profile,
+        allow_simulated_sdk_posts=True, event_path=audit,
+    )
+    response = service.dispatch(
+        "POST", "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 0.2},
+    )
+    assert response.status == 409 and response.body["ok"] is False
+    assert response.body["request_id"]
+    assert "injected native SDK error" in response.body["error"]
+    recorded = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert len(recorded) == 1
+    assert recorded[0]["ok"] is False and recorded[0]["action"] == "joint"
+    assert recorded[0]["request_id"] == response.body["request_id"]
+    assert recorded[0]["result"] == {}
+    if error_type is MotionCancelledError:
+        assert executor.session_evidence["lifecycle"] == "open"
+    else:
+        assert executor.session_evidence["lifecycle"] == "faulted"
+    assert arm.connect_count == 1
     executor.close()
