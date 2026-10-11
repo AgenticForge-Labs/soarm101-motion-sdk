@@ -209,6 +209,7 @@ class SDKAgentExecutor:
         with self._lifecycle_lock:
             if self._lifecycle in {"closing", "closed"}:
                 return
+            had_unverified_fault = self._lifecycle == "faulted"
             self._lifecycle = "closing"  # Reject queued requests before waiting.
         try:
             # STOP may be independent of the ordinary dispatch lock. Do not
@@ -219,7 +220,13 @@ class SDKAgentExecutor:
                         arm = self._session
                         try:
                             if arm is not None:
-                                arm.disconnect()
+                                if had_unverified_fault and isinstance(arm, SOARM101):
+                                    # Physical STOP verification already failed.
+                                    # Never issue two additional position latches
+                                    # from the generic arm disconnect cleanup.
+                                    arm.disconnect(stop_before_disconnect=False)
+                                else:
+                                    arm.disconnect()
                         finally:
                             self._session = None
                             if self._trace is not None:
