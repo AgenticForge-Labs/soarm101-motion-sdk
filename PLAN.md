@@ -52,11 +52,15 @@ is not a physical STOP guarantee.
 The reusable `examples/persistent_broker_stop_trial.py` adds a
 separate trusted-host qualification: **verify measured Sleep without
 commanding it**, complete Overhead -> Sleep and verify both positions,
-then interrupt a new Overhead leg via independent STOP. Human
-ROUNDTRIP/INTERRUPT/STATIONARY gates, immutable bounded HTTP broker,
+then initiate a new Overhead movement and **wait for operator ENTER
+while motion is active** before issuing independent STOP. Human
+ROUNDTRIP/START/ENTER/STATIONARY gates, immutable bounded HTTP broker,
 finite STOP timeout, and trace/event/summary evidence remain active.
-STOP intentionally leaves the arm between poses; a fresh human lease
-is required for any later return to Sleep. Automated test
+STOP revokes the original lease and leaves the arm between poses.
+The attended operator can decline recovery or explicitly type `REARM`
+after verifying stationary HOLD. Only a new short calibration-bound
+lease plus a new joint-only broker command can finish Overhead; the
+cancelled action is never resumed automatically. Automated test
 `tests/test_broker_stop_trial.py` checks no initial no-op Sleep,
 measured pose tolerances, command order, and unattended rejection,
 never serial activity. Actual physical acceptance remains operator-run.
