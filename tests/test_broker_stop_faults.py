@@ -148,7 +148,7 @@ def test_native_broker_rejects_inflight_false_success_after_stop(tmp_path, monke
     assert results[0].status == 409
     assert results[0].body["ok"] is False
     assert "completion is not confirmed" in results[0].body["error"]
-    saved = [json.loads(l) for l in events.read_text().splitlines()]
+    saved = [json.loads(line) for line in events.read_text().splitlines()]
     assert any(e["action"] == "stop" and e["ok"] is True for e in saved)
     assert any(e["action"] == "joint" and e["ok"] is False for e in saved)
     assert not any(e["action"] == "joint" and e["ok"] is True for e in saved)
