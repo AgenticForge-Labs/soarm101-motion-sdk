@@ -27,13 +27,14 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import Any
 
-from persistent_broker_motion_trace import _preflight_saved_poses, _request
+from persistent_broker_motion_trace import _request
 
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.broker import AgentMotionRates, RobotBrokerHTTPServer, RobotBrokerService
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile
 from soarm101_motion.poses import PoseLibrary
+from soarm101_motion.provenance import require_calibration_compatibility
 
 
 # The trial must begin from a measured posture reasonably close to the
@@ -173,12 +174,26 @@ def main(argv: list[str] | None = None) -> int:
         calibration_id = state.get("calibration_id")
         if not calibration_id or calibration_id == "simulation":
             raise PermissionError("requires measured physical motor calibration")
-        _preflight_saved_poses(args.robot_id, calibration_id)
+        # This minimal qualification uses only one saved pose. Do not
+        # require unrelated Left/Right calibration artifacts from the
+        # older five-leg characterization script.
+        overhead_pose = PoseLibrary(args.robot_id).require("agent_start_overhead")
+        require_calibration_compatibility(
+            {
+                "source_robot_id": overhead_pose.source_robot_id,
+                "source_calibration_id": overhead_pose.source_calibration_id,
+                "target_robot_id": overhead_pose.target_robot_id,
+                "target_calibration_id": overhead_pose.target_calibration_id,
+            },
+            current_robot_id=args.robot_id,
+            current_calibration_id=calibration_id,
+            artifact_label="agent_start_overhead",
+        )
         sdk_arm = executor._session
         if sdk_arm is None:
             raise RuntimeError("physical SDK connection disappeared")
         sleep_target = sdk_arm.get_sleep_joint_positions()
-        overhead_target = PoseLibrary(args.robot_id).require("agent_start_overhead").joints
+        overhead_target = overhead_pose.joints
         summary["start_sleep_errors_deg"] = _verify_measured_pose(
             state["joint_positions_rad"], sleep_target, label="initial Sleep",
         )
