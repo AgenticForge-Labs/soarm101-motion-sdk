@@ -74,3 +74,29 @@ def test_faulted_broker_close_suppresses_generic_arm_hold_cleanup(
     executor.close()
     assert calls == [False]
     assert executor.session_evidence["lifecycle"] == "closed"
+
+
+def test_verified_physical_stop_close_does_not_reissue_hold(monkeypatch, tmp_path):
+    from soarm101_motion.agent_control import AgentAuthorityStore
+    from soarm101_motion.broker import AgentMotionRates
+    from soarm101_motion.broker_sdk import SDKAgentExecutor
+    from soarm101_motion.config import SOARM101Config
+
+    arm = SOARM101.simulated()
+    disconnect_options = []
+    monkeypatch.setattr(
+        arm, "disconnect", lambda *, stop_before_disconnect=True:
+        disconnect_options.append(stop_before_disconnect),
+    )
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(port="/dev/fake", robot_id="so101"),
+        rates=AgentMotionRates(), physical_trial=True,
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
+        arm_factory=lambda: arm,
+    )
+    executor._session = arm
+    executor._lifecycle = "open"
+    executor._verified_physical_stop = True
+    executor.close()
+    assert disconnect_options == [False]
+    assert executor.session_evidence["lifecycle"] == "closed"
