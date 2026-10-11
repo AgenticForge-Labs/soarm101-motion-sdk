@@ -64,3 +64,113 @@ def test_stop_trial_refuses_non_dev_port_before_creating_output(
             "--port", "FAKE", "--output", str(tmp_path / "trace.jsonl"),
         ])
     assert not list(tmp_path.iterdir())
+
+
+def test_stop_trial_requires_measured_sleep_without_moving(
+    monkeypatch,
+) -> None:
+    import math
+
+    trial = _load_trial(monkeypatch)
+    target = {"shoulder_pan": math.radians(20), "elbow_flex": math.radians(-40)}
+    measured = {"shoulder_pan": math.radians(21), "elbow_flex": math.radians(-39)}
+    errors = trial._verify_measured_pose(measured, target, label="initial Sleep")
+    assert max(errors.values()) == pytest.approx(1)
+    with pytest.raises(RuntimeError, match="reposition manually"):
+        trial._verify_measured_pose(
+            {"shoulder_pan": math.radians(26), "elbow_flex": math.radians(-40)},
+            target, label="initial Sleep",
+        )
+    with pytest.raises(ValueError, match="missing"):
+        trial._verify_measured_pose(
+            {"shoulder_pan": math.radians(20)}, target, label="initial Sleep",
+        )
+
+
+def test_stop_trial_refuses_identical_overhead_and_sleep_target(monkeypatch) -> None:
+    import math
+
+    trial = _load_trial(monkeypatch)
+    sleep = {"shoulder_pan": 0.0, "elbow_flex": 0.0}
+    with pytest.raises(RuntimeError, match="too close"):
+        trial._verify_meaningful_overhead_travel(sleep, dict(sleep))
+    overhead = {"shoulder_pan": 0.0, "elbow_flex": math.radians(15)}
+    assert trial._verify_meaningful_overhead_travel(
+        sleep, overhead,
+    ) == pytest.approx(15)
+    with pytest.raises(ValueError, match="different arm joints"):
+        trial._verify_meaningful_overhead_travel(sleep, {"shoulder_pan": 0.1})
+
+
+def test_stop_trial_baseline_completes_overhead_then_sleep_no_initial_sleep(
+    monkeypatch,
+) -> None:
+    import math
+
+    trial = _load_trial(monkeypatch)
+    sleep = {"shoulder_pan": 0.0, "elbow_flex": 0.0}
+    overhead = {"shoulder_pan": math.radians(20), "elbow_flex": math.radians(25)}
+    log = []
+    position = dict(sleep)
+
+    def request(method, path, payload):
+        log.append((method, path))
+        if method == "POST":
+            assert payload["joint_only"] is True
+            if path == "/v1/go-pose":
+                assert payload["name"] == "agent_start_overhead"
+                position.update(overhead)
+            elif path == "/v1/sleep":
+                position.update(sleep)
+            else:
+                raise AssertionError(f"unexpected baseline motion route: {path}")
+            return {
+                "request_id": f"req-{len(log)}",
+                "result": {
+                    "accepted": True, "completed": True,
+                    "broker_session": {"id": "single-sdk-session"},
+                },
+            }
+        assert method == "GET" and path == "/v1/state"
+        return {"result": {"joint_positions_rad": dict(position)}}
+
+    legs = trial._execute_verified_roundtrip(
+        request, expected_session_id="single-sdk-session",
+        overhead_target=overhead, sleep_target=sleep,
+    )
+    assert [name for _, name in log] == [
+        "/v1/go-pose", "/v1/state", "/v1/sleep", "/v1/state",
+    ]
+    assert [leg["label"] for leg in legs] == ["OVERHEAD", "SLEEP"]
+    assert all(leg["completed"] for leg in legs)
+    assert position == sleep
+
+
+def test_stop_trial_never_proceeds_from_unverified_overhead(
+    monkeypatch,
+) -> None:
+    import math
+
+    trial = _load_trial(monkeypatch)
+    sleep = {"shoulder_pan": 0.0}
+    overhead = {"shoulder_pan": math.radians(20)}
+    log = []
+
+    def request(method, path, payload):
+        log.append((method, path))
+        if method == "POST":
+            return {
+                "request_id": "one", "result": {
+                    "accepted": True, "completed": True,
+                    "broker_session": {"id": "session"},
+                },
+            }
+        # Deliberately report no measured Overhead displacement.
+        return {"result": {"joint_positions_rad": sleep}}
+
+    with pytest.raises(RuntimeError, match="OVERHEAD baseline"):
+        trial._execute_verified_roundtrip(
+            request, expected_session_id="session",
+            overhead_target=overhead, sleep_target=sleep,
+        )
+    assert log == [("POST", "/v1/go-pose"), ("GET", "/v1/state")]
