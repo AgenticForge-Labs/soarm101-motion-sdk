@@ -1,5 +1,14 @@
 # Shared SDK capability registry and broker migration
 
+**Integration update for PR #90:** #89 merged at
+`77b28edba0f2beb129c031e6adf11513d0e240fe`. Draft #90
+adds post-STOP broker epoch validation, full arm/tool STOP attempt,
+unverified HOLD fault latching, physical lease revocation and live
+connected/nonfaulted feedback before STOP acknowledgement. It does
+not change the normal bounded CLI broker or authorize OpenShell/native
+physical actions; a supervised active-motion STOP test is still
+required.
+
 **Integration update (2026-10-10):** staged PR #88 merged into `main` at
 `957e86fb1f090a52960a593ce5b07caeaffb7ec6`. Open PR #89 hardens
 persistent SDK session ownership, terminal close/fault behavior,
