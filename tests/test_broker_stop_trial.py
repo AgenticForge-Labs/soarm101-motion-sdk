@@ -174,3 +174,126 @@ def test_stop_trial_never_proceeds_from_unverified_overhead(
             overhead_target=overhead, sleep_target=sleep,
         )
     assert log == [("POST", "/v1/go-pose"), ("GET", "/v1/state")]
+
+
+def test_manual_stop_requires_enter_while_motion_still_active(
+    monkeypatch,
+) -> None:
+    import threading
+
+    trial = _load_trial(monkeypatch)
+    finished = threading.Event()
+    class OperatorTTY:
+        def isatty(self):
+            return True
+        def readline(self):
+            return "\n"
+    stream = OperatorTTY()
+    selected = []
+    def select_ready(inputs, *_):
+        selected.append(True)
+        assert inputs == [stream]
+        return [stream], [], []
+    monkeypatch.setattr(trial.select, "select", select_ready)
+    seen = trial._await_operator_stop(
+        is_moving=lambda: True,
+        motion_finished=finished, stream=stream, timeout_s=1.0,
+    )
+    assert isinstance(seen, float)
+    assert len(selected) == 1
+
+
+def test_manual_stop_fails_if_motion_finished_before_enter(
+    monkeypatch,
+) -> None:
+    import threading
+
+    trial = _load_trial(monkeypatch)
+    ended = threading.Event()
+    ended.set()
+    class OperatorTTY:
+        def isatty(self):
+            return True
+        def readline(self):
+            raise AssertionError("should never consume ENTER after motion completion")
+    with pytest.raises(RuntimeError, match="ended before"):
+        trial._await_operator_stop(
+            is_moving=lambda: False,
+            motion_finished=ended, stream=OperatorTTY(), timeout_s=0.2,
+        )
+
+
+def test_manual_stop_refuses_late_enter_even_if_stdin_is_ready(
+    monkeypatch,
+) -> None:
+    import threading
+
+    trial = _load_trial(monkeypatch)
+    ended = threading.Event()
+    class OperatorTTY:
+        def isatty(self):
+            return True
+        def readline(self):
+            ended.set()
+            return "\n"
+    stream = OperatorTTY()
+    monkeypatch.setattr(
+        trial.select, "select", lambda *args: ([stream], [], []),
+    )
+    with pytest.raises(RuntimeError, match="finished before"):
+        trial._await_operator_stop(
+            is_moving=lambda: True, motion_finished=ended,
+            stream=stream, timeout_s=0.2,
+        )
+
+
+def test_post_stop_rearm_requires_stationary_healthy_hold(
+    monkeypatch, tmp_path,
+) -> None:
+    from types import SimpleNamespace
+
+    from soarm101_motion.agent_control import AgentAuthorityStore
+
+    trial = _load_trial(monkeypatch)
+    monkeypatch.setattr(
+        trial.sys, "stdin",
+        type("TTY", (), {"isatty": lambda self: True})(),
+    )
+    class FakeArm:
+        config = SimpleNamespace(robot_id="so101")
+        calibration_id = "cal-test"
+        motion = SimpleNamespace(is_moving=False)
+        hold_count = 0
+        def get_state(self):
+            return SimpleNamespace(
+                connected=True, faulted=False, torque_enabled=True,
+            )
+        def hold(self):
+            self.hold_count += 1
+    fake = FakeArm()
+    store = AgentAuthorityStore(tmp_path / "authority.json")
+    assert not store.status()["armed"]
+    fake.motion.is_moving = True
+    with pytest.raises(RuntimeError, match="active"):
+        trial._operator_rearm_for_completion(
+            arm=fake, authority_store=store,
+            robot_id="so101", calibration_id="cal-test",
+        )
+    assert not store.status()["armed"]
+    fake.motion.is_moving = False
+    fake.calibration_id = "wrong"
+    with pytest.raises(RuntimeError, match="identity/calibration"):
+        trial._operator_rearm_for_completion(
+            arm=fake, authority_store=store,
+            robot_id="so101", calibration_id="cal-test",
+        )
+    assert not store.status()["armed"]
+    fake.calibration_id = "cal-test"
+    result = trial._operator_rearm_for_completion(
+        arm=fake, authority_store=store,
+        robot_id="so101", calibration_id="cal-test",
+    )
+    assert result["calibration_id"] == "cal-test"
+    assert fake.hold_count == 1
+    lease = store.require(robot_id="so101", calibration_id="cal-test")
+    assert lease.expires_at - lease.issued_at == pytest.approx(300)
