@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import secrets
+import select
 import sys
 import threading
 import time
@@ -32,6 +33,7 @@ from persistent_broker_motion_trace import _request
 from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.broker import AgentMotionRates, RobotBrokerHTTPServer, RobotBrokerService
 from soarm101_motion.broker_sdk import SDKAgentExecutor
+from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.capability_profile import CapabilityProfile
 from soarm101_motion.poses import PoseLibrary
 from soarm101_motion.provenance import require_calibration_compatibility
@@ -119,6 +121,83 @@ def _execute_verified_roundtrip(
         })
         print(f"{label}: complete; measured pose verified.", flush=True)
     return legs
+
+
+def _await_operator_stop(
+    *,
+    is_moving: Callable[[], bool],
+    motion_finished: threading.Event,
+    stream: Any,
+    timeout_s: float = 90.0,
+) -> float:
+    """Observe interactive ENTER while the *host* motion is in flight.
+
+    This polls only the stdin fd and controller flags, not physical servo
+    registers. Never wait on a blocking input() call that outlives movement.
+    """
+    if not stream.isatty():
+        raise PermissionError("manual STOP requires an operator terminal")
+    print(
+        "OVERHEAD IS MOVING. Press ENTER now to send STOP; "
+        "do not wait for the arm to reach Overhead.",
+        flush=True,
+    )
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if motion_finished.is_set() or not is_moving():
+            raise RuntimeError(
+                "Overhead movement ended before the operator triggered STOP; "
+                "STOP interruption was not qualified"
+            )
+        ready, _, _ = select.select([stream], [], [], 0.02)
+        if ready:
+            # The terminal supplies one complete newline. Do not treat
+            # any queued keystrokes as authority to start another action.
+            if not stream.readline():
+                raise RuntimeError("operator STOP terminal closed")
+            if motion_finished.is_set() or not is_moving():
+                raise RuntimeError(
+                    "motion finished before the operator STOP request"
+                )
+            return time.monotonic()
+    raise TimeoutError("operator did not trigger STOP during active movement")
+
+
+def _operator_rearm_for_completion(
+    *, arm: SOARM101, authority_store: AgentAuthorityStore,
+    robot_id: str, calibration_id: str,
+) -> dict[str, object]:
+    """Explicit trusted-host operator recovery, never a sandbox action.
+
+    Called only after a verified STOP and a separate typed rearm decision.
+    Reuse the human arming primitive: verify current safe HOLD, then issue
+    a fresh calibration-bound, short-lived lease. Never replay a cancelled
+    handle or bypass the canonical broker motion checks.
+    """
+    if not sys.stdin.isatty():
+        raise PermissionError("rearming requires a physical operator terminal")
+    if arm.motion.is_moving:
+        raise RuntimeError("cannot rearm while the previous motion is active")
+    state = arm.get_state()
+    if not state.connected or state.faulted or not state.torque_enabled:
+        raise RuntimeError("cannot rearm without connected, fault-free torque HOLD")
+    if arm.config.robot_id != robot_id or arm.calibration_id != calibration_id:
+        raise RuntimeError("robot identity/calibration changed after STOP")
+    # Re-latch HOLD using the same operation the normal host agent-arm CLI
+    # uses. Do not issue new authority until that operation succeeds.
+    arm.hold()
+    confirmed = arm.get_state()
+    if not confirmed.connected or confirmed.faulted or not confirmed.torque_enabled:
+        raise RuntimeError("fresh HOLD could not be confirmed before rearming")
+    authority = authority_store.issue(
+        robot_id=robot_id, calibration_id=calibration_id, minutes=5,
+    )
+    return {
+        "issued_at": authority.issued_at,
+        "expires_at": authority.expires_at,
+        "calibration_id": calibration_id,
+        "method": "human-confirmed trusted-host recovery after STOP",
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -264,8 +343,8 @@ def main(argv: list[str] | None = None) -> int:
             "The arm may remain between poses afterward and will NOT auto-return.",
             flush=True,
         )
-        if input("Type INTERRUPT to test STOP during overhead movement: ").strip() != "INTERRUPT":
-            raise PermissionError("operator declined STOP test")
+        if input("Type START to begin the Overhead movement you will interrupt: ").strip() != "START":
+            raise PermissionError("operator declined manual STOP trial")
 
         def move():
             try:
@@ -292,13 +371,15 @@ def main(argv: list[str] | None = None) -> int:
         summary["active_motion_observed"] = observed_active
         if not observed_active:
             raise RuntimeError("movement completed before STOP qualification began")
-        # Let motion visibly start, but reject an already completed leg as a
-        # valid STOP trial. Rate ceilings and pose provenance stay enforced.
-        time.sleep(0.15)
-        if not sdk_arm.motion.is_moving:
-            raise RuntimeError("motion completed before independent STOP request")
-
-        stop_start = time.monotonic()
+        # The operator, not a fixed 150 ms timer, chooses when STOP fires.
+        # This waits only on terminal input and the host motion state; it
+        # never launches competing servo read requests during motion.
+        stop_start = _await_operator_stop(
+            is_moving=lambda: sdk_arm.motion.is_moving,
+            motion_finished=interrupted_finished,
+            stream=sys.stdin,
+        )
+        summary["stop_trigger"] = "human_pressed_enter_during_active_motion"
         summary["stop_requested_monotonic_s"] = stop_start
         try:
             stop = _request(url, token, "POST", "/v1/stop", {}, timeout_s=5.0)
@@ -330,7 +411,46 @@ def main(argv: list[str] | None = None) -> int:
         print("Review position, stability, trace and camera/eyes-on observation.", flush=True)
         if input("Type STATIONARY only if physically stationary and holding: ").strip() != "STATIONARY":
             raise RuntimeError("operator did not verify physical STOP")
+        summary["stop_qualification_passed"] = True
         summary["passed"] = True
+
+        # The original lease was revoked by STOP. Finishing the goal is a
+        # separate new motion requiring explicit human reauthorization,
+        # fresh HOLD/identity checks, and normal validated broker dispatch.
+        print(
+            "STOP qualified; robot remains held between Sleep and Overhead. "
+            "To finish Overhead, a NEW 5-minute operator lease is required.",
+            flush=True,
+        )
+        if input(
+            "Type REARM to authorize a NEW joint-only move to Overhead; "
+            "press ENTER to leave the arm holding: "
+        ).strip() == "REARM":
+            summary["post_stop_recovery_requested"] = True
+            summary["post_stop_human_rearm"] = _operator_rearm_for_completion(
+                arm=sdk_arm, authority_store=executor._authority,
+                robot_id=args.robot_id, calibration_id=calibration_id,
+            )
+            recovery = _request(
+                url, token, "POST", "/v1/go-pose",
+                {"name": "agent_start_overhead", "joint_only": True},
+            )
+            if not recovery["result"].get("accepted") or not recovery["result"].get("completed"):
+                raise RuntimeError("separately authorized Overhead completion failed")
+            final = _request(url, token, "GET", "/v1/state")["result"]
+            summary["post_stop_overhead_errors_deg"] = _verify_measured_pose(
+                final["joint_positions_rad"], overhead_target,
+                label="human-reauthorized Overhead finish",
+            )
+            summary["post_stop_recovery_completed"] = True
+            summary["post_stop_recovery_request_id"] = recovery["request_id"]
+            # Limit subsequent motion after operator recovery. Hold remains
+            # enabled; this clears only agent motion authority.
+            executor._authority.clear()
+            print("Overhead reached and measured. Motion authority removed.", flush=True)
+        else:
+            summary["post_stop_recovery_requested"] = False
+            print("No further motion requested. Arm remains torque-held.", flush=True)
     except BaseException as exc:
         failure = repr(exc)
         print(f"STOP qualification FAILED/INTERRUPTED: {failure}", flush=True)
