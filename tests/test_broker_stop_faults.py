@@ -44,7 +44,8 @@ class FakeStopArm:
     def get_state(self):
         return SimpleNamespace(
             connected=self.is_connected, torque_enabled=self.torque_enabled,
-            faulted=self.faulted, fault_message="injected servo fault" if self.faulted else None,
+            faulted=self.faulted, moving=False,
+            fault_message="injected servo fault" if self.faulted else None,
         )
 
     def get_joint_positions(self):
@@ -277,4 +278,95 @@ def test_sdk_specific_faults_are_authenticated_http_failures_with_audit(
     else:
         assert executor.session_evidence["lifecycle"] == "faulted"
     assert arm.connect_count == 1
+    executor.close()
+
+
+def test_physical_stop_rejects_trace_like_encoder_drift_after_ack(
+    tmp_path, monkeypatch,
+) -> None:
+    """Real 2026-10-11 trace moved 18.4 deg AFTER broker returned success."""
+    import math
+    from types import SimpleNamespace
+
+    import soarm101_motion.broker_sdk as sdk_module
+
+    executor, arm, authority = _executor(tmp_path, physical=True)
+    executor._arm()
+    authority.issue(robot_id="so101", calibration_id="cal-good", minutes=1)
+    sleep_calls = []
+    monkeypatch.setattr(
+        sdk_module.time, "sleep", lambda delta: sleep_calls.append(delta),
+    )
+    # 82.8° at STOP; ~64.4° one second afterward. A subset of the
+    # extracted trace is reproduced as fake encoder readback, never as
+    # a command to the robot.
+    samples_deg = iter([82.8, 82.6, 79.2])
+    def measured():
+        return SimpleNamespace(
+            positions={"elbow_flex": math.radians(next(samples_deg))}
+        )
+    monkeypatch.setattr(arm, "get_joint_positions", measured)
+    with pytest.raises(HardwareFaultError, match="moved 3.60"):
+        executor.execute("stop", {})
+    assert sleep_calls == [0.25, 0.25]
+    assert arm.stop_count == 1
+    assert executor.session_evidence["lifecycle"] == "faulted"
+    assert executor.session_evidence["fault_kind"] == "HardwareFaultError"
+    assert not authority.status()["armed"]
+    assert arm.connect_count == 1
+    with pytest.raises(RuntimeError, match="human restart required"):
+        executor.execute("state", {})
+    executor.close()
+
+
+def test_physical_stop_only_acks_stable_post_latch_feedback(
+    tmp_path, monkeypatch,
+) -> None:
+    import math
+    from types import SimpleNamespace
+
+    import soarm101_motion.broker_sdk as sdk_module
+
+    executor, arm, authority = _executor(tmp_path, physical=True)
+    executor._arm()
+    authority.issue(robot_id="so101", calibration_id="cal-good", minutes=1)
+    timeline = []
+    monkeypatch.setattr(
+        sdk_module.time, "sleep", lambda delay: timeline.append(delay),
+    )
+    angles = iter([50.0, 50.1, 50.05, 50.15, 50.1])
+    monkeypatch.setattr(
+        arm, "get_joint_positions",
+        lambda: SimpleNamespace(
+            positions={"elbow_flex": math.radians(next(angles))}
+        ),
+    )
+    result = executor.execute("stop", {})
+    assert result["completed"] is True
+    assert result["post_stop_stability"]["verified"] is True
+    assert len(result["post_stop_stability"]["samples"]) == 4
+    assert result["post_stop_stability"]["duration_s"] == pytest.approx(1.5)
+    assert result["post_stop_stability"]["max_drift_deg"] == pytest.approx(0.15)
+    assert timeline == [0.25, 0.25, 0.5, 0.5]
+    assert not authority.status()["armed"]
+    executor.close()
+
+
+def test_physical_stop_rejects_moving_flag_even_with_unchanged_encoder(
+    tmp_path, monkeypatch,
+) -> None:
+    import soarm101_motion.broker_sdk as sdk_module
+
+    executor, arm, _ = _executor(tmp_path, physical=True)
+    executor._arm()
+    monkeypatch.setattr(sdk_module.time, "sleep", lambda _: None)
+    original = arm.get_state
+    def state():
+        base = original()
+        base.moving = True
+        return base
+    monkeypatch.setattr(arm, "get_state", state)
+    with pytest.raises(HardwareFaultError, match="motor state still moving"):
+        executor.execute("stop", {})
+    assert executor.session_evidence["lifecycle"] == "faulted"
     executor.close()
