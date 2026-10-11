@@ -1,5 +1,18 @@
 # SO-ARM101 Motion SDK
 
+## PR #90 — supervised independent physical STOP trial (unmerged)
+
+The staged SDK/broker STOP changes remain subject to a real-arm gate.
+The trusted-host-only `examples/persistent_broker_stop_trial.py`
+uses the existing fixed, loopback-only native broker profile; it
+requires an active human lease, interactive TTY, operator confirmations,
+a measured in-flight SDK motion, an independent authenticated STOP, and
+live post-STOP feedback with human stationary confirmation. It records
+stop-request latency and preserves trace/audit evidence. No agent or
+OpenShell physical access is enabled by this feature. The script does
+not prove safety-rated emergency stopping. See `TESTING.md` and
+`docs/safety.md` before running on the unloaded arm.
+
 ## PR #89 — one-owner SDK session lifecycle (merged)
 
 The staged persistent-SDK executor now has explicit lifecycle states
