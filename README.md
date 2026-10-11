@@ -1,5 +1,16 @@
 # SO-ARM101 Motion SDK
 
+## STOP/HOLD hardware safety blocker (2026-10-11)
+
+Operator-supplied motor/broker traces show physical elbow travel of
+~18.4° in the second *after* an acknowledged STOP, with no newly
+streamed motion. Previous `passed=true` STOP qualification is invalid.
+PR #90 is intentionally held as a draft. An encoder-settle check
+now refuses STOP/HOLD success on post-latch drift, but that check
+does **not** fix low-level servo braking. Do not repeat physical STOP
+or recovery experiments until the STOP actuator behavior has been
+investigated with a safe local qualification plan.
+
 ## PR #90 — supervised independent physical STOP trial (unmerged)
 
 The staged SDK/broker STOP changes remain subject to a real-arm gate.
