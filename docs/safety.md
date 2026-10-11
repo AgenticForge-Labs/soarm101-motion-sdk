@@ -1,5 +1,26 @@
 # Safety
 
+## Single-joint STOP candidate (draft PR #90; physical result unknown)
+
+The short qualification profile is now the default for the attended
+`persistent_broker_stop_trial.py`: one fixed 8° `shoulder_pan` motion
+from encoder-verified Sleep, 2°/s and 10°/s² defaults, with hard rate
+caps and 5° calibrated-limit inset. No preliminary Overhead roundtrip,
+no tool motion, and no automatic rearm or return follow STOP. The
+operator presses ENTER while moving; the broker's measured HOLD
+stability gate and another one-second encoder readback must pass
+before entering `STATIONARY`. Normal SDK cancellation, safeguards and
+broker authentication remain authoritative. The larger Overhead route
+requires explicit `--trial overhead` and separate physical review.
+
+**This is not a safety-rated emergency STOP.** The previous powered
+excursion remains a failed hardware gate. Keep external physical
+power cutoff reachable and discontinue on any unexpected movement.
+Use the short protocol only under approved, unloaded, secured,
+operator-controlled bench conditions. The short trial has not yet
+produced hardware evidence. CI cannot establish braking performance.
+
+
 ## PR #89 broker lifecycle guard (merged, not a physical STOP qualification)
 
 The native SDK broker's lifecycle is terminal on close or qualifying
