@@ -38,8 +38,8 @@ refuses to auto-move to Sleep, then completes and measures a joint-only
 Overhead -> Sleep baseline through the fixed restricted profile. Only
 after the baseline passes does it start a new Overhead leg and send
 authenticated STOP independently during measured active motion. It
-requires an explicit human stationary check. It cannot guarantee that a failed USB/Feetech transport
-will physically brake or hold the mechanism. Keep the hardware cutoff
+requires an explicit human stationary check. It cannot guarantee that
+a failed USB/Feetech transport will physically brake or hold the mechanism. Keep the hardware cutoff
 within immediate reach and report partial or timed-out STOP as a **failed**
 qualification, not success. Because STOP revokes arming, the final arm
 position may remain between Sleep and Overhead; no automatic rearming
