@@ -36,6 +36,16 @@ after Python 3.10/3.12 CI and operator-reported read-only local checks.
 
 ## 2026-10-11 physical STOP trace adjudication — FAILED safety gate
 
+A complete source-level packet/firmware command analysis, original evidence
+hashes, confirmed 1/1 new-goal defect, duplicate cancellation writers,
+candidate 0/254 correction, and remaining hardware gates are maintained at
+[Feetech STOP protocol investigation](docs/feetech-stop-protocol-investigation.md).
+The same open PR now consolidates controller-owned cancellation, skips
+idle-gripper STOP duplication, and prevents faulted shutdown from creating
+additional position-latch commands. These changes are **simulation-gated
+only** until verified with real motor feedback and an approved test plan.
+
+
 User-supplied `stop-20261011-113611.jsonl`, `*.broker-events.jsonl`,
 and `*.summary.json` document a real unattended 1-second post-STOP
 joint drift despite HTTP 200 / `completed=true`. The operator correctly
