@@ -1,5 +1,14 @@
 # Changelog
 
+- Replace PR #90's fixed 150 ms in-flight STOP trigger with operator
+  ENTER while motion is active; fail if motion finishes before input.
+  Following human `STATIONARY` verification, offer an optional
+  explicitly human-confirmed `REARM`: validate held state, issue a
+  fresh five-minute calibration-bound lease, then finish Overhead via
+  a **new** validated joint-only broker command. Never resume the
+  cancelled action. Add hardware-free manual-trigger and lease gates.
+
+
 - Update the PR #90 physical STOP qualification to **assume measured Sleep**
   rather than command an initial no-op Sleep. Require the actual joint angles
   to be within 5° of calibrated Sleep, an Overhead target at least 10° away,
