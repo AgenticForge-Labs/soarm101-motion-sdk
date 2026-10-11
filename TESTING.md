@@ -50,13 +50,15 @@ python examples/persistent_broker_stop_trial.py \
   --output "$HOME/soarm-motion-tests/stop-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 
-It preflights saved-pose calibration, executes a known joint-only Sleep
-under the same broker, then launches a joint-only approved Overhead
-pose in one HTTP request while independently observing active SDK motion.
-Once movement is actually active, it sends authenticated
-`POST /v1/stop` with a bounded 5-second client timeout, captures the
-response time and verifies the in-flight reply is a rejection, authority
-is revoked, and the SDK is no longer moving. It records the broker
+It preflights Overhead provenance **without requiring unrelated Left/Right
+poses**, verifies measured starting Sleep, then completes and measures
+**Overhead -> Sleep** using the trusted broker, recording both baseline
+leg results and their actual joint errors. No initial Sleep motion is
+commanded. Only after completing that return does it start a **new
+Overhead movement** and issue authenticated `POST /v1/stop` once SDK
+motion is active. It captures the independent STOP response time and
+verifies the in-flight reply is a rejection, authority is revoked,
+and the SDK is no longer moving. It records the broker
 events, motor trace and summary. After 1 second it requires an explicit
 human observation of stationary posture before it can mark the trial
 passed. A timeout, readback or HOLD fault is **not** STOP success.
