@@ -29,6 +29,7 @@ from typing import Mapping, Sequence
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
 from soarm101_motion.config import SOARM101Config, rate_within_ceiling
+from soarm101_motion.exceptions import SOARM101Error
 from soarm101_motion.constants import (
     DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
     DEFAULT_MAX_JOINT_SPEED_DEG_S,
@@ -405,8 +406,8 @@ class RobotBrokerService:
                                 )
                     else:
                         result = self.executor.run(arguments)
-        except (BrokerCommandError, RuntimeError, ValueError, KeyError,
-                OSError, PermissionError) as exc:
+        except (BrokerCommandError, SOARM101Error, RuntimeError, ValueError,
+                KeyError, OSError, PermissionError) as exc:
             duration = time.monotonic() - started
             self._record(
                 request_id=request_id,
