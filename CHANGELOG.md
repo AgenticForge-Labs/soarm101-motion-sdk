@@ -7,6 +7,11 @@
   broker event traces, and explicit stationary confirmation. Tests only
   validate script input/terminal gates; no hardware is exercised in CI.
 
+- Broker native HTTP now catches the SDK's own typed motion-cancel,
+  communication and hardware exceptions as auditable errors instead of
+  allowing uncaught exceptions to break the request connection. The
+  attended STOP trial also requires positive torque-held confirmation.
+
 - PR #90 (draft): complete both arm and tool/gripper STOP attempts even
   on partial HOLD failure, reject stale in-flight native broker successes
   after STOP, latch any failed existing-session HOLD and revoke physical
