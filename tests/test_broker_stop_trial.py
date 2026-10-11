@@ -297,3 +297,100 @@ def test_post_stop_rearm_requires_stationary_healthy_hold(
     assert fake.hold_count == 1
     lease = store.require(robot_id="so101", calibration_id="cal-test")
     assert lease.expires_at - lease.issued_at == pytest.approx(300)
+
+
+def test_short_mode_is_default_and_legacy_overhead_requires_opt_in(monkeypatch) -> None:
+    trial = _load_trial(monkeypatch)
+    minimal = trial.build_parser().parse_args([
+        "--port", "/dev/ttyACM1", "--output", "/tmp/trial.jsonl",
+    ])
+    assert minimal.trial == "short"
+    assert minimal.speed_deg_s is None
+    old = trial.build_parser().parse_args([
+        "--port", "/dev/ttyACM1", "--output", "/tmp/trial.jsonl",
+        "--trial", "overhead",
+    ])
+    assert old.trial == "overhead"
+
+
+@pytest.mark.parametrize("speed,acceleration,permitted", [
+    (2.0, 10.0, True),
+    (3.0, 15.0, True),
+    (3.01, 10.0, False),
+    (2.0, 15.01, False),
+])
+def test_short_motion_has_immutable_speed_and_acceleration_caps(
+    monkeypatch, speed, acceleration, permitted,
+) -> None:
+    trial = _load_trial(monkeypatch)
+    monkeypatch.setattr(trial.sys, "stdin", type("TTY", (), {
+        "isatty": lambda self: True,
+    })())
+    args = trial.build_parser().parse_args([
+        "--port", "/dev/ttyACM1", "--output", "/tmp/unused.jsonl",
+        "--trial", "short",
+        "--speed-deg-s", str(speed),
+        "--acceleration-deg-s2", str(acceleration),
+    ])
+    if permitted:
+        trial._require_operator(args)
+    else:
+        with pytest.raises(ValueError, match="short STOP rate caps"):
+            trial._require_operator(args)
+
+
+def test_short_pan_preflight_is_fixed_and_requires_inset_limits(monkeypatch) -> None:
+    import math
+
+    trial = _load_trial(monkeypatch)
+    measurement = {"shoulder_pan": math.radians(0)}
+    limits = {"shoulder_pan": (math.radians(-90), math.radians(90))}
+    result = trial._preflight_short_joint(measurement, limits)
+    assert result["joint"] == "shoulder_pan"
+    assert result["delta_deg"] == 8.0
+    assert result["target_deg"] == pytest.approx(8)
+    with pytest.raises(RuntimeError, match="target exceeds"):
+        trial._preflight_short_joint(
+            {"shoulder_pan": math.radians(78)},
+            {"shoulder_pan": (math.radians(-90), math.radians(90))},
+        )
+    with pytest.raises(RuntimeError, match="starts too close"):
+        trial._preflight_short_joint(
+            {"shoulder_pan": math.radians(87)}, limits,
+        )
+    with pytest.raises(ValueError, match="nonfinite"):
+        trial._preflight_short_joint(
+            {"shoulder_pan": float("nan")}, limits,
+        )
+
+
+def test_short_stop_must_verify_stability_before_success(monkeypatch) -> None:
+    import math
+
+    trial = _load_trial(monkeypatch)
+    def state(angle, armed=False):
+        return {
+            "joint_positions_rad": {"shoulder_pan": math.radians(angle)},
+            "authority": {"armed": armed},
+        }
+    hold = {
+        "post_stop_stability": {"verified": True},
+        "joint_positions_rad": {"shoulder_pan": math.radians(1)},
+    }
+    drifts = trial._verify_post_stop_stability(
+        hold, state(1.1), state(1.2),
+    )
+    assert drifts["shoulder_pan"] == pytest.approx(0.2)
+    with pytest.raises(RuntimeError, match="drift exceeded"):
+        trial._verify_post_stop_stability(
+            hold, state(1.1), state(3),
+        )
+    with pytest.raises(RuntimeError, match="verified physical encoder"):
+        trial._verify_post_stop_stability(
+            {**hold, "post_stop_stability": {"verified": False}},
+            state(1), state(1),
+        )
+    with pytest.raises(RuntimeError, match="authority"):
+        trial._verify_post_stop_stability(
+            hold, state(1), state(1, armed=True),
+        )
