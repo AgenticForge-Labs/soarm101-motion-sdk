@@ -33,7 +33,21 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
-**PR #89 (not yet merged):** stage native broker session ownership and
+**PR #90 (open, unmerged):** maintain one deterministic SDK-owned STOP
+path; do not create a competing raw bus or agent STOP implementation.
+Software STOP must attempt both arm and tool/gripper cancellation even
+if one errors, refuse late successful broker replies after a newer STOP,
+and latch failed or unverified HOLD. A faulted physical SDK session cannot
+rearm itself, reconnect, or resume work. STOP is not a hardware emergency
+stop. Preserve the normal CLI-backed production broker and the read-only
+native preview. Real-arm STOP-during-motion tests require attended local
+Codex/operator validation, cleared workspace, calibrated empty arm, and
+power cutoff immediately available. Record trace/latency/settled state
+before declaring PR #90 physical acceptance.
+
+
+
+**Merged PR #89:** stage native broker session ownership and
 fail-closed lifecycle without changing the released CLI-backed broker.
 The SDK session must never silently reconnect after close, device fault,
 calibration change, or partial serial initialization failure. A physical
