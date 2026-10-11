@@ -8,13 +8,16 @@ uses the existing fixed, loopback-only native broker profile; it
 requires an active human lease, interactive TTY, operator confirmations,
 and an actual measured Sleep starting posture (rather than commanding a
 redundant initial Sleep). It first completes and verifies Overhead ->
-Sleep, then interrupts a new Overhead move with an independent
-authenticated STOP and records live stationary/held feedback. It records
+Sleep, then initiates a new Overhead move and waits for **operator ENTER
+during motion** before issuing independent authenticated STOP; it records
+live stationary/held feedback. It records
 stop-request latency and preserves trace/audit evidence. No agent or
 OpenShell physical access is enabled by this feature. The script does
 not prove safety-rated emergency stopping. The interrupted movement
-can leave the arm partway toward Overhead; STOP revokes the human lease,
-so the script never automatically returns to Sleep after the test.
+can leave the arm partway toward Overhead; STOP revokes the human lease.
+After `STATIONARY`, the operator can leave it holding or explicitly
+`REARM` for a new five-minute lease and a distinct, validated joint-only
+move that finishes Overhead. No cancelled trajectory is resumed.
 See `TESTING.md` and `docs/safety.md` before running on the unloaded arm.
 
 ## PR #89 — one-owner SDK session lifecycle (merged)
