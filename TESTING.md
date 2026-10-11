@@ -1,5 +1,54 @@
 # Testing
 
+## PR #90 independent STOP and fault regression (open, unmerged)
+
+Hardware-free software verification at the exact PR SHA:
+
+```bash
+ruff check .
+python -m pytest --no-cov -q \
+  tests/test_broker_stop_faults.py \
+  tests/test_broker_sdk.py \
+  tests/test_broker_session_lifecycle.py \
+  tests/test_feetech_backend.py
+python -m pytest --no-cov -q
+```
+
+The new suite uses simulated arms and an authenticated fake native
+broker. It asserts that late nominal SDK completion after a competing
+STOP is audited/replied as failure; a generic failure in an attempted
+STOP/HOLD latches a fault and revokes physical-trial motion authority;
+a disconnected or faulted device cannot report completed STOP; and
+the top-level arm always attempts tool/gripper STOP when arm HOLD
+throws. Existing broker tests must retain STOP concurrency, queued
+generation invalidation, HTTP profile denial and exact per-request
+evidence. CI must never open the physical serial follower.
+
+**Required attended local physical gate, separate from software CI:**
+Verify current branch SHA, calibration, measured start/end poses and
+clearance, power cutoff, and that the arm has no payload. Use only the
+trusted-host, loopback-only physical broker with the fixed trial
+profile from `examples/persistent_broker_motion_trace.py` and an
+explicit human `soarm101 agent arm` lease. Exercise a previously
+validated safe pose transition with an independent authenticated
+`POST /v1/stop` while **movement is visibly underway**. Verify:
+the STOP is admitted while movement is in progress rather than queued;
+no subsequent motion command executes; the in-flight response is a
+rejection, never success; the human lease is revoked; the robot
+settles safely; all five arm joint positions and gripper are inspected;
+and no further movement occurs. Record monotonic STOP request/response
+timestamps, physical observation, broker events, trace, failures and
+held/fault state. Do not reuse a prior five-leg success as STOP proof.
+Stop immediately on a communication, gripper, or HOLD error and inspect
+the robot before any renewed arming.
+
+This is a manual attended *qualification*, not a CLI flag added by #90.
+Do not conduct this physical test in GitHub CI, unattended Codex, or
+an OpenShell agent shell. Local Codex can help inspect and collect
+traces on the trusted host with direct human control. Treat inability
+to issue independent STOP, unclear motion state, no position readback,
+or incomplete HOLD as a blocked merge gate for #90.
+
 ## PR #89 simulated ownership and lifecycle regression
 
 Test on the exact PR #89 commit without connecting a real arm:
