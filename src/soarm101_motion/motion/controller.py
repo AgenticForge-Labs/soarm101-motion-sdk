@@ -159,6 +159,11 @@ class MotionController:
         self.ik = IKSolver(self.model)
         self._state_lock = threading.RLock()
         self._active_handle: MotionHandle[MotionResult] | None = None
+        # Events whose cancellation has a dedicated owner already issuing
+        # backend STOP. A worker must not send a second servo position latch
+        # on the same cancellation. Direct handle.cancel() is not owned here
+        # and must retain the existing emergency fallback STOP.
+        self._stop_owned_events: set[threading.Event] = set()
         self._joint_stream: JointStreamState | None = None
         self._feedback_callback: Callable[[Mapping[str, float]], None] | None = None
         self._tool_feedback_callback: Callable[[float], None] | None = None
@@ -213,8 +218,16 @@ class MotionController:
 
     def _clear_handle(self, handle: MotionHandle[MotionResult]) -> None:
         with self._state_lock:
+            self._stop_owned_events.discard(handle._cancel_event)
             if self._active_handle is handle:
                 self._active_handle = None
+
+    def _needs_fallback_stop(self, cancel_event: threading.Event) -> bool:
+        with self._state_lock:
+            return not (
+                cancel_event.is_set()
+                and cancel_event in self._stop_owned_events
+            )
 
     def _ensure_idle_locked(self) -> None:
         if self._active_handle is not None and not self._active_handle.done:
@@ -1426,10 +1439,11 @@ class MotionController:
                 previous_actual = actual
                 time.sleep(self.config.trajectory_feedback_interval_s)
         except BaseException:
-            try:
-                self.backend.stop()
-            except Exception:
-                pass
+            if self._needs_fallback_stop(cancel_event):
+                try:
+                    self.backend.stop()
+                except Exception:
+                    pass
             raise
 
     def _wait_for_settle(
@@ -1565,10 +1579,11 @@ class MotionController:
                     previous_command = last_command_sent
             return self._wait_for_settle(samples[-1], cancel_event)
         except BaseException:
-            try:
-                self.backend.stop()
-            except Exception:
-                pass
+            if self._needs_fallback_stop(cancel_event):
+                try:
+                    self.backend.stop()
+                except Exception:
+                    pass
             raise
 
     def _execute_recorded(
@@ -1648,10 +1663,11 @@ class MotionController:
                 {**settled.final_positions, STOCK_GRIPPER: actual_gripper},
             )
         except BaseException:
-            try:
-                self.backend.stop()
-            except Exception:
-                pass
+            if self._needs_fallback_stop(cancel_event):
+                try:
+                    self.backend.stop()
+                except Exception:
+                    pass
             raise
 
     def _start_locked(
@@ -2056,6 +2072,9 @@ class MotionController:
             handle = self._active_handle
             self._joint_stream = None
             if handle is not None and not handle.done:
+                # Claim ownership before cancellation is visible to the
+                # worker. This STOP issues the one authoritative latch.
+                self._stop_owned_events.add(handle._cancel_event)
                 handle.cancel()
         self.backend.stop()
         if wait and handle is not None and not handle.done:
