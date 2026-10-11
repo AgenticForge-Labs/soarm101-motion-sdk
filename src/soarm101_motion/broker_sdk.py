@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -37,6 +38,15 @@ from soarm101_motion.workstation import WorkstationProfileStore
 
 if TYPE_CHECKING:
     from soarm101_motion.config import SOARM101Config
+
+
+# An acknowledged software STOP must not mean merely that a goal write
+# succeeded. A physical arm can continue moving after the servo was sent
+# a present-position latch (observed 18.4° elbow travel within one second
+# on 2026-10-11). Verify bounded post-latch encoder stability before ACK.
+# These conservative detection bounds do NOT certify physical braking.
+STOP_STABILITY_SAMPLE_DELAYS_S = (0.25, 0.25, 0.5, 0.5)
+STOP_MAX_POST_LATCH_DRIFT_DEG = 1.0
 
 
 # HTTP fields are a strict, versioned interface. No host paths, arbitrary
@@ -404,10 +414,72 @@ class SDKAgentExecutor:
                     str(getattr(state, "fault_message", None) or "device is faulted")
                 )
             joints = dict(arm.get_joint_positions().positions)
+            stability: dict[str, object] = {"verified": False}
+            if not self.simulation:
+                # No new target writes are made during these observations.
+                # Compare every measured sample against the immediate latch
+                # position, not just the end points of an oscillation.
+                if not state.torque_enabled:
+                    raise HardwareFaultError(
+                        "STOP/HOLD unverified: physical torque hold is disabled"
+                    )
+                first = dict(joints)
+                max_drift_deg = 0.0
+                samples = []
+                elapsed = 0.0
+                for pause in STOP_STABILITY_SAMPLE_DELAYS_S:
+                    time.sleep(pause)
+                    elapsed += pause
+                    sampled = dict(arm.get_joint_positions().positions)
+                    if set(sampled) != set(first):
+                        raise HardwareFaultError(
+                            "STOP/HOLD unverified: arm joint feedback changed shape"
+                        )
+                    worst_joint, drift = max(
+                        (
+                            (joint, abs(math.degrees(sampled[joint] - initial)))
+                            for joint, initial in first.items()
+                        ),
+                        key=lambda item: item[1],
+                    )
+                    max_drift_deg = max(max_drift_deg, drift)
+                    samples.append({
+                        "elapsed_s": elapsed, "max_drift_deg": drift,
+                        "worst_joint": worst_joint,
+                    })
+                    if self._trace is not None:
+                        self._trace.mark(
+                            "post_stop_stability_sample",
+                            elapsed_s=elapsed, max_drift_deg=drift,
+                            joints_rad=sampled,
+                        )
+                    if drift > STOP_MAX_POST_LATCH_DRIFT_DEG:
+                        raise HardwareFaultError(
+                            "STOP/HOLD unverified: "
+                            f"{worst_joint} moved {drift:.2f}° after the "
+                            "position latch, without a new movement command"
+                        )
+                    joints = sampled
+                state = arm.get_state()
+                if (
+                    not state.connected or state.faulted
+                    or not state.torque_enabled or state.moving
+                ):
+                    raise HardwareFaultError(
+                        "STOP/HOLD unverified: motor state still moving, "
+                        "faulted, disconnected, or torque-disabled after settling"
+                    )
+                stability = {
+                    "verified": True,
+                    "duration_s": elapsed,
+                    "max_drift_deg": max_drift_deg,
+                    "samples": samples,
+                }
             return {
                 "accepted": True, "completed": True, "action": "stop",
                 "holding": bool(state.torque_enabled),
                 "joint_positions_rad": joints,
+                "post_stop_stability": stability,
             }
 
         arm = self._arm()
