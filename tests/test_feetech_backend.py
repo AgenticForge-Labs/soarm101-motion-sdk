@@ -50,6 +50,7 @@ class FakePacket:
         self.port = port
         self.positions = {motor_id: 2047 for motor_id in MOTOR_IDS.values()}
         self.sync_speeds: dict[int, int] = {}
+        self.sync_accelerations: dict[int, int] = {}
         self.registers = defaultdict(int)
         for motor_id in MOTOR_IDS.values():
             self.registers[(motor_id, 3)] = 777
@@ -95,8 +96,8 @@ class FakePacket:
         return 0, 0
 
     def SyncWritePosEx(self, motor_id: int, raw: int, speed: int, acceleration: int):
-        del acceleration
         self.sync_speeds[motor_id] = speed
+        self.sync_accelerations[motor_id] = acceleration
         self.groupSyncWrite.pending[motor_id] = raw
         return True
 
@@ -449,6 +450,7 @@ def test_stop_uses_the_existing_servo_tracking_profile(monkeypatch: pytest.Monke
         backend.stop()
         assert packet.positions == positions_before
         assert all(packet.sync_speeds[motor_id] == 0 for motor_id in MOTOR_IDS.values())
+        assert all(packet.sync_accelerations[motor_id] == 254 for motor_id in MOTOR_IDS.values())
     finally:
         backend.disconnect()
 
