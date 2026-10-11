@@ -15,7 +15,10 @@ python -m pytest --no-cov -q
 ```
 
 The new suite uses simulated arms and an authenticated fake native
-broker. It asserts that late nominal SDK completion after a competing
+broker. It also checks SDK-specific MotionCancelledError, HardwareFaultError
+and CommunicationError are returned as audited HTTP 409 errors rather
+than escaping the broker worker; STOP success on real hardware requires
+a positive torque-held readback, not merely a successful HTTP status. It asserts that late nominal SDK completion after a competing
 STOP is audited/replied as failure; a generic failure in an attempted
 STOP/HOLD latches a fault and revokes physical-trial motion authority;
 a disconnected or faulted device cannot report completed STOP; and
