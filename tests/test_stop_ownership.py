@@ -100,3 +100,21 @@ def test_verified_physical_stop_close_does_not_reissue_hold(monkeypatch, tmp_pat
     executor.close()
     assert disconnect_options == [False]
     assert executor.session_evidence["lifecycle"] == "closed"
+
+
+def test_normal_disconnect_uses_controller_cleanup_not_public_stop(monkeypatch) -> None:
+    arm = SOARM101.simulated()
+    observations = []
+
+    def public_stop_is_broken():
+        raise RuntimeError("injected broker STOP failure")
+
+    monkeypatch.setattr(arm, "stop", public_stop_is_broken)
+    monkeypatch.setattr(
+        arm.motion, "stop", lambda *, wait=True: observations.append("controller"),
+    )
+    monkeypatch.setattr(
+        arm.backend, "disconnect", lambda: observations.append("close"),
+    )
+    arm.disconnect()
+    assert observations == ["controller", "close"]
