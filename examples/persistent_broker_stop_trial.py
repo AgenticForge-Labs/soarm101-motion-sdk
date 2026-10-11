@@ -143,24 +143,25 @@ def main(argv: list[str] | None = None) -> int:
 
         worker = threading.Thread(target=move, daemon=True)
         worker.start()
-        # Observe the *real SDK motion state*, not merely the HTTP client
-        # thread. No additional motor I/O, commands or secret exposure.
+        # Observe only the host motion-controller state, not the HTTP client
+        # thread. Avoid SOARM101.is_moving here: that queries each physical
+        # servo and could contend with motion/STOP packet I/O.
         sdk_arm = executor._session
         if sdk_arm is None:
             raise RuntimeError("physical SDK connection disappeared")
         deadline = time.monotonic() + 10.0
-        while not sdk_arm.is_moving and not interrupted_finished.is_set():
+        while not sdk_arm.motion.is_moving and not interrupted_finished.is_set():
             if time.monotonic() > deadline:
                 raise RuntimeError("active motion was not observed within 10 seconds")
             time.sleep(0.01)
-        observed_active = bool(sdk_arm.is_moving)
+        observed_active = bool(sdk_arm.motion.is_moving)
         summary["active_motion_observed"] = observed_active
         if not observed_active:
             raise RuntimeError("movement completed before STOP qualification began")
         # Let motion visibly start, but reject an already completed leg as a
         # valid STOP trial. Rate ceilings and pose provenance stay enforced.
         time.sleep(0.15)
-        if not sdk_arm.is_moving:
+        if not sdk_arm.motion.is_moving:
             raise RuntimeError("motion completed before independent STOP request")
 
         stop_start = time.monotonic()
@@ -180,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("interrupted movement was falsely acknowledged as success")
         if not interrupted_reply.get("error"):
             raise RuntimeError("expected interrupted motion to return an explicit failure")
-        if sdk_arm.is_moving:
+        if sdk_arm.motion.is_moving:
             raise RuntimeError("SDK still reports motion active after STOP")
         post = _request(url, token, "GET", "/v1/state")["result"]
         summary["post_stop_state"] = post
