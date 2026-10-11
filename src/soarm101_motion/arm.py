@@ -359,9 +359,19 @@ class SOARM101:
         never claim full STOP success if either component failed.
         """
         errors: list[Exception] = []
-        for action in (lambda: self.motion.stop(wait=True), lambda: self._stop_tool(wait=True)):
+        try:
+            self.motion.stop(wait=True)
+        except Exception as exc:
+            errors.append(exc)
+        # MotionController.stop() already latched ALL connected Feetech
+        # motors, including the gripper. A second tool.stop() when the
+        # gripper was idle sent another entire 1/1 HOLD packet in the
+        # real 2026-10-11 joint-only STOP trace. Only cancel an active
+        # tool worker independently, or attempt fallback if the arm HOLD
+        # failed and the tool may still require a HOLD.
+        if errors or bool(getattr(self.tool, "is_moving", False)):
             try:
-                action()
+                self._stop_tool(wait=True)
             except Exception as exc:
                 errors.append(exc)
         if errors:
