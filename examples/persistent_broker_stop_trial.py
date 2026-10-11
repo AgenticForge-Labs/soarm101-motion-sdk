@@ -298,6 +298,8 @@ def _require_operator(args: argparse.Namespace) -> None:
         accel = 10.0 if args.acceleration_deg_s2 is None else args.acceleration_deg_s2
         if speed > SHORT_MAX_SPEED_DEG_S or accel > SHORT_MAX_ACCEL_DEG_S2:
             raise ValueError("short STOP rate caps: at most 3 deg/s and 15 deg/s²")
+        if args.command_frequency_hz > 20:
+            raise ValueError("short STOP command frequency must be at most 20 Hz")
 
 
 def main(argv: list[str] | None = None) -> int:
