@@ -12,8 +12,10 @@ Sleep, then interrupts a new Overhead move with an independent
 authenticated STOP and records live stationary/held feedback. It records
 stop-request latency and preserves trace/audit evidence. No agent or
 OpenShell physical access is enabled by this feature. The script does
-not prove safety-rated emergency stopping. See `TESTING.md` and
-`docs/safety.md` before running on the unloaded arm.
+not prove safety-rated emergency stopping. The interrupted movement
+can leave the arm partway toward Overhead; STOP revokes the human lease,
+so the script never automatically returns to Sleep after the test.
+See `TESTING.md` and `docs/safety.md` before running on the unloaded arm.
 
 ## PR #89 — one-owner SDK session lifecycle (merged)
 
