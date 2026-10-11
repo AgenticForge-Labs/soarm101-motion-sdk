@@ -120,6 +120,9 @@ class SDKAgentExecutor:
         self._lifecycle_lock = threading.RLock()
         self._lifecycle = "new"  # new -> open -> closing/closed; failure -> faulted
         self._fault_kind: str | None = None
+        # Close after a verified physical STOP must not send another
+        # all-motor position latch. Any later motion clears this flag.
+        self._verified_physical_stop = False
         self._bound_calibration_id: str | None = None
         self._session: SOARM101 | None = None
 
@@ -220,10 +223,14 @@ class SDKAgentExecutor:
                         arm = self._session
                         try:
                             if arm is not None:
-                                if had_unverified_fault and isinstance(arm, SOARM101):
-                                    # Physical STOP verification already failed.
-                                    # Never issue two additional position latches
-                                    # from the generic arm disconnect cleanup.
+                                if (
+                                    self.physical_trial
+                                    and isinstance(arm, SOARM101)
+                                    and (had_unverified_fault or self._verified_physical_stop)
+                                ):
+                                    # A failed OR a verified physical STOP
+                                    # already sent its position latch. Cleanup
+                                    # must not silently send another goal.
                                     arm.disconnect(stop_before_disconnect=False)
                                 else:
                                     arm.disconnect()
@@ -309,6 +316,8 @@ class SDKAgentExecutor:
         self._validate(action, request)
         def run() -> dict[str, object]:
             self._require_active(stop=action == "stop")
+            if action in {"go_pose", "joint", "jog", "gripper", "sleep", "sleep_up"}:
+                self._verified_physical_stop = False
             trace = self._trace
             if trace is not None:
                 trace.mark(
@@ -321,6 +330,12 @@ class SDKAgentExecutor:
                 )
             try:
                 result = self._execute_action(action, request)
+                if action == "stop" and self.physical_trial:
+                    self._verified_physical_stop = bool(
+                        result.get("completed")
+                        and result.get("holding")
+                        and result.get("post_stop_stability", {}).get("verified")
+                    )
             except BaseException as exc:
                 # Never re-open a silently disconnected/faulted transport on
                 # the next request. STOP remains possible on an existing arm.
