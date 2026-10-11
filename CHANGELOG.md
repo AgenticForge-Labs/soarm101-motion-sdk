@@ -1,5 +1,17 @@
 # Changelog
 
+- Correct a **real 2026-10-11 physical STOP false positive**: an
+  acknowledged STOP was followed by 18.4° elbow movement in ~1 s with
+  no new host movement command. In the staged SDK broker, sample
+  physical encoder hold stability over 1.5 s before acknowledging STOP;
+  refuse drift >1°, moving/faulted/disconnected/torque-off state, latch
+  session fault and preserve revoked authority. Add deterministic
+  replay-style regression from measured values. The attended STOP script
+  must not reissue STOP blindly after an unverified first latch.
+  The servo braking cause remains unresolved: PR #90 physical gate
+  failed and production cutover remains blocked.
+
+
 - Replace PR #90's fixed 150 ms in-flight STOP trigger with operator
   ENTER while motion is active; fail if motion finishes before input.
   Following human `STATIONARY` verification, offer an optional
