@@ -1,5 +1,12 @@
 # Changelog
 
+- Add the **operator-only** real HTTP in-flight STOP qualification
+  `examples/persistent_broker_stop_trial.py`, with human confirmations,
+  20 Hz joint-only candidate pacing, observed active movement, independent
+  authenticated 5-second-timeout STOP, live state readback, motor and
+  broker event traces, and explicit stationary confirmation. Tests only
+  validate script input/terminal gates; no hardware is exercised in CI.
+
 - PR #90 (draft): complete both arm and tool/gripper STOP attempts even
   on partial HOLD failure, reject stale in-flight native broker successes
   after STOP, latch any failed existing-session HOLD and revoke physical
