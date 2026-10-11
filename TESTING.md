@@ -25,6 +25,38 @@ generation invalidation, HTTP profile denial and exact per-request
 evidence. CI must never open the physical serial follower.
 
 **Required attended local physical gate, separate from software CI:**
+
+A reusable trusted-host procedure is now in
+`examples/persistent_broker_stop_trial.py`. It never runs in CI or as an
+OpenShell agent. It requires the calibrated saved Overhead pose, a
+human-issued lease, physical TTY, two typed confirmations and an additional
+human `STATIONARY` verification after the STOP. Its default motion pacing is
+conservative 8 deg/s, 25 deg/s², 20 Hz; these are **test candidates**, not
+proven loaded-arm capabilities.
+
+```bash
+cd ~/AgenticForge/soarm101-motion-sdk
+source .venv/bin/activate
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_stop_trial.py \
+  --port /dev/ttyACM1 --robot-id so101 \
+  --output "$HOME/soarm-motion-tests/stop-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+It preflights saved-pose calibration, executes a known joint-only Sleep
+under the same broker, then launches a joint-only approved Overhead
+pose in one HTTP request while independently observing active SDK motion.
+Once movement is actually active, it sends authenticated
+`POST /v1/stop` with a bounded 5-second client timeout, captures the
+response time and verifies the in-flight reply is a rejection, authority
+is revoked, and the SDK is no longer moving. It records the broker
+events, motor trace and summary. After 1 second it requires an explicit
+human observation of stationary posture before it can mark the trial
+passed. A timeout, readback or HOLD fault is **not** STOP success.
+Power cutoff must remain immediately accessible; discontinue on any
+unexpected behavior. Additional manual visual/trace review is required
+before merge regardless of script exit status.
+
 Verify current branch SHA, calibration, measured start/end poses and
 clearance, power cutoff, and that the arm has no payload. Use only the
 trusted-host, loopback-only physical broker with the fixed trial
