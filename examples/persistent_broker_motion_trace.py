@@ -61,7 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _request(base: str, token: str, method: str, path: str,
-             payload: dict[str, Any] | None = None) -> dict[str, Any]:
+             payload: dict[str, Any] | None = None, *,
+             timeout_s: float = 200.0) -> dict[str, Any]:
     request = urllib.request.Request(
         base + path, method=method,
         headers={
@@ -71,7 +72,7 @@ def _request(base: str, token: str, method: str, path: str,
         data=(json.dumps(payload or {}).encode("utf-8") if method == "POST" else None),
     )
     try:
-        with urllib.request.urlopen(request, timeout=200) as response:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
             body = json.load(response)
     except urllib.error.HTTPError as exc:
         try:
