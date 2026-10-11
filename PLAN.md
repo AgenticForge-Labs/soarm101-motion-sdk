@@ -4,7 +4,7 @@ The motion SDK remains authoritative for hardware, calibration, kinematics, plan
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
-## PR #89 — Broker-owned SDK session lifecycle (open, unmerged)
+## PR #89 — Broker-owned SDK session lifecycle (merged)
 
 Following staged PR #88 merged into `main` at
 `957e86fb1f090a52960a593ce5b07caeaffb7ec6`, PR #89 hardens the
@@ -31,7 +31,37 @@ concurrency/STOP regression. Hardware gates: local Codex/read-only
 verification of one-owner GUI/CLI/second-broker exclusion and shutdown
 with power cutoff accessible; no unintended motion. Complete physical STOP,
 fault injection, native camera parity and 2 mm Cartesian qualifications belong
-to proposed #90–#92. Keep #89 open until local validation and CI pass.
+to proposed #90–#92. PR #89 merged into `main` at `77b28edba0f2beb129c031e6adf11513d0e240fe`
+after Python 3.10/3.12 CI and operator-reported read-only local checks.
+
+## PR #90 — Independent STOP response and fail-closed HOLD (open, unmerged)
+
+Built on the #89 terminal broker session, this PR reinforces the existing
+shared SDK STOP path rather than adding an alternate hardware controller.
+`SOARM101.stop()` now attempts both motion-controller HOLD and gripper STOP,
+preserving the original failure if either fails. The trusted native broker
+serializes ordinary actions while dispatching STOP independently. After SDK
+dispatch, the broker rechecks the original request's STOP epoch, refusing a
+late success result for an action interrupted by a newer STOP. STOP that fails
+in any way after reaching an existing SDK session latches a fault and revokes
+physical-trial human authority; no automatic reconnect or resume is allowed.
+A STOP success requires live connected/nonfaulted state and joint readback,
+rather than unverified last-commanded positions. A successful simulated test
+is not a physical STOP guarantee.
+
+Software gates: Ruff, `tests/test_broker_stop_faults.py`, existing
+`test_broker_sdk.py` STOP/queued/HTTP tests, full pytest and both supported
+CI Python versions. Physical gate: human-supervised active-motion STOP via
+the restricted trusted-host loopback broker, with unloaded calibrated arm,
+power cutoff available, timestamped independent STOP response, motor and
+broker traces, no unintended resumed motion, and operator observation.
+An error or incomplete HOLD is a BLOCKER; do not treat fake STOP or read-only
+Codex success as completing this qualification.
+
+Production remains bounded CLI-backed and the public persistent-SDK preview
+remains read-only simulation. No interactive OpenShell physical motion is
+enabled. Future #91 (native capability parity) and #92 (physical cutover)
+must not branch until this PR merges.
 
 ## 2026-10-10 operator gripper fault and joint-only tracing
 
@@ -77,7 +107,7 @@ Retain the operator's trace evidence on merged #88. Additional physical
 safety qualification belongs to subsequent PRs and must be attached to those
 reviews rather than presented as already released behavior.
 
-## Milestone B integration sequence (#88 merged; #89 in progress)
+## Milestone B integration sequence (#88/#89 merged; #90 open)
 
 GitHub `main` is authoritative. Do not create a dependent branch until the
 preceding PR is merged. Preserve the extensive #88 staged work rather than
@@ -90,11 +120,11 @@ starting a competing SDK executor.
    human arming, explicit RUN confirmation and a separate narrow loopback profile.
    The completed 2026-10-10 five-leg experiment is evidence for *that route*
    only, not generalized robot safety.
-2. **PR #89 — exclusive hardware ownership/session lifecycle (open):**
+2. **PR #89 — exclusive hardware ownership/session lifecycle (merged):**
    one broker-owned persistent SDK session; fail-closed disconnect, restart,
    authority expiry and calibration changes; confirm GUI/CLI/second-broker
    exclusivity, including cooperative lock limitations.
-3. **Proposed PR #90 — independent STOP and fault handling:** true active-motion
+3. **PR #90 — independent STOP and fault handling (open):** true active-motion
    cancellation, generation-based queued-request invalidation, incomplete HOLD
    and servo faults; hardware-free race tests followed by a supervised STOP
    while moving with physical power cutoff accessible.
