@@ -175,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
         # unconfirmed STOP, timeout or bus fault remains a failed gate.
         if not stop["result"].get("completed"):
             raise RuntimeError("broker STOP did not report completed HOLD")
+        if stop["result"].get("holding") is not True:
+            raise RuntimeError("broker STOP did not verify torque-held state")
         if not interrupted_finished.wait(timeout=5):
             raise RuntimeError("interrupted motion did not terminate after STOP")
         if "body" in interrupted_reply and interrupted_reply["body"].get("ok"):
