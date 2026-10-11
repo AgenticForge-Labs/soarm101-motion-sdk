@@ -33,6 +33,19 @@ automated testing, or operator-led diagnostics.
 
 ## Development
 
+**STOP HARDWARE BLOCKER, 2026-10-11:** Real encoder evidence shows an
+18.4-degree elbow displacement in the second after broker STOP reported
+success. The physical STOP gate for open PR #90 **failed**, even though
+its prior trial summary said `passed=true`. Do not run another active
+hardware STOP or post-STOP REARM test until servo position latch dynamics
+are investigated and a separately reviewed physical protocol is ready.
+The staged native broker now verifies post-latch stability and fails
+closed on drift; this detects but cannot mechanically stop an unsafe
+servo. Keep hardware cutoff immediately available. Do not suppress
+motor status flags, lower safety thresholds, auto-retry HOLD or swap
+raw Feetech braking parameters to obtain a passing report.
+
+
 **PR #90 (open, unmerged):** maintain one deterministic SDK-owned STOP
 path; do not create a competing raw bus or agent STOP implementation.
 Software STOP must attempt both arm and tool/gripper cancellation even
