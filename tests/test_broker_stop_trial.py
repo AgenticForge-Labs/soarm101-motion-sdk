@@ -394,3 +394,16 @@ def test_short_stop_must_verify_stability_before_success(monkeypatch) -> None:
         trial._verify_post_stop_stability(
             hold, state(1), state(1, armed=True),
         )
+
+
+def test_short_mode_caps_command_frequency(monkeypatch) -> None:
+    trial = _load_trial(monkeypatch)
+    monkeypatch.setattr(trial.sys, "stdin", type("TTY", (), {
+        "isatty": lambda self: True,
+    })())
+    args = trial.build_parser().parse_args([
+        "--port", "/dev/ttyACM1", "--output", "/tmp/unused.jsonl",
+        "--command-frequency-hz", "30",
+    ])
+    with pytest.raises(ValueError, match="at most 20 Hz"):
+        trial._require_operator(args)
