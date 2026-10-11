@@ -1,11 +1,19 @@
 # Changelog
 
+- Update the PR #90 physical STOP qualification to **assume measured Sleep**
+  rather than command an initial no-op Sleep. Require the actual joint angles
+  to be within 5° of calibrated Sleep, an Overhead target at least 10° away,
+  and a completed/measured Overhead -> Sleep baseline before interrupting a
+  *new* Overhead leg. STOP revokes authority and never automatically returns
+  to Sleep. Add hardware-free pose and route-order regressions.
+
+
 - Add the **operator-only** real HTTP in-flight STOP qualification
   `examples/persistent_broker_stop_trial.py`, with human confirmations,
   20 Hz joint-only candidate pacing, observed active movement, independent
   authenticated 5-second-timeout STOP, live state readback, motor and
   broker event traces, and explicit stationary confirmation. Tests only
-  validate script input/terminal gates; no hardware is exercised in CI.
+  validate script operator gates, starting pose, and baseline route order; no hardware is exercised in CI.
 
 - Broker native HTTP now catches the SDK's own typed motion-cancel,
   communication and hardware exceptions as auditable errors instead of
