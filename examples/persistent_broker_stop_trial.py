@@ -134,14 +134,21 @@ def _verify_post_stop_stability(
         raise RuntimeError("STOP did not provide verified physical encoder settling")
     a = first_state["joint_positions_rad"]
     b = later_state["joint_positions_rad"]
-    if set(a) != set(b) or not a:
+    latch = stop_result["joint_positions_rad"]
+    if set(a) != set(b) or set(a) != set(latch) or not a:
         raise RuntimeError("STOP stability readback changed joint identities")
     drifts = {}
     for joint in a:
-        initial, subsequent = float(a[joint]), float(b[joint])
-        if not math.isfinite(initial) or not math.isfinite(subsequent):
+        initial, subsequent, latched = (
+            float(a[joint]), float(b[joint]), float(latch[joint])
+        )
+        if not all(math.isfinite(value) for value in (initial, subsequent, latched)):
             raise RuntimeError("STOP stability feedback contained a nonfinite joint")
-        drifts[joint] = abs(math.degrees(subsequent - initial))
+        drifts[joint] = max(
+            abs(math.degrees(subsequent - initial)),
+            abs(math.degrees(initial - latched)),
+            abs(math.degrees(subsequent - latched)),
+        )
     if max(drifts.values()) > tolerance_deg:
         raise RuntimeError(
             f"STOP stationary HOLD drift exceeded {tolerance_deg:g} deg: {drifts}"
@@ -514,49 +521,61 @@ def main(argv: list[str] | None = None) -> int:
         summary["post_stop_state_one_second"] = _request(
             url, token, "GET", "/v1/state"
         )["result"]
+        summary["post_stop_max_drift_by_joint_deg"] = _verify_post_stop_stability(
+            stop["result"], post, summary["post_stop_state_one_second"],
+        )
         print("Review position, stability, trace and camera/eyes-on observation.", flush=True)
         if input("Type STATIONARY only if physically stationary and holding: ").strip() != "STATIONARY":
             raise RuntimeError("operator did not verify physical STOP")
         summary["stop_qualification_passed"] = True
         summary["passed"] = True
 
-        # The original lease was revoked by STOP. Finishing the goal is a
-        # separate new motion requiring explicit human reauthorization,
-        # fresh HOLD/identity checks, and normal validated broker dispatch.
-        print(
-            "STOP qualified; robot remains held between Sleep and Overhead. "
-            "To finish Overhead, a NEW 5-minute operator lease is required.",
-            flush=True,
-        )
-        if input(
-            "Type REARM to authorize a NEW joint-only move to Overhead; "
-            "press ENTER to leave the arm holding: "
-        ).strip() == "REARM":
-            summary["post_stop_recovery_requested"] = True
-            summary["post_stop_human_rearm"] = _operator_rearm_for_completion(
-                arm=sdk_arm, authority_store=executor._authority,
-                robot_id=args.robot_id, calibration_id=calibration_id,
-            )
-            recovery = _request(
-                url, token, "POST", "/v1/go-pose",
-                {"name": "agent_start_overhead", "joint_only": True},
-            )
-            if not recovery["result"].get("accepted") or not recovery["result"].get("completed"):
-                raise RuntimeError("separately authorized Overhead completion failed")
-            final = _request(url, token, "GET", "/v1/state")["result"]
-            summary["post_stop_overhead_errors_deg"] = _verify_measured_pose(
-                final["joint_positions_rad"], overhead_target,
-                label="human-reauthorized Overhead finish",
-            )
-            summary["post_stop_recovery_completed"] = True
-            summary["post_stop_recovery_request_id"] = recovery["request_id"]
-            # Limit subsequent motion after operator recovery. Hold remains
-            # enabled; this clears only agent motion authority.
-            executor._authority.clear()
-            print("Overhead reached and measured. Motion authority removed.", flush=True)
-        else:
+        if args.trial == "short":
+            # No rearm or second motor command, even after a verified hold.
             summary["post_stop_recovery_requested"] = False
-            print("No further motion requested. Arm remains torque-held.", flush=True)
+            print(
+                "SHORT STOP gate complete. No REARM or new position goal. "
+                "The arm remains held; review saved trace before any further test.",
+                flush=True,
+            )
+        else:
+            # The original lease was revoked by STOP. Finishing the goal is a
+            # separate new motion requiring explicit human reauthorization,
+            # fresh HOLD/identity checks, and normal validated broker dispatch.
+            print(
+                "STOP qualified; robot remains held between Sleep and Overhead. "
+                "To finish Overhead, a NEW 5-minute operator lease is required.",
+                flush=True,
+            )
+            if input(
+                "Type REARM to authorize a NEW joint-only move to Overhead; "
+                "press ENTER to leave the arm holding: "
+            ).strip() == "REARM":
+                summary["post_stop_recovery_requested"] = True
+                summary["post_stop_human_rearm"] = _operator_rearm_for_completion(
+                    arm=sdk_arm, authority_store=executor._authority,
+                    robot_id=args.robot_id, calibration_id=calibration_id,
+                )
+                recovery = _request(
+                    url, token, "POST", "/v1/go-pose",
+                    {"name": "agent_start_overhead", "joint_only": True},
+                )
+                if not recovery["result"].get("accepted") or not recovery["result"].get("completed"):
+                    raise RuntimeError("separately authorized Overhead completion failed")
+                final = _request(url, token, "GET", "/v1/state")["result"]
+                summary["post_stop_overhead_errors_deg"] = _verify_measured_pose(
+                    final["joint_positions_rad"], overhead_target,
+                    label="human-reauthorized Overhead finish",
+                )
+                summary["post_stop_recovery_completed"] = True
+                summary["post_stop_recovery_request_id"] = recovery["request_id"]
+                # Limit subsequent motion after operator recovery. Hold remains
+                # enabled; this clears only agent motion authority.
+                executor._authority.clear()
+                print("Overhead reached and measured. Motion authority removed.", flush=True)
+            else:
+                summary["post_stop_recovery_requested"] = False
+                print("No further motion requested. Arm remains torque-held.", flush=True)
     except BaseException as exc:
         failure = repr(exc)
         # Preserve a separately validated STOP but never report the whole
