@@ -1,5 +1,20 @@
 # Agent robot broker
 
+## Draft #90 bounded physical STOP qualification
+
+The attended loopback broker defaults to one fixed +8° pan
+joint movement from encoder-verified Sleep and an independent STOP
+triggered by the human pressing ENTER during motion. It uses the
+same authenticated `/v1/joint` route and SDK validation as other
+trusted operator calls, with narrow speed/acceleration ceilings.
+The physical STOP reply must include encoder settling evidence and
+a subsequent stable readback. There is no baseline Overhead route,
+automatic recovery or post-STOP REARM in short mode. The historical
+full Overhead test is explicit `--trial overhead` and remains
+physically blocked until the short gate and trace inspection pass.
+Production/native-public broker paths are unchanged.
+
+
 ## PR #90 independent STOP semantics (draft, unmerged)
 
 The operator-run `examples/persistent_broker_stop_trial.py` supplies
