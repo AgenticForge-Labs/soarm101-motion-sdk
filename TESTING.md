@@ -32,11 +32,14 @@ evidence. CI must never open the physical serial follower.
 
 A reusable trusted-host procedure is now in
 `examples/persistent_broker_stop_trial.py`. It never runs in CI or as an
-OpenShell agent. It requires the calibrated saved Overhead pose, a
-human-issued lease, physical TTY, two typed confirmations and an additional
-human `STATIONARY` verification after the STOP. Its default motion pacing is
-conservative 8 deg/s, 25 deg/s², 20 Hz; these are **test candidates**, not
-proven loaded-arm capabilities.
+OpenShell agent. **Start with the arm physically at Sleep**: the script
+checks every measured arm joint against the calibrated, SDK-generated
+Sleep target (5° tolerance) and refuses to auto-correct a mismatch. It
+requires a calibrated saved Overhead pose meaningfully distinct from
+Sleep (at least one joint differs by 10°), a human-issued lease,
+physical TTY, and `ROUNDTRIP`, `INTERRUPT`, and `STATIONARY`
+confirmations. The default 8 deg/s, 25 deg/s², 20 Hz are **conservative
+test candidates**, not proven loaded-arm capabilities.
 
 ```bash
 cd ~/AgenticForge/soarm101-motion-sdk
