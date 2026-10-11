@@ -1,6 +1,6 @@
 # Safety
 
-## PR #89 broker lifecycle guard (staged, unmerged)
+## PR #89 broker lifecycle guard (merged, not a physical STOP qualification)
 
 The native SDK broker's lifecycle is terminal on close or qualifying
 transport/hardware fault. It must not silently create a new SDK connection,
@@ -16,6 +16,26 @@ with an unloaded, physically supervised arm; legacy programs may not
 honor the cooperative lock. A failed software HOLD must remain observable.
 
 
+
+## PR #90 independent software STOP qualification (open, not hardware validated)
+
+The SDK STOP operation must attempt both arm-controller cancellation/HOLD and
+tool/gripper STOP, even if one reports an error. Preserve the initiating
+failure and never claim overall success when a component is unverified.
+The trusted native broker invalidates already-admitted and late-completing
+requests after STOP; completion after a newer STOP must be audited as a
+rejection, not a successful movement. A failed STOP/HOLD of a connected
+session latches fault state, revokes physical motion authority and requires
+deliberate human session replacement; no automatic reconnect or resume.
+A reported STOP success still requires a live connected, nonfaulted
+readback and encoder measurements, not cached or commanded joint values.
+
+The Feetech serial transport uses a cooperative lock, not a separate
+safety channel. STOP can be delayed behind packet I/O or blocked by a
+physically unresponsive bus. Software cancellation cannot replace
+accessible physical power cutoff. Hardware timing, braking/stability,
+gripper hold and interrupted-move behavior remain **unverified** until
+an attended physical trial. Never perform unattended fault injection.
 
 ## Operator-only passive jog tracing
 
