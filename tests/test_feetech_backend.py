@@ -438,6 +438,21 @@ def test_joint_sync_write_accepts_per_motor_speed_limits(
     backend.disconnect()
 
 
+def test_stop_uses_the_existing_servo_tracking_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(SOARM101Config(port="FAKE", use_stored_calibration=False))
+    backend.connect()
+    backend.enable_torque()
+    packet = backend._packet_handler
+    try:
+        positions_before = dict(packet.positions)
+        backend.stop()
+        assert packet.positions == positions_before
+        assert all(packet.sync_speeds[motor_id] == 0 for motor_id in MOTOR_IDS.values())
+    finally:
+        backend.disconnect()
+
+
 def test_partial_stop_still_holds_readable_arm_motors_on_gripper_fault(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
