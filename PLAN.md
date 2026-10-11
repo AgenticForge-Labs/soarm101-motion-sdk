@@ -1,5 +1,17 @@
 # Development plan
 
+## PR #90 first short-motion STOP gate (draft, hardware result unknown)
+
+The attended broker STOP trial now defaults to one fixed +8° pan
+movement from measured Sleep, narrow joint rates (2°/s and 10°/s²
+defaults), manual ENTER during motion, independent authenticated STOP
+and measured post-HOLD stability confirmation. It has no preliminary
+Overhead roundtrip or post-STOP REARM; the larger Overhead route
+remains explicit opt-in and blocked pending the short gate. This is
+not emergency-stop certification, and simulated passing tests cannot
+demonstrate physical braking.
+
+
 The motion SDK remains authoritative for hardware, calibration, kinematics, planning,
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
