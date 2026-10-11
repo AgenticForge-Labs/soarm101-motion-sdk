@@ -49,6 +49,14 @@ A STOP success requires live connected/nonfaulted state and joint readback,
 rather than unverified last-commanded positions. A successful simulated test
 is not a physical STOP guarantee.
 
+The reusable `examples/persistent_broker_stop_trial.py` adds a
+separate trusted-host qualification: typed human PREPARE/INTERRUPT/STATIONARY
+gates, fixed bounded HTTP broker, known saved poses, observed active motion,
+independent STOP, finite HTTP timeout, trace and event/summary evidence,
+and **no subsequent motion**. Automated test
+`tests/test_broker_stop_trial.py` checks input/unattended rejection only,
+never serial activity. Actual physical acceptance remains operator-run.
+
 Software gates: Ruff, `tests/test_broker_stop_faults.py`, existing
 `test_broker_sdk.py` STOP/queued/HTTP tests, full pytest and both supported
 CI Python versions. Physical gate: human-supervised active-motion STOP via
