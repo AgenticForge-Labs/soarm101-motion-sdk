@@ -43,7 +43,11 @@ stop. Preserve the normal CLI-backed production broker and the read-only
 native preview. Real-arm STOP-during-motion tests require attended local
 Codex/operator validation, cleared workspace, calibrated empty arm, and
 power cutoff immediately available. Record trace/latency/settled state
-before declaring PR #90 physical acceptance. For new supervised
+before declaring PR #90 physical acceptance. During this qualification,
+operator ENTER (not a timer) requests STOP while Overhead is moving.
+After verified stationary HOLD, an optional explicit human `REARM`
+with fresh calibration-bound short lease may run a **new** validated
+joint-only Overhead command; never resume the cancelled trajectory. For new supervised
 minimal movement tests, **start from measured Sleep** (do not command a
 no-op initial Sleep), execute an approved Overhead movement and a
 return-to-Sleep baseline, and validate both measured endpoints. If
