@@ -1,5 +1,21 @@
 # Agent robot broker
 
+## PR #90 independent STOP semantics (draft, unmerged)
+
+The native SDK trial's authenticated STOP bypasses the ordinary broker
+motion queue. Queued native requests are cancelled by broker generation
+and late SDK responses are not allowed to report completed motion after
+a newer STOP. The underlying SDK motion controller remains the single
+owner of hardware cancellation. A failed HOLD or faulted/disconnected
+post-STOP readback returns an error, latches a native session fault
+and revokes physical-trial authority. Its event record is `ok=false`;
+never interpret HTTP 409 as a successful HOLD.
+
+This does not enable physical native dispatch in the normal broker,
+does not guarantee hard real-time STOP, and does not prove physical
+servo bus interruption. An operator-attended active-motion trial is
+required before treating #90 as complete.
+
 ## Operator-only direct physical session test (PR #88)
 
 A separate local example, `examples/persistent_broker_motion_trace.py`,
