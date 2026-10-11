@@ -6,12 +6,12 @@ in reach throughout. No agent is permitted to invoke or parameterize it.
 
 Start with an unloaded, secured, calibrated SO-ARM101 already physically at
 Sleep; require a human-issued `soarm101 agent arm --minutes 30` lease.
-The script verifies the measured Sleep joints without moving, completes
-Overhead -> Sleep through the restricted HTTP broker, then obtains a SECOND
-typed confirmation and interrupts a separate Overhead movement with STOP.
-Because STOP revokes motion authority, the arm may finish between Sleep and
-Overhead; returning it to Sleep after the test requires a separate human-
-authorized recovery. It never rearms or resumes motion automatically.
+The default short trial verifies measured Sleep without moving, then
+interrupts one fixed +8° shoulder-pan movement through the restricted
+broker. There is no baseline roundtrip or post-STOP rearm in short mode.
+The historical, larger Overhead trial is available only via explicit
+--trial overhead after separate safety review. STOP always revokes authority.
+No mode automatically resumes a cancelled trajectory.
 """
 
 from __future__ import annotations
@@ -44,6 +44,11 @@ from soarm101_motion.provenance import require_calibration_compatibility
 # Overhead/Sleep transition must also have meaningful joint travel.
 START_POSE_TOLERANCE_DEG = 5.0
 MIN_OVERHEAD_SEPARATION_DEG = 10.0
+SHORT_JOINT = "shoulder_pan"
+SHORT_DELTA_DEG = 8.0
+SHORT_MAX_SPEED_DEG_S = 3.0
+SHORT_MAX_ACCEL_DEG_S2 = 15.0
+SHORT_LIMIT_INSET_DEG = 5.0
 
 
 def _verify_measured_pose(
@@ -87,6 +92,63 @@ def _verify_meaningful_overhead_travel(
             "saved Overhead pose is too close to Sleep for this STOP trial"
         )
     return displacement
+
+
+def _preflight_short_joint(
+    measured: Mapping[str, float],
+    limits: Mapping[str, tuple[float, float]],
+) -> dict[str, float | str]:
+    """Accept only a fixed, inwardly bounded pan move from measured Sleep."""
+    if SHORT_JOINT not in measured or SHORT_JOINT not in limits:
+        raise ValueError("short STOP: calibrated shoulder_pan is unavailable")
+    actual = float(measured[SHORT_JOINT])
+    lower, upper = (float(value) for value in limits[SHORT_JOINT])
+    target = actual + math.radians(SHORT_DELTA_DEG)
+    inset = math.radians(SHORT_LIMIT_INSET_DEG)
+    if not all(math.isfinite(value) for value in (actual, lower, upper, target)):
+        raise ValueError("short STOP: nonfinite measured position or limit")
+    if not lower + inset <= actual <= upper - inset:
+        raise RuntimeError("short STOP: shoulder_pan starts too close to its limit")
+    if not lower + inset <= target <= upper - inset:
+        raise RuntimeError("short STOP: target exceeds inset calibrated pan limit")
+    return {
+        "joint": SHORT_JOINT,
+        "delta_deg": SHORT_DELTA_DEG,
+        "start_deg": math.degrees(actual),
+        "target_deg": math.degrees(target),
+        "lower_deg": math.degrees(lower),
+        "upper_deg": math.degrees(upper),
+    }
+
+
+def _verify_post_stop_stability(
+    stop_result: Mapping[str, Any],
+    first_state: Mapping[str, Any],
+    later_state: Mapping[str, Any],
+    *,
+    tolerance_deg: float = 1.0,
+) -> dict[str, float]:
+    """A successful HTTP reply alone cannot qualify a stationary HOLD."""
+    stability = stop_result.get("post_stop_stability")
+    if not isinstance(stability, Mapping) or stability.get("verified") is not True:
+        raise RuntimeError("STOP did not provide verified physical encoder settling")
+    a = first_state["joint_positions_rad"]
+    b = later_state["joint_positions_rad"]
+    if set(a) != set(b) or not a:
+        raise RuntimeError("STOP stability readback changed joint identities")
+    drifts = {}
+    for joint in a:
+        initial, subsequent = float(a[joint]), float(b[joint])
+        if not math.isfinite(initial) or not math.isfinite(subsequent):
+            raise RuntimeError("STOP stability feedback contained a nonfinite joint")
+        drifts[joint] = abs(math.degrees(subsequent - initial))
+    if max(drifts.values()) > tolerance_deg:
+        raise RuntimeError(
+            f"STOP stationary HOLD drift exceeded {tolerance_deg:g} deg: {drifts}"
+        )
+    if later_state["authority"]["armed"]:
+        raise RuntimeError("STOP authority was unexpectedly restored")
+    return drifts
 
 
 def _execute_verified_roundtrip(
@@ -138,15 +200,15 @@ def _await_operator_stop(
     if not stream.isatty():
         raise PermissionError("manual STOP requires an operator terminal")
     print(
-        "OVERHEAD IS MOVING. Press ENTER now to send STOP; "
-        "do not wait for the arm to reach Overhead.",
+        "MOTION IS ACTIVE. Press ENTER now to send STOP "
+        "before it reaches the target.",
         flush=True,
     )
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if motion_finished.is_set() or not is_moving():
             raise RuntimeError(
-                "Overhead movement ended before the operator triggered STOP; "
+                "Movement ended before the operator triggered STOP; "
                 "STOP interruption was not qualified"
             )
         ready, _, _ = select.select([stream], [], [], 0.02)
@@ -205,8 +267,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", required=True)
     parser.add_argument("--robot-id", default="so101")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--speed-deg-s", type=float, default=8.0)
-    parser.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    parser.add_argument(
+        "--trial", choices=("short", "overhead"), default="short",
+        help="short is the default single-joint STOP gate; overhead is the older large route",
+    )
+    parser.add_argument("--speed-deg-s", type=float)
+    parser.add_argument("--acceleration-deg-s2", type=float)
     parser.add_argument("--command-frequency-hz", type=float, default=20.0)
     return parser
 
@@ -218,13 +284,22 @@ def _require_operator(args: argparse.Namespace) -> None:
         raise ValueError("physical STOP trial needs an explicit Linux /dev/ tty")
     for name in ("speed_deg_s", "acceleration_deg_s2", "command_frequency_hz"):
         value = getattr(args, name)
-        if not math.isfinite(value) or value <= 0:
+        if value is not None and (not math.isfinite(value) or value <= 0):
             raise ValueError(f"{name} must be finite and positive")
+    if args.trial == "short":
+        speed = 2.0 if args.speed_deg_s is None else args.speed_deg_s
+        accel = 10.0 if args.acceleration_deg_s2 is None else args.acceleration_deg_s2
+        if speed > SHORT_MAX_SPEED_DEG_S or accel > SHORT_MAX_ACCEL_DEG_S2:
+            raise ValueError("short STOP rate caps: at most 3 deg/s and 15 deg/s²")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _require_operator(args)  # Before touching files, devices or a lease.
+    if args.speed_deg_s is None:
+        args.speed_deg_s = 2.0 if args.trial == "short" else 8.0
+    if args.acceleration_deg_s2 is None:
+        args.acceleration_deg_s2 = 10.0 if args.trial == "short" else 25.0
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     events_path = output.with_suffix(".broker-events.jsonl")
@@ -253,8 +328,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     profile = CapabilityProfile.from_document({
         "schema_version": 1, "name": "physical-supervised-stop-qualification",
-        "tools": ["robot_health", "robot_capabilities", "robot_state",
-                  "go_pose", "sleep", "stop"],
+        "tools": (
+            ["robot_health", "robot_capabilities", "robot_state", "jog_joint", "stop"]
+            if args.trial == "short"
+            else ["robot_health", "robot_capabilities", "robot_state",
+                  "go_pose", "sleep", "stop"]
+        ),
         "cameras": [], "limits": {},
     })
     service = RobotBrokerService(
@@ -267,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
     server_thread.start()
     summary: dict[str, Any] = {
         "kind": "persistent_broker_stop_qualification", "passed": False,
+        "trial": args.trial,
         "initial_pose_assumed": "Sleep, verified from measured joint angles",
         "automatic_recovery_after_stop": False,
         "robot_id": args.robot_id, "port": args.port,
