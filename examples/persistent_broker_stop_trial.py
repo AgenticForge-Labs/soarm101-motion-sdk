@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from persistent_broker_motion_trace import _request
@@ -85,6 +85,38 @@ def _verify_meaningful_overhead_travel(
             "saved Overhead pose is too close to Sleep for this STOP trial"
         )
     return displacement
+
+
+def _execute_verified_roundtrip(
+    request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
+    *,
+    expected_session_id: str,
+    overhead_target: Mapping[str, float],
+    sleep_target: Mapping[str, float],
+) -> list[dict[str, Any]]:
+    """Complete and measure Overhead -> Sleep without an initial Sleep write."""
+    legs: list[dict[str, Any]] = []
+    for label, path, payload, target in (
+        ("OVERHEAD", "/v1/go-pose",
+         {"name": "agent_start_overhead", "joint_only": True}, overhead_target),
+        ("SLEEP", "/v1/sleep", {"joint_only": True}, sleep_target),
+    ):
+        reply = request("POST", path, payload)
+        result = reply["result"]
+        if not result.get("accepted") or not result.get("completed"):
+            raise RuntimeError(f"{label} baseline motion did not complete")
+        if result.get("broker_session", {}).get("id") != expected_session_id:
+            raise RuntimeError(f"{label}: persistent broker session unexpectedly changed")
+        measured = request("GET", "/v1/state", None)["result"]
+        errors = _verify_measured_pose(
+            measured["joint_positions_rad"], target, label=f"{label} baseline",
+        )
+        legs.append({
+            "label": label, "request_id": reply["request_id"],
+            "joint_errors_deg": errors, "completed": True,
+        })
+        print(f"{label}: complete; measured pose verified.", flush=True)
+    return legs
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -216,26 +248,12 @@ def main(argv: list[str] | None = None) -> int:
         if input("Type ROUNDTRIP to move Overhead and back to Sleep: ").strip() != "ROUNDTRIP":
             raise PermissionError("operator declined Overhead/Sleep baseline")
 
-        for label, path, payload, target in (
-            ("OVERHEAD", "/v1/go-pose",
-             {"name": "agent_start_overhead", "joint_only": True}, overhead_target),
-            ("SLEEP", "/v1/sleep", {"joint_only": True}, sleep_target),
-        ):
-            reply = _request(url, token, "POST", path, payload)
-            result = reply["result"]
-            if not result.get("accepted") or not result.get("completed"):
-                raise RuntimeError(f"{label} baseline motion did not complete")
-            if result.get("broker_session", {}).get("id") != summary["broker_session"]["id"]:
-                raise RuntimeError(f"{label}: persistent broker session unexpectedly changed")
-            measured = _request(url, token, "GET", "/v1/state")["result"]
-            errors = _verify_measured_pose(
-                measured["joint_positions_rad"], target, label=f"{label} baseline",
-            )
-            summary["baseline_legs"].append({
-                "label": label, "request_id": reply["request_id"],
-                "joint_errors_deg": errors, "completed": True,
-            })
-            print(f"{label}: complete; measured pose verified.", flush=True)
+        summary["baseline_legs"] = _execute_verified_roundtrip(
+            lambda method, path, payload: _request(url, token, method, path, payload),
+            expected_session_id=summary["broker_session"]["id"],
+            overhead_target=overhead_target,
+            sleep_target=sleep_target,
+        )
 
         print(
             "The baseline Overhead -> Sleep round trip is complete. "
