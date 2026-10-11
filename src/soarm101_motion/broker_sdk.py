@@ -307,10 +307,16 @@ class SDKAgentExecutor:
             except BaseException as exc:
                 # Never re-open a silently disconnected/faulted transport on
                 # the next request. STOP remains possible on an existing arm.
-                if isinstance(exc, (
-                    CommunicationError, RobotConnectionError, HardwareFaultError,
-                    MotionTimeoutError, OSError, ConnectionError,
-                )):
+                if (
+                    isinstance(exc, (
+                        CommunicationError, RobotConnectionError, HardwareFaultError,
+                        MotionTimeoutError, OSError, ConnectionError,
+                    ))
+                    # An attempted STOP that cannot confirm HOLD leaves
+                    # physical state unknown even if its backend raised a
+                    # plain RuntimeError. Latch failure and revoke authority.
+                    or (action == "stop" and self._session is not None)
+                ):
                     self._fault(exc)
                 if self._trace is not None:
                     self._trace.mark("broker_action_error", action=action, error=repr(exc))
@@ -379,11 +385,28 @@ class SDKAgentExecutor:
             arm = self._session
             if arm is None:
                 raise RuntimeError("no connected SDK session to stop")
+            if getattr(arm, "is_connected", True) is False:
+                raise RobotConnectionError(
+                    "STOP/HOLD unverified: SDK device is disconnected"
+                )
             SDK_CAPABILITIES.dispatch("stop", arm, {})
+            # STOP/HOLD was attempted. Verify the device is still connected
+            # and not faulted before declaring completion. Never invent an
+            # encoder position from the last issued command.
+            state = arm.get_state()
+            if getattr(state, "connected", True) is False:
+                raise RobotConnectionError(
+                    "STOP/HOLD unverified: device disconnected during STOP"
+                )
+            if getattr(state, "faulted", False):
+                raise HardwareFaultError(
+                    "STOP/HOLD unverified: " +
+                    str(getattr(state, "fault_message", None) or "device is faulted")
+                )
             joints = dict(arm.get_joint_positions().positions)
             return {
                 "accepted": True, "completed": True, "action": "stop",
-                "holding": bool(arm.get_state().torque_enabled),
+                "holding": bool(state.torque_enabled),
                 "joint_positions_rad": joints,
             }
 
