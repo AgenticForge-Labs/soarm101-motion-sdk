@@ -4,12 +4,14 @@ DO NOT run unattended or inside OpenShell. This is a supervised mechanical
 experiment, not a safety-rated emergency stop. Keep the hardware power cutoff
 in reach throughout. No agent is permitted to invoke or parameterize it.
 
-Start with an unloaded, secured, calibrated SO-ARM101; require a human-issued
-`soarm101 agent arm --minutes 30` lease. The script moves to the familiar
-calibrated Sleep pose, waits for a SECOND typed confirmation, starts a tested
-Overhead saved-pose replay through authenticated HTTP, observes the SDK's
-active-motion flag, then sends independent HTTP STOP. It never resumes
-movement after STOP.
+Start with an unloaded, secured, calibrated SO-ARM101 already physically at
+Sleep; require a human-issued `soarm101 agent arm --minutes 30` lease.
+The script verifies the measured Sleep joints without moving, completes
+Overhead -> Sleep through the restricted HTTP broker, then obtains a SECOND
+typed confirmation and interrupts a separate Overhead movement with STOP.
+Because STOP revokes motion authority, the arm may finish between Sleep and
+Overhead; returning it to Sleep after the test requires a separate human-
+authorized recovery. It never rearms or resumes motion automatically.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from persistent_broker_motion_trace import _preflight_saved_poses, _request
@@ -30,6 +33,57 @@ from soarm101_motion import SOARM101, SOARM101Config
 from soarm101_motion.broker import AgentMotionRates, RobotBrokerHTTPServer, RobotBrokerService
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile
+from soarm101_motion.poses import PoseLibrary
+
+
+# The trial must begin from a measured posture reasonably close to the
+# calibration-relative Sleep target, not move there silently. A genuine
+# Overhead/Sleep transition must also have meaningful joint travel.
+START_POSE_TOLERANCE_DEG = 5.0
+MIN_OVERHEAD_SEPARATION_DEG = 10.0
+
+
+def _verify_measured_pose(
+    measured: Mapping[str, float],
+    expected: Mapping[str, float],
+    *,
+    label: str,
+    tolerance_deg: float = START_POSE_TOLERANCE_DEG,
+) -> dict[str, float]:
+    """Fail before issuing the next move if measured joints mismatch."""
+    errors: dict[str, float] = {}
+    for joint, target in expected.items():
+        if joint not in measured:
+            raise ValueError(f"{label}: measured joint {joint} is missing")
+        actual = float(measured[joint])
+        if not math.isfinite(actual) or not math.isfinite(float(target)):
+            raise ValueError(f"{label}: nonfinite joint position for {joint}")
+        errors[joint] = abs(math.degrees(actual - float(target)))
+    if not errors:
+        raise ValueError(f"{label}: no pose joints to verify")
+    if max(errors.values()) > tolerance_deg:
+        raise RuntimeError(
+            f"{label}: not within {tolerance_deg:g} deg of expected pose "
+            f"(largest error {max(errors.values()):.2f} deg); "
+            "reposition manually and restart; do not auto-correct"
+        )
+    return errors
+
+
+def _verify_meaningful_overhead_travel(
+    sleep: Mapping[str, float], overhead: Mapping[str, float],
+) -> float:
+    """Reject an accidental identical saved pose before motor movement."""
+    if set(sleep) != set(overhead):
+        raise ValueError("Sleep and Overhead targets have different arm joints")
+    if not sleep:
+        raise ValueError("Sleep/Overhead targets contain no arm joints")
+    displacement = max(abs(math.degrees(float(overhead[j] - sleep[j]))) for j in sleep)
+    if not math.isfinite(displacement) or displacement < MIN_OVERHEAD_SEPARATION_DEG:
+        raise RuntimeError(
+            "saved Overhead pose is too close to Sleep for this STOP trial"
+        )
+    return displacement
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     server_thread.start()
     summary: dict[str, Any] = {
         "kind": "persistent_broker_stop_qualification", "passed": False,
+        "initial_pose_assumed": "Sleep, verified from measured joint angles",
+        "automatic_recovery_after_stop": False,
         "robot_id": args.robot_id, "port": args.port,
         "speed_deg_s": args.speed_deg_s,
         "acceleration_deg_s2": args.acceleration_deg_s2,
@@ -118,16 +174,61 @@ def main(argv: list[str] | None = None) -> int:
         if not calibration_id or calibration_id == "simulation":
             raise PermissionError("requires measured physical motor calibration")
         _preflight_saved_poses(args.robot_id, calibration_id)
+        sdk_arm = executor._session
+        if sdk_arm is None:
+            raise RuntimeError("physical SDK connection disappeared")
+        sleep_target = sdk_arm.get_sleep_joint_positions()
+        overhead_target = PoseLibrary(args.robot_id).require("agent_start_overhead").joints
+        summary["start_sleep_errors_deg"] = _verify_measured_pose(
+            state["joint_positions_rad"], sleep_target, label="initial Sleep",
+        )
+        summary["overhead_separation_deg"] = _verify_meaningful_overhead_travel(
+            sleep_target, overhead_target,
+        )
         summary["calibration_id"] = calibration_id
         summary["broker_session"] = state["broker_session"]
         if state["broker_session"]["sdk_connect_count"] != 1:
             raise RuntimeError("unexpected SDK connect count")
+        summary["route"] = [
+            "verify measured Sleep (no movement)", "Overhead (complete)",
+            "Sleep (complete)", "Overhead (STOP while moving)",
+        ]
+        summary["baseline_legs"] = []
         print("Clear arm workspace; remove payload; keep power cutoff reachable.", flush=True)
+        print("Starting pose verified as Sleep; no initial Sleep command will be sent.", flush=True)
+        print("Baseline route: Sleep -> Overhead -> Sleep, then interrupt Overhead.", flush=True)
         print("This is NOT an emergency-stop certification.", flush=True)
-        if input("Type PREPARE to move to calibrated Sleep: ").strip() != "PREPARE":
-            raise PermissionError("operator declined Sleep setup")
-        _request(url, token, "POST", "/v1/sleep", {"joint_only": True})
-        if input("Type INTERRUPT to test STOP during overhead pose movement: ").strip() != "INTERRUPT":
+        if input("Type ROUNDTRIP to move Overhead and back to Sleep: ").strip() != "ROUNDTRIP":
+            raise PermissionError("operator declined Overhead/Sleep baseline")
+
+        for label, path, payload, target in (
+            ("OVERHEAD", "/v1/go-pose",
+             {"name": "agent_start_overhead", "joint_only": True}, overhead_target),
+            ("SLEEP", "/v1/sleep", {"joint_only": True}, sleep_target),
+        ):
+            reply = _request(url, token, "POST", path, payload)
+            result = reply["result"]
+            if not result.get("accepted") or not result.get("completed"):
+                raise RuntimeError(f"{label} baseline motion did not complete")
+            if result.get("broker_session", {}).get("id") != summary["broker_session"]["id"]:
+                raise RuntimeError(f"{label}: persistent broker session unexpectedly changed")
+            measured = _request(url, token, "GET", "/v1/state")["result"]
+            errors = _verify_measured_pose(
+                measured["joint_positions_rad"], target, label=f"{label} baseline",
+            )
+            summary["baseline_legs"].append({
+                "label": label, "request_id": reply["request_id"],
+                "joint_errors_deg": errors, "completed": True,
+            })
+            print(f"{label}: complete; measured pose verified.", flush=True)
+
+        print(
+            "The baseline Overhead -> Sleep round trip is complete. "
+            "Next STOP will interrupt a NEW Overhead movement. "
+            "The arm may remain between poses afterward and will NOT auto-return.",
+            flush=True,
+        )
+        if input("Type INTERRUPT to test STOP during overhead movement: ").strip() != "INTERRUPT":
             raise PermissionError("operator declined STOP test")
 
         def move():
@@ -146,9 +247,6 @@ def main(argv: list[str] | None = None) -> int:
         # Observe only the host motion-controller state, not the HTTP client
         # thread. Avoid SOARM101.is_moving here: that queries each physical
         # servo and could contend with motion/STOP packet I/O.
-        sdk_arm = executor._session
-        if sdk_arm is None:
-            raise RuntimeError("physical SDK connection disappeared")
         deadline = time.monotonic() + 10.0
         while not sdk_arm.motion.is_moving and not interrupted_finished.is_set():
             if time.monotonic() > deadline:
