@@ -7,8 +7,11 @@ a physical qualification procedure, not completed qualification,
 without changing the public broker: it uses the
 restricted existing broker profile and per-run localhost token.
 It verifies measured initial Sleep without moving, performs a complete
-Overhead -> Sleep baseline, and interrupts a *subsequent* Overhead movement
-with independent authenticated STOP. The human must confirm the arm is
+Overhead -> Sleep baseline and starts a *subsequent* Overhead movement.
+The operator then presses ENTER during motion to request independent
+authenticated STOP. After a verified stationary HOLD, an explicit
+`REARM` confirmation may issue a new short calibration-bound lease for
+a **new** joint-only Overhead movement; no cancelled trajectory resumes. The human must confirm the arm is
 stationary; JSONL motor/event
 traces and a summary preserve timing and denied completion. This script
 cannot run inside OpenShell or without an interactive operator terminal.
