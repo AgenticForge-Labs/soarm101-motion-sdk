@@ -1,6 +1,6 @@
 # SO-ARM101 Motion SDK
 
-## PR #89 — one-owner SDK session lifecycle (unmerged)
+## PR #89 — one-owner SDK session lifecycle (merged)
 
 The staged persistent-SDK executor now has explicit lifecycle states
 (`new`, `open`, `faulted`, `closing`, `closed`). Once a device
@@ -12,7 +12,7 @@ fault/shutdown until transport closure. Closing is terminal and serialized
 against other device operations; serial-connect error paths clean up a
 partially opened port before releasing the advisory lock.
 
-This change is being tested on PR #89 and **does not enable native SDK
+This change merged in PR #89 and **does not enable native SDK
 physical control from the standard broker**. Normal `soarm101-broker`
 and OpenShell MCP still use bounded CLI subprocesses; the opt-in public SDK
 preview is still simulation/read-only. Cooperative Linux device locks
