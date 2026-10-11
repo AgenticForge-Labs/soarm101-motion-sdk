@@ -41,7 +41,10 @@ authenticated STOP independently during measured active motion. It
 requires an explicit human stationary check. It cannot guarantee that a failed USB/Feetech transport
 will physically brake or hold the mechanism. Keep the hardware cutoff
 within immediate reach and report partial or timed-out STOP as a **failed**
-qualification, not success. Never use this as an emergency-stop controller.
+qualification, not success. Because STOP revokes arming, the final arm
+position may remain between Sleep and Overhead; no automatic rearming
+or return-to-Sleep is allowed. A separate supervised human recovery
+is required. Never use this as an emergency-stop controller.
 
 The Feetech serial transport uses a cooperative lock, not a separate
 safety channel. STOP can be delayed behind packet I/O or blocked by a
