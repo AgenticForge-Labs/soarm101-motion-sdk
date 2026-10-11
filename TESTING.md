@@ -37,8 +37,7 @@ checks every measured arm joint against the calibrated, SDK-generated
 Sleep target (5° tolerance) and refuses to auto-correct a mismatch. It
 requires a calibrated saved Overhead pose meaningfully distinct from
 Sleep (at least one joint differs by 10°), a human-issued lease,
-physical TTY, and `ROUNDTRIP`, `INTERRUPT`, and `STATIONARY`
-confirmations. The default 8 deg/s, 25 deg/s², 20 Hz are **conservative
+physical TTY, and `ROUNDTRIP`, `START`, a **manual ENTER while moving**, and `STATIONARY` confirmations. The default 8 deg/s, 25 deg/s², 20 Hz are **conservative
 test candidates**, not proven loaded-arm capabilities.
 
 ```bash
