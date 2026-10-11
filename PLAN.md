@@ -34,6 +34,40 @@ fault injection, native camera parity and 2 mm Cartesian qualifications belong
 to proposed #90–#92. PR #89 merged into `main` at `77b28edba0f2beb129c031e6adf11513d0e240fe`
 after Python 3.10/3.12 CI and operator-reported read-only local checks.
 
+## 2026-10-11 physical STOP trace adjudication — FAILED safety gate
+
+User-supplied `stop-20261011-113611.jsonl`, `*.broker-events.jsonl`,
+and `*.summary.json` document a real unattended 1-second post-STOP
+joint drift despite HTTP 200 / `completed=true`. The operator correctly
+reported acceleration and a subsequent return toward the commanded hold
+posture. Broker STOP was requested at trace +62.899 s, ended at +62.922 s
+(~24 ms), but the elbow moved from about **82.8°** then to **64.4°** by
++63.934 s (**18.4° further motion**), while the shoulder moved ~5.0° and
+the model-derived TCP physical height changed from **51.1 to 111.6 mm**.
+The position-latch raw writes at +62.907, +62.910 and +62.913 s all used
+`speed_raw=1, acceleration_raw=1` and position ~2990 ticks. The last
+ordinary streamed goal was +62.896 s, speed 0 / acceleration 254.
+**No new ordinary motion command appears in the intervening second.**
+By +92.13 s before the operator's separately authorized move, elbow
+feedback was again ~83.3°: this suggests a motion reversal around the
+latched position, but sparse feedback cannot determine the peak or exact
+physical cause. Motor acceleration/braking dynamics at the servo are
+**suspected**, not proven. The previous trial's `passed=true` result
+is explicitly REVOKED as a physical STOP safety qualification.
+
+Remediation in the same open PR: fail-closed physical STOP acceptance:
+sample measured joint positions over 1.5 s after latch, reject >1°
+post-latch drift or ongoing motor `Moving`/fault/torque loss, latch
+`faulted` and keep authority revoked; expose stability evidence and
+HTTP failure rather than claiming `completed=true`. Do not repeat a
+failed/unverified hardware STOP command automatically, or offer the
+post-STOP REARM path on failure. Fake-transport tests replay the
+observed elbow displacement. This **detects** unsafe HOLD; it does
+not repair or certify servo braking. Keep PR #90 draft, do not
+activate native production motor paths or resume real STOP qualification
+until Feetech STOP register behavior (especially 1/1 vs prior 0/254)
+has been investigated with local Codex and a physical safety plan.
+
 ## PR #90 — Independent STOP response and fail-closed HOLD (open, unmerged)
 
 Built on the #89 terminal broker session, this PR reinforces the existing
