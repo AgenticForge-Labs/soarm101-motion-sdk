@@ -392,6 +392,17 @@ class RobotBrokerService:
                         ):
                             raise PermissionError("SDK preview currently permits only read-only routes")
                         result = self.executor.execute(action, request)
+                        # The SDK may return a completed result while an
+                        # independent STOP is racing with its final settle or
+                        # HOLD. The broker must never acknowledge that stale
+                        # result as a successful motion after STOP admission.
+                        # This is the response linearization point.
+                        with self._sdk_epoch_lock:
+                            if admitted_epoch != self._sdk_stop_epoch:
+                                raise BrokerCommandError(
+                                    "request interrupted by a newer STOP; "
+                                    "completion is not confirmed"
+                                )
                     else:
                         result = self.executor.run(arguments)
         except (BrokerCommandError, RuntimeError, ValueError, KeyError,
