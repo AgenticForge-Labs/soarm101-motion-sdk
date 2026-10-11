@@ -97,9 +97,30 @@ def test_stop_attempts_arm_and_reports_tool_failure(monkeypatch) -> None:
 
     monkeypatch.setattr(arm.motion, "stop", arm_stop)
     monkeypatch.setattr(arm, "_stop_tool", failed_tool_stop)
+    # A genuinely active tool still needs independent cancellation.
+    arm.tool._active_handle = SimpleNamespace(done=False)
     with pytest.raises(RuntimeError, match="gripper STOP failure"):
         arm.stop()
     assert actions == ["arm", "tool"]
+
+
+def test_joint_only_stop_does_not_repeat_backend_hold_for_idle_gripper(
+    monkeypatch,
+) -> None:
+    arm = SOARM101.simulated()
+    calls = []
+
+    def joint_stop(*, wait=True):
+        calls.append("motion")
+
+    def tool_stop(*, wait=True):
+        calls.append("tool")
+
+    monkeypatch.setattr(arm.motion, "stop", joint_stop)
+    monkeypatch.setattr(arm, "_stop_tool", tool_stop)
+    assert not arm.tool.is_moving
+    arm.stop()
+    assert calls == ["motion"]
 
 
 def test_native_broker_rejects_inflight_false_success_after_stop(tmp_path, monkeypatch) -> None:
