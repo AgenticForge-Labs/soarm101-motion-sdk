@@ -17,6 +17,31 @@ honor the cooperative lock. A failed software HOLD must remain observable.
 
 
 
+## 2026-10-11 real STOP/HOLD instability — physical acceptance FAILED
+
+The attended trace from `stop-20261011-113611` showed the broker
+acknowledging STOP in 24 ms while the physical elbow continued moving
+**18.4° within the following second**, with no intervening new streamed
+motion commands. The prior trial's success flag was a **false positive**:
+torque-enabled/connected and an immediate encoder read are insufficient
+to establish physical stationary HOLD. The low-level Feetech STOP
+currently writes the measured position at `speed_raw=1`,
+`acceleration_raw=1`, repeatedly; the ordinary 20 Hz trajectory used
+0/254. These settings are a suspected mechanical/servo response problem,
+not a confirmed cause. Do not change them speculatively for live hardware.
+
+Draft PR #90 now samples post-STOP encoder stability for 1.5 seconds
+and refuses STOP success if drift exceeds 1° or the backend still
+reports movement, fault, disconnect, or disabled torque. An unverified
+HOLD must fault the SDK session and revoke motion authority. The
+operator-only qualification cannot automatically issue a second
+STOP latch or permit REARM after failure. **This mitigation detects a
+failure but does not guarantee physical braking, a safe latency, or
+stability after the observation window.** Do not repeat in-flight
+STOP tests on the real arm until the underlying actuator response is
+investigated under a controlled, operator-approved procedure with
+physical cutoff immediately accessible.
+
 ## PR #90 independent software STOP qualification (open, not hardware validated)
 
 The SDK STOP operation must attempt both arm-controller cancellation/HOLD and
