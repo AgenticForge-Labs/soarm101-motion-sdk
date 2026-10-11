@@ -1,5 +1,45 @@
 # Testing
 
+## PR #90 first low-energy STOP gate — new default, hardware not yet qualified
+
+The operator-only trial defaults to `--trial short`. It verifies all
+Sleep joints by encoder first, then sends exactly one authenticated
+`POST /v1/joint` for **shoulder_pan +8°** at default 2°/s and 10°/s²
+(hard maxima 3°/s and 15°/s²). The fixed target must be at least
+5° inside calibrated joint limits. No saved Overhead pose, baseline
+roundtrip, gripper action, automatic recovery or post-STOP REARM is used.
+
+After direct human `START`, press ENTER **while moving** to call independent
+STOP. The broker must confirm physical encoder settling across 1.5 seconds,
+the worker must return interrupted failure, and another readback after
+1 additional second must not drift more than 1° from the latched
+position. Only then may the operator type `STATIONARY`. Success
+does **not** certify an emergency stop, servo braking distance or
+unloaded stability beyond the sampled interval.
+
+```bash
+cd ~/AgenticForge/soarm101-motion-sdk
+git switch feature/broker-independent-stop-faults
+git pull --ff-only
+source .venv/bin/activate
+ruff check .
+python -m pytest --no-cov -q tests/test_broker_stop_trial.py tests/test_stop_ownership.py tests/test_broker_stop_faults.py
+python -m pytest --no-cov -q
+# Only after software checks, deliberate operator approval and bench safety review:
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_stop_trial.py --trial short \
+  --port /dev/ttyACM1 --robot-id so101 \
+  --output "$HOME/soarm-motion-tests/short-stop-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+Do not repeat the previous large-angle STOP test to troubleshoot
+braking. Never run this from a sandbox, unattended Codex or CI.
+Stop the trial on any unanticipated motion, warning or incomplete HOLD,
+and do not issue REARM. Save the trace, broker events, JSON summary
+and human observations. This is **a candidate protocol for review**,
+not authorization to move an unsafe or unsupported arm.
+
+
 ## STOP qualification blocker from supplied 2026-10-11 logs
 
 **Do not repeat physical STOP-during-motion or REARM tests on the arm yet.**
