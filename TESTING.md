@@ -8,6 +8,7 @@ Hardware-free software verification at the exact PR SHA:
 ruff check .
 python -m pytest --no-cov -q \
   tests/test_broker_stop_faults.py \
+  tests/test_broker_stop_trial.py \
   tests/test_broker_sdk.py \
   tests/test_broker_session_lifecycle.py \
   tests/test_feetech_backend.py
