@@ -108,16 +108,24 @@ braking algorithm: 0 allows maximum internal servo speed, and the
 manufacturer-reseller information about maximum supported acceleration
 varies. Neither code review nor simulated tests can demonstrate safe
 deceleration, physical stop distance, or holding under actual load.
-The redundant multi-writer STOP sequence also remains a blocker.
+The duplicate software STOP paths have now been narrowed in this
+draft branch: controller-owned cancellation suppresses the worker's
+fallback write, and SOARM101.stop() does not call idle gripper STOP after
+a successful arm HOLD. An independently cancelled worker still issues
+its own fallback. These paths are covered by hardware-free tests, but
+their combined physical timing remains unqualified.
 
 ## Resolution gates
 
 1. Keep #90 in draft and normal production broker CLI-backed.
-2. Make all arm/tool cancellation paths converge to **one authoritative
-   backend STOP transaction per accepted operator STOP** while preserving
-   independent out-of-band cancellation, exceptional fallback STOP,
-   and a fault on any incomplete HOLD. Test concurrency with a fake
-   Feetech packet handler and trace event provenance.
+2. Verify the branch's new source-level STOP deduplication in full
+   software tests and, later, guarded hardware traces: controller-issued
+   STOP owns the cancellation fallback; idle-gripper STOP does not send
+   another whole-arm latch. Exceptional direct handle cancellation
+   retains its fallback hold. Faulted SDK cleanup closes transport
+   without silently issuing new actuator goals. Any incomplete HOLD
+   is still a failure. A true hardware single-latch claim remains
+   unverified until an attended, controlled test.
 3. Read the actual motor model/firmware, Operating_Mode, Goal_Position,
    Goal_Velocity, Acceleration, Maximum_Acceleration, Present_Velocity,
    Present_Load, Present_Current, Status and Moving (read-only, no torque
