@@ -50,11 +50,15 @@ rather than unverified last-commanded positions. A successful simulated test
 is not a physical STOP guarantee.
 
 The reusable `examples/persistent_broker_stop_trial.py` adds a
-separate trusted-host qualification: typed human PREPARE/INTERRUPT/STATIONARY
-gates, fixed bounded HTTP broker, known saved poses, observed active motion,
-independent STOP, finite HTTP timeout, trace and event/summary evidence,
-and **no subsequent motion**. Automated test
-`tests/test_broker_stop_trial.py` checks input/unattended rejection only,
+separate trusted-host qualification: **verify measured Sleep without
+commanding it**, complete Overhead -> Sleep and verify both positions,
+then interrupt a new Overhead leg via independent STOP. Human
+ROUNDTRIP/INTERRUPT/STATIONARY gates, immutable bounded HTTP broker,
+finite STOP timeout, and trace/event/summary evidence remain active.
+STOP intentionally leaves the arm between poses; a fresh human lease
+is required for any later return to Sleep. Automated test
+`tests/test_broker_stop_trial.py` checks no initial no-op Sleep,
+measured pose tolerances, command order, and unattended rejection,
 never serial activity. Actual physical acceptance remains operator-run.
 
 Software gates: Ruff, `tests/test_broker_stop_faults.py`, existing
