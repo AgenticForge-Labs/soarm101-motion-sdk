@@ -1,5 +1,14 @@
 # Changelog
 
+- Stage PR #90's default supervised short STOP profile: a single
+  calibrated-inset +8° pan command from encoder-verified Sleep at
+  narrow rates, manual ENTER interrupt, verified hold plus a later
+  stability readback. No baseline roundtrip or post-STOP REARM.
+  Preserve historical Overhead test behind explicit opt-in.
+  Suppress a duplicate servo latch from successful STOP teardown.
+  This remains draft and physically unqualified.
+
+
 - Correct a **real 2026-10-11 physical STOP false positive**: an
   acknowledged STOP was followed by 18.4° elbow movement in ~1 s with
   no new host movement command. In the staged SDK broker, sample
