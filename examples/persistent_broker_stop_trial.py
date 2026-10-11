@@ -453,6 +453,9 @@ def main(argv: list[str] | None = None) -> int:
             print("No further motion requested. Arm remains torque-held.", flush=True)
     except BaseException as exc:
         failure = repr(exc)
+        # Preserve a separately validated STOP but never report the whole
+        # requested trial as passed when a selected recovery subsequently fails.
+        summary["passed"] = False
         print(f"STOP qualification FAILED/INTERRUPTED: {failure}", flush=True)
         # After failure, try STOP once more; report any incomplete HOLD.
         # This is not a substitute for human-accessible power cutoff.
