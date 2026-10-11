@@ -62,6 +62,10 @@ and the SDK is no longer moving. It records the broker
 events, motor trace and summary. After 1 second it requires an explicit
 human observation of stationary posture before it can mark the trial
 passed. A timeout, readback or HOLD fault is **not** STOP success.
+**The STOP-interrupted Overhead leg intentionally ends between Sleep and
+Overhead.** STOP revokes authority: the script must not rearm itself or
+automatically finish moving to Sleep. Inspect the held arm and plan a
+separate, explicitly human-authorized recovery to Sleep if desired.
 Power cutoff must remain immediately accessible; discontinue on any
 unexpected behavior. Additional manual visual/trace review is required
 before merge regardless of script exit status.
