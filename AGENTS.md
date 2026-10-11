@@ -1,5 +1,16 @@
 # Agent instructions
 
+**Draft PR #90, short STOP gate:** The attended physical trial now
+defaults to a fixed +8° shoulder-pan move from measured Sleep,
+operator-initiated STOP and measured post-HOLD stability checks.
+There is no preliminary Overhead roundtrip or post-STOP REARM.
+This is software-only staged code until an operator-approved, supervised
+low-energy bench run confirms it. Retain the previous 18.4° unsafe STOP
+trace as a failed hardware gate, keep physical cutoff accessible, and
+never run robot motion via autonomous agents or CI. Full Overhead
+interruption requires `--trial overhead` and is not qualified.
+
+
 This repository is used in two different ways: agents may **develop the SDK**, or they may
 **operate and inspect an SO-ARM101 through the SDK/CLI**. Keep those roles separate. Code
 changes require development discipline; robot use requires conservative hardware behavior.
