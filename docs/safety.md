@@ -33,10 +33,12 @@ readback and encoder measurements, not cached or commanded joint values.
 The attended physical STOP trial is a separately invoked trusted-host
 script, `examples/persistent_broker_stop_trial.py`; it has no unattended
 `--yes` path and refuses non-TTY invocations before connecting. It
-uses only known calibration-bound Sleep/Overhead targets under the
-restricted fixed profile, sends authenticated STOP through an independent
-HTTP request after it observes movement, and requires an explicit human
-stationary check. It cannot guarantee that a failed USB/Feetech transport
+verifies the actual Sleep starting posture from encoder readback,
+refuses to auto-move to Sleep, then completes and measures a joint-only
+Overhead -> Sleep baseline through the fixed restricted profile. Only
+after the baseline passes does it start a new Overhead leg and send
+authenticated STOP independently during measured active motion. It
+requires an explicit human stationary check. It cannot guarantee that a failed USB/Feetech transport
 will physically brake or hold the mechanism. Keep the hardware cutoff
 within immediate reach and report partial or timed-out STOP as a **failed**
 qualification, not success. Never use this as an emergency-stop controller.
