@@ -277,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         "summary": str(summary_path),
     }
     failure: str | None = None
+    stop_attempted = False
     interrupted_reply: dict[str, Any] = {}
     interrupted_finished = threading.Event()
     worker: threading.Thread | None = None
@@ -382,6 +383,7 @@ def main(argv: list[str] | None = None) -> int:
         summary["stop_trigger"] = "human_pressed_enter_during_active_motion"
         summary["stop_requested_monotonic_s"] = stop_start
         try:
+            stop_attempted = True
             stop = _request(url, token, "POST", "/v1/stop", {}, timeout_s=5.0)
         finally:
             summary["stop_response_duration_s"] = time.monotonic() - stop_start
@@ -457,14 +459,29 @@ def main(argv: list[str] | None = None) -> int:
         # requested trial as passed when a selected recovery subsequently fails.
         summary["passed"] = False
         print(f"STOP qualification FAILED/INTERRUPTED: {failure}", flush=True)
-        # After failure, try STOP once more; report any incomplete HOLD.
-        # This is not a substitute for human-accessible power cutoff.
-        try:
-            summary["failure_stop"] = _request(
-                url, token, "POST", "/v1/stop", {}, timeout_s=5.0,
-            )["result"]
-        except Exception as stop_exc:
-            summary["failure_stop_error"] = repr(stop_exc)
+        # Do not silently send a SECOND latch after an already attempted
+        # STOP that returned unverified HOLD. The 2026-10-11 trace showed
+        # major physical overshoot *after* successful 1/1 servo latch writes.
+        # A blind repeated latch could aggravate the motion and conceal
+        # the earliest STOP failure. Keep hardware power cutoff accessible.
+        if stop_attempted:
+            summary["failure_stop_retry"] = "prohibited_after_first_attempt"
+            print(
+                "Original STOP may not have physically held the arm. "
+                "No automatic retry or REARM; use the accessible physical "
+                "power cutoff if unsafe and inspect hardware.",
+                flush=True,
+            )
+        elif worker is not None and worker.is_alive():
+            # If motion was launched but STOP was never requested (e.g.
+            # operator missed the window), try the ONE allowed STOP here.
+            try:
+                stop_attempted = True
+                summary["failure_stop"] = _request(
+                    url, token, "POST", "/v1/stop", {}, timeout_s=5.0,
+                )["result"]
+            except Exception as stop_exc:
+                summary["failure_stop_error"] = repr(stop_exc)
     finally:
         if worker is not None:
             worker.join(timeout=2)
