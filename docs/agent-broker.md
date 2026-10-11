@@ -4,9 +4,10 @@
 
 The operator-run `examples/persistent_broker_stop_trial.py` now
 qualifies this path without changing the public broker: it uses the
-restricted existing broker profile, a per-run localhost token and one
-measured active saved-pose movement, then issues independent authenticated
-STOP. The human must confirm the arm is stationary; JSONL motor/event
+restricted existing broker profile and per-run localhost token.
+It verifies measured initial Sleep without moving, performs a complete
+Overhead -> Sleep baseline, and interrupts a *subsequent* Overhead movement
+with independent authenticated STOP. The human must confirm the arm is stationary; JSONL motor/event
 traces and a summary preserve timing and denied completion. This script
 cannot run inside OpenShell or without an interactive operator terminal.
 
