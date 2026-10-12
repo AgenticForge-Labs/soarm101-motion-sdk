@@ -434,9 +434,15 @@ def main(argv: list[str] | None = None) -> int:
         if sdk_arm is None:
             raise RuntimeError("physical SDK connection disappeared")
         sleep_target = sdk_arm.get_sleep_joint_positions()
-        summary["start_sleep_errors_deg"] = _verify_measured_pose(
-            state["joint_positions_rad"], sleep_target, label="initial Sleep",
+        measured_joints = state["joint_positions_rad"]
+        errors = _pose_joint_errors(
+            measured_joints, sleep_target, label="initial Sleep comparison",
         )
+        summary["start_sleep_errors_deg"] = errors
+        summary["initial_joint_positions_deg"] = {
+            joint: math.degrees(float(position))
+            for joint, position in measured_joints.items()
+        }
         summary["calibration_id"] = calibration_id
         summary["broker_session"] = state["broker_session"]
         if state["broker_session"]["sdk_connect_count"] != 1:
@@ -444,18 +450,60 @@ def main(argv: list[str] | None = None) -> int:
 
         summary["baseline_legs"] = []
         print("Clear arm workspace; remove payload; keep power cutoff reachable.", flush=True)
-        print("Starting pose verified as Sleep; no initial Sleep command will be sent.", flush=True)
         print("This is NOT an emergency-stop certification.", flush=True)
+        print("Measured starting joints versus calculated Sleep (degrees):", flush=True)
+        for joint, error in errors.items():
+            print(
+                f"  {joint:16s} actual={math.degrees(measured_joints[joint]):+8.2f}"
+                f" Sleep={math.degrees(sleep_target[joint]):+8.2f}"
+                f" difference={error:6.2f}",
+                flush=True,
+            )
         if args.trial == "short":
             # The trial uses a fixed single-joint broker route, not an
             # unchecked raw servo command or operator-selected direction.
             # The canonical SDK is still responsible for motion validation.
             limits = sdk_arm.motion._effective_limits()
             summary["short_preflight"] = _preflight_short_joint(
-                state["joint_positions_rad"], limits,
+                measured_joints, limits,
             )
+            if args.short_start == "sleep":
+                _verify_measured_pose(
+                    measured_joints, sleep_target, label="initial Sleep",
+                )
+                print("Verified measured Sleep; no initial movement.", flush=True)
+            else:
+                # The agent-arm CLI enables torque and HOLD at current encoder
+                # positions; it does not park the arm in Sleep. A small pan
+                # qualification may start from another pose only after
+                # calibrated limit checks and a separate physical operator
+                # confirmation of the swept volume and support/clearance.
+                hardware = sdk_arm.get_state()
+                if (
+                    not hardware.connected or hardware.faulted
+                    or not hardware.torque_enabled or hardware.moving
+                    or sdk_arm.motion.is_moving
+                ):
+                    raise RuntimeError(
+                        "short measured start requires a stationary, healthy torque HOLD"
+                    )
+                print(
+                    "Measured-start experiment, NOT a Sleep posture. "
+                    "Inspect the whole arm and the full +8 degree pan swept "
+                    "volume for clearance, cables, floor/contact and base "
+                    "stability. No motion has been commanded by this script.",
+                    flush=True,
+                )
+                if input(
+                    "Type MEASURED to confirm clearance and authorize the "
+                    "measured starting posture: "
+                ).strip() != "MEASURED":
+                    raise PermissionError(
+                        "operator declined measured-start physical preflight"
+                    )
+                summary["measured_start_operator_confirmed"] = True
             summary["route"] = [
-                "verify measured Sleep (no movement)",
+                f"verify {args.short_start} starting posture (no movement)",
                 "shoulder_pan +8 deg (manual STOP while moving)",
             ]
             movement_path = "/v1/joint"
@@ -470,6 +518,11 @@ def main(argv: list[str] | None = None) -> int:
                 flush=True,
             )
         else:
+            # Preserve the historical Sleep-only gate for the larger route.
+            _verify_measured_pose(
+                measured_joints, sleep_target, label="initial Sleep",
+            )
+            print("Verified measured Sleep; no initial movement.", flush=True)
             # The original higher-energy characterization is preserved but
             # requires an explicit opt-in --trial overhead.
             overhead_pose = PoseLibrary(args.robot_id).require("agent_start_overhead")
