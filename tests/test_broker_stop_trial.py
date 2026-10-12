@@ -432,7 +432,7 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
     short = trial._physical_trial_profile("short")
     assert short.allowed_tools == frozenset({
         "robot_health", "robot_capabilities", "robot_state",
-        "jog_joint", "stop",
+        "sleep", "jog_joint", "stop",
     })
     assert short.max_joint_delta_deg == PHYSICAL_SHORT_STOP_DELTA_DEG == 8.0
 
@@ -461,6 +461,8 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
     for path, payload in [
         ("/v1/go-pose", {"name": "agent_start_overhead"}),
         ("/v1/sleep", {}),
+        ("/v1/sleep", {"joint_only": False}),
+        ("/v1/sleep", {"joint_only": True, "target": "hijack"}),
         ("/v1/jog", {"x_mm": 2.0}),
         ("/v1/gripper", {"target": "open"}),
     ]:
@@ -480,14 +482,27 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
         "joint": PHYSICAL_SHORT_STOP_JOINT,
         "delta_deg": PHYSICAL_SHORT_STOP_DELTA_DEG,
     }
+    # The exact pan command is never admitted BEFORE a canonical Sleep.
+    assert service.dispatch("POST", "/v1/joint", exact).status == 409
+    assert called == []
+    prepared = service.dispatch(
+        "POST", "/v1/sleep", {"joint_only": True},
+    )
+    assert prepared.status == 200
+    assert called[0][0] == "sleep"
+    assert called[0][1]["joint_only"] is True
+    assert service.dispatch(
+        "POST", "/v1/sleep", {"joint_only": True},
+    ).status == 409  # no repeat
     accepted = service.dispatch("POST", "/v1/joint", exact)
     assert accepted.status == 200
     assert accepted.body["ok"] is True
-    assert len(called) == 1
-    assert called[0][0] == "joint"
-    assert all(called[0][1][key] == value for key, value in exact.items())
-    assert called[0][1]["speed_deg_s"] == 8.0
-    assert called[0][1]["acceleration_deg_s2"] == 25.0
+    assert service.dispatch("POST", "/v1/joint", exact).status == 409
+    assert len(called) == 2
+    assert called[1][0] == "joint"
+    assert all(called[1][1][key] == value for key, value in exact.items())
+    assert called[1][1]["speed_deg_s"] == 8.0
+    assert called[1][1]["acceleration_deg_s2"] == 25.0
     assert executor.connection_count == 0
     executor.close()
 
@@ -514,7 +529,7 @@ def test_physical_trial_broker_still_rejects_widened_short_profiles(
         {"limits": {}},
         {"limits": {"max_joint_delta_deg": 20.0}},
         {"tools": sorted(set(short.allowed_tools) | {"go_pose"})},
-        {"tools": sorted(set(short.allowed_tools) | {"sleep"})},
+        {"tools": sorted(set(short.allowed_tools) | {"move_gripper"})},
     ):
         document = short.as_dict()
         document.update(changes)
