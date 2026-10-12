@@ -12,7 +12,9 @@ request result and whether actual physical encoder settling was verified.
 Read-only runs never issue a STOP/motor command on cleanup.
 
 The legacy CLI-backed broker now revokes the agent lease on STOP
-admission, so a new CLI tool cannot acquire stale authority. However,
+admission, so a new CLI tool cannot acquire stale authority. The
+physical CLI STOP also refuses torque-off/faulted hardware instead of
+silently re-enabling the motors or writing an extra 1/1 enable latch. However,
 a CLI process already moving the arm can outlive that revocation, and
 legacy STOP may queue behind it. Its CLI `completed`/HOLD reply is
 **not** encoder-proven independent braking; the supervisor therefore
