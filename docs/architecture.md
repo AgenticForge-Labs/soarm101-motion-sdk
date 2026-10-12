@@ -1,5 +1,30 @@
 # Architecture
 
+## Draft #90 — bounded single saved-Overhead STOP qualification
+
+The trusted `RobotBrokerService` remains the sole physical-trial
+authority layer. `overhead-single` is an exact camera-free capability
+profile admitting ONLY state/health/capabilities, one
+joint-only `agent_start_overhead` request, and STOP; one-shot phase
+`ready → pose_in_flight → pose_finished` or `stopped` is consumed
+before SDK dispatch. Neither a fault nor successful completion nor
+independent STOP can authorize another pose or gripper command.
+Legacy `overhead` (multi-leg), `short` (pan) and the normal
+CLI-backed production broker remain separate; public native SDK
+preview still denies all physical POST.
+
+One source of truth remains the SDK's saved-pose calibration/provenance,
+joint planning, limit, effort/fault, rate and STOP contracts. This
+physical experiment adds operator-visible read-only measured-state,
+saved-target and joint-stop-inset checks. A human authorizes ONE
+movement at 6°/s 30°/s² default (8°/s 40°/s² maximum); no Sleep
+roundtrip, autonomous rearm/recovery or raw motor access. The SDK
+preserves human-established live Feetech torque HOLD on joint-only
+pose execution. Passive trace gates require two moving physical
+encoders; stable feedback after the latch is necessary but not
+sufficient for broader physical braking certification.
+
+
 ## Trusted broker physical read-only preflight cleanup (draft PR #90)
 
 The broker-owned `SDKAgentExecutor` separates a session that merely
