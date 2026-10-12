@@ -611,15 +611,59 @@ def test_overhead_single_preflight_rejects_limits_distance_and_one_axis(
             p, {"shoulder_pan": math.radians(101), "elbow_flex": math.radians(-20)},
             limits,
         )
-    with pytest.raises(RuntimeError, match="calibrated stop"):
+    with pytest.raises(RuntimeError, match="outside executable calibrated range"):
         trial._preflight_overhead_single(
-            p, t, {"shoulder_pan": (math.radians(-120), math.radians(35)),
+            p, t, {"shoulder_pan": (math.radians(-120), math.radians(34)),
                    "elbow_flex": limits["elbow_flex"]},
+        )
+    with pytest.raises(RuntimeError, match="outside executable calibrated range"):
+        trial._preflight_overhead_single(
+            {"shoulder_pan": math.radians(-121), "elbow_flex": 0.0},
+            t, limits,
         )
     with pytest.raises(ValueError, match="matching"):
         trial._preflight_overhead_single(
             p, {"shoulder_pan": 0.0}, limits,
         )
+
+
+def test_overhead_preflight_accepts_canonical_sleep_inside_effective_limits(
+    monkeypatch,
+) -> None:
+    """2026-10-12 real failure: healthy shoulder lift ~2° from the limit.
+
+    Canonical Sleep targets already include the SDK's calibrated stop
+    margin and their own 2-degree inset. Do not layer another 5 degrees.
+    """
+    import math
+
+    trial = _load_trial(monkeypatch)
+    limits = {
+        "shoulder_lift": (math.radians(-104.05), math.radians(70.0)),
+        "elbow_flex": (math.radians(-100.0), math.radians(110.0)),
+        "shoulder_pan": (math.radians(-120.0), math.radians(120.0)),
+    }
+    measured = {
+        "shoulder_lift": math.radians(-101.89),
+        "elbow_flex": math.radians(95.21),
+        "shoulder_pan": math.radians(4.40),
+    }
+    overhead = {
+        "shoulder_lift": math.radians(-60.0),
+        "elbow_flex": math.radians(50.0),
+        "shoulder_pan": math.radians(4.40),
+    }
+    travel = trial._preflight_overhead_single(measured, overhead, limits)
+    assert travel["shoulder_lift"] == pytest.approx(41.89)
+    assert travel["elbow_flex"] == pytest.approx(-45.21)
+
+    # An actual out-of-range measured posture or saved target still fails.
+    too_low = {**measured, "shoulder_lift": math.radians(-104.06)}
+    with pytest.raises(RuntimeError, match="outside executable calibrated range"):
+        trial._preflight_overhead_single(too_low, overhead, limits)
+    too_low_target = {**overhead, "shoulder_lift": math.radians(-104.06)}
+    with pytest.raises(RuntimeError, match="outside executable calibrated range"):
+        trial._preflight_overhead_single(measured, too_low_target, limits)
 
 
 def test_overhead_single_broker_admits_only_one_fixed_joint_only_pose(
