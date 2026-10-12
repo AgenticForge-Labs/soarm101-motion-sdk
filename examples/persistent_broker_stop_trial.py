@@ -324,6 +324,33 @@ def _assess_physical_inflight_feedback(
     }
 
 
+def _execute_prepared_sleep(
+    request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
+    *,
+    sleep_target: Mapping[str, float],
+    expected_session_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """One canonical broker Sleep then measured verification, no pan yet."""
+    reply = request("POST", "/v1/sleep", {"joint_only": True})
+    result = reply["result"]
+    if not (result.get("accepted") and result.get("completed")):
+        raise RuntimeError("Sleep preparation did not complete")
+    measured = request("GET", "/v1/state", None)["result"]
+    if measured["broker_session"]["id"] != expected_session_id:
+        raise RuntimeError("Sleep preparation changed broker SDK session")
+    if not measured["authority"]["armed"]:
+        raise RuntimeError("Sleep preparation lost calibration-bound authority")
+    errors = _verify_measured_pose(
+        measured["joint_positions_rad"], sleep_target,
+        label="prepared Sleep",
+    )
+    return measured, {
+        "request_id": reply["request_id"], "action": "sleep",
+        "joint_only": True, "completed": True,
+        "joint_errors_deg": errors,
+    }
+
+
 def _execute_verified_roundtrip(
     request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
     *,
@@ -605,27 +632,15 @@ def main(argv: list[str] | None = None) -> int:
                 "broker; no gripper motion or separate CLI session.",
                 flush=True,
             )
-            sleep_reply = _request(
-                url, token, "POST", "/v1/sleep",
-                {"joint_only": True}, timeout_s=200.0,
+            prepared, sleep_record = _execute_prepared_sleep(
+                lambda method, path, payload: _request(
+                    url, token, method, path, payload, timeout_s=200.0,
+                ),
+                sleep_target=sleep_target,
+                expected_session_id=summary["broker_session"]["id"],
             )
-            sleep_result = sleep_reply["result"]
-            if not (sleep_result.get("accepted") and sleep_result.get("completed")):
-                raise RuntimeError("Sleep preparation did not complete")
-            prepared = _request(url, token, "GET", "/v1/state")["result"]
-            if prepared["broker_session"]["id"] != summary["broker_session"]["id"]:
-                raise RuntimeError("Sleep preparation changed broker SDK session")
-            if not prepared["authority"]["armed"]:
-                raise RuntimeError("Sleep preparation lost calibration-bound authority")
-            summary["prepared_sleep_errors_deg"] = _verify_measured_pose(
-                prepared["joint_positions_rad"], sleep_target,
-                label="prepared Sleep",
-            )
-            summary["sleep_preparation"] = {
-                "request_id": sleep_reply["request_id"],
-                "action": "sleep", "joint_only": True,
-                "completed": True,
-            }
+            summary["prepared_sleep_errors_deg"] = sleep_record["joint_errors_deg"]
+            summary["sleep_preparation"] = sleep_record
             summary["short_preflight"] = _preflight_short_joint(
                 prepared["joint_positions_rad"], limits,
             )
