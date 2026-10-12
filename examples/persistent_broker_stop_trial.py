@@ -236,6 +236,94 @@ def _authorize_sleep_preparation(
         raise PermissionError("operator declined canonical Sleep preparation")
 
 
+def _assess_physical_inflight_feedback(
+    window: Mapping[str, Any],
+    *,
+    start_pan_rad: float,
+    target_delta_deg: float = SHORT_DELTA_DEG,
+) -> dict[str, Any]:
+    """Evidence gate; does not command hardware or approve a second attempt.
+
+    The previous apparent STOP success occurred after a pan encoder had
+    stopped changing and hardware reported Moving=false. Require fresh,
+    changing actual encoder feedback plus a substantial remaining
+    displacement AT THE OPERATOR'S STOP KEYPRESS. Never infer motion from
+    the host controller's active flag alone.
+    """
+    captured = float(window["captured_s"])
+    samples = list(window.get("samples", []))
+    moving = list(window.get("hardware_moving_samples", []))
+    reasons: list[str] = []
+    if len(samples) < 2:
+        reasons.append("insufficient passive encoder samples")
+    if not math.isfinite(start_pan_rad) or not math.isfinite(captured):
+        reasons.append("nonfinite starting pose or observation time")
+    age = None
+    progress = None
+    remaining = None
+    recent_encoder_deg = None
+    last_change_age = None
+    last_hardware_moving = None
+    if samples and math.isfinite(captured) and math.isfinite(start_pan_rad):
+        final = samples[-1]
+        last_rad = float(final["rad"])
+        last_raw = int(final["raw"])
+        age = captured - float(final["elapsed_s"])
+        progress = math.degrees(last_rad - start_pan_rad)
+        remaining = target_delta_deg - progress
+        if not all(math.isfinite(x) for x in (last_rad, age, progress, remaining)):
+            reasons.append("nonfinite encoder feedback")
+        else:
+            if age < 0 or age > 0.12:
+                reasons.append("encoder sample too stale at STOP")
+            if progress < 0.5:
+                reasons.append("insufficient measured pan progress before STOP")
+            if remaining < 2.0:
+                reasons.append("STOP requested too near pan target")
+            recent = [
+                sample for sample in samples
+                if captured - float(sample["elapsed_s"]) <= 0.25
+            ]
+            if len(recent) < 2:
+                reasons.append("insufficient recent pan feedback")
+            else:
+                recent_encoder_deg = abs(
+                    math.degrees(last_rad - float(recent[0]["rad"]))
+                )
+                if recent_encoder_deg < 0.15:
+                    reasons.append("pan encoder did not show recent movement")
+            older_distinct = [
+                sample for sample in samples[:-1]
+                if int(sample["raw"]) != last_raw
+            ]
+            if older_distinct:
+                last_change_age = captured - float(older_distinct[-1]["elapsed_s"])
+            if last_change_age is None or last_change_age > 0.12:
+                reasons.append("pan encoder not changing immediately before STOP")
+    latest_status = moving[-1] if moving else None
+    if latest_status is not None:
+        moving_age = captured - float(latest_status["elapsed_s"])
+        last_hardware_moving = bool(latest_status["moving"])
+        if moving_age < 0 or moving_age > 0.16:
+            reasons.append("servo Moving status too stale")
+        if not last_hardware_moving:
+            reasons.append("servo did not report Moving immediately before STOP")
+    else:
+        reasons.append("no passive servo Moving status available")
+    return {
+        "verified": not reasons,
+        "reasons": reasons,
+        "capture_elapsed_s": captured,
+        "last_feedback_age_s": age,
+        "progress_deg": progress,
+        "remaining_deg": remaining,
+        "recent_encoder_motion_deg": recent_encoder_deg,
+        "last_encoder_change_age_s": last_change_age,
+        "last_hardware_moving": last_hardware_moving,
+        "feedback_count": len(samples),
+    }
+
+
 def _execute_verified_roundtrip(
     request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
     *,
@@ -645,6 +733,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         summary["stop_trigger"] = "human_pressed_enter_during_active_motion"
         summary["stop_requested_monotonic_s"] = stop_start
+        # Passive tracer snapshots the actual encoder / hardware state
+        # before independent STOP, without ANY additional motor bus reads.
+        # Always issue the requested STOP even if this evidence is weak.
+        pre_stop_window = None
+        if args.trial == "short":
+            if executor._trace is None:
+                raise RuntimeError("short STOP evidence recorder unavailable")
+            pre_stop_window = executor._trace.feedback_window(
+                SHORT_JOINT, window_s=0.35,
+            )
+            summary["pre_stop_passive_window"] = pre_stop_window
         try:
             stop_attempted = True
             stop = _request(url, token, "POST", "/v1/stop", {}, timeout_s=5.0)
@@ -679,6 +778,19 @@ def main(argv: list[str] | None = None) -> int:
         print("Review position, stability, trace and camera/eyes-on observation.", flush=True)
         if input("Type STATIONARY only if physically stationary and holding: ").strip() != "STATIONARY":
             raise RuntimeError("operator did not verify physical STOP")
+        if args.trial == "short":
+            if pre_stop_window is None:
+                raise RuntimeError("missing passive physical movement evidence")
+            evidence = _assess_physical_inflight_feedback(
+                pre_stop_window,
+                start_pan_rad=summary["short_start_pan_rad"],
+            )
+            summary["physical_inflight_stop_evidence"] = evidence
+            if not evidence["verified"]:
+                raise RuntimeError(
+                    "STOP was stable but moving-servo braking NOT qualified: "
+                    + "; ".join(evidence["reasons"])
+                )
         summary["stop_qualification_passed"] = True
         summary["passed"] = True
 
