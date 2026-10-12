@@ -1,5 +1,7 @@
 # Changelog
 
+- **Draft PR #90, 2026-10-12:** Fix real one-shot Overhead preflight refusal from canonical Sleep-adjacent measured posture. Remove redundant extra 5° limit inset after existing SDK mechanical-stop margin; retain effective-calibration bounds, distance, rate and live HOLD checks. Record read-only saved Overhead targets and executable limits in failure summary; add out-of-range negative regression. No real Overhead movement occurred during the failed trial.
+
 - Draft PR #90: added operator-only `overhead-single` stopped-pose
   qualification. One trusted-broker joint-only saved Overhead action
   from measured stationary pose, no initial Sleep/roundtrip/rearm,
