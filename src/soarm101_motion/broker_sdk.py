@@ -395,6 +395,10 @@ class SDKAgentExecutor:
             if self.physical_trial:
                 result["actions"] = {
                     "state": "read_only", "go_pose": True,
+                    "joint": {
+                        "mode": "single-joint relative angle",
+                        "max_abs_delta_deg": AGENT_JOINT_MAX_DELTA_DEG,
+                    },
                     "sleep": True, "stop": True,
                 }
                 from soarm101_motion.poses import PoseLibrary
@@ -625,7 +629,21 @@ class SDKAgentExecutor:
             }
             SDK_CAPABILITIES.get("jog_joint").validate(arguments)
             before = dict(arm.get_joint_positions().positions)
-            arm.enable()
+            if self.physical_trial:
+                # Never create an unapproved 1/1 servo latch by re-enabling
+                # motors already torque-held by the human. Only accept a
+                # fresh stationary, connected, fault-free physical HOLD.
+                hold = arm.get_state()
+                if (
+                    not hold.connected or hold.faulted
+                    or not hold.torque_enabled or hold.moving
+                ):
+                    raise HardwareFaultError(
+                        "physical joint action requires an already healthy "
+                        "stationary torque HOLD; no implicit rearm"
+                    )
+            else:
+                arm.enable()
             result = SDK_CAPABILITIES.dispatch("jog_joint", arm, arguments)
             arm.hold()
             if not result.accepted or not result.completed:
