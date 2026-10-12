@@ -1,5 +1,50 @@
 # Testing
 
+## PR #90 local failure: live torque state not adopted on second process
+
+Operator trial `short-stop-20261011-211824` stopped **before any scripted
+Sleep or STOP movement**, reporting `Sleep preparation requires a
+stationary, healthy torque HOLD`. The displayed encoder positions were
+valid and close to calculated Sleep other than shoulder-pan +7.03°.
+The exact raw state flag in that trial is not yet available here because
+its local trace/summary was not uploaded.
+
+**Confirmed source bug:** `soarm101 agent arm` enabled the real Feetech
+servos from one process. After that process disconnected without relaxing
+torque, the trial connected via a fresh `FeetechBackend`. Its
+`_torque_enabled=False` constructor flag was not reconciled to
+`Torque_Enable` registers during `connect()`. The preflight checked that
+stale flag and could reject a legitimate hardware hold. This defect
+also prevented independently connected sessions from correctly deciding
+whether the physical STOP primitive could issue a HOLD before enabling
+torque through a new command.
+
+**Code fix:** On physical connection, read every motor's actual torque
+enable register. Allow all enabled or all disabled, reject partial/mixed
+states, no writes. For already-enabled joint-only physical Sleep, reuse
+the existing hold rather than issuing a new low-acceleration 1/1 position
+latch. A genuinely moving, faulted or torque-off arm still fails closed;
+the trial now saves detailed read-only per-motor failure evidence.
+
+**Software-only next:**
+```bash
+cd ~/AgenticForge/soarm101-motion-sdk
+source .venv/bin/activate
+ruff check .
+python -m pytest --no-cov -q \
+  tests/test_feetech_backend.py \
+  tests/test_broker_sdk.py \
+  tests/test_broker_stop_trial.py \
+  tests/test_stop_ownership.py
+python -m pytest --no-cov -q
+```
+
+Do not retry live motion until tests, physical clearance, and state
+checks are reviewed. If `Moving=true` or a fault persists after this
+repair, preserve the read-only diagnostic output and do not override it.
+The old 18.4° powered elbow excursion is NOT cleared.
+
+
 ## PR #90 revised attended STOP test — Sleep preparation then moving-servo check
 
 **Current draft behavior (supersedes older preflight proposals below):**
