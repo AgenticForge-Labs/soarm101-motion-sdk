@@ -2,6 +2,18 @@
 
 ## PR #90 short-motion physical STOP candidate (open, unmerged)
 
+**Trial bootstrap repair (2026-10-11):** An earlier attempt raised
+`ValueError: physical trial profile must restrict actions to state,
+pose, Sleep and STOP` before connecting to the arm or issuing any
+movement, because the broker still required the old exact pose/Sleep
+tool set. Draft #90 now supports the separate short `jog_joint`
+trial profile, fixed at shoulder-pan +8° with an 8° profile ceiling.
+The old pose/Sleep test remains separately gated. Other joints,
+reverse movement, alternate deltas and rate overrides remain denied;
+no public broker physical motion permission was added.
+
+
+
 The trusted-host `examples/persistent_broker_stop_trial.py` now defaults
 to a **single fixed +8° shoulder-pan movement** from encoder-verified Sleep
 at 2°/s and 10°/s², with hard caps of 3°/s and 15°/s².
