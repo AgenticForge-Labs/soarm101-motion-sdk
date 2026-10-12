@@ -1,5 +1,13 @@
 # Changelog
 
+- Draft PR #90: preserve read-only physical broker preflight semantics
+  through executor teardown. Sessions which connected to externally
+  torque-held servos but attempted **no motion** close the transport
+  without implicitly writing another servo STOP/HOLD goal; after any
+  attempted movement, preexisting cancellation/fault protections remain.
+  Added a regression test for preflight-only cleanup.
+
+
 - Draft PR #90: repair the attended short physical STOP trial failing
   `Sleep preparation requires a stationary, healthy torque HOLD`
   after a human `agent arm`. Feetech now reads all motor
