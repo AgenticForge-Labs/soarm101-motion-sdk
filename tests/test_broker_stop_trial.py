@@ -419,7 +419,6 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
         PHYSICAL_SHORT_STOP_DELTA_DEG, PHYSICAL_SHORT_STOP_JOINT,
     )
     from soarm101_motion.broker_sdk import SDKAgentExecutor
-    from soarm101_motion.capability_profile import CapabilityProfile
 
     trial = _load_trial(monkeypatch)
     config = SOARM101Config(port="/dev/fake", robot_id="so101")
@@ -482,7 +481,11 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
     accepted = service.dispatch("POST", "/v1/joint", exact)
     assert accepted.status == 200
     assert accepted.body["ok"] is True
-    assert called == [("joint", exact)]
+    assert len(called) == 1
+    assert called[0][0] == "joint"
+    assert all(called[0][1][key] == value for key, value in exact.items())
+    assert called[0][1]["speed_deg_s"] == 8.0
+    assert called[0][1]["acceleration_deg_s2"] == 25.0
     assert executor.connection_count == 0
     executor.close()
 
