@@ -1966,6 +1966,7 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         capability_profile=Path(args.capability_profile) if args.capability_profile else None,
         adapter_manifest=manifest,
         broker_rates=rates,
+        sdk_simulation=args.sdk_simulation,
     )
     payload = result.as_dict()
     print(json.dumps(payload, indent=2))
@@ -2553,6 +2554,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--capability-profile", help="trusted host JSON tool/camera/limit profile for this run",
     )
     agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
+    agent_sandbox_run.add_argument(
+        "--sdk-simulation", action="store_true",
+        help="use persistent SDK simulation and a restricted per-run relay; "
+             "does not connect to physical hardware",
+    )
     agent_sandbox_run.add_argument("--agent-joint-speed-deg-s", type=float)
     agent_sandbox_run.add_argument("--agent-joint-acceleration-deg-s2", type=float)
     agent_sandbox_run.add_argument("--agent-cartesian-speed-mm-s", type=float)
