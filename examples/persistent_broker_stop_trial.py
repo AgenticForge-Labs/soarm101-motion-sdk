@@ -251,14 +251,16 @@ def _assess_physical_inflight_feedback(
 
     The previous apparent STOP success occurred after a pan encoder had
     stopped changing and hardware reported Moving=false. Require fresh,
-    changing actual encoder feedback plus a substantial remaining
-    displacement AT THE OPERATOR'S STOP KEYPRESS. Never infer motion from
-    the host controller's active flag alone.
+    changing actual encoder feedback plus substantial remaining displacement
+    AT THE OPERATOR'S STOP KEYPRESS. Never infer motion from a host controller
+    flag or the Feetech Moving bit alone: the latter has reported false while
+    real encoder positions increased under slow commanded motion.
     """
     captured = float(window["captured_s"])
     samples = list(window.get("samples", []))
     moving = list(window.get("hardware_moving_samples", []))
     reasons: list[str] = []
+    warnings: list[str] = []
     if len(samples) < 2:
         reasons.append("insufficient passive encoder samples")
     if not math.isfinite(start_pan_rad) or not math.isfinite(captured):
@@ -297,13 +299,17 @@ def _assess_physical_inflight_feedback(
                 )
                 if recent_encoder_deg < 0.15:
                     reasons.append("pan encoder did not show recent movement")
-            older_distinct = [
-                sample for sample in samples[:-1]
-                if int(sample["raw"]) != last_raw
+            # Date the CHANGE at the *new* encoder sample, not the previous
+            # sample with a different value. Otherwise 10-Hz feedback adds an
+            # artificial ~100-ms age and rejects actual moving-servo evidence.
+            change_times = [
+                float(current["elapsed_s"])
+                for previous, current in zip(samples, samples[1:])
+                if int(previous["raw"]) != int(current["raw"])
             ]
-            if older_distinct:
-                last_change_age = captured - float(older_distinct[-1]["elapsed_s"])
-            if last_change_age is None or last_change_age > 0.12:
+            if change_times:
+                last_change_age = captured - change_times[-1]
+            if last_change_age is None or not 0 <= last_change_age <= 0.12:
                 reasons.append("pan encoder not changing immediately before STOP")
     latest_status = moving[-1] if moving else None
     if latest_status is not None:
@@ -312,12 +318,17 @@ def _assess_physical_inflight_feedback(
         if moving_age < 0 or moving_age > 0.16:
             reasons.append("servo Moving status too stale")
         if not last_hardware_moving:
-            reasons.append("servo did not report Moving immediately before STOP")
+            # The 2026-10-12 08:23 operator trace had four fresh Moving=false
+            # reads DURING 0.62 degrees of measured pan encoder travel over
+            # 0.30 seconds. Keep a fresh status observation as diagnostics,
+            # but don't override independently observed encoder movement.
+            warnings.append("servo Moving bit was false during measured pan motion")
     else:
         reasons.append("no passive servo Moving status available")
     return {
         "verified": not reasons,
         "reasons": reasons,
+        "warnings": warnings,
         "capture_elapsed_s": captured,
         "last_feedback_age_s": age,
         "progress_deg": progress,

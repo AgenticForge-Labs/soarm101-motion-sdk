@@ -1,5 +1,7 @@
 # Agent instructions
 
+**2026-10-12 physical evidence / #90 (unmerged):** The attended +8° pan STOP at 2°/s physically stopped with <=0.088° post-latch drift; raw feedback advanced immediately before STOP even though all sampled Feetech `Moving` flags were false. The script's old rejection was a misdated encoder-transition timestamp and an over-trusted Moving bit, not observed post-STOP movement. Respect real encoder movement/freshness, remaining travel, human command and stationarity verification. This does NOT certify multi-joint Overhead/loaded/high-speed braking or clear the previous 18.4° elbow incident. Do not automatically run the Overhead trial or merge before an independently reviewed physical qualification.
+
 **PR #90 reattachment STOP trial:** Separate `agent arm` and trusted
 broker processes do not share Feetech's Python-local torque cache. A
 fresh backend now reads **all six** physical `Torque_Enable` registers
@@ -22,7 +24,8 @@ SDK Sleep (no gripper close), verifies Sleep and only then admits ONE
 fixed pan +8° command. Operator ENTER triggers independent STOP while
 host motion is active. Qualify *actual* physical in-motion STOP only
 if existing passive encoder evidence proves recent movement, fresh
-Moving status and >=2° travel remaining. Regardless of evidence, STOP
+status diagnostics and >=2° travel remaining. Feetech Moving=false alone
+must not veto genuine fresh changing encoder evidence. Regardless of evidence, STOP
 must always run; a failed evidence gate must not retry motion or STOP.
 The original 18.4° elbow excursion remains unsafe evidence, and the
 near-endpoint short test did NOT demonstrate braking. Never let Codex,

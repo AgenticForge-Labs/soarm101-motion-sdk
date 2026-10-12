@@ -1,5 +1,37 @@
 # SO-ARM101 Motion SDK
 
+## Attended short STOP evidence — 2026-10-12 (draft #90)
+
+The operator's `short-stop-20261012-082341` trace was collected on real
+hardware. The pan encoder advanced 2091 -> 2098 ticks in 0.299 s immediately
+before STOP (0.6154°, consistent with the commanded 2°/s), with 3.69° still
+to go. STOP made ONE 0/254 six-motor position latch; no additional position
+targets were issued afterward. Maximum post-latch drift was 0.0879°,
+remaining stationary to encoder resolution through the follow-up read.
+The human reported an immediate physical stop. Torque reattachment was
+healthy: connected=true, torque_enabled=true, moving=false, faulted=false.
+
+The old script nevertheless reported `passed=false`. Its last-change
+timestamp mistakenly used the earlier *different* sample's time
+(0.1232 s old) instead of the changed sample's time (0.0231 s old).
+It also vetoed genuine moving encoder evidence merely because the Feetech
+`Moving` status bit was false during slow movement. The evidence evaluator
+now timestamps actual encoder transitions and records contradictory but
+fresh `Moving` flags as warnings, retaining strict measured-change,
+freshness, progress, remaining-travel, after-STOP settling, fault, human
+authority and one-write rules. Do not edit this original trial summary;
+its software `passed=false` was the *old evaluator's* result.
+
+This is encouraging **attended 2°/s single-joint STOP evidence**, not a
+qualification of the earlier higher-energy 18.4° elbow excursion.
+Do not default to the multi-joint Overhead trial or release native
+production motion based on it. A broader Overhead stop requires separate
+operator-reviewed joint-specific bounds, workspace/clearance planning,
+and physical cutoff. The present change is software-only; hardware has
+not been moved by this change. See
+`docs/physical-stop-short-trial-20261012.md`.
+
+
 ## PR #90 repair: reconnect to an already-held robot (2026-10-11)
 
 An attended `--trial short` returned

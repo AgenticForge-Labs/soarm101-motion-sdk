@@ -1,5 +1,13 @@
 # Changelog
 
+- **Draft PR #90, 2026-10-12:** Reconcile real short STOP trace with measured
+  2°/s in-flight pan encoder changes, one 0/254 stop latch and <=0.088°
+  post-latch drift. Fix the evaluator's previous-sample timestamp error
+  and treat contradictory Feetech Moving=false as a recorded warning,
+  not stronger proof than direct encoder motion. Add trace-derived positive
+  and stationary negative regressions. Keep broader Overhead and native
+  production safety gates blocked pending separately approved evidence.
+
 - Draft PR #90: preserve read-only physical broker preflight semantics
   through executor teardown. Sessions which connected to externally
   torque-held servos but attempted **no motion** close the transport

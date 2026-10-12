@@ -638,7 +638,7 @@ def test_stop_evidence_requires_real_movement_with_travel_remaining(monkeypatch)
     )
     assert old["verified"] is False
     assert any("near pan target" in r for r in old["reasons"])
-    assert any("did not report Moving" in r for r in old["reasons"])
+    assert any("pan encoder not changing" in r for r in old["reasons"])
     stopped = trial._assess_physical_inflight_feedback(
         window([1.5, 1.5, 1.5], moving=False), start_pan_rad=0.0,
     )
@@ -648,6 +648,65 @@ def test_stop_evidence_requires_real_movement_with_travel_remaining(monkeypatch)
     assert trial._assess_physical_inflight_feedback(
         stale, start_pan_rad=0.0,
     )["verified"] is False
+
+
+def test_observed_slow_pan_motion_is_not_rejected_by_feetech_moving_bit(
+    monkeypatch,
+) -> None:
+    """Real 2026-10-12 trace: encoder advanced while Moving=false.
+
+    The previous implementation dated the last change at the *preceding*
+    distinct sample, adding one 100-ms feedback interval to its age.
+    """
+    import math
+
+    trial = _load_trial(monkeypatch)
+    window = {
+        "captured_s": 25.67164789396338,
+        "samples": [
+            {"elapsed_s": 25.349643517984077, "raw": 2091,
+             "rad": math.radians(3.868131868131868)},
+            {"elapsed_s": 25.45009369403124, "raw": 2095,
+             "rad": math.radians(4.21978021978022)},
+            {"elapsed_s": 25.548443865962327, "raw": 2096,
+             "rad": math.radians(4.3076923076923075)},
+            {"elapsed_s": 25.648581036017276, "raw": 2098,
+             "rad": math.radians(4.483516483516484)},
+        ],
+        "hardware_moving_samples": [
+            {"elapsed_s": 25.347674545948394, "moving": False},
+            {"elapsed_s": 25.44822516106069, "moving": False},
+            {"elapsed_s": 25.546964584034868, "moving": False},
+            {"elapsed_s": 25.646776293986477, "moving": False},
+        ],
+    }
+    evidence = trial._assess_physical_inflight_feedback(
+        window, start_pan_rad=math.radians(0.17582417582417584),
+    )
+    assert evidence["verified"] is True
+    assert evidence["reasons"] == []
+    assert evidence["remaining_deg"] == pytest.approx(3.6923077, abs=0.01)
+    assert evidence["recent_encoder_motion_deg"] == pytest.approx(0.2637363, abs=0.01)
+    assert evidence["last_encoder_change_age_s"] == pytest.approx(0.023066858)
+    assert evidence["last_hardware_moving"] is False
+    assert evidence["warnings"]
+
+    # A stale/unchanged encoder must still fail even with a fresh Moving=true.
+    stationary = {
+        **window,
+        "samples": [
+            {**sample, "raw": 2098, "rad": math.radians(4.483516483516484)}
+            for sample in window["samples"]
+        ],
+        "hardware_moving_samples": [
+            {"elapsed_s": 25.646776293986477, "moving": True},
+        ],
+    }
+    negative = trial._assess_physical_inflight_feedback(
+        stationary, start_pan_rad=math.radians(0.17582417582417584),
+    )
+    assert negative["verified"] is False
+    assert any("pan encoder" in reason for reason in negative["reasons"])
 
 
 def test_passive_stop_feedback_snapshot_does_not_read_bus(tmp_path) -> None:
