@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import signal
 import subprocess
 from pathlib import Path
 
@@ -1296,6 +1297,42 @@ def test_host_supervisor_requests_stop_before_sandbox_delete_on_ctrl_c(
     assert record["holding"] is True
     # CLI-backed broker's completed STOP lacks SDK encoder verification.
     assert record["verified_physical_hold"] is False
+
+
+def test_sigterm_during_active_agent_exec_uses_supervisor_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "TASK.md"
+    task.write_text("Move conservatively.\\n", encoding="utf-8")
+    fake = FakeOpenShell()
+    original_exec = fake.exec
+    old_handler = signal.getsignal(signal.SIGTERM)
+
+    def terminated(name, command, **kwargs):
+        if command and command[0] == "hermes":
+            handler = signal.getsignal(signal.SIGTERM)
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+        return original_exec(name, command, **kwargs)
+
+    fake.exec = terminated
+    FakeBroker.instances.clear()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    with pytest.raises(KeyboardInterrupt, match="SIGTERM"):
+        agent_sandbox.run_hermes(
+            task=task, output_dir=tmp_path / "out", openshell=fake,
+        )
+    assert signal.getsignal(signal.SIGTERM) == old_handler
+    assert FakeBroker.instances[-1].stop_requests == 1
+    assert FakeBroker.instances[-1].stopped
+    assert fake.deleted
 
 
 def test_supervisor_stop_failure_is_never_a_successful_agent_exit(
