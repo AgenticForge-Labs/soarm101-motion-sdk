@@ -2,6 +2,19 @@
 
 ## Draft #90 bounded physical STOP qualification
 
+**2026-10-11 physical-trial constructor fix:** The previous exact
+allowlist only accepted the legacy `go_pose/sleep/stop` physical trial,
+so the new short profile containing `jog_joint` failed before motion.
+The broker now admits two separately strict local-only profiles, never
+a union: the historical pose/Sleep profile, or short STOP with
+`max_joint_delta_deg=8`. The latter additionally rejects every
+joint request except exactly `shoulder_pan +8°`, without extra
+fields or per-action rate overrides. The script reads these fixed
+action values from the broker owner; standard production/MCP paths
+are not affected.
+
+
+
 The attended loopback broker defaults to one fixed +8° pan
 joint movement from encoder-verified Sleep and an independent STOP
 triggered by the human pressing ENTER during motion. It uses the
