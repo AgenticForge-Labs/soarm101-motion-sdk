@@ -1,41 +1,28 @@
 # Development plan
 
-## PR #90 first short-motion STOP gate (draft, hardware result unknown)
+## Draft PR #90 — prepared Sleep and actual in-motion evidence
 
-**2026-10-11 measured-start follow-up:** The short operator trial next
-failed its pre-motion Sleep posture gate by 86.23°. Inspecting the CLI
-confirms `soarm101 agent arm` only enables torque/HOLD at current
-encoder positions; it does not park to Sleep. Preserve default Sleep
-mode and add a strictly short-only `--short-start measured` with
-per-joint discrepancy evidence, executable-calibration validation,
-5° pan inset, stationary/fault-free torque check, and explicit
-`MEASURED` operator swept-volume approval before any motion. The
-Overhead trial remains Sleep-only. No reported STOP hardware result;
-keep #90 draft and blocked on actual safety evidence.
+2026-10-11 subsequent operator evidence shows a stable, single 0/254
+HOLD and revoked lease in the short +8° pan trial, but **not moving-servo
+braking**, because physical pan feedback was already stationary near the
+endpoint before STOP. The same branch now stages the next test:
 
+- All healthy, calibrated starting postures are eligible **only if**
+  the operator confirms the entire multi-joint path to Sleep is clear.
+- One trusted loopback broker session executes one **joint-only** canonical
+  Sleep, verifies measured Sleep, then admits one fixed short pan motion.
+  A broker-owned phase gate denies pan-before-Sleep, Sleep replay,
+  and post-STOP motion. The production and public broker remain unchanged.
+- A passive trace snapshot at the operator keypress must show recent
+  changing encoder data, a fresh servo Moving flag, >=0.5° progress and
+  >=2° remaining; otherwise the physical braking gate remains
+  inconclusive even if stationary HOLD succeeded.
+- No automated START/STOP, added hardware polling, agent authority,
+  gripper close, auto-return or rearm. Local Codex/software validation
+  and separately attended hardware evidence are still required.
 
-
-The operator's first attempt failed during `RobotBrokerService`
-construction before any trial movement: the short `jog_joint` profile
-was not admitted by the local physical-trial constructor. The fix
-remains on this draft branch. Keep two exact, mutually exclusive
-physical-trial profiles (old pose/Sleep or short joint) and require
-`shoulder_pan +8°` with `max_joint_delta_deg=8` for the short
-profile. Include an integration regression constructing the broker
-with the script's actual profile, plus negative permission tests.
-Physical STOP remains unqualified until a valid supervised trial.
-
-
-
-The attended broker STOP trial now defaults to one fixed +8° pan
-movement from measured Sleep, narrow joint rates (2°/s and 10°/s²
-defaults), manual ENTER during motion, independent authenticated STOP
-and measured post-HOLD stability confirmation. It has no preliminary
-Overhead roundtrip or post-STOP REARM; the larger Overhead route
-remains explicit opt-in and blocked pending the short gate. This is
-not emergency-stop certification, and simulated passing tests cannot
-demonstrate physical braking.
-
+Keep PR #90 draft/unmerged and the original 18.4° powered excursion
+open as an unresolved physical safety blocker.
 
 The motion SDK remains authoritative for hardware, calibration, kinematics, planning,
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
