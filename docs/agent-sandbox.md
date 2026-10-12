@@ -1,5 +1,31 @@
 # Self-contained agent sandbox
 
+## PR #93 — SDK-backed simulated OpenShell agent sessions (unmerged)
+
+Use `--sdk-simulation` with the trusted sandbox runner to use the
+persistent SDK **simulation only**. A single broker subprocess owns
+a private `127.0.0.1` controller and a separate, authenticated,
+profile-constrained OpenShell relay on the agent-accessible host port.
+The agent receives only the relay token. The host owns a distinct private
+token for STOP, even when the agent profile does not expose a STOP tool.
+Both the agent-visible capability listing and MCP profile show only
+permitted tools. Host STOP is dispatched before sandbox deletion and
+broker teardown, never as an agent instruction.
+
+Read-only runs issue no STOP. Physical cameras, workspace Cartesian
+commands and real servo connection are unavailable in this mode. Before
+motion-capable handoff, the host reads SDK state to establish a session
+that can be stopped without opening a new device during cancellation.
+The legacy CLI broker is unchanged and remains the normal physical path.
+#94 will separately review watchdog and supervised physical cutover.
+
+```bash
+soarm101 agent arm --simulation --minutes 10
+soarm101 agent sandbox run --agent hermes --interface mcp \
+  --sdk-simulation --task TASK.md --output runs/hermes-sdk-sim
+```
+
+
 ## Agent supervisor STOP on cancellation (PR #91, unmerged)
 
 The trusted host runner—not Hermes, Codex, or an LLM prompt—owns final
