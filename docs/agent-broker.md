@@ -1,3 +1,19 @@
+## Draft #90 — experimental attended saved-Overhead STOP
+
+The `overhead-single` trial is NOT a production broker capability or
+agent-accessible tool. The operator must authenticate on trusted
+loopback, inspect full route clearance and type `OVERHEAD_START`
+to command a single calibration-compatible joint-only
+`agent_start_overhead` movement at a default 6°/s and 30°/s²
+(hard caps 8°/s and 40°/s²). The broker denies any second
+pose, arbitrary saved pose, gripper action, preparatory Sleep,
+rate override or post-STOP replay. A human ENTER triggers STOP
+and never authorizes recovery; the trial logs multi-joint moving
+encoders, post-latch settling, cancelled action and revoked authority.
+Use the local commands and acceptance boundary in `TESTING.md`.
+The earlier 18.4° elbow displacement remains a physical blocker,
+irrespective of hobby-arm scale.
+
 # Agent robot broker
 
 ## Draft #90 bounded physical STOP qualification
