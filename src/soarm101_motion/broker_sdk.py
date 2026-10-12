@@ -123,6 +123,10 @@ class SDKAgentExecutor:
         # Close after a verified physical STOP must not send another
         # all-motor position latch. Any later motion clears this flag.
         self._verified_physical_stop = False
+        # Opening for read-only state/preflight does not transfer motion
+        # ownership from an earlier human-armed CLI process. Closing such a
+        # physical session must not issue a fresh all-motor position latch.
+        self._motion_action_attempted = False
         self._bound_calibration_id: str | None = None
         self._session: SOARM101 | None = None
 
@@ -226,7 +230,11 @@ class SDKAgentExecutor:
                                 if (
                                     self.physical_trial
                                     and isinstance(arm, SOARM101)
-                                    and (had_unverified_fault or self._verified_physical_stop)
+                                    and (
+                                        had_unverified_fault
+                                        or self._verified_physical_stop
+                                        or not self._motion_action_attempted
+                                    )
                                 ):
                                     # A failed OR a verified physical STOP
                                     # already sent its position latch. Cleanup
@@ -318,6 +326,7 @@ class SDKAgentExecutor:
             self._require_active(stop=action == "stop")
             if action in {"go_pose", "joint", "jog", "gripper", "sleep", "sleep_up"}:
                 self._verified_physical_stop = False
+                self._motion_action_attempted = True
             trace = self._trace
             if trace is not None:
                 trace.mark(
