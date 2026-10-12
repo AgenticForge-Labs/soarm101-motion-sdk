@@ -2,6 +2,18 @@
 
 ## PR #90 first short-motion STOP gate (draft, hardware result unknown)
 
+The operator's first attempt failed during `RobotBrokerService`
+construction before any trial movement: the short `jog_joint` profile
+was not admitted by the local physical-trial constructor. The fix
+remains on this draft branch. Keep two exact, mutually exclusive
+physical-trial profiles (old pose/Sleep or short joint) and require
+`shoulder_pan +8°` with `max_joint_delta_deg=8` for the short
+profile. Include an integration regression constructing the broker
+with the script's actual profile, plus negative permission tests.
+Physical STOP remains unqualified until a valid supervised trial.
+
+
+
 The attended broker STOP trial now defaults to one fixed +8° pan
 movement from measured Sleep, narrow joint rates (2°/s and 10°/s²
 defaults), manual ENTER during motion, independent authenticated STOP
