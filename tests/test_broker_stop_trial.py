@@ -534,3 +534,113 @@ def test_physical_trial_broker_still_rejects_widened_short_profiles(
         profile=old, allow_physical_sdk_trial=True,
     )
     executor.close()
+
+
+def test_agent_arm_hold_does_not_require_short_trial_to_start_at_sleep(
+    monkeypatch,
+) -> None:
+    """86-degree posture mismatch may be operator-approved for short pan only."""
+    import math
+    from types import SimpleNamespace
+
+    trial = _load_trial(monkeypatch)
+    args = trial.build_parser().parse_args([
+        "--port", "/dev/ttyACM1", "--output", "/tmp/short.jsonl",
+        "--trial", "short", "--short-start", "measured",
+    ])
+    assert args.short_start == "measured"
+    measured = {
+        "shoulder_pan": 0.0,
+        "shoulder_lift": math.radians(10),
+        "elbow_flex": math.radians(5),
+        "wrist_flex": math.radians(15),
+        "wrist_roll": 0.0,
+    }
+    expected = dict(measured, shoulder_lift=math.radians(-76.23))
+    errors = trial._pose_joint_errors(
+        measured, expected, label="initial Sleep comparison",
+    )
+    assert errors["shoulder_lift"] == pytest.approx(86.23)
+    with pytest.raises(RuntimeError, match="shoulder_lift.*86.23"):
+        trial._verify_measured_pose(
+            measured, expected, label="initial Sleep",
+        )
+    limits = {joint: (-math.pi / 2, math.pi / 2) for joint in measured}
+    preflight = trial._preflight_short_joint(measured, limits)
+    assert preflight["joint"] == "shoulder_pan"
+    assert preflight["delta_deg"] == 8.0
+
+    hardware = SimpleNamespace(
+        connected=True, faulted=False, torque_enabled=True, moving=False,
+    )
+    requests = []
+    trial._authorize_measured_short_start(
+        state=hardware, motion_active=False,
+        confirm=lambda prompt: requests.append(prompt) or "MEASURED",
+    )
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("condition", [
+    "disconnected", "faulted", "torque_disabled", "moving", "host_moving",
+])
+def test_measured_start_denies_unsafe_hardware_state_without_prompt(
+    monkeypatch, condition,
+) -> None:
+    from types import SimpleNamespace
+
+    trial = _load_trial(monkeypatch)
+    hardware = SimpleNamespace(
+        connected=condition != "disconnected",
+        faulted=condition == "faulted",
+        torque_enabled=condition != "torque_disabled",
+        moving=condition == "moving",
+    )
+    with pytest.raises(RuntimeError, match="stationary, healthy torque HOLD"):
+        trial._authorize_measured_short_start(
+            state=hardware, motion_active=condition == "host_moving",
+            confirm=lambda _: pytest.fail("should not request operator approval"),
+        )
+
+
+def test_measured_start_decline_has_no_movement_or_authorization(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    trial = _load_trial(monkeypatch)
+    hardware = SimpleNamespace(
+        connected=True, faulted=False, torque_enabled=True, moving=False,
+    )
+    with pytest.raises(PermissionError, match="operator declined"):
+        trial._authorize_measured_short_start(
+            state=hardware, motion_active=False,
+            confirm=lambda _: "NO",
+        )
+
+
+def test_measured_start_does_not_bypass_joint_calibration_limits(
+    monkeypatch,
+) -> None:
+    import math
+
+    trial = _load_trial(monkeypatch)
+    limits = {"shoulder_pan": (-1.5, 1.5), "elbow_flex": (-1.5, 1.5)}
+    with pytest.raises(RuntimeError, match="elbow_flex.*outside"):
+        trial._preflight_short_joint(
+            {"shoulder_pan": 0.0, "elbow_flex": math.radians(87)},
+            limits,
+        )
+    with pytest.raises(ValueError, match="measured joint elbow_flex is missing"):
+        trial._preflight_short_joint({"shoulder_pan": 0.0}, limits)
+
+
+def test_measured_start_option_never_applies_to_overhead(monkeypatch) -> None:
+    trial = _load_trial(monkeypatch)
+    args = trial.build_parser().parse_args([
+        "--port", "/dev/ttyACM1", "--output", "/tmp/short.jsonl",
+        "--trial", "overhead", "--short-start", "measured",
+    ])
+    monkeypatch.setattr(trial.sys, "stdin", type("TTY", (), {
+        "isatty": lambda self: True,
+    })())
+    with pytest.raises(ValueError, match="only to --trial short"):
+        trial._require_operator(args)
