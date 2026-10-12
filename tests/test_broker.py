@@ -23,6 +23,40 @@ from soarm101_motion.broker import (
 
 
 
+def test_legacy_broker_stop_revokes_human_lease_before_cli_execution(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A future CLI request cannot reuse human motion authority after STOP."""
+    from soarm101_motion.agent_control import AgentAuthorityStore
+
+    store = AgentAuthorityStore(tmp_path / "human-lease.json")
+    store.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    monkeypatch.setattr("soarm101_motion.broker.AgentAuthorityStore", lambda: store)
+    order = []
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = '{"accepted":true,"completed":true,"holding":true}'
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        order.append((store.status()["armed"], tuple(command)))
+        return Completed()
+
+    monkeypatch.setattr("soarm101_motion.broker.subprocess.run", fake_run)
+    service = RobotBrokerService(
+        executor=AgentCommandExecutor(),
+        token="one-run-token",
+        event_path=tmp_path / "events.jsonl",
+    )
+    response = service.dispatch("POST", "/v1/stop", {})
+    assert response.status == 200
+    assert response.body["result"]["holding"] is True
+    assert order and order[0][0] is False
+    assert store.status()["armed"] is False
+
+
 def test_broker_executor_propagates_trusted_motion_envelope(monkeypatch) -> None:
     commands: list[list[str]] = []
 
