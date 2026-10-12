@@ -2,6 +2,22 @@
 
 ## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)
 
+**2026-10-12 preflight correction:** The first attended `overhead-single`
+attempt stopped before any movement at measured shoulder-lift **−101.89°**.
+The SDK's canonical Sleep is approximately **−102.05°** for that joint
+and deliberately uses a **2° inset inside already safety-margined
+executable joint limits**. The trial's extra 5° start/target inset
+mistakenly rejected a healthy Sleep-adjacent pose. This extra inset is
+removed only from the experimental Overhead preflight: both measured
+positions and saved targets must still lie within the SDK's authoritative
+effective calibrated limits, which already incorporate its configured
+mechanical-stop margin. Calibration provenance, max 100° joint travel,
+at least two joints with ≥12° travel, stationary healthy torque HOLD,
+rate caps, independent STOP and post-STOP verification remain enforced.
+On refusal, the summary now includes the measured joints, saved target
+and executable bounds; the original failure trace is unchanged.
+No physical Overhead STOP result has yet been recorded.
+
 **Unmerged, operator-only physical experiment, not production motor control.**
 New `--trial overhead-single` uses the CURRENT measured, calibrated and
 stationary torque-held posture and moves **once** toward the existing saved
@@ -14,7 +30,7 @@ broker STOP; `STATIONARY` is only for confirmed stable physical HOLD.
 The speed is **6°/s, acceleration 30°/s²** by default (3x faster than
 the earlier 2°/s short-pan trial); hard caps are **8°/s, 40°/s²**
 and 20 Hz. The measured pose and saved Overhead must match calibrated
-joint identities, retain 5° inset from every stop, require at least two
+joint identities, remain inside SDK effective calibrated joint limits (which already incorporate its configured stop margin), require at least two
 joints moving ≥12°, and no joint may travel more than 100°. The broker
 accepts only one exact joint-only Overhead POST and STOP; it blocks any
 second pose, other pose, Sleep, jog, gripper, rate override or post-STOP
