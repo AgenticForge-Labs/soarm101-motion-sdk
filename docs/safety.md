@@ -1,5 +1,30 @@
 # Safety
 
+## Live torque state across physical broker reconnection (draft #90)
+
+After a separate human `soarm101 agent arm`, a fresh SDK/broker process
+must read the Feetech **hardware Torque_Enable** registers, not infer
+torque state from an initial false Python field. This read-only
+reconciliation now fails on partial/invalid motor torque states; it
+does not command position or enable motor power merely to open a port.
+
+The `short-stop-20261011-211824` attended trial aborted before any
+scripted Sleep/STOP because the preflight saw an unqualified stationary
+hold; the exact motor flags were not supplied. The confirmed stale
+cached-torque implementation is corrected on the branch. Other causes
+(e.g. persistent `Moving=true`, real servo status faults, moving
+gripper) may still fail preflight. The trial must display connected,
+torque, moving, fault and host-activity flags, plus per-servo read-only
+diagnostics on failure; never simply disable the check.
+
+For joint-only canonical Sleep, an already enabled and healthy physical
+HOLD must not trigger a second all-motor 1/1 enable latch; Sleep goes
+through existing SDK validated motion primitives. The full path still
+requires physical operator clearance and `PREPARE_SLEEP`. This is
+neither an emergency stop guarantee nor resolution of the prior 18.4°
+powered excursion.
+
+
 ## Draft PR #90 — operator-approved joint-only Sleep then in-motion STOP
 
 A successful `agent arm` only torque-holds the **current** encoder pose.
