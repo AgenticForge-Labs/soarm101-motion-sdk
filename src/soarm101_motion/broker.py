@@ -31,6 +31,7 @@ from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
 from soarm101_motion.config import SOARM101Config, rate_within_ceiling
 from soarm101_motion.exceptions import SOARM101Error
+from soarm101_motion.supervisor_watchdog import SupervisorHeartbeatWatchdog
 from soarm101_motion.constants import (
     DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
     DEFAULT_MAX_JOINT_SPEED_DEG_S,
@@ -352,6 +353,21 @@ class RobotBrokerService:
         self._sdk_stop_epoch = 0
         self._sdk_epoch_lock = threading.Lock()
         self._event_lock = threading.Lock()
+        self._supervisor_watchdog: SupervisorHeartbeatWatchdog | None = None
+
+    def attach_supervisor_watchdog(
+        self, watchdog: SupervisorHeartbeatWatchdog,
+    ) -> None:
+        if not (
+            isinstance(self.executor, SDKAgentExecutor)
+            and self._allow_simulated_sdk_posts
+        ):
+            raise ValueError(
+                "trusted heartbeat watchdog currently requires simulated native SDK"
+            )
+        if self._supervisor_watchdog is not None:
+            raise ValueError("supervisor watchdog already attached")
+        self._supervisor_watchdog = watchdog
 
     def authorized(self, authorization: str | None) -> bool:
         if authorization is None:
@@ -420,6 +436,13 @@ class RobotBrokerService:
         with self._sdk_epoch_lock:
             admitted_epoch = self._sdk_stop_epoch
         try:
+            if self._supervisor_watchdog is not None:
+                if action == "stop":
+                    self._supervisor_watchdog.stop()
+                elif action in {
+                    "go_pose", "joint", "jog", "gripper", "sleep", "sleep_up",
+                }:
+                    self._supervisor_watchdog.require_fresh()
             if isinstance(self.executor, AgentCommandExecutor) and action == "stop":
                 # The legacy CLI stop does not revoke the human agent lease.
                 # Revoke BEFORE waiting behind a previous CLI action, so
@@ -582,6 +605,24 @@ class RobotBrokerService:
         request = dict(payload or {})
         request_id = uuid.uuid4().hex
 
+        if method == "POST" and path == "/v1/supervisor-heartbeat":
+            if self._supervisor_watchdog is None:
+                return BrokerResponse(
+                    HTTPStatus.NOT_FOUND,
+                    {"ok": False, "request_id": request_id,
+                     "error": "supervisor heartbeat is not enabled"},
+                )
+            try:
+                state = self._supervisor_watchdog.pulse()
+            except PermissionError as exc:
+                return BrokerResponse(
+                    HTTPStatus.CONFLICT,
+                    {"ok": False, "request_id": request_id, "error": str(exc)},
+                )
+            return BrokerResponse(
+                HTTPStatus.OK,
+                {"ok": True, "request_id": request_id, "result": state},
+            )
         if method == "GET" and path == "/v1/profile":
             return BrokerResponse(
                 HTTPStatus.OK,
@@ -939,6 +980,13 @@ class BrokerRelayService:
         payload: Mapping[str, object] | None = None,
     ) -> BrokerResponse:
         request = dict(payload or {})
+        if path == "/v1/supervisor-heartbeat":
+            # This host-only route cannot be acquired by writing an agent
+            # profile; it is absent from the public capability registry.
+            return BrokerResponse(
+                HTTPStatus.FORBIDDEN,
+                {"ok": False, "error": "supervisor heartbeat is host-only"},
+            )
         if method.upper() == "GET" and path == "/v1/profile":
             return BrokerResponse(
                 HTTPStatus.OK, {
@@ -1004,6 +1052,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--sdk-agent-relay-port", type=int,
         help="simulation-only OpenShell ingress with separate agent token; "
              "trusted SDK executor remains bound to 127.0.0.1",
+    )
+    parser.add_argument(
+        "--sdk-supervisor-timeout-s", type=float,
+        help="require trusted host heartbeat and STOP on expiry (only SDK "
+             "simulation relay; not hardware E-stop)",
     )
     simulated_modes = parser.add_mutually_exclusive_group()
     simulated_modes.add_argument(
@@ -1105,6 +1158,12 @@ def main(argv: list[str] | None = None) -> int:
     ).validated(config)
     simulated_actions = bool(args.sdk_simulation_actions)
     relay_port = args.sdk_agent_relay_port
+    if args.sdk_supervisor_timeout_s is not None and (
+        not simulated_actions or relay_port is None
+    ):
+        raise SystemExit(
+            "--sdk-supervisor-timeout-s requires the SDK simulation agent relay"
+        )
     if relay_port is not None and (
         not simulated_actions or not 1 <= relay_port <= 65535
     ):
@@ -1177,6 +1236,21 @@ def main(argv: list[str] | None = None) -> int:
         allow_simulated_sdk_posts=simulated_actions,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
+    watchdog = None
+    if args.sdk_supervisor_timeout_s is not None:
+        def watchdog_stop() -> None:
+            outcome = service.dispatch("POST", "/v1/stop", {})
+            if outcome.status != HTTPStatus.OK:
+                raise RuntimeError(
+                    "watchdog STOP/HOLD was not confirmed: "
+                    + str(outcome.body.get("error"))
+                )
+        watchdog = SupervisorHeartbeatWatchdog(
+            timeout_s=args.sdk_supervisor_timeout_s,
+            on_expire=watchdog_stop,
+        )
+        service.attach_supervisor_watchdog(watchdog)
+        watchdog.start()
     relay_server = None
     if relay_port is not None:
         relay_service = BrokerRelayService(
@@ -1216,6 +1290,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if watchdog is not None:
+            watchdog.close()
         if relay_server is not None:
             relay_server.server_close()
             server.shutdown()
