@@ -182,6 +182,152 @@ def test_native_preview_parser_is_opt_in() -> None:
     assert build_parser().parse_args(["--sdk-simulation-preview"]).sdk_simulation_preview
 
 
+
+def test_broker_cli_sdk_simulation_actions_keep_one_session_and_stop(
+    tmp_path, monkeypatch,
+) -> None:
+    """Real broker CLI composition, no subprocesses, bus or physical connection."""
+    import soarm101_motion.broker as broker_module
+
+    authority_file = tmp_path / "authority.json"
+    monkeypatch.setenv("SOARM101_AGENT_AUTHORITY_PATH", str(authority_file))
+    monkeypatch.setenv("SOARM101_BROKER_TOKEN", "synthetic-test-only-token")
+    lease = AgentAuthorityStore(authority_file)
+    lease.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+
+    doc = {
+        "schema_version": 1, "name": "simulated-small-joint",
+        "tools": ["robot_health", "robot_capabilities", "robot_state",
+                  "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 1},
+    }
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(doc), encoding="utf-8")
+    event_path = tmp_path / "events.jsonl"
+    events = []
+    class FakeServer:
+        def __init__(self, address, service):
+            assert address[0] == "127.0.0.1"
+            self.service = service
+
+        def serve_forever(self):
+            service = self.service
+            assert isinstance(service.executor, SDKAgentExecutor)
+            assert service.executor.simulation is True
+            assert service.executor.physical_trial is False
+            assert service.executor.simulation_actions is True
+            assert service.executor._session is None
+            caps = service.dispatch("GET", "/v1/capabilities")
+            assert caps.status == 200
+            advertised = caps.body["result"]["actions"]
+            assert "joint" in advertised and "stop" in advertised
+            assert "go_pose" not in advertised and "jog" not in advertised
+            assert caps.body["result"]["authority"]["armed"] is True
+            first = service.dispatch("GET", "/v1/state")
+            assert first.status == 200
+            assert first.body["result"]["broker_session"]["sdk_connect_count"] == 1
+            identity = first.body["result"]["broker_session"]["id"]
+            for delta in (0.2, -0.2):
+                result = service.dispatch(
+                    "POST", "/v1/joint",
+                    {"joint": "shoulder_pan", "delta_deg": delta},
+                )
+                assert result.status == 200, result.body
+                assert result.body["result"]["completed"] is True
+                assert result.body["result"]["broker_session"]["id"] == identity
+                assert result.body["result"]["broker_session"]["sdk_connect_count"] == 1
+            assert service.dispatch("POST", "/v1/stop", {}).status == 200
+            assert not lease.status()["armed"]
+            later = service.dispatch(
+                "POST", "/v1/joint",
+                {"joint": "shoulder_pan", "delta_deg": 0.1},
+            )
+            assert later.status == 409
+            assert "not armed" in later.body["error"]
+            events.extend(json.loads(line) for line in event_path.read_text().splitlines())
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(broker_module, "RobotBrokerHTTPServer", FakeServer)
+    monkeypatch.setattr(
+        broker_module.subprocess, "run",
+        lambda *a, **k: pytest.fail("native simulation must not launch CLI subprocess"),
+    )
+    assert broker_module.main([
+        "--sdk-simulation-actions", "--profile", str(profile_path),
+        "--events", str(event_path), "--port", "0",
+    ]) == 0
+    assert any(x["action"] == "stop" and x["ok"] for x in events)
+    assert len([x for x in events if x["action"] == "joint" and x["ok"]]) == 2
+    assert len({x["profile_sha256"] for x in events}) == 1
+
+
+def test_cli_sdk_simulation_actions_fail_closed_before_server(
+    tmp_path, monkeypatch,
+) -> None:
+    import soarm101_motion.broker as broker_module
+    monkeypatch.setenv("SOARM101_BROKER_TOKEN", "test-only-token")
+    monkeypatch.setattr(
+        broker_module, "RobotBrokerHTTPServer",
+        lambda *a, **kw: pytest.fail("unsafe broker must not be started"),
+    )
+    profile = tmp_path / "profile.json"
+    cases = [
+        (None, "requires an explicit --profile", []),
+        ({"tools": ["robot_state", "jog_joint", "stop"]},
+         "requires capabilities, state and STOP", []),
+        ({"tools": ["robot_state", "robot_capabilities", "jog_joint"]},
+         "requires capabilities, state and STOP", []),
+        ({"tools": ["robot_state", "robot_capabilities", "stop", "capture_camera"],
+          "cameras": ["overhead"]}, "cannot authorize cameras", []),
+        ({"tools": ["robot_state", "robot_capabilities", "stop", "jog_cartesian"]},
+         "cannot authorize cameras or Cartesian jogs", []),
+        ({"tools": ["robot_state", "robot_capabilities", "stop", "jog_joint"]},
+         "must bind only to 127.0.0.1", ["--host", "0.0.0.0"]),
+    ]
+    for spec, fragment, args in cases:
+        if spec is None:
+            argv = ["--sdk-simulation-actions"]
+        else:
+            doc = {
+                "schema_version": 1, "name": "negative", "cameras": [],
+                "limits": {}, **spec,
+            }
+            profile.write_text(json.dumps(doc), encoding="utf-8")
+            argv = ["--sdk-simulation-actions", "--profile", str(profile), *args]
+        with pytest.raises(SystemExit, match=fragment):
+            broker_module.main(argv)
+
+
+def test_simulated_native_broker_cannot_listen_on_external_interface(tmp_path) -> None:
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(robot_id="so101"),
+        rates=AgentMotionRates(), simulation=True, simulation_actions=True,
+        authority_store=AgentAuthorityStore(tmp_path / "authority.json"),
+    )
+    service = RobotBrokerService(
+        executor=executor, token="simulated-token",
+        profile=CapabilityProfile.from_document({
+            "schema_version": 1, "name": "simulation",
+            "tools": ["robot_state", "jog_joint", "stop"],
+            "cameras": [], "limits": {"max_joint_delta_deg": 1},
+        }),
+        allow_simulated_sdk_posts=True,
+    )
+    with pytest.raises(ValueError, match="loopback"):
+        RobotBrokerHTTPServer(("0.0.0.0", 0), service)
+    executor.close()
+
+
+def test_simulation_action_mode_cannot_enable_real_arm() -> None:
+    with pytest.raises(ValueError, match="simulated arm only"):
+        SDKAgentExecutor(
+            config=SOARM101Config(robot_id="so101"),
+            rates=AgentMotionRates(), simulation_actions=True,
+        )
+
+
 def test_native_executor_stop_can_interrupt_a_fake_inflight_move(tmp_path) -> None:
     """Executor unit proof only; NOT a real serial/HOLD or HTTP-level STOP proof."""
     started = threading.Event()
