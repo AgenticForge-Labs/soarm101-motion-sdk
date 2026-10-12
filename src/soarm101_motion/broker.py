@@ -29,6 +29,7 @@ from typing import Mapping, Sequence
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
 from soarm101_motion.config import SOARM101Config, rate_within_ceiling
+from soarm101_motion.exceptions import SOARM101Error
 from soarm101_motion.constants import (
     DEFAULT_MAX_JOINT_ACCEL_DEG_S2,
     DEFAULT_MAX_JOINT_SPEED_DEG_S,
@@ -41,6 +42,23 @@ from soarm101_motion.constants import (
 
 DEFAULT_BROKER_HOST = "127.0.0.1"
 DEFAULT_BROKER_PORT = 8765
+
+# Trusted-host-only physical STOP qualifications. These are not public broker
+# capabilities: the regular broker CLI still rejects SDK motion POST routes.
+# Keep the fixed single-joint envelope here so the example and the server
+# cannot drift apart.
+PHYSICAL_SHORT_STOP_JOINT = "shoulder_pan"
+PHYSICAL_SHORT_STOP_DELTA_DEG = 8.0
+_PHYSICAL_TRIAL_COMMON_TOOLS = frozenset({
+    "robot_health", "robot_capabilities", "robot_state", "stop",
+})
+_PHYSICAL_TRIAL_POSE_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"go_pose", "sleep"}
+# Joint-only canonical Sleep PREP precedes exactly one pan move. The
+# profile alone never authorizes an arbitrary sequence of these actions.
+_PHYSICAL_TRIAL_SHORT_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"jog_joint", "sleep"}
+# Separately approved one-shot saved Overhead trial: no Sleep or other pose
+# and no automatic return. Exact payload and phases are enforced below.
+_PHYSICAL_TRIAL_OVERHEAD_SINGLE_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"go_pose"}
 DEFAULT_EVENT_PATH = Path.home() / ".local" / "state" / "soarm101" / "broker" / "events.jsonl"
 
 
@@ -278,12 +296,32 @@ class RobotBrokerService:
             raise ValueError("physical trial requires a real explicitly provisioned SDK executor")
         if allow_simulated_sdk_posts and allow_physical_sdk_trial:
             raise ValueError("cannot combine simulated and physical broker modes")
+        physical_short_stop_trial = False
+        physical_overhead_single_trial = False
         if allow_physical_sdk_trial:
-            if profile is None or profile.allowed_tools != frozenset({
-                "robot_health", "robot_capabilities", "robot_state",
-                "go_pose", "sleep", "stop",
-            }) or profile.allowed_cameras:
-                raise ValueError("physical trial profile must restrict actions to state, pose, Sleep and STOP")
+            if profile is None or profile.allowed_cameras:
+                raise ValueError("physical trial requires a restricted camera-free profile")
+            physical_short_stop_trial = (
+                profile.allowed_tools == _PHYSICAL_TRIAL_SHORT_TOOLS
+                and profile.max_joint_delta_deg == PHYSICAL_SHORT_STOP_DELTA_DEG
+                and profile.max_model_jog_mm is None
+            )
+            physical_pose_trial = (
+                profile.allowed_tools == _PHYSICAL_TRIAL_POSE_TOOLS
+                and profile.max_joint_delta_deg is None
+                and profile.max_model_jog_mm is None
+            )
+            physical_overhead_single_trial = (
+                profile.allowed_tools == _PHYSICAL_TRIAL_OVERHEAD_SINGLE_TOOLS
+                and profile.max_joint_delta_deg is None
+                and profile.max_model_jog_mm is None
+            )
+            if not (physical_short_stop_trial or physical_pose_trial
+                    or physical_overhead_single_trial):
+                raise ValueError(
+                    "physical trial profile must be an approved short-pan, "
+                    "historical pose, or one-shot saved Overhead STOP set"
+                )
         if not str(token):
             raise ValueError("broker token cannot be empty")
         self.executor = executor or AgentCommandExecutor()
@@ -291,6 +329,18 @@ class RobotBrokerService:
         # disabled until physical STOP/ownership/workspace gates are passed.
         self._allow_simulated_sdk_posts = allow_simulated_sdk_posts
         self._allow_physical_sdk_trial = allow_physical_sdk_trial
+        self._physical_short_stop_trial = physical_short_stop_trial
+        self._physical_overhead_single_trial = physical_overhead_single_trial
+        # One motion from the measured pose directly to saved Overhead;
+        # the local operator must confirm it, and no second move is permitted.
+        self._physical_overhead_phase = (
+            "ready" if physical_overhead_single_trial else None
+        )
+        # This trusted trial progresses one way only: Sleep -> pan -> STOP.
+        # It is not a second unrestricted physical broker.
+        self._physical_short_phase = (
+            "await_sleep" if physical_short_stop_trial else None
+        )
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
         self.profile = profile if profile is not None else CapabilityProfile.full()
@@ -377,9 +427,37 @@ class RobotBrokerService:
                 # even if the backend STOP itself raises.
                 with self._sdk_epoch_lock:
                     self._sdk_stop_epoch += 1
+                    if self._physical_short_stop_trial:
+                        self._physical_short_phase = "stopped"
+                    if self._physical_overhead_single_trial:
+                        self._physical_overhead_phase = "stopped"
                 result = self.executor.execute(action, request)
             else:
                 with self._operation_lock:
+                    if self._physical_overhead_single_trial and action == "go_pose":
+                        with self._sdk_epoch_lock:
+                            if self._physical_overhead_phase != "ready":
+                                raise PermissionError(
+                                    "one-shot Overhead STOP trial denies replay "
+                                    f"in phase {self._physical_overhead_phase}"
+                                )
+                            # Consume before touching the device, including on
+                            # failure or an independent STOP racing the movement.
+                            self._physical_overhead_phase = "pose_in_flight"
+                    if self._physical_short_stop_trial and action in {"sleep", "joint"}:
+                        with self._sdk_epoch_lock:
+                            required = "await_sleep" if action == "sleep" else "ready"
+                            if self._physical_short_phase != required:
+                                raise PermissionError(
+                                    f"short STOP trial action {action} denied in "
+                                    f"phase {self._physical_short_phase}"
+                                )
+                            # Mark consumed BEFORE execution to reject retries
+                            # even if hardware returns an error or STOP races.
+                            self._physical_short_phase = (
+                                "sleep_in_flight" if action == "sleep"
+                                else "joint_in_flight"
+                            )
                     if isinstance(self.executor, SDKAgentExecutor):
                         with self._sdk_epoch_lock:
                             if admitted_epoch != self._sdk_stop_epoch:
@@ -392,10 +470,32 @@ class RobotBrokerService:
                         ):
                             raise PermissionError("SDK preview currently permits only read-only routes")
                         result = self.executor.execute(action, request)
+                        # The SDK may return a completed result while an
+                        # independent STOP is racing with its final settle or
+                        # HOLD. The broker must never acknowledge that stale
+                        # result as a successful motion after STOP admission.
+                        # This is the response linearization point.
+                        with self._sdk_epoch_lock:
+                            if admitted_epoch != self._sdk_stop_epoch:
+                                raise BrokerCommandError(
+                                    "request interrupted by a newer STOP; "
+                                    "completion is not confirmed"
+                                )
+                            if self._physical_short_stop_trial and action == "sleep":
+                                if not (result.get("accepted") and result.get("completed")):
+                                    raise BrokerCommandError(
+                                        "short STOP preparation Sleep incomplete"
+                                    )
+                                self._physical_short_phase = "ready"
+                            elif self._physical_short_stop_trial and action == "joint":
+                                self._physical_short_phase = "joint_finished"
+                            elif (self._physical_overhead_single_trial
+                                  and action == "go_pose"):
+                                self._physical_overhead_phase = "pose_finished"
                     else:
                         result = self.executor.run(arguments)
-        except (BrokerCommandError, RuntimeError, ValueError, KeyError,
-                OSError, PermissionError) as exc:
+        except (BrokerCommandError, SOARM101Error, RuntimeError, ValueError,
+                KeyError, OSError, PermissionError) as exc:
             duration = time.monotonic() - started
             self._record(
                 request_id=request_id,
@@ -481,6 +581,31 @@ class RobotBrokerService:
             )
         try:
             self.profile.check(method, path, request)
+            if self._physical_short_stop_trial and method == "POST" and path == "/v1/sleep":
+                if request != {"joint_only": True}:
+                    raise PermissionError(
+                        "short physical STOP preparation requires joint-only Sleep"
+                    )
+            if (self._physical_overhead_single_trial and method == "POST"
+                    and path == "/v1/go-pose"):
+                if request != {"name": "agent_start_overhead", "joint_only": True}:
+                    raise PermissionError(
+                        "one-shot Overhead STOP trial permits only the fixed "
+                        "joint-only agent_start_overhead pose"
+                    )
+            if self._physical_short_stop_trial and method == "POST" and path == "/v1/joint":
+                # The signed/local broker profile caps the magnitude, and
+                # this exact-payload gate prevents other axes, reversed motion,
+                # rate overrides, or extra fields in a physical STOP bench run.
+                if not (
+                    set(request) == {"joint", "delta_deg"}
+                    and request["joint"] == PHYSICAL_SHORT_STOP_JOINT
+                    and type(request["delta_deg"]) in (int, float)
+                    and request["delta_deg"] == PHYSICAL_SHORT_STOP_DELTA_DEG
+                ):
+                    raise PermissionError(
+                        "short physical STOP trial permits only shoulder_pan +8 degrees"
+                    )
         except (PermissionError, ProfileError) as exc:
             self._record(
                 request_id=request_id,

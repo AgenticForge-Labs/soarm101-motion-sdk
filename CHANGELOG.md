@@ -1,5 +1,137 @@
 # Changelog
 
+- **Draft PR #90, 2026-10-12:** Fix real one-shot Overhead preflight refusal from canonical Sleep-adjacent measured posture. Remove redundant extra 5° limit inset after existing SDK mechanical-stop margin; retain effective-calibration bounds, distance, rate and live HOLD checks. Record read-only saved Overhead targets and executable limits in failure summary; add out-of-range negative regression. No real Overhead movement occurred during the failed trial.
+
+- Draft PR #90: added operator-only `overhead-single` stopped-pose
+  qualification. One trusted-broker joint-only saved Overhead action
+  from measured stationary pose, no initial Sleep/roundtrip/rearm,
+  only exact fixed go-pose payload and one-shot phase. 6°/s 30°/s²
+  defaults (hard caps 8°/s 40°/s²), joint margin/travel checks,
+  two-joint passive moving feedback at STOP and unchanged fault/settling
+  gates. Physical go-pose reuses human torque HOLD, avoids 1/1 latch;
+  fake-hardware tests cover rate/profile/replay/refused torque-off.
+  Real multi-joint braking remains to be validated locally.
+
+
+- **Draft PR #90, 2026-10-12:** Reconcile real short STOP trace with measured
+  2°/s in-flight pan encoder changes, one 0/254 stop latch and <=0.088°
+  post-latch drift. Fix the evaluator's previous-sample timestamp error
+  and treat contradictory Feetech Moving=false as a recorded warning,
+  not stronger proof than direct encoder motion. Add trace-derived positive
+  and stationary negative regressions. Keep broader Overhead and native
+  production safety gates blocked pending separately approved evidence.
+
+- Draft PR #90: preserve read-only physical broker preflight semantics
+  through executor teardown. Sessions which connected to externally
+  torque-held servos but attempted **no motion** close the transport
+  without implicitly writing another servo STOP/HOLD goal; after any
+  attempted movement, preexisting cancellation/fault protections remain.
+  Added a regression test for preflight-only cleanup.
+
+
+- Draft PR #90: repair the attended short physical STOP trial failing
+  `Sleep preparation requires a stationary, healthy torque HOLD`
+  after a human `agent arm`. Feetech now reads all motor
+  `Torque_Enable` registers on a fresh connection (all enabled/off
+  accepted; mixed/invalid rejected) without sending motor goals.
+  Joint-only physical Sleep reuses an existing healthy HOLD instead
+  of repeating an all-motor 1/1 latch. Preflight failure emits
+  precise flags and read-only per-motor diagnostics. Added fake
+  hardware and SDK tests; physical STOP remains unqualified.
+
+
+- **Draft PR #90, next physical STOP gate (2026-10-11):** replace the
+  short trial's assumed Sleep starting posture with an operator-approved
+  canonical **joint-only** Sleep action from a healthy, calibrated
+  measured posture. The trusted broker enforces one Sleep, one +8°
+  pan move, independent STOP, and no motion replay. The passive
+  tracer provides read-only, pre-STOP encoder/Moving evidence, with
+  >=2° remaining and a recent changing encoder requirement to
+  distinguish actual moving-servo interruption from the earlier
+  stable near-endpoint cancellation. Tests exercise denial of
+  pan-before-Sleep, duplicate Sleep, invalid start, and stationary
+  STOP evidence. No autonomous hardware run, production broker
+  cutover, or emergency-stop certification.
+
+
+- Continue draft #90 after a physical-trial **preflight** (no motion)
+  rejected an 86.23° difference from Sleep. Confirmed `agent arm` holds
+  current position rather than parking. Add a short-only measured-start
+  option with per-joint diagnostic evidence, validated all-joint limits,
+  healthy stationary torque HOLD and explicit human `MEASURED` clearance
+  approval. Preserve Sleep defaults and the Overhead Sleep-only gate.
+  Physical STOP remains unqualified.
+
+
+- Repair PR #90 trusted-host short STOP bootstrap: the physical-trial
+  broker's previous pose/Sleep-only allowlist rejected the new
+  `jog_joint` short trial before motion. Support two exact, distinct
+  allowlisted local trial profiles, require an 8° joint profile cap and
+  reject any physical short command other than shoulder-pan +8° with
+  no extra fields. Regression-test the script's profile through the
+  real broker constructor. No production broker change or physical
+  qualification claimed.
+
+
+- Stage PR #90's default supervised short STOP profile: a single
+  calibrated-inset +8° pan command from encoder-verified Sleep at
+  narrow rates, manual ENTER interrupt, verified hold plus a later
+  stability readback. No baseline roundtrip or post-STOP REARM.
+  Preserve historical Overhead test behind explicit opt-in.
+  Suppress a duplicate servo latch from successful STOP teardown.
+  This remains draft and physically unqualified.
+
+
+- Correct a **real 2026-10-11 physical STOP false positive**: an
+  acknowledged STOP was followed by 18.4° elbow movement in ~1 s with
+  no new host movement command. In the staged SDK broker, sample
+  physical encoder hold stability over 1.5 s before acknowledging STOP;
+  refuse drift >1°, moving/faulted/disconnected/torque-off state, latch
+  session fault and preserve revoked authority. Add deterministic
+  replay-style regression from measured values. The attended STOP script
+  must not reissue STOP blindly after an unverified first latch.
+  The servo braking cause remains unresolved: PR #90 physical gate
+  failed and production cutover remains blocked.
+
+
+- Replace PR #90's fixed 150 ms in-flight STOP trigger with operator
+  ENTER while motion is active; fail if motion finishes before input.
+  Following human `STATIONARY` verification, offer an optional
+  explicitly human-confirmed `REARM`: validate held state, issue a
+  fresh five-minute calibration-bound lease, then finish Overhead via
+  a **new** validated joint-only broker command. Never resume the
+  cancelled action. Add hardware-free manual-trigger and lease gates.
+
+
+- Update the PR #90 physical STOP qualification to **assume measured Sleep**
+  rather than command an initial no-op Sleep. Require the actual joint angles
+  to be within 5° of calibrated Sleep, an Overhead target at least 10° away,
+  and a completed/measured Overhead -> Sleep baseline before interrupting a
+  *new* Overhead leg. STOP revokes authority and never automatically returns
+  to Sleep. Add hardware-free pose and route-order regressions.
+
+
+- Add the **operator-only** real HTTP in-flight STOP qualification
+  `examples/persistent_broker_stop_trial.py`, with human confirmations,
+  20 Hz joint-only candidate pacing, observed active movement, independent
+  authenticated 5-second-timeout STOP, live state readback, motor and
+  broker event traces, and explicit stationary confirmation. Tests only
+  validate script operator gates, starting pose, and baseline route order; no hardware is exercised in CI.
+
+- Broker native HTTP now catches the SDK's own typed motion-cancel,
+  communication and hardware exceptions as auditable errors instead of
+  allowing uncaught exceptions to break the request connection. The
+  attended STOP trial also requires positive torque-held confirmation.
+
+- PR #90 (draft): complete both arm and tool/gripper STOP attempts even
+  on partial HOLD failure, reject stale in-flight native broker successes
+  after STOP, latch any failed existing-session HOLD and revoke physical
+  authority, and require connected/nonfaulted live feedback for STOP
+  acknowledgement. Add simulation-only cancellation, generic STOP fault,
+  gripper STOP and broker audit regression tests; real STOP latency and
+  physical interruption are **not yet qualified**.
+
+
 - PR #88 staging consolidation: remove the unattended `--yes` bypass from
   `examples/persistent_broker_motion_trace.py`; require a TTY and literal RUN
   confirmation in addition to the existing human lease. Add a hardware-free

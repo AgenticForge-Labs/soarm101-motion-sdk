@@ -41,7 +41,10 @@ class FakeConnectedArm:
         return SimpleNamespace(positions={"shoulder_pan": 0.0})
 
     def get_state(self):
-        return SimpleNamespace(torque_enabled=True)
+        return SimpleNamespace(
+            connected=self.is_connected, torque_enabled=True,
+            moving=False, faulted=False, fault_message=None,
+        )
 
 
 def make_executor(tmp_path, arm, *, physical=False):

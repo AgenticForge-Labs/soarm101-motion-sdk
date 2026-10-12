@@ -1,10 +1,171 @@
 # Development plan
 
+## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)
+
+**2026-10-12 preflight correction:** The first attended `overhead-single`
+attempt stopped before any movement at measured shoulder-lift **−101.89°**.
+The SDK's canonical Sleep is approximately **−102.05°** for that joint
+and deliberately uses a **2° inset inside already safety-margined
+executable joint limits**. The trial's extra 5° start/target inset
+mistakenly rejected a healthy Sleep-adjacent pose. This extra inset is
+removed only from the experimental Overhead preflight: both measured
+positions and saved targets must still lie within the SDK's authoritative
+effective calibrated limits, which already incorporate its configured
+mechanical-stop margin. Calibration provenance, max 100° joint travel,
+at least two joints with ≥12° travel, stationary healthy torque HOLD,
+rate caps, independent STOP and post-STOP verification remain enforced.
+On refusal, the summary now includes the measured joints, saved target
+and executable bounds; the original failure trace is unchanged.
+No physical Overhead STOP result has yet been recorded.
+
+**Unmerged, operator-only physical experiment, not production motor control.**
+New `--trial overhead-single` uses the CURRENT measured, calibrated and
+stationary torque-held posture and moves **once** toward the existing saved
+`agent_start_overhead` pose, joint-only (no gripper, preparatory Sleep,
+Overhead roundtrip, retry, automatic recovery or REARM). The operator must
+review every joint's printed displacement and swept-route clearance and
+type `OVERHEAD_START`. ENTER during physical motion requests independent
+broker STOP; `STATIONARY` is only for confirmed stable physical HOLD.
+
+The speed is **6°/s, acceleration 30°/s²** by default (3x faster than
+the earlier 2°/s short-pan trial); hard caps are **8°/s, 40°/s²**
+and 20 Hz. The measured pose and saved Overhead must match calibrated
+joint identities, remain inside SDK effective calibrated joint limits (which already incorporate its configured stop margin), require at least two
+joints moving ≥12°, and no joint may travel more than 100°. The broker
+accepts only one exact joint-only Overhead POST and STOP; it blocks any
+second pose, other pose, Sleep, jog, gripper, rate override or post-STOP
+replay. The physical joint-only pose reuses existing human torque HOLD
+rather than issuing another 1/1 servo latch.
+
+The STOP qualification requires fresh measured encoder progress from
+at least **two** distinct joints with ≥2° remaining, one corrected
+0/254 HOLD, ≤1° 1.5-s settling, fault-free connected torque state,
+cancellation of the interrupted action, human STATIONARY observation
+and revoked authority. The Feetech Moving bit can be false even as an
+encoder changes: preserve it as diagnostic, not sole motion authority.
+Neither software success nor a hobby arm implies certified braking.
+An earlier real elbow STOP continued ~18.4°; the later short 2°/s
+pan test stopped with ~0.088° settling. The multi-joint physical gate
+still requires separate supervised evidence, clear workspace, no load
+and a reachable physical power cutoff.
+
+### Software validation (no hardware)
+
+```bash
+cd ~/AgenticForge/soarm101-motion-sdk
+git switch feature/broker-independent-stop-faults
+git pull --ff-only
+git rev-parse HEAD
+source .venv/bin/activate
+ruff check .
+python -m pytest --no-cov -q tests/test_broker_stop_trial.py tests/test_broker_sdk.py tests/test_broker_stop_faults.py tests/test_stop_ownership.py
+python -m pytest --no-cov -q
+```
+
+### Attended test (only after exact-head CI, human readiness and clearance)
+
+```bash
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_stop_trial.py \
+  --trial overhead-single --port /dev/ttyACM1 --robot-id so101 \
+  --output "$HOME/soarm-motion-tests/overhead-stop-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+Decline at `OVERHEAD_START` for a read-only pose/torque preflight;
+the script reports a nonpassing qualification, with no scripted motion
+when declined. Human arming itself can enable motors. After confirmation,
+press ENTER **early, when more than one joint is physically moving**.
+If anything behaves unexpectedly, use the accessible power cutoff
+rather than retrying software STOP. Do not issue a recovery move.
+
+Share `*.summary.json`, `*.broker-events.jsonl`, and motor `*.jsonl`
+together (redact tokens/leases). Distinguish raw stop-latch timing,
+braking response, and the separate 1.5-s stabilization-monitor HTTP
+duration. Never edit these original evidence files.
+
+
+## 2026-10-12 attended moving-pan STOP: physical response good, evidence-gate defect
+
+The operator's `short-stop-20261012-082341` trace was collected on real
+hardware. The pan encoder advanced 2091 -> 2098 ticks in 0.299 s immediately
+before STOP (0.6154°, consistent with the commanded 2°/s), with 3.69° still
+to go. STOP made ONE 0/254 six-motor position latch; no additional position
+targets were issued afterward. Maximum post-latch drift was 0.0879°,
+remaining stationary to encoder resolution through the follow-up read.
+The human reported an immediate physical stop. Torque reattachment was
+healthy: connected=true, torque_enabled=true, moving=false, faulted=false.
+
+The old script nevertheless reported `passed=false`. Its last-change
+timestamp mistakenly used the earlier *different* sample's time
+(0.1232 s old) instead of the changed sample's time (0.0231 s old).
+It also vetoed genuine moving encoder evidence merely because the Feetech
+`Moving` status bit was false during slow movement. The evidence evaluator
+now timestamps actual encoder transitions and records contradictory but
+fresh `Moving` flags as warnings, retaining strict measured-change,
+freshness, progress, remaining-travel, after-STOP settling, fault, human
+authority and one-write rules. Do not edit this original trial summary;
+its software `passed=false` was the *old evaluator's* result.
+
+This is encouraging **attended 2°/s single-joint STOP evidence**, not a
+qualification of the earlier higher-energy 18.4° elbow excursion.
+Do not default to the multi-joint Overhead trial or release native
+production motion based on it. A broader Overhead stop requires separate
+operator-reviewed joint-specific bounds, workspace/clearance planning,
+and physical cutoff. The present change is software-only; hardware has
+not been moved by this change. See
+`docs/physical-stop-short-trial-20261012.md`.
+
+
+## 2026-10-11 PR #90 — reconnected live torque preflight repair
+
+The attended Sleep-first short STOP script failed before motion:
+`Sleep preparation requires a stationary, healthy torque HOLD`.
+Root-cause source review established that `FeetechBackend.connect()`
+did not recover the live `Torque_Enable` register state left by the
+previous human `agent arm` process, so its new local cache could
+incorrectly report torque off. The branch now reads all six real servo
+torque registers on connect, rejects mixed/invalid states, and keeps
+connection side-effect free. Joint-only physical Sleep does not
+re-enable torque or send another 1/1 latch when already held. The
+preflight logs exact flags and per-servo read-only diagnostics on failure.
+
+Added software tests for new-session all-ON, all-OFF, mixed torque, no
+goal write, joint-only Sleep reuse, and genuine torque-off refusal.
+Keep the existing short STOP physical gate **blocked** until exact-head
+software tests pass and the operator reviews hardware state. If moving,
+faulted, or gripper-state issues persist, investigate original state
+rather than bypassing the gate. No new physical STOP evidence yet.
+
+
+## Draft PR #90 — prepared Sleep and actual in-motion evidence
+
+2026-10-11 subsequent operator evidence shows a stable, single 0/254
+HOLD and revoked lease in the short +8° pan trial, but **not moving-servo
+braking**, because physical pan feedback was already stationary near the
+endpoint before STOP. The same branch now stages the next test:
+
+- All healthy, calibrated starting postures are eligible **only if**
+  the operator confirms the entire multi-joint path to Sleep is clear.
+- One trusted loopback broker session executes one **joint-only** canonical
+  Sleep, verifies measured Sleep, then admits one fixed short pan motion.
+  A broker-owned phase gate denies pan-before-Sleep, Sleep replay,
+  and post-STOP motion. The production and public broker remain unchanged.
+- A passive trace snapshot at the operator keypress must show recent
+  changing encoder data, a fresh servo Moving flag, >=0.5° progress and
+  >=2° remaining; otherwise the physical braking gate remains
+  inconclusive even if stationary HOLD succeeded.
+- No automated START/STOP, added hardware polling, agent authority,
+  gripper close, auto-return or rearm. Local Codex/software validation
+  and separately attended hardware evidence are still required.
+
+Keep PR #90 draft/unmerged and the original 18.4° powered excursion
+open as an unresolved physical safety blocker.
+
 The motion SDK remains authoritative for hardware, calibration, kinematics, planning,
 and safety. Forge Puppeteer owns higher-level physical performer/stage coordination;
 historical Director/Studio integration references below describe older adapter work.
 
-## PR #89 — Broker-owned SDK session lifecycle (open, unmerged)
+## PR #89 — Broker-owned SDK session lifecycle (merged)
 
 Following staged PR #88 merged into `main` at
 `957e86fb1f090a52960a593ce5b07caeaffb7ec6`, PR #89 hardens the
@@ -31,7 +192,97 @@ concurrency/STOP regression. Hardware gates: local Codex/read-only
 verification of one-owner GUI/CLI/second-broker exclusion and shutdown
 with power cutoff accessible; no unintended motion. Complete physical STOP,
 fault injection, native camera parity and 2 mm Cartesian qualifications belong
-to proposed #90–#92. Keep #89 open until local validation and CI pass.
+to proposed #90–#92. PR #89 merged into `main` at `77b28edba0f2beb129c031e6adf11513d0e240fe`
+after Python 3.10/3.12 CI and operator-reported read-only local checks.
+
+## 2026-10-11 physical STOP trace adjudication — FAILED safety gate
+
+A complete source-level packet/firmware command analysis, original evidence
+hashes, confirmed 1/1 new-goal defect, duplicate cancellation writers,
+candidate 0/254 correction, and remaining hardware gates are maintained at
+[Feetech STOP protocol investigation](docs/feetech-stop-protocol-investigation.md).
+The same open PR now consolidates controller-owned cancellation, skips
+idle-gripper STOP duplication, and prevents faulted shutdown from creating
+additional position-latch commands. These changes are **simulation-gated
+only** until verified with real motor feedback and an approved test plan.
+
+
+User-supplied `stop-20261011-113611.jsonl`, `*.broker-events.jsonl`,
+and `*.summary.json` document a real unattended 1-second post-STOP
+joint drift despite HTTP 200 / `completed=true`. The operator correctly
+reported acceleration and a subsequent return toward the commanded hold
+posture. Broker STOP was requested at trace +62.899 s, ended at +62.922 s
+(~24 ms), but the elbow moved from about **82.8°** then to **64.4°** by
++63.934 s (**18.4° further motion**), while the shoulder moved ~5.0° and
+the model-derived TCP physical height changed from **51.1 to 111.6 mm**.
+The position-latch raw writes at +62.907, +62.910 and +62.913 s all used
+`speed_raw=1, acceleration_raw=1` and position ~2990 ticks. The last
+ordinary streamed goal was +62.896 s, speed 0 / acceleration 254.
+**No new ordinary motion command appears in the intervening second.**
+By +92.13 s before the operator's separately authorized move, elbow
+feedback was again ~83.3°: this suggests a motion reversal around the
+latched position, but sparse feedback cannot determine the peak or exact
+physical cause. Motor acceleration/braking dynamics at the servo are
+**suspected**, not proven. The previous trial's `passed=true` result
+is explicitly REVOKED as a physical STOP safety qualification.
+
+Remediation in the same open PR: fail-closed physical STOP acceptance:
+sample measured joint positions over 1.5 s after latch, reject >1°
+post-latch drift or ongoing motor `Moving`/fault/torque loss, latch
+`faulted` and keep authority revoked; expose stability evidence and
+HTTP failure rather than claiming `completed=true`. Do not repeat a
+failed/unverified hardware STOP command automatically, or offer the
+post-STOP REARM path on failure. Fake-transport tests replay the
+observed elbow displacement. This **detects** unsafe HOLD; it does
+not repair or certify servo braking. Keep PR #90 draft, do not
+activate native production motor paths or resume real STOP qualification
+until Feetech STOP register behavior (especially 1/1 vs prior 0/254)
+has been investigated with local Codex and a physical safety plan.
+
+## PR #90 — Independent STOP response and fail-closed HOLD (open, unmerged)
+
+Built on the #89 terminal broker session, this PR reinforces the existing
+shared SDK STOP path rather than adding an alternate hardware controller.
+`SOARM101.stop()` now attempts both motion-controller HOLD and gripper STOP,
+preserving the original failure if either fails. The trusted native broker
+serializes ordinary actions while dispatching STOP independently. After SDK
+dispatch, the broker rechecks the original request's STOP epoch, refusing a
+late success result for an action interrupted by a newer STOP. STOP that fails
+in any way after reaching an existing SDK session latches a fault and revokes
+physical-trial human authority; no automatic reconnect or resume is allowed.
+A STOP success requires live connected/nonfaulted state and joint readback,
+rather than unverified last-commanded positions. A successful simulated test
+is not a physical STOP guarantee.
+
+The reusable `examples/persistent_broker_stop_trial.py` adds a
+separate trusted-host qualification: **verify measured Sleep without
+commanding it**, complete Overhead -> Sleep and verify both positions,
+then initiate a new Overhead movement and **wait for operator ENTER
+while motion is active** before issuing independent STOP. Human
+ROUNDTRIP/START/ENTER/STATIONARY gates, immutable bounded HTTP broker,
+finite STOP timeout, and trace/event/summary evidence remain active.
+STOP revokes the original lease and leaves the arm between poses.
+The attended operator can decline recovery or explicitly type `REARM`
+after verifying stationary HOLD. Only a new short calibration-bound
+lease plus a new joint-only broker command can finish Overhead; the
+cancelled action is never resumed automatically. Automated test
+`tests/test_broker_stop_trial.py` checks no initial no-op Sleep,
+measured pose tolerances, command order, and unattended rejection,
+never serial activity. Actual physical acceptance remains operator-run.
+
+Software gates: Ruff, `tests/test_broker_stop_faults.py`, existing
+`test_broker_sdk.py` STOP/queued/HTTP tests, full pytest and both supported
+CI Python versions. Physical gate: human-supervised active-motion STOP via
+the restricted trusted-host loopback broker, with unloaded calibrated arm,
+power cutoff available, timestamped independent STOP response, motor and
+broker traces, no unintended resumed motion, and operator observation.
+An error or incomplete HOLD is a BLOCKER; do not treat fake STOP or read-only
+Codex success as completing this qualification.
+
+Production remains bounded CLI-backed and the public persistent-SDK preview
+remains read-only simulation. No interactive OpenShell physical motion is
+enabled. Future #91 (native capability parity) and #92 (physical cutover)
+must not branch until this PR merges.
 
 ## 2026-10-10 operator gripper fault and joint-only tracing
 
@@ -77,7 +328,7 @@ Retain the operator's trace evidence on merged #88. Additional physical
 safety qualification belongs to subsequent PRs and must be attached to those
 reviews rather than presented as already released behavior.
 
-## Milestone B integration sequence (#88 merged; #89 in progress)
+## Milestone B integration sequence (#88/#89 merged; #90 open)
 
 GitHub `main` is authoritative. Do not create a dependent branch until the
 preceding PR is merged. Preserve the extensive #88 staged work rather than
@@ -90,11 +341,11 @@ starting a competing SDK executor.
    human arming, explicit RUN confirmation and a separate narrow loopback profile.
    The completed 2026-10-10 five-leg experiment is evidence for *that route*
    only, not generalized robot safety.
-2. **PR #89 — exclusive hardware ownership/session lifecycle (open):**
+2. **PR #89 — exclusive hardware ownership/session lifecycle (merged):**
    one broker-owned persistent SDK session; fail-closed disconnect, restart,
    authority expiry and calibration changes; confirm GUI/CLI/second-broker
    exclusivity, including cooperative lock limitations.
-3. **Proposed PR #90 — independent STOP and fault handling:** true active-motion
+3. **PR #90 — independent STOP and fault handling (open):** true active-motion
    cancellation, generation-based queued-request invalidation, incomplete HOLD
    and servo faults; hardware-free race tests followed by a supervised STOP
    while moving with physical power cutoff accessible.

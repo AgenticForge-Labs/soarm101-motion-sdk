@@ -798,6 +798,9 @@ def test_loopback_trial_sleep_http_reuses_one_sdk_connection_without_cli(
             "capture_saved_pose", sdk._arm(),
             {"robot_id": "so101", "name": pose_name, "source": "follower"},
         )
+    # The real operator arms through a separate CLI process before the
+    # broker opens; simulate that already-active torque HOLD here.
+    sdk._arm().enable()
     monkeypatch.setattr(
         AgentCommandExecutor, "run",
         lambda *a, **k: pytest.fail("physical persistent broker invoked CLI"),
@@ -892,3 +895,147 @@ def test_physical_broker_trace_requires_operator_tty_and_has_no_yes_bypass(
     with pytest.raises(PermissionError, match="interactive operator terminal"):
         module.main(command)
     assert not list(tmp_path.iterdir())
+
+
+def test_joint_only_physical_overhead_reuses_human_torque_hold(
+    tmp_path, monkeypatch,
+) -> None:
+    """One-shot saved pose must not inject the old 1/1 enable latch."""
+    from soarm101_motion import SOARM101
+    from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
+    import soarm101_motion.poses as poses
+
+    config = SOARM101Config(port="/dev/fake-device", robot_id="so101")
+    arm = SOARM101.simulated(config=config, realtime=False)
+    arm.connect()
+    arm.enable()
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}-saved-poses.json",
+    )
+    SDK_CAPABILITIES.dispatch(
+        "capture_saved_pose", arm,
+        {"robot_id": "so101", "name": "agent_start_overhead",
+         "source": "follower"},
+    )
+    monkeypatch.setattr(
+        arm, "enable", lambda: pytest.fail("unexpected 1/1 torque relatch"),
+    )
+    authority = AgentAuthorityStore(tmp_path / "human-lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        physical_trial=True, arm_factory=lambda: arm, authority_store=authority,
+    )
+    monkeypatch.setattr(executor, "_calibration_id", lambda current: "simulation")
+    try:
+        result = executor.execute(
+            "go_pose", {"name": "agent_start_overhead", "joint_only": True},
+        )
+        assert result["accepted"] and result["completed"]
+        assert result["joint_only"] is True
+        assert executor.connection_count == 1
+    finally:
+        executor.close()
+
+
+def test_joint_only_physical_overhead_rejects_disabled_torque_before_goal(
+    tmp_path, monkeypatch,
+) -> None:
+    from soarm101_motion import SOARM101
+    from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
+    from soarm101_motion.exceptions import HardwareFaultError
+    import soarm101_motion.poses as poses
+
+    config = SOARM101Config(port="/dev/fake-device", robot_id="so101")
+    arm = SOARM101.simulated(config=config, realtime=False)
+    arm.connect()
+    monkeypatch.setattr(
+        poses, "default_pose_library_path",
+        lambda robot_id: tmp_path / f"{robot_id}-saved-poses.json",
+    )
+    SDK_CAPABILITIES.dispatch(
+        "capture_saved_pose", arm,
+        {"robot_id": "so101", "name": "agent_start_overhead",
+         "source": "follower"},
+    )
+    monkeypatch.setattr(
+        arm, "enable", lambda: pytest.fail("torque-off must not rearm itself"),
+    )
+    authority = AgentAuthorityStore(tmp_path / "human-lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        physical_trial=True, arm_factory=lambda: arm, authority_store=authority,
+    )
+    monkeypatch.setattr(executor, "_calibration_id", lambda current: "simulation")
+    try:
+        with pytest.raises(HardwareFaultError, match="stationary torque HOLD"):
+            executor.execute(
+                "go_pose", {"name": "agent_start_overhead", "joint_only": True},
+            )
+        assert authority.status()["armed"] is False
+    finally:
+        executor.close()
+
+
+def test_joint_only_physical_sleep_reuses_existing_torque_hold_without_rearming(
+    tmp_path, monkeypatch,
+) -> None:
+    """A broker reconnect must not issue a second 1/1 torque-enable latch."""
+    from soarm101_motion import SOARM101
+    config = SOARM101Config(port="/dev/fake-device", robot_id="so101")
+    arm = SOARM101.simulated(config=config)
+    arm.connect()
+    arm.enable()
+    assert arm.get_state().torque_enabled is True
+    monkeypatch.setattr(
+        arm, "enable",
+        lambda: pytest.fail("redundant torque-enable during canonical Sleep"),
+    )
+    authority = AgentAuthorityStore(tmp_path / "human-lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: arm, authority_store=authority,
+    )
+    monkeypatch.setattr(executor, "_calibration_id", lambda current: "simulation")
+    try:
+        result = executor.execute("sleep", {"joint_only": True})
+        assert result["accepted"] is True
+        assert result["completed"] is True
+        assert result["action"] == "sleep"
+        assert result["holding"] is True
+        assert executor.connection_count == 1
+    finally:
+        executor.close()
+
+
+def test_joint_only_physical_sleep_rejects_torque_off_without_enabling(
+    tmp_path, monkeypatch,
+) -> None:
+    from soarm101_motion import SOARM101
+    from soarm101_motion.exceptions import HardwareFaultError
+    config = SOARM101Config(port="/dev/fake-device", robot_id="so101")
+    arm = SOARM101.simulated(config=config)
+    arm.connect()
+    assert arm.get_state().torque_enabled is False
+    monkeypatch.setattr(
+        arm, "enable",
+        lambda: pytest.fail("failed preflight must not enable motors"),
+    )
+    authority = AgentAuthorityStore(tmp_path / "human-lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: arm, authority_store=authority,
+    )
+    monkeypatch.setattr(executor, "_calibration_id", lambda current: "simulation")
+    try:
+        with pytest.raises(HardwareFaultError, match="stationary torque HOLD"):
+            executor.execute("sleep", {"joint_only": True})
+        assert authority.status()["armed"] is False
+    finally:
+        executor.close()

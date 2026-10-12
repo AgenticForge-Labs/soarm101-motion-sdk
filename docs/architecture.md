@@ -1,6 +1,82 @@
 # Architecture
 
-## Persistent SDK lifecycle and serial ownership (PR #89; open, not production)
+## 2026-10-12 Overhead preflight correction (draft #90)
+
+The first attended `overhead-single` attempt was rejected **before any saved-pose movement** because its added 5° inset disagreed with a valid, stationary near-Sleep shoulder-lift starting position (-101.89°; calculated Sleep -102.05°). The Motion SDK already computes effective limits with configured mechanical-stop margins and derives canonical Sleep at an additional 2° executable inset. The trial no longer duplicates a larger inset. It checks both measured start and saved pose endpoints against those SDK effective limits; SDK planning/validation owns all actual motion. Out-of-range targets, calibration provenance mismatches, excessive displacements, missing HOLD, and fault states still refuse before motion. The preflight preserves read-only positions/limits in the summary to expose the earliest authoritative cause of rejection.
+
+## Draft #90 — bounded single saved-Overhead STOP qualification
+
+The trusted `RobotBrokerService` remains the sole physical-trial
+authority layer. `overhead-single` is an exact camera-free capability
+profile admitting ONLY state/health/capabilities, one
+joint-only `agent_start_overhead` request, and STOP; one-shot phase
+`ready → pose_in_flight → pose_finished` or `stopped` is consumed
+before SDK dispatch. Neither a fault nor successful completion nor
+independent STOP can authorize another pose or gripper command.
+Legacy `overhead` (multi-leg), `short` (pan) and the normal
+CLI-backed production broker remain separate; public native SDK
+preview still denies all physical POST.
+
+One source of truth remains the SDK's saved-pose calibration/provenance,
+joint planning, limit, effort/fault, rate and STOP contracts. This
+physical experiment adds operator-visible read-only measured-state,
+saved-target and authoritative effective-calibration-range checks. A human authorizes ONE
+movement at 6°/s 30°/s² default (8°/s 40°/s² maximum); no Sleep
+roundtrip, autonomous rearm/recovery or raw motor access. The SDK
+preserves human-established live Feetech torque HOLD on joint-only
+pose execution. Passive trace gates require two moving physical
+encoders; stable feedback after the latch is necessary but not
+sufficient for broader physical braking certification.
+
+
+## Trusted broker physical read-only preflight cleanup (draft PR #90)
+
+The broker-owned `SDKAgentExecutor` separates a session that merely
+observed a physical robot (with torque held under earlier human authority)
+from a session that attempted any consequential motion. On a read-only
+preflight exit, closing the transport does not create a fresh actuator
+position-latch command. When movement was attempted, the normal
+stop/fault cleanup and human-authority revocation still apply. This
+extends live torque-register reconciliation without conflating connection
+with motor-goal ownership.
+
+
+## PR #90: live servo torque authority across broker reconnect (unmerged)
+
+The owning Feetech backend synchronizes torque state on connection from
+read-only on-device `Torque_Enable` registers. State held by a prior
+CLI process is not inferred from its own new process-local
+`_torque_enabled=False` constructor default. All six actuators
+must agree on all-ON or all-OFF; partial/malformed states fail closed.
+A physical trial's joint-only Sleep consumes an existing healthy
+torque hold without issuing a redundant 1/1 torque-enable position
+goal. This is SDK/hardware state reconciliation, **not** agent authority
+or a new broker implementation. Operator approval and the trusted
+Sleep → pan → STOP state machine remain distinct deterministic gates.
+
+
+## PR #90 Sleep-first attended physical STOP qualification (draft/unmerged)
+
+The trusted-host loopback physical trial now uses one deterministic SDK
+broker session: verified healthy/calibrated current posture, explicit human
+`PREPARE_SLEEP` clearance approval, ONE canonical joint-only SDK Sleep,
+fresh encoder verification of Sleep, ONE fixed shoulder-pan +8° command
+and independent human-triggered STOP. The broker's trusted short-profile
+state machine rejects pan before a completed Sleep, duplicate Sleep,
+pan replay and all post-STOP motion. Normal CLI-backed production
+broker and public read-only SDK simulation preview are unchanged.
+
+A passive trace snapshot at the STOP keypress reads only telemetry already
+collected by the controller. The hardware gate requires recent changing
+pan encoder feedback, fresh Moving=true hardware status, and at least
+2° of remaining travel; stable post-STOP encoder HOLD and fault-free
+feedback are separate requirements. The earlier near-endpoint short
+trial showed stable HOLD but **not** active physical braking. The initial
+18.4° powered elbow excursion remains unresolved. This is not a
+safety-rated emergency stop and does not enable native production motion.
+
+
+## Persistent SDK lifecycle and serial ownership (PR #89; merged, not production)
 
 The staged `SDKAgentExecutor` holds one lazy SDK session. It binds the
 robot/calibration identity at first successful connect. A subsequent
@@ -27,6 +103,30 @@ physical SDK executor => explicitly constructed, operator-only restricted
 bench trial. Independent in-flight STOP, physical reconnect/fault response,
 native camera parity, and calibrated 2 mm jog are still later gates.
 
+
+## Independent STOP and session fault authority (PR #90; open, unmerged)
+
+The host broker alone owns authenticated request admission and an epoch
+for queued/in-flight native SDK actions. The existing SDK motion controller
+owns cancellation and actual backend STOP/HOLD; the broker does not
+reimplement motor trajectory stopping. The native broker admits STOP without
+waiting for its ordinary action lock. All previously admitted requests are
+invalidated, including a request that returns nominal SDK success after STOP
+was issued. Never audit or respond to such an action as successfully completed.
+
+A STOP attempts both arm HOLD and tool/gripper cancellation, collecting and
+reporting incomplete results. A failed native STOP of an existing session
+latches a terminal fault, revokes physical trial arming, and never triggers
+implicit reconnect. Only a connected, nonfaulted hardware status with live
+joint readback permits an acknowledged software STOP response. This is not
+a safety-rated emergency-stop, and passing fake-transport tests does not
+demonstrate physical bus response time or deceleration.
+
+The physical SDK broker remains a separate trusted operator-only test path.
+The ordinary production broker continues using bounded subprocess CLI
+dispatch; public native simulation preview denies POST. Active-motion
+physical STOP evidence is required before merging #90; broader native
+physical production dispatch remains gated on #91/#92.
 
 ## Supervised direct physical SDK broker trial (PR #88, not released)
 
@@ -99,7 +199,7 @@ commands. Hardware safety remains in the existing SDK. See
 
 
 
-## Fault handling in the physical arm backend (PR #88, unmerged)
+## Fault handling in the physical arm backend (merged PR #88)
 
 The Feetech backend must treat a nonzero servo status packet as a
 motion-aborting fault, not as proof that the instantaneous measured current

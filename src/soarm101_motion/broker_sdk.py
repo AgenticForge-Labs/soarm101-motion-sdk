@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -37,6 +38,15 @@ from soarm101_motion.workstation import WorkstationProfileStore
 
 if TYPE_CHECKING:
     from soarm101_motion.config import SOARM101Config
+
+
+# An acknowledged software STOP must not mean merely that a goal write
+# succeeded. A physical arm can continue moving after the servo was sent
+# a present-position latch (observed 18.4° elbow travel within one second
+# on 2026-10-11). Verify bounded post-latch encoder stability before ACK.
+# These conservative detection bounds do NOT certify physical braking.
+STOP_STABILITY_SAMPLE_DELAYS_S = (0.25, 0.25, 0.5, 0.5)
+STOP_MAX_POST_LATCH_DRIFT_DEG = 1.0
 
 
 # HTTP fields are a strict, versioned interface. No host paths, arbitrary
@@ -110,6 +120,13 @@ class SDKAgentExecutor:
         self._lifecycle_lock = threading.RLock()
         self._lifecycle = "new"  # new -> open -> closing/closed; failure -> faulted
         self._fault_kind: str | None = None
+        # Close after a verified physical STOP must not send another
+        # all-motor position latch. Any later motion clears this flag.
+        self._verified_physical_stop = False
+        # Opening for read-only state/preflight does not transfer motion
+        # ownership from an earlier human-armed CLI process. Closing such a
+        # physical session must not issue a fresh all-motor position latch.
+        self._motion_action_attempted = False
         self._bound_calibration_id: str | None = None
         self._session: SOARM101 | None = None
 
@@ -199,6 +216,7 @@ class SDKAgentExecutor:
         with self._lifecycle_lock:
             if self._lifecycle in {"closing", "closed"}:
                 return
+            had_unverified_fault = self._lifecycle == "faulted"
             self._lifecycle = "closing"  # Reject queued requests before waiting.
         try:
             # STOP may be independent of the ordinary dispatch lock. Do not
@@ -209,7 +227,21 @@ class SDKAgentExecutor:
                         arm = self._session
                         try:
                             if arm is not None:
-                                arm.disconnect()
+                                if (
+                                    self.physical_trial
+                                    and isinstance(arm, SOARM101)
+                                    and (
+                                        had_unverified_fault
+                                        or self._verified_physical_stop
+                                        or not self._motion_action_attempted
+                                    )
+                                ):
+                                    # A failed OR a verified physical STOP
+                                    # already sent its position latch. Cleanup
+                                    # must not silently send another goal.
+                                    arm.disconnect(stop_before_disconnect=False)
+                                else:
+                                    arm.disconnect()
                         finally:
                             self._session = None
                             if self._trace is not None:
@@ -292,6 +324,9 @@ class SDKAgentExecutor:
         self._validate(action, request)
         def run() -> dict[str, object]:
             self._require_active(stop=action == "stop")
+            if action in {"go_pose", "joint", "jog", "gripper", "sleep", "sleep_up"}:
+                self._verified_physical_stop = False
+                self._motion_action_attempted = True
             trace = self._trace
             if trace is not None:
                 trace.mark(
@@ -304,13 +339,25 @@ class SDKAgentExecutor:
                 )
             try:
                 result = self._execute_action(action, request)
+                if action == "stop" and self.physical_trial:
+                    self._verified_physical_stop = bool(
+                        result.get("completed")
+                        and result.get("holding")
+                        and result.get("post_stop_stability", {}).get("verified")
+                    )
             except BaseException as exc:
                 # Never re-open a silently disconnected/faulted transport on
                 # the next request. STOP remains possible on an existing arm.
-                if isinstance(exc, (
-                    CommunicationError, RobotConnectionError, HardwareFaultError,
-                    MotionTimeoutError, OSError, ConnectionError,
-                )):
+                if (
+                    isinstance(exc, (
+                        CommunicationError, RobotConnectionError, HardwareFaultError,
+                        MotionTimeoutError, OSError, ConnectionError,
+                    ))
+                    # An attempted STOP that cannot confirm HOLD leaves
+                    # physical state unknown even if its backend raised a
+                    # plain RuntimeError. Latch failure and revoke authority.
+                    or (action == "stop" and self._session is not None)
+                ):
                     self._fault(exc)
                 if self._trace is not None:
                     self._trace.mark("broker_action_error", action=action, error=repr(exc))
@@ -379,12 +426,91 @@ class SDKAgentExecutor:
             arm = self._session
             if arm is None:
                 raise RuntimeError("no connected SDK session to stop")
+            if getattr(arm, "is_connected", True) is False:
+                raise RobotConnectionError(
+                    "STOP/HOLD unverified: SDK device is disconnected"
+                )
             SDK_CAPABILITIES.dispatch("stop", arm, {})
+            # STOP/HOLD was attempted. Verify the device is still connected
+            # and not faulted before declaring completion. Never invent an
+            # encoder position from the last issued command.
+            state = arm.get_state()
+            if getattr(state, "connected", True) is False:
+                raise RobotConnectionError(
+                    "STOP/HOLD unverified: device disconnected during STOP"
+                )
+            if getattr(state, "faulted", False):
+                raise HardwareFaultError(
+                    "STOP/HOLD unverified: " +
+                    str(getattr(state, "fault_message", None) or "device is faulted")
+                )
             joints = dict(arm.get_joint_positions().positions)
+            stability: dict[str, object] = {"verified": False}
+            if not self.simulation:
+                # No new target writes are made during these observations.
+                # Compare every measured sample against the immediate latch
+                # position, not just the end points of an oscillation.
+                if not state.torque_enabled:
+                    raise HardwareFaultError(
+                        "STOP/HOLD unverified: physical torque hold is disabled"
+                    )
+                first = dict(joints)
+                max_drift_deg = 0.0
+                samples = []
+                elapsed = 0.0
+                for pause in STOP_STABILITY_SAMPLE_DELAYS_S:
+                    time.sleep(pause)
+                    elapsed += pause
+                    sampled = dict(arm.get_joint_positions().positions)
+                    if set(sampled) != set(first):
+                        raise HardwareFaultError(
+                            "STOP/HOLD unverified: arm joint feedback changed shape"
+                        )
+                    worst_joint, drift = max(
+                        (
+                            (joint, abs(math.degrees(sampled[joint] - initial)))
+                            for joint, initial in first.items()
+                        ),
+                        key=lambda item: item[1],
+                    )
+                    max_drift_deg = max(max_drift_deg, drift)
+                    samples.append({
+                        "elapsed_s": elapsed, "max_drift_deg": drift,
+                        "worst_joint": worst_joint,
+                    })
+                    if self._trace is not None:
+                        self._trace.mark(
+                            "post_stop_stability_sample",
+                            elapsed_s=elapsed, max_drift_deg=drift,
+                            joints_rad=sampled,
+                        )
+                    if drift > STOP_MAX_POST_LATCH_DRIFT_DEG:
+                        raise HardwareFaultError(
+                            "STOP/HOLD unverified: "
+                            f"{worst_joint} moved {drift:.2f}° after the "
+                            "position latch, without a new movement command"
+                        )
+                    joints = sampled
+                state = arm.get_state()
+                if (
+                    not state.connected or state.faulted
+                    or not state.torque_enabled or state.moving
+                ):
+                    raise HardwareFaultError(
+                        "STOP/HOLD unverified: motor state still moving, "
+                        "faulted, disconnected, or torque-disabled after settling"
+                    )
+                stability = {
+                    "verified": True,
+                    "duration_s": elapsed,
+                    "max_drift_deg": max_drift_deg,
+                    "samples": samples,
+                }
             return {
                 "accepted": True, "completed": True, "action": "stop",
-                "holding": bool(arm.get_state().torque_enabled),
+                "holding": bool(state.torque_enabled),
                 "joint_positions_rad": joints,
+                "post_stop_stability": stability,
             }
 
         arm = self._arm()
@@ -431,8 +557,22 @@ class SDKAgentExecutor:
                 "validate_saved_pose", arm,
                 {"robot_id": self.robot_id, "name": name},
             )
-            arm.enable()
             joint_only = bool(request.get("joint_only", False))
+            if self.physical_trial and joint_only:
+                # A separately human-armed process may already own the servo
+                # torque HOLD. A redundant enable_torque() would issue a new
+                # all-motor 1/1 position latch before the approved Overhead
+                # trajectory and change Feetech inner-loop tracking settings.
+                # Preserve that verified live HOLD just as physical Sleep does.
+                hold = arm.get_state()
+                if (not hold.connected or hold.faulted
+                        or not hold.torque_enabled or hold.moving):
+                    raise HardwareFaultError(
+                        "joint-only physical saved pose requires an already "
+                        "healthy stationary torque HOLD"
+                    )
+            else:
+                arm.enable()
             moved, gripper = SDK_CAPABILITIES.dispatch(
                 "replay_saved_pose", arm,
                 {"robot_id": self.robot_id, "name": name,
@@ -535,7 +675,25 @@ class SDKAgentExecutor:
                 "message": result.message,
             }
         if action in ("sleep", "sleep_up"):
-            arm.enable()
+            if self.physical_trial and action == "sleep" and request.get("joint_only") is True:
+                # The attended Sleep-first trial begins from a human-armed
+                # torque HOLD established in an earlier CLI process. Our
+                # fresh Feetech backend now reconciles the live servo torque
+                # registers on connect. Do NOT blindly call arm.enable()
+                # again here: enable_torque() issues a new all-motor 1/1
+                # position latch, which could alter the servo inner loop.
+                # Refuse an unsafe or unverified hold rather than changing it.
+                initial_hold = arm.get_state()
+                if (
+                    not initial_hold.connected or initial_hold.faulted
+                    or not initial_hold.torque_enabled or initial_hold.moving
+                ):
+                    raise HardwareFaultError(
+                        "joint-only physical Sleep requires an already healthy "
+                        "stationary torque HOLD"
+                    )
+            else:
+                arm.enable()
             result = SDK_CAPABILITIES.dispatch(
                 action, arm, {
                     "speed_rad_s": float(rates["speed_deg_s"]) * pi / 180.0,

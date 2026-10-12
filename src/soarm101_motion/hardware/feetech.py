@@ -35,6 +35,8 @@ from soarm101_motion.constants import (
     MOTOR_IDS,
     STOCK_GRIPPER,
     STS3215_REGISTERS,
+    TELEOP_SERVO_SPEED_RAW,
+    TELEOP_SERVO_ACCELERATION_RAW,
 )
 from soarm101_motion.exceptions import (
     CalibrationCancelledError,
@@ -203,6 +205,27 @@ class FeetechBackend(SO101HardwareBackend):
                     self.calibration,
                     robot_id=self.config.robot_id,
                 )
+            # A previous, human-authorized CLI process may have left the
+            # servos torque-held after releasing the serial port. This fresh
+            # backend cannot infer live actuator authority from its initial
+            # process-local False flag: read every servo's actual Torque_Enable
+            # register BEFORE reporting a connected state. Never issue a
+            # motor goal or change torque while adopting this read-only state.
+            torque = {
+                name: self.read_register(name, "Torque_Enable")
+                for name in ALL_MOTORS
+            }
+            if any(value not in (0, 1) for value in torque.values()):
+                raise RobotConnectionError(
+                    "invalid live Torque_Enable register(s): "
+                    + ", ".join(f"{name}={value}" for name, value in torque.items())
+                )
+            if len(set(torque.values())) != 1:
+                raise RobotConnectionError(
+                    "mixed servo torque state on connect; no movement authorized: "
+                    + ", ".join(f"{name}={value}" for name, value in torque.items())
+                )
+            self._torque_enabled = all(value == 1 for value in torque.values())
             self._connected = True
         except Exception:
             self._connected = False
@@ -784,7 +807,24 @@ class FeetechBackend(SO101HardwareBackend):
             # Still request HOLD for each independently readable actuator.
             # Never substitute a stale position or claim full STOP success.
             if raw_positions:
-                self._write_raw_positions(raw_positions, speed_raw=1, acceleration_raw=1)
+                # The 2026-10-11 physical trace showed ~18.4° of continued
+                # motor travel after a 1/1 "HOLD" command. The official
+                # SyncWritePosEx format sends these as an actual new velocity
+                # limit and acceleration, not a dedicated brake instruction.
+                # Speed 1 limits the servo to ~1 encoder step/s and ACC 1
+                # requests only ~100 steps/s² of ramp authority. Do not
+                # abruptly cripple the inner position controller while
+                # cancelling a high-response 0/254 trajectory: command the
+                # current encoder positions using the *same* proven ordinary
+                # inner-loop tracking profile. This is an unqualified
+                # correction candidate; stationary feedback must still be
+                # verified by the broker, and no hardware STOP is authorized
+                # until operator safety review.
+                self._write_raw_positions(
+                    raw_positions,
+                    speed_raw=TELEOP_SERVO_SPEED_RAW,
+                    acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
+                )
             if failures:
                 raise CommunicationError(
                     "STOP/HOLD incomplete; unable to read " + "; ".join(failures)

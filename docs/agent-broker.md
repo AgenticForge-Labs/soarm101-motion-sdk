@@ -1,4 +1,80 @@
+## Draft #90 — experimental attended saved-Overhead STOP
+
+**2026-10-12 repair:** The first `overhead-single` run on real hardware performed no scripted movement: an extra 5° near-stop requirement conflicted with valid canonical Sleep. The trial now relies on the Motion SDK's already margin-adjusted executable calibrated bounds and preserves measured start/saved target/limit diagnostics in the summary. Other preflight, broker one-shot and STOP policies are unchanged.
+
+The `overhead-single` trial is NOT a production broker capability or
+agent-accessible tool. The operator must authenticate on trusted
+loopback, inspect full route clearance and type `OVERHEAD_START`
+to command a single calibration-compatible joint-only
+`agent_start_overhead` movement at a default 6°/s and 30°/s²
+(hard caps 8°/s and 40°/s²). The broker denies any second
+pose, arbitrary saved pose, gripper action, preparatory Sleep,
+rate override or post-STOP replay. A human ENTER triggers STOP
+and never authorizes recovery; the trial logs multi-joint moving
+encoders, post-latch settling, cancelled action and revoked authority.
+Use the local commands and acceptance boundary in `TESTING.md`.
+The earlier 18.4° elbow displacement remains a physical blocker,
+irrespective of hobby-arm scale.
+
 # Agent robot broker
+
+## Draft #90 bounded physical STOP qualification
+
+**2026-10-11 physical-trial constructor fix:** The previous exact
+allowlist only accepted the legacy `go_pose/sleep/stop` physical trial,
+so the new short profile containing `jog_joint` failed before motion.
+The broker now admits two separately strict local-only profiles, never
+a union: the historical pose/Sleep profile, or short STOP with
+`max_joint_delta_deg=8`. The latter additionally rejects every
+joint request except exactly `shoulder_pan +8°`, without extra
+fields or per-action rate overrides. The script reads these fixed
+action values from the broker owner; standard production/MCP paths
+are not affected.
+
+
+
+The attended loopback broker defaults to one fixed +8° pan
+joint movement from encoder-verified Sleep and an independent STOP
+triggered by the human pressing ENTER during motion. It uses the
+same authenticated `/v1/joint` route and SDK validation as other
+trusted operator calls, with narrow speed/acceleration ceilings.
+The physical STOP reply must include encoder settling evidence and
+a subsequent stable readback. There is no baseline Overhead route,
+automatic recovery or post-STOP REARM in short mode. The historical
+full Overhead test is explicit `--trial overhead` and remains
+physically blocked until the short gate and trace inspection pass.
+Production/native-public broker paths are unchanged.
+
+
+## PR #90 independent STOP semantics (draft, unmerged)
+
+The operator-run `examples/persistent_broker_stop_trial.py` supplies
+a physical qualification procedure, not completed qualification,
+without changing the public broker: it uses the
+restricted existing broker profile and per-run localhost token.
+It verifies measured initial Sleep without moving, performs a complete
+Overhead -> Sleep baseline and starts a *subsequent* Overhead movement.
+The operator then presses ENTER during motion to request independent
+authenticated STOP. After a verified stationary HOLD, an explicit
+`REARM` confirmation may issue a new short calibration-bound lease for
+a **new** joint-only Overhead movement; no cancelled trajectory resumes. The human must confirm the arm is
+stationary; JSONL motor/event
+traces and a summary preserve timing and denied completion. This script
+cannot run inside OpenShell or without an interactive operator terminal.
+
+The native SDK trial's authenticated STOP bypasses the ordinary broker
+motion queue. Queued native requests are cancelled by broker generation
+and late SDK responses are not allowed to report completed motion after
+a newer STOP. The underlying SDK motion controller remains the single
+owner of hardware cancellation. A failed HOLD or faulted/disconnected
+post-STOP readback returns an error, latches a native session fault
+and revokes physical-trial authority. Its event record is `ok=false`;
+never interpret HTTP 409 as a successful HOLD.
+
+This does not enable physical native dispatch in the normal broker,
+does not guarantee hard real-time STOP, and does not prove physical
+servo bus interruption. An operator-attended active-motion trial is
+required before treating #90 as complete.
 
 ## Operator-only direct physical session test (PR #88)
 

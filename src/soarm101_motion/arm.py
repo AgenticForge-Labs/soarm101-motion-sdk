@@ -316,17 +316,33 @@ class SOARM101:
                 raise
             raise RobotConnectionError("failed to connect to SO-ARM101") from exc
 
-    def disconnect(self) -> None:
+    def disconnect(self, *, stop_before_disconnect: bool = True) -> None:
+        """Release transport; optionally avoid new commands after a failed STOP.
+
+        The default cleanup preserves the legacy stop-before-close behavior.
+        A broker session with an UNVERIFIED physical HOLD must not issue
+        fresh position goals as a side effect of closing the port. Its
+        operator is responsible for the accessible physical power cutoff.
+        """
         errors: list[Exception] = []
-        for action in (
-            lambda: self.motion.stop(wait=True),
-            lambda: self._stop_tool(wait=True),
-            self.backend.disconnect,
-        ):
+        if stop_before_disconnect:
+            # Use the owned controller primitive, not a second public
+            # SOARM101.stop() dispatch. This retains the legacy independent
+            # cleanup behavior even if the public method was monkeypatched
+            # to emulate a failed broker STOP.
             try:
-                action()
+                self.motion.stop(wait=True)
             except Exception as exc:
                 errors.append(exc)
+            if errors or bool(getattr(self.tool, "is_moving", False)):
+                try:
+                    self._stop_tool(wait=True)
+                except Exception as exc:
+                    errors.append(exc)
+        try:
+            self.backend.disconnect()
+        except Exception as exc:
+            errors.append(exc)
         if errors:
             raise errors[0]
 
@@ -352,9 +368,30 @@ class SOARM101:
         self.disable()
 
     def stop(self) -> None:
-        """Cancel active host motion and hold the current arm/tool positions."""
-        self.motion.stop(wait=True)
-        self._stop_tool(wait=True)
+        """Attempt both arm HOLD and tool STOP, even when either fails.
+
+        A gripper command must not be left running just because the joint
+        controller reported an incomplete HOLD. Preserve the first failure;
+        never claim full STOP success if either component failed.
+        """
+        errors: list[Exception] = []
+        try:
+            self.motion.stop(wait=True)
+        except Exception as exc:
+            errors.append(exc)
+        # MotionController.stop() already latched ALL connected Feetech
+        # motors, including the gripper. A second tool.stop() when the
+        # gripper was idle sent another entire 1/1 HOLD packet in the
+        # real 2026-10-11 joint-only STOP trace. Only cancel an active
+        # tool worker independently, or attempt fallback if the arm HOLD
+        # failed and the tool may still require a HOLD.
+        if errors or bool(getattr(self.tool, "is_moving", False)):
+            try:
+                self._stop_tool(wait=True)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     software_stop = stop
 

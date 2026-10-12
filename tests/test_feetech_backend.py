@@ -50,6 +50,7 @@ class FakePacket:
         self.port = port
         self.positions = {motor_id: 2047 for motor_id in MOTOR_IDS.values()}
         self.sync_speeds: dict[int, int] = {}
+        self.sync_accelerations: dict[int, int] = {}
         self.registers = defaultdict(int)
         for motor_id in MOTOR_IDS.values():
             self.registers[(motor_id, 3)] = 777
@@ -95,8 +96,8 @@ class FakePacket:
         return 0, 0
 
     def SyncWritePosEx(self, motor_id: int, raw: int, speed: int, acceleration: int):
-        del acceleration
         self.sync_speeds[motor_id] = speed
+        self.sync_accelerations[motor_id] = acceleration
         self.groupSyncWrite.pending[motor_id] = raw
         return True
 
@@ -438,6 +439,22 @@ def test_joint_sync_write_accepts_per_motor_speed_limits(
     backend.disconnect()
 
 
+def test_stop_uses_the_existing_servo_tracking_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(SOARM101Config(port="FAKE", use_stored_calibration=False))
+    backend.connect()
+    backend.enable_torque()
+    packet = backend._packet_handler
+    try:
+        positions_before = dict(packet.positions)
+        backend.stop()
+        assert packet.positions == positions_before
+        assert all(packet.sync_speeds[motor_id] == 0 for motor_id in MOTOR_IDS.values())
+        assert all(packet.sync_accelerations[motor_id] == 254 for motor_id in MOTOR_IDS.values())
+    finally:
+        backend.disconnect()
+
+
 def test_partial_stop_still_holds_readable_arm_motors_on_gripper_fault(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -597,3 +614,71 @@ else:
 
     released = check_child()
     assert released.returncode == 0, (released.stdout, released.stderr)
+
+
+def test_fresh_connection_recovers_live_human_authorized_torque_without_goal_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI process can leave torque ON before the broker opens a new port."""
+    install_fake_sdk(monkeypatch)
+
+    class PreArmedPacket(FakePacket):
+        def __init__(self, port):
+            super().__init__(port)
+            for motor_id in MOTOR_IDS.values():
+                self.registers[(motor_id, 40)] = 1
+
+    monkeypatch.setattr(sys.modules["scservo_sdk"], "sms_sts", PreArmedPacket)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False),
+    )
+    backend.connect()
+    assert backend.get_hardware_state().connected
+    assert backend.get_hardware_state().torque_enabled
+    assert backend._torque_enabled is True
+    assert backend._packet_handler.sync_speeds == {}  # no movement on connect
+    backend.stop()
+    assert set(backend._packet_handler.sync_speeds) == set(MOTOR_IDS.values())
+    assert all(v == 0 for v in backend._packet_handler.sync_speeds.values())
+    assert all(v == 254 for v in backend._packet_handler.sync_accelerations.values())
+    backend.disconnect()
+
+
+def test_connection_rejects_mixed_hardware_torque_state_without_writing_goals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    packets = []
+
+    class MixedPacket(FakePacket):
+        def __init__(self, port):
+            super().__init__(port)
+            for motor_id in MOTOR_IDS.values():
+                self.registers[(motor_id, 40)] = 1
+            self.registers[(MOTOR_IDS["elbow_flex"], 40)] = 0
+            packets.append(self)
+
+    monkeypatch.setattr(sys.modules["scservo_sdk"], "sms_sts", MixedPacket)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False),
+    )
+    with pytest.raises(RobotConnectionError, match="mixed servo torque state"):
+        backend.connect()
+    assert backend.is_connected is False
+    assert backend._torque_enabled is False
+    assert backend._port_handler is None
+    assert backend._packet_handler is None
+    assert packets and packets[0].sync_speeds == {}
+
+
+def test_connection_preserves_all_torque_off_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(
+        SOARM101Config(port="FAKE", use_stored_calibration=False),
+    )
+    backend.connect()
+    assert backend.get_hardware_state().torque_enabled is False
+    assert backend._packet_handler.sync_speeds == {}
+    backend.disconnect()
