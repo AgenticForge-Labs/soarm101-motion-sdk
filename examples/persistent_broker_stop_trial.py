@@ -465,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--trial", choices=("short", "overhead"), default="short",
         help="short is the default single-joint STOP gate; overhead is the older large route",
     )
-     parser.add_argument("--speed-deg-s", type=float)
+    parser.add_argument("--speed-deg-s", type=float)
     parser.add_argument("--acceleration-deg-s2", type=float)
     parser.add_argument("--command-frequency-hz", type=float, default=20.0)
     return parser
@@ -480,7 +480,7 @@ def _require_operator(args: argparse.Namespace) -> None:
         value = getattr(args, name)
         if value is not None and (not math.isfinite(value) or value <= 0):
             raise ValueError(f"{name} must be finite and positive")
-     if args.trial == "short":
+    if args.trial == "short":
         speed = 2.0 if args.speed_deg_s is None else args.speed_deg_s
         accel = 10.0 if args.acceleration_deg_s2 is None else args.acceleration_deg_s2
         if speed > SHORT_MAX_SPEED_DEG_S or accel > SHORT_MAX_ACCEL_DEG_S2:
