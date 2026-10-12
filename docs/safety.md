@@ -2,6 +2,22 @@
 
 ## Single-joint STOP candidate (draft PR #90; physical result unknown)
 
+**New measured-start gate:** The `soarm101 agent arm` CLI enables/holds
+at the actual encoder posture, not Sleep. When the short STOP trial
+cannot meet its default Sleep preflight, it must not command a large
+unreviewed move to Sleep or silently loosen the 5° tolerance.
+An explicitly requested `--short-start measured` applies only to the
+single-joint +8° pan test, checks all joint executable limits and pan
+limit inset, requires stationary healthy torque HOLD, and asks the
+human to inspect actual pan swept-volume clearance and type `MEASURED`.
+The calculated workspace height is not used as an automatic clearance
+certificate; paper/workspace calibration alone cannot verify the scene.
+No trial motion, STOP or REARM has occurred from the 86.23° failure.
+The larger Overhead route still requires measured Sleep. A human must
+not use measured-start if the full swept volume cannot be observed clear.
+
+
+
 The short qualification profile is now the default for the attended
 `persistent_broker_stop_trial.py`: one fixed 8° `shoulder_pan` motion
 from encoder-verified Sleep, 2°/s and 10°/s² defaults, with hard rate
