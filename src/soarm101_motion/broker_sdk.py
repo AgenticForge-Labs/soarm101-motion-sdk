@@ -88,12 +88,15 @@ class SDKAgentExecutor:
         arm_factory: Callable[[], SOARM101] | None = None,
         authority_store: AgentAuthorityStore | None = None,
         physical_trial: bool = False,
+        simulation_actions: bool = False,
         trace_path: str | Path | None = None,
     ) -> None:
         if physical_trial and (simulation or arm_factory is None or not config.port):
             raise ValueError("physical trial requires a real port and explicit SDK arm factory")
         if trace_path is not None and not physical_trial:
             raise ValueError("passive broker motion trace requires physical trial mode")
+        if simulation_actions and (not simulation or physical_trial):
+            raise ValueError("SDK simulation action mode requires a simulated arm only")
         if not simulation and arm_factory is None:
             raise ValueError(
                 "direct-SDK physical sessions are disabled pending supervised "
@@ -105,6 +108,7 @@ class SDKAgentExecutor:
         self.robot_id = config.robot_id
         self.rates = rates
         self.simulation = simulation
+        self.simulation_actions = simulation_actions
         self.physical_trial = physical_trial
         self.session_id = uuid.uuid4().hex
         self.connection_count = 0
@@ -265,7 +269,12 @@ class SDKAgentExecutor:
         return {
             "id": self.session_id,
             "sdk_connect_count": self.connection_count,
-            "mode": "physical_trial" if self.physical_trial else "simulation_preview",
+            "mode": (
+                "physical_trial" if self.physical_trial else (
+                    "simulation_actions" if self.simulation_actions
+                    else "simulation_preview"
+                )
+            ),
             "robot_id": self.robot_id,
             "lifecycle": self._lifecycle,
             "fault_kind": self._fault_kind,
@@ -393,13 +402,27 @@ class SDKAgentExecutor:
                 result["poses"] = [name for name in names if name.startswith(AGENT_POSE_PREFIX)]
                 result["authority"] = self._authority.status()
             else:
-                result["actions"] = {"state": "read_only"}
+                if self.simulation_actions:
+                    # Actual supported simulated actions. The HTTP profile
+                    # further intersects these; no fake Cartesian workspace
+                    # or camera capture is advertised.
+                    allowed = {
+                        "state", "go_pose", "joint", "gripper",
+                        "sleep", "sleep_up", "stop",
+                    }
+                    result["actions"] = {
+                        k: v for k, v in result["actions"].items()
+                        if k in allowed
+                    }
+                    result["authority"] = self._authority.status()
+                else:
+                    result["actions"] = {"state": "read_only"}
+                    result["authority"] = {
+                        "armed": False, "robot_id": None, "calibration_id": None,
+                        "issued_at": None, "expires_at": None,
+                        "remaining_seconds": 0.0,
+                    }
                 result["poses"] = []
-                result["authority"] = {
-                    "armed": False, "robot_id": None, "calibration_id": None,
-                    "issued_at": None, "expires_at": None,
-                    "remaining_seconds": 0.0,
-                }
                 result["world_directions"] = {
                     "available": False,
                     "reason": "simulation preview has no measured physical directions",
@@ -531,7 +554,9 @@ class SDKAgentExecutor:
                 except Exception as exc:
                     error = str(exc)
             return {
-                "authority": self._authority.status() if self.physical_trial else {
+                "authority": self._authority.status() if (
+                    self.physical_trial or self.simulation_actions
+                ) else {
                     "armed": False, "robot_id": None,
                     "calibration_id": None, "issued_at": None,
                     "expires_at": None, "remaining_seconds": 0.0,

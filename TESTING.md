@@ -1,5 +1,47 @@
 # Testing
 
+## PR #92 — persistent native-SDK simulated broker (unmerged)
+
+The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
+one persistent simulated SO-ARM101 SDK session and dispatches a
+human-profiled subset of the existing broker HTTP API **without spawning
+a CLI process for each action**. It requires a trusted, camera-free
+`--profile`, includes `robot_state`, `robot_capabilities` and `stop`,
+and binds **only to 127.0.0.1**. A bounded example profile is
+`docs/examples/sdk-broker-simulation-actions.json`. Production and
+physical-agent brokers remain CLI-backed. `--sdk-simulation-preview`
+remains read-only and mutually exclusive with the new option.
+
+With a local human-issued **simulation** authority lease, multiple
+bounded simulated joint actions reuse one SDK session. STOP uses
+the existing independent SDK dispatch, invalidates queued actions,
+revokes the lease and writes broker events. STOP completion in
+simulation is **not proof of physical servo braking**. This PR does
+not change the OpenShell listener, start/stop live services, turn on
+real-hardware POST, or use the trial's restricted physical capability
+bypass. The ordinary physical broker does not have a `--sdk-physical`
+mode. Real-world integration belongs to later #93/#94.
+
+**Local software check (no physical hardware):**
+```bash
+ruff check .
+python -m pytest --no-cov -q tests/test_broker_sdk.py tests/test_broker.py \
+  tests/test_broker_stop_faults.py tests/test_broker_session_lifecycle.py
+python -m pytest --no-cov -q
+```
+
+**Isolated simulated HTTP broker example (terminal 1):**
+```bash
+SOARM101_BROKER_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(24))')"
+export SOARM101_BROKER_TOKEN
+soarm101-broker --sdk-simulation-actions --host 127.0.0.1 \
+  --port 8765 --profile docs/examples/sdk-broker-simulation-actions.json
+```
+The `soarm101-broker` entrypoint is defined in `pyproject.toml`.
+The test suite exercises full protocol behavior with an isolated
+simulation lease; no real-arm arming is used.
+
+
 ## PR #91 — supervisor STOP lifecycle acceptance (unmerged)
 
 CI-only tests use fake OpenShell and broker processes. They exercise

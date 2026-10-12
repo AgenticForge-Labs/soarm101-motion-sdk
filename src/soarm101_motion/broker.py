@@ -902,8 +902,10 @@ class RobotBrokerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], service: RobotBrokerService) -> None:
-        if service._allow_physical_sdk_trial and address[0] != "127.0.0.1":
-            raise ValueError("physical broker trial must bind to IPv4 loopback only")
+        if (service._allow_physical_sdk_trial or service._allow_simulated_sdk_posts) and (
+            address[0] != "127.0.0.1"
+        ):
+            raise ValueError("native SDK action broker must bind to IPv4 loopback only")
         self.service = service
         super().__init__(address, _BrokerHandler)
 
@@ -913,9 +915,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_BROKER_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_BROKER_PORT)
     parser.add_argument("--robot-id", default="so101")
-    parser.add_argument(
+    simulated_modes = parser.add_mutually_exclusive_group()
+    simulated_modes.add_argument(
         "--sdk-simulation-preview", action="store_true",
         help="read-only persistent simulated SDK session; no serial or motion endpoints",
+    )
+    simulated_modes.add_argument(
+        "--sdk-simulation-actions", action="store_true",
+        help="opt-in persistent SDK simulation with bounded POST actions; "
+             "requires a trusted camera-free --profile and loopback",
     )
     parser.add_argument("--events", type=Path, default=DEFAULT_EVENT_PATH)
     parser.add_argument(
@@ -1005,17 +1013,44 @@ def main(argv: list[str] | None = None) -> int:
         gripper_speed_raw=args.agent_gripper_speed_raw,
         gripper_acceleration_raw=args.agent_gripper_acceleration_raw,
     ).validated(config)
-    if args.sdk_simulation_preview:
-        preview = CapabilityProfile.from_document({
-            "schema_version": 1,
-            "name": "sdk-preview-read-only",
-            "tools": ["robot_health", "robot_capabilities", "robot_state"],
-            "cameras": [],
-            "limits": {},
-        })
-        if args.profile is not None:
-            raise SystemExit("--profile is not supported in read-only SDK simulation preview")
-        executor = SDKAgentExecutor(config=config, rates=rates, simulation=True)
+    simulated_actions = bool(args.sdk_simulation_actions)
+    if args.sdk_simulation_preview or simulated_actions:
+        if args.host != "127.0.0.1":
+            raise SystemExit("SDK simulation broker must bind only to 127.0.0.1")
+        if simulated_actions:
+            if args.profile is None:
+                raise SystemExit("--sdk-simulation-actions requires an explicit --profile")
+            preview = CapabilityProfile.from_file(args.profile)
+            # The first cutover step intentionally has neither real cameras,
+            # physical workspace calibration nor Cartesian execution.
+            unsupported = preview.allowed_tools.intersection({
+                "capture_camera", "jog_cartesian",
+            })
+            if preview.allowed_cameras or unsupported:
+                raise SystemExit(
+                    "SDK simulation actions cannot authorize cameras or Cartesian jogs"
+                )
+            required = {"robot_capabilities", "robot_state", "stop"}
+            if not required.issubset(preview.allowed_tools):
+                raise SystemExit(
+                    "SDK simulation actions profile requires capabilities, state and STOP"
+                )
+        else:
+            if args.profile is not None:
+                raise SystemExit(
+                    "--profile is not supported in read-only SDK simulation preview"
+                )
+            preview = CapabilityProfile.from_document({
+                "schema_version": 1,
+                "name": "sdk-preview-read-only",
+                "tools": ["robot_health", "robot_capabilities", "robot_state"],
+                "cameras": [],
+                "limits": {},
+            })
+        executor = SDKAgentExecutor(
+            config=config, rates=rates, simulation=True,
+            simulation_actions=simulated_actions,
+        )
     else:
         preview = CapabilityProfile.from_file(args.profile) if args.profile else None
         executor = AgentCommandExecutor(config=config, rates=rates)
@@ -1024,6 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
         token=token,
         event_path=args.events,
         profile=preview,
+        allow_simulated_sdk_posts=simulated_actions,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     limits = config.motion_limits_human

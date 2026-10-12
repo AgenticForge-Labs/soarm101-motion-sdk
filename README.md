@@ -1,20 +1,51 @@
 # SO-ARM101 Motion SDK
 
-## Agent Ctrl+C supervision — PR #91 (unmerged)
+## PR #92 — persistent native-SDK simulated broker (unmerged)
 
-The trusted OpenShell agent runner now requests bounded broker STOP
-**before** sandbox deletion and broker shutdown on success, Ctrl+C
-and failures (only after full-control motion authority was handed
-off). `supervisor-stop.json` records completion and whether encoder
-stability was independently verified. Read-only runs never move the
-robot. The legacy CLI broker revokes human agent authority when STOP
-is admitted, but it does **not** guarantee that a previously launched
-separate CLI movement is interrupted immediately. Merged PR #90's
-independent physical SDK STOP is not yet the default multi-action
-production agent broker. Do not assume Ctrl+C is a hardware emergency
-stop or activate unsupervised physical agent tests on this change alone.
-See `docs/agent-sandbox.md` and `TESTING.md`.
+The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
+one persistent simulated SO-ARM101 SDK session and dispatches a
+human-profiled subset of the existing broker HTTP API **without spawning
+a CLI process for each action**. It requires a trusted, camera-free
+`--profile`, includes `robot_state`, `robot_capabilities` and `stop`,
+and binds **only to 127.0.0.1**. A bounded example profile is
+`docs/examples/sdk-broker-simulation-actions.json`. Production and
+physical-agent brokers remain CLI-backed. `--sdk-simulation-preview`
+remains read-only and mutually exclusive with the new option.
 
+With a local human-issued **simulation** authority lease, multiple
+bounded simulated joint actions reuse one SDK session. STOP uses
+the existing independent SDK dispatch, invalidates queued actions,
+revokes the lease and writes broker events. STOP completion in
+simulation is **not proof of physical servo braking**. This PR does
+not change the OpenShell listener, start/stop live services, turn on
+real-hardware POST, or use the trial's restricted physical capability
+bypass. The ordinary physical broker does not have a `--sdk-physical`
+mode. Real-world integration belongs to later #93/#94.
+
+**Local software check (no physical hardware):**
+```bash
+ruff check .
+python -m pytest --no-cov -q tests/test_broker_sdk.py tests/test_broker.py \
+  tests/test_broker_stop_faults.py tests/test_broker_session_lifecycle.py
+python -m pytest --no-cov -q
+```
+
+**Isolated simulated HTTP broker example (terminal 1):**
+```bash
+SOARM101_BROKER_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(24))')"
+export SOARM101_BROKER_TOKEN
+soarm101-broker --sdk-simulation-actions --host 127.0.0.1 \
+  --port 8765 --profile docs/examples/sdk-broker-simulation-actions.json
+```
+The `soarm101-broker` entrypoint is defined in `pyproject.toml`.
+The test suite exercises full protocol behavior with an isolated
+simulation lease; no real-arm arming is used.
+
+## Historical qualification and development notes (#90/#91 merged)
+
+The dated sections below document historical development stages. #90 and #91
+are already merged; their earlier draft/open status labels are retained for
+provenance, not current deployment state.
 
 ## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)
 
