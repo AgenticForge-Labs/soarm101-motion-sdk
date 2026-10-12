@@ -4,8 +4,9 @@ DO NOT run unattended or inside OpenShell. This is a supervised mechanical
 experiment, not a safety-rated emergency stop. Keep the hardware power cutoff
 in reach throughout. No agent is permitted to invoke or parameterize it.
 
-Start with an unloaded, secured, calibrated SO-ARM101 already physically at
-Sleep; require a human-issued `soarm101 agent arm --minutes 30` lease.
+Start with an unloaded, secured, calibrated SO-ARM101 in a stationary
+posture with a visually clear and operator-approved path to Sleep; require
+a human-issued `soarm101 agent arm --minutes 30` lease.
 The default short trial takes a measured starting pose, requires explicit
 operator clearance approval, moves to calibrated Sleep through the same
 authenticated broker with the joint-only SDK Sleep primitive, verifies
@@ -48,9 +49,9 @@ from soarm101_motion.poses import PoseLibrary
 from soarm101_motion.provenance import require_calibration_compatibility
 
 
-# The historical Overhead trial requires the calibration-relative Sleep
-# starting target. The short pan trial can instead use an independently
-# confirmed measured starting posture; neither mode auto-repositions.
+# The historical Overhead trial requires starting at calculated Sleep.
+# The short trial checks current encoder state and requires local operator
+# approval before its one canonical broker-owned Sleep preparation.
 START_POSE_TOLERANCE_DEG = 5.0
 MIN_OVERHEAD_SEPARATION_DEG = 10.0
 # Single source of truth for the hardware trial's broker-side action policy.
@@ -221,7 +222,11 @@ def _authorize_sleep_preparation(
         or not state.torque_enabled or state.moving or motion_active
     ):
         raise RuntimeError(
-            "Sleep preparation requires a stationary, healthy torque HOLD"
+            "Sleep preparation requires a stationary, healthy torque HOLD; "
+            f"connected={state.connected}, torque_enabled={state.torque_enabled}, "
+            f"moving={state.moving}, faulted={state.faulted}, "
+            f"host_motion_active={motion_active}, "
+            f"fault_message={getattr(state, 'fault_message', None)}"
         )
     print(
         "Preparing calibrated Sleep from the CURRENT encoder position. "
@@ -621,8 +626,37 @@ def main(argv: list[str] | None = None) -> int:
             # SDK Sleep primitive, not bespoke motor targets, owns execution.
             limits = sdk_arm.motion._effective_limits()
             _preflight_joints_within_limits(measured_joints, limits)
+            hold_state = sdk_arm.get_state()
+            summary["preparation_hardware_state"] = {
+                "connected": hold_state.connected,
+                "torque_enabled": hold_state.torque_enabled,
+                "moving": hold_state.moving,
+                "faulted": hold_state.faulted,
+                "fault_message": hold_state.fault_message,
+                "host_motion_active": bool(sdk_arm.motion.is_moving),
+            }
+            if (
+                not hold_state.connected or hold_state.faulted
+                or not hold_state.torque_enabled or hold_state.moving
+                or sdk_arm.motion.is_moving
+            ):
+                # Diagnostics only on failure: identify WHICH servo reports
+                # Moving/Status, without sending new goals or changing torque.
+                try:
+                    summary["preparation_motor_diagnostics"] = [
+                        {
+                            "name": item.name,
+                            "moving": item.moving,
+                            "status": item.status,
+                            "position_raw": item.position_raw,
+                            "error": item.error,
+                        }
+                        for item in sdk_arm.backend.diagnostics()
+                    ]
+                except Exception as exc:
+                    summary["preparation_diagnostic_error"] = repr(exc)
             _authorize_sleep_preparation(
-                state=sdk_arm.get_state(),
+                state=hold_state,
                 motion_active=bool(sdk_arm.motion.is_moving),
                 confirm=input,
             )
