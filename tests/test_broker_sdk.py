@@ -895,3 +895,65 @@ def test_physical_broker_trace_requires_operator_tty_and_has_no_yes_bypass(
     with pytest.raises(PermissionError, match="interactive operator terminal"):
         module.main(command)
     assert not list(tmp_path.iterdir())
+
+
+def test_joint_only_physical_sleep_reuses_existing_torque_hold_without_rearming(
+    tmp_path, monkeypatch,
+) -> None:
+    """A broker reconnect must not issue a second 1/1 torque-enable latch."""
+    from soarm101_motion import SOARM101
+    config = SOARM101Config(port="/dev/fake-device", robot_id="so101")
+    arm = SOARM101.simulated(config=config)
+    arm.connect()
+    arm.enable()
+    assert arm.get_state().torque_enabled is True
+    monkeypatch.setattr(
+        arm, "enable",
+        lambda: pytest.fail("redundant torque-enable during canonical Sleep"),
+    )
+    authority = AgentAuthorityStore(tmp_path / "human-lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: arm, authority_store=authority,
+    )
+    monkeypatch.setattr(executor, "_calibration_id", lambda current: "simulation")
+    try:
+        result = executor.execute("sleep", {"joint_only": True})
+        assert result["accepted"] is True
+        assert result["completed"] is True
+        assert result["action"] == "sleep"
+        assert result["holding"] is True
+        assert executor.connection_count == 1
+    finally:
+        executor.close()
+
+
+def test_joint_only_physical_sleep_rejects_torque_off_without_enabling(
+    tmp_path, monkeypatch,
+) -> None:
+    from soarm101_motion import SOARM101
+    from soarm101_motion.exceptions import HardwareFaultError
+    config = SOARM101Config(port="/dev/fake-device", robot_id="so101")
+    arm = SOARM101.simulated(config=config)
+    arm.connect()
+    assert arm.get_state().torque_enabled is False
+    monkeypatch.setattr(
+        arm, "enable",
+        lambda: pytest.fail("failed preflight must not enable motors"),
+    )
+    authority = AgentAuthorityStore(tmp_path / "human-lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: arm, authority_store=authority,
+    )
+    monkeypatch.setattr(executor, "_calibration_id", lambda current: "simulation")
+    try:
+        with pytest.raises(HardwareFaultError, match="stationary torque HOLD"):
+            executor.execute("sleep", {"joint_only": True})
+        assert authority.status()["armed"] is False
+    finally:
+        executor.close()
