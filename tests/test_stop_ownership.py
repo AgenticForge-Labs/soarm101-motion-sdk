@@ -118,3 +118,33 @@ def test_normal_disconnect_uses_controller_cleanup_not_public_stop(monkeypatch) 
     )
     arm.disconnect()
     assert observations == ["controller", "close"]
+
+
+def test_read_only_physical_trial_close_does_not_issue_motor_hold(
+    monkeypatch, tmp_path,
+) -> None:
+    """A failed Sleep preflight did not authorize any physical motor writes."""
+    from soarm101_motion import SOARM101, SOARM101Config
+    from soarm101_motion.agent_control import AgentAuthorityStore
+    from soarm101_motion.broker import AgentMotionRates
+    from soarm101_motion.broker_sdk import SDKAgentExecutor
+
+    arm = SOARM101.simulated()
+    calls = []
+    monkeypatch.setattr(
+        arm, "disconnect",
+        lambda *, stop_before_disconnect=True:
+        calls.append(stop_before_disconnect),
+    )
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(port="/dev/fake", robot_id="so101"),
+        rates=AgentMotionRates(), physical_trial=True,
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
+        arm_factory=lambda: arm,
+    )
+    executor._session = arm
+    executor._lifecycle = "open"
+    assert executor._motion_action_attempted is False
+    executor.close()
+    assert calls == [False]
+    assert executor.session_evidence["lifecycle"] == "closed"
