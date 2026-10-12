@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "sdk-simulated-joints",
+  "tools": [
+    "robot_health",
+    "robot_capabilities",
+    "robot_state",
+    "jog_joint",
+    "stop"
+  ],
+  "cameras": [],
+  "limits": {
+    "max_joint_delta_deg": 1
+  }
+}
