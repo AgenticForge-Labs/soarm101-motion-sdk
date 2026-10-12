@@ -1238,7 +1238,7 @@ def test_supervised_physical_jog_never_implicitly_rearms_torque(
         )
         assert motion["completed"] is True
         assert executor.connection_count == 1
-        arm.tool.disable()
+        arm.disable()
         # A torque-off target may not silently enable motor power.
         # The fake arm state remains usable for deterministic refusal.
         with pytest.raises((HardwareFaultError, RuntimeError)):
