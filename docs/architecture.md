@@ -1,5 +1,26 @@
 # Architecture
 
+## PR #90 Sleep-first attended physical STOP qualification (draft/unmerged)
+
+The trusted-host loopback physical trial now uses one deterministic SDK
+broker session: verified healthy/calibrated current posture, explicit human
+`PREPARE_SLEEP` clearance approval, ONE canonical joint-only SDK Sleep,
+fresh encoder verification of Sleep, ONE fixed shoulder-pan +8° command
+and independent human-triggered STOP. The broker's trusted short-profile
+state machine rejects pan before a completed Sleep, duplicate Sleep,
+pan replay and all post-STOP motion. Normal CLI-backed production
+broker and public read-only SDK simulation preview are unchanged.
+
+A passive trace snapshot at the STOP keypress reads only telemetry already
+collected by the controller. The hardware gate requires recent changing
+pan encoder feedback, fresh Moving=true hardware status, and at least
+2° of remaining travel; stable post-STOP encoder HOLD and fault-free
+feedback are separate requirements. The earlier near-endpoint short
+trial showed stable HOLD but **not** active physical braking. The initial
+18.4° powered elbow excursion remains unresolved. This is not a
+safety-rated emergency stop and does not enable native production motion.
+
+
 ## Persistent SDK lifecycle and serial ownership (PR #89; merged, not production)
 
 The staged `SDKAgentExecutor` holds one lazy SDK session. It binds the
