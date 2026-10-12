@@ -1722,7 +1722,20 @@ def _cmd_agent_sleep_up(args: argparse.Namespace) -> int:
 
 def _cmd_agent_stop(args: argparse.Namespace) -> int:
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
-        arm.enable()
+        if getattr(args, "simulation", False):
+            # Fresh simulation sessions do not retain motor torque state.
+            arm.enable()
+        else:
+            # A real STOP must never energize a torque-off motor or relatch
+            # an already held arm via Feetech's low-speed 1/1 enable profile.
+            # The broker's physical-native STOP independently owns its
+            # feedback-certified HOLD; this legacy CLI path remains best-effort.
+            state = arm.get_state()
+            if not state.connected or state.faulted or not state.torque_enabled:
+                raise RuntimeError(
+                    "STOP/HOLD unverified: physical arm is disconnected, "
+                    "faulted, or torque-disabled; no implicit rearm"
+                )
         arm.stop()
         joints = dict(arm.get_joint_positions().positions)
     print(
