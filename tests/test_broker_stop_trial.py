@@ -414,6 +414,7 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
 ) -> None:
     """Regression: old constructor rejected every short trial before motion."""
     from soarm101_motion import SOARM101, SOARM101Config
+    from soarm101_motion.agent_control import AgentAuthorityStore
     from soarm101_motion.broker import (
         AgentMotionRates, RobotBrokerService,
         PHYSICAL_SHORT_STOP_DELTA_DEG, PHYSICAL_SHORT_STOP_JOINT,
@@ -426,6 +427,7 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
         config=config, rates=AgentMotionRates(),
         simulation=False, physical_trial=True,
         arm_factory=lambda: SOARM101.simulated(config=config),
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
     )
     short = trial._physical_trial_profile("short")
     assert short.allowed_tools == frozenset({
@@ -494,6 +496,7 @@ def test_physical_trial_broker_still_rejects_widened_short_profiles(
     tmp_path, monkeypatch,
 ) -> None:
     from soarm101_motion import SOARM101, SOARM101Config
+    from soarm101_motion.agent_control import AgentAuthorityStore
     from soarm101_motion.broker import AgentMotionRates, RobotBrokerService
     from soarm101_motion.broker_sdk import SDKAgentExecutor
     from soarm101_motion.capability_profile import CapabilityProfile
@@ -504,6 +507,7 @@ def test_physical_trial_broker_still_rejects_widened_short_profiles(
         config=config, rates=AgentMotionRates(),
         simulation=False, physical_trial=True,
         arm_factory=lambda: SOARM101.simulated(config=config),
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
     )
     short = trial._physical_trial_profile("short")
     for changes in (
