@@ -191,6 +191,37 @@ def _verify_post_stop_stability(
     return drifts
 
 
+def _authorize_measured_short_start(
+    *,
+    state: Any,
+    motion_active: bool,
+    confirm: Callable[[str], str],
+) -> None:
+    """Require healthy stationary HOLD and explicit local swept-volume approval.
+
+    This is an operator acknowledgement, not inferred clearance/collision
+    certification from unvalidated workspace calibration.
+    """
+    if (
+        not state.connected or state.faulted
+        or not state.torque_enabled or state.moving or motion_active
+    ):
+        raise RuntimeError(
+            "short measured start requires a stationary, healthy torque HOLD"
+        )
+    print(
+        "Measured-start experiment, NOT a Sleep posture. Inspect the whole "
+        "arm and the full +8 degree pan swept volume for clearance, cables, "
+        "floor/contact and base stability. No motion has been commanded.",
+        flush=True,
+    )
+    if confirm(
+        "Type MEASURED to confirm clearance and authorize the "
+        "measured starting posture: "
+    ).strip() != "MEASURED":
+        raise PermissionError("operator declined measured-start physical preflight")
+
+
 def _execute_verified_roundtrip(
     request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
     *,
@@ -478,29 +509,11 @@ def main(argv: list[str] | None = None) -> int:
                 # qualification may start from another pose only after
                 # calibrated limit checks and a separate physical operator
                 # confirmation of the swept volume and support/clearance.
-                hardware = sdk_arm.get_state()
-                if (
-                    not hardware.connected or hardware.faulted
-                    or not hardware.torque_enabled or hardware.moving
-                    or sdk_arm.motion.is_moving
-                ):
-                    raise RuntimeError(
-                        "short measured start requires a stationary, healthy torque HOLD"
-                    )
-                print(
-                    "Measured-start experiment, NOT a Sleep posture. "
-                    "Inspect the whole arm and the full +8 degree pan swept "
-                    "volume for clearance, cables, floor/contact and base "
-                    "stability. No motion has been commanded by this script.",
-                    flush=True,
+                _authorize_measured_short_start(
+                    state=sdk_arm.get_state(),
+                    motion_active=bool(sdk_arm.motion.is_moving),
+                    confirm=input,
                 )
-                if input(
-                    "Type MEASURED to confirm clearance and authorize the "
-                    "measured starting posture: "
-                ).strip() != "MEASURED":
-                    raise PermissionError(
-                        "operator declined measured-start physical preflight"
-                    )
                 summary["measured_start_operator_confirmed"] = True
             summary["route"] = [
                 f"verify {args.short_start} starting posture (no movement)",
