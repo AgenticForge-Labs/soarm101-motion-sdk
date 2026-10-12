@@ -1,5 +1,34 @@
 # Testing
 
+## PR #91 — supervisor STOP lifecycle acceptance (unmerged)
+
+CI-only tests use fake OpenShell and broker processes. They exercise
+ordinary success, injected KeyboardInterrupt, STOP failure, read-only
+no-motor cleanup and lease revocation before a CLI STOP subprocess. Physical CLI STOP
+regressions assert no redundant torque-enable latch in a healthy HOLD
+and no implicit rearm when torque is genuinely disabled.
+STOP must be requested **while broker is alive and before sandbox
+deletion**, even on agent error, not added to a model prompt. On STOP
+failure, `supervisor-stop.json` must say `completed=false` and the
+otherwise successful run must fail. CLI `completed=true` means a
+bounded command returned, **not** that native physical encoder
+stability was verified.
+
+```bash
+python -m pytest --no-cov -q tests/test_agent_sandbox.py tests/test_broker.py
+ruff check .
+python -m pytest --no-cov -q
+```
+
+**Hardware handoff (not yet authorized by this PR):** With an unloaded,
+human-supervised arm, validate that Ctrl+C terminates an agent's task,
+invokes trusted STOP, prevents later commands, revokes authority,
+and leaves stable physical encoder HOLD. This test requires the next
+explicit persistent-SDK physical agent broker integration. A legacy
+CLI broker can serialize STOP behind an in-flight CLI subprocess;
+do not claim a physical in-flight STOP pass from CI alone.
+
+
 ## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)
 
 **2026-10-12 preflight correction:** The first attended `overhead-single`

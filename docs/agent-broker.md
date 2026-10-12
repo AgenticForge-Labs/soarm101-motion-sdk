@@ -1,3 +1,25 @@
+## PR #91 host-supervisor STOP and legacy lease revocation (unmerged)
+
+The `agent sandbox run` host requests authenticated STOP while the
+broker remains alive and before OpenShell deletion. On failure, the
+runner retains `supervisor-stop.json` with `completed=false` and
+does not report the run as successful; a CLI HOLD reply without physical
+stability samples is recorded as **not physically verified**.
+Read-only agent sessions do not issue STOP during teardown.
+
+On a legacy `AgentCommandExecutor` STOP, the broker revokes the
+calibration-bound human authority *before* waiting for its ordinary
+CLI-subprocess lock. Physical `soarm101 agent stop` now uses the live
+already-held torque state, not another low-speed 1/1 enable latch;
+real torque-off/faulted states refuse STOP rather than silently rearm. This blocks future CLI tools but cannot cancel
+an already executing separate physical CLI subprocess. The production
+broker is STILL CLI-backed and must not be represented as the
+physically qualified persistent-SDK trial of merged PR #90. The
+MCP `stop` and robotctl `stop` remain ordinary bounded agent tools;
+supervisor STOP is separate, unconditional cleanup when motion access
+was handed off. A future native SDK physical agent profile, broker
+watchdog and attended cancellation test are required before deployment.
+
 ## Draft #90 — experimental attended saved-Overhead STOP
 
 **2026-10-12 repair:** The first `overhead-single` run on real hardware performed no scripted movement: an extra 5° near-stop requirement conflicted with valid canonical Sleep. The trial now relies on the Motion SDK's already margin-adjusted executable calibrated bounds and preserves measured start/saved target/limit diagnostics in the summary. Other preflight, broker one-shot and STOP policies are unchanged.

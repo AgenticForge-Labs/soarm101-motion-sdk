@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from soarm101_motion.broker_sdk import SDKAgentExecutor
+from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
 from soarm101_motion.config import SOARM101Config, rate_within_ceiling
 from soarm101_motion.exceptions import SOARM101Error
@@ -419,6 +420,13 @@ class RobotBrokerService:
         with self._sdk_epoch_lock:
             admitted_epoch = self._sdk_stop_epoch
         try:
+            if isinstance(self.executor, AgentCommandExecutor) and action == "stop":
+                # The legacy CLI stop does not revoke the human agent lease.
+                # Revoke BEFORE waiting behind a previous CLI action, so
+                # future spawned commands cannot acquire fresh authority.
+                # This alone cannot interrupt an already-running CLI move:
+                # that requires the persistent SDK control-plane cutover.
+                AgentAuthorityStore().clear()
             if isinstance(self.executor, SDKAgentExecutor) and action == "stop":
                 if not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial):
                     raise PermissionError("native SDK STOP is not available in read-only preview")

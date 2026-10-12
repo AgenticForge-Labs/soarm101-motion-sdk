@@ -1,5 +1,37 @@
 # Self-contained agent sandbox
 
+## Agent supervisor STOP on cancellation (PR #91, unmerged)
+
+The trusted host runner—not Hermes, Codex, or an LLM prompt—owns final
+STOP when a human-authorized full-control sandbox run exits. It now sends
+authenticated `POST /v1/stop` **before** deleting the OpenShell sandbox
+or terminating the trusted broker, for ordinary success, agent failure,
+timeout, and Python `KeyboardInterrupt` (Ctrl+C). A failed STOP is a
+failed run, and the host writes `supervisor-stop.json` containing the
+request result and whether actual physical encoder settling was verified.
+Read-only runs never issue a STOP/motor command on cleanup.
+
+The legacy CLI-backed broker now revokes the agent lease on STOP
+admission, so a new CLI tool cannot acquire stale authority. The
+physical CLI STOP also refuses torque-off/faulted hardware instead of
+silently re-enabling the motors or writing an extra 1/1 enable latch. However,
+a CLI process already moving the arm can outlive that revocation, and
+legacy STOP may queue behind it. Its CLI `completed`/HOLD reply is
+**not** encoder-proven independent braking; the supervisor therefore
+records `verified_physical_hold=false` for that result. This is a
+lifecycle improvement, NOT the full deployment of PR #90's real-time
+independent native physical STOP.
+
+Until the persistent native SDK broker supports an explicit operator-
+approved multi-action agent profile and local physical validation,
+full-control physical Hermes/Codex sessions remain a separate hardware
+qualification. Start with `--read-only`, then locally supervised,
+small/bounded agent commands. Never treat Ctrl+C as an emergency stop,
+and keep the physical power cutoff accessible. A process killed by
+SIGKILL, power loss, or kernel failure cannot execute Python cleanup;
+a future broker-owned heartbeat/watchdog is required.
+
+
 ## Human-pinned motion rate ceilings (PR #88, unmerged)
 
 The OpenShell runner starts the broker itself. For full-control Codex/Hermes

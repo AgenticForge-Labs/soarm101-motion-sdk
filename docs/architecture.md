@@ -1,5 +1,25 @@
 # Architecture
 
+## Draft #91 — trusted host agent STOP ownership
+
+For Hermes, Codex or other OpenShell adapters, cancellation/teardown
+belongs to the Motion SDK's trusted host runner, not the LLM, skill
+instructions or sandbox process. When agent motion authority has been
+handed off, the runner sends STOP while the broker is still alive,
+then tears down the sandbox and broker. On failure the run is unsafe/
+unconfirmed rather than successful, with durable STOP evidence.
+Read-only runs have no such motor side effect.
+
+Legacy subprocess-backed broker STOP now also revokes the human lease
+when admitted. **This is not independent in-flight cancellation**:
+a CLI child may still be executing while STOP waits for serialization.
+Merged PR #90 owns the qualified persistent native-SDK physical
+STOP primitive; a new explicitly authorized production agent-broker
+cutover and hardware acceptance are needed to use that primitive for
+continuous multi-action agent runs. No parallel motor control stack
+is introduced.
+
+
 ## 2026-10-12 Overhead preflight correction (draft #90)
 
 The first attended `overhead-single` attempt was rejected **before any saved-pose movement** because its added 5° inset disagreed with a valid, stationary near-Sleep shoulder-lift starting position (-101.89°; calculated Sleep -102.05°). The Motion SDK already computes effective limits with configured mechanical-stop margins and derives canonical Sleep at an additional 2° executable inset. The trial no longer duplicates a larger inset. It checks both measured start and saved pose endpoints against those SDK effective limits; SDK planning/validation owns all actual motion. Out-of-range targets, calibration provenance mismatches, excessive displacements, missing HOLD, and fault states still refuse before motion. The preflight preserves read-only positions/limits in the summary to expose the earliest authoritative cause of rejection.

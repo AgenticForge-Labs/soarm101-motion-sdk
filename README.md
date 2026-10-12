@@ -1,5 +1,21 @@
 # SO-ARM101 Motion SDK
 
+## Agent Ctrl+C supervision — PR #91 (unmerged)
+
+The trusted OpenShell agent runner now requests bounded broker STOP
+**before** sandbox deletion and broker shutdown on success, Ctrl+C
+and failures (only after full-control motion authority was handed
+off). `supervisor-stop.json` records completion and whether encoder
+stability was independently verified. Read-only runs never move the
+robot. The legacy CLI broker revokes human agent authority when STOP
+is admitted, but it does **not** guarantee that a previously launched
+separate CLI movement is interrupted immediately. Merged PR #90's
+independent physical SDK STOP is not yet the default multi-action
+production agent broker. Do not assume Ctrl+C is a hardware emergency
+stop or activate unsupervised physical agent tests on this change alone.
+See `docs/agent-sandbox.md` and `TESTING.md`.
+
+
 ## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)
 
 **2026-10-12 preflight correction:** The first attended `overhead-single`

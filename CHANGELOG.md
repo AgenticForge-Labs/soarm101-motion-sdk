@@ -1,5 +1,17 @@
 # Changelog
 
+- **PR #91 (draft):** Trusted OpenShell agent supervisor now requests
+  broker STOP before sandbox deletion/broker termination on normal
+  completion, Ctrl+C and failure, with `supervisor-stop.json` and
+  failed-run treatment if STOP does not confirm HOLD. Read-only runs
+  do not issue STOP. The legacy CLI broker revokes human motion
+  authority on STOP admission. Physical CLI STOP now avoids a
+  redundant Feetech 1/1 torque-enable latch and fails when torque is
+  already off rather than secretly rearming. This does not add independent
+  interruption to in-flight CLI subprocesses or activate persistent
+  native physical broker for agents.
+
+
 - **Draft PR #90, 2026-10-12:** Fix real one-shot Overhead preflight refusal from canonical Sleep-adjacent measured posture. Remove redundant extra 5° limit inset after existing SDK mechanical-stop margin; retain effective-calibration bounds, distance, rate and live HOLD checks. Record read-only saved Overhead targets and executable limits in failure summary; add out-of-range negative regression. No real Overhead movement occurred during the failed trial.
 
 - Draft PR #90: added operator-only `overhead-single` stopped-pose
