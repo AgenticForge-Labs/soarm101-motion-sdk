@@ -13,6 +13,7 @@ import os
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -337,6 +338,7 @@ def broker_policy_text(
     auth: str | None = None,
     adapter_manifest: Path | None = None,
     interface: str = "robotctl",
+    allowed_tools: frozenset[str] | None = None,
 ) -> str:
     adapter = resolve_agent_adapter(agent, adapter_manifest)
     if interface not in {"robotctl", "mcp"}:
@@ -356,9 +358,15 @@ def broker_policy_text(
         ("POST", "/v1/stop"),
     )
     rules = read_only_rules if read_only else read_only_rules + motion_rules
+    if allowed_tools is not None:
+        from soarm101_motion.capability_profile import TOOL_ROUTES
+        allowed_routes = {TOOL_ROUTES[t] for t in allowed_tools}
+        rules = tuple(route for route in rules if route in allowed_routes)
     if interface == "mcp":
         rules += (("GET", "/v1/profile"),)
-        if not read_only:
+        if not read_only and (
+            allowed_tools is None or "sleep_up" in allowed_tools
+        ):
             rules += (("POST", "/v1/sleep-up"),)
     lines = [
         "version: 1",
@@ -606,7 +614,22 @@ class BrokerProcess:
         event_path: Path,
         profile_path: Path | None = None,
         rates: object | None = None,
+        sdk_simulation: bool = False,
     ) -> None:
+        self.sdk_simulation = sdk_simulation
+        if sdk_simulation and profile_path is None:
+            raise AgentSandboxError(
+                "SDK simulation relay requires an explicit immutable profile"
+            )
+        self._private_token = (
+            secrets.token_urlsafe(32) if sdk_simulation else token
+        )
+        if sdk_simulation:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                self._control_port = int(probe.getsockname()[1])
+        else:
+            self._control_port = int(port)
         self.profile_path = profile_path
         self.rates = rates
         self.port = int(port)
@@ -616,13 +639,21 @@ class BrokerProcess:
 
     def start(self) -> None:
         env = os.environ.copy()
-        env["SOARM101_BROKER_TOKEN"] = self.token
+        env["SOARM101_BROKER_TOKEN"] = self._private_token
+        if self.sdk_simulation:
+            env["SOARM101_RELAY_TOKEN"] = self.token
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
         command = [
             sys.executable, "-m", "soarm101_motion.broker",
-            "--host", DEFAULT_BROKER_HOST, "--port", str(self.port),
+            "--host", ("127.0.0.1" if self.sdk_simulation else DEFAULT_BROKER_HOST),
+            "--port", str(self._control_port),
             "--events", str(self.event_path),
         ]
+        if self.sdk_simulation:
+            command.extend([
+                "--sdk-simulation-actions",
+                "--sdk-agent-relay-port", str(self.port),
+            ])
         if self.profile_path is not None:
             command.extend(["--profile", str(self.profile_path)])
         if self.rates is not None:
@@ -652,6 +683,14 @@ class BrokerProcess:
                 )
             try:
                 self.request("GET", "/v1/health")
+                if self.sdk_simulation:
+                    relay_req = urllib.request.Request(
+                        f"http://127.0.0.1:{self.port}/v1/health",
+                        headers={"Authorization": f"Bearer {self.token}"},
+                    )
+                    with urllib.request.urlopen(relay_req, timeout=2) as relay_response:
+                        if relay_response.status != 200:
+                            raise AgentSandboxError("agent relay health unavailable")
                 return
             except Exception:
                 time.sleep(0.2)
@@ -665,11 +704,11 @@ class BrokerProcess:
     ) -> dict[str, object]:
         data = None if payload is None else json.dumps(dict(payload)).encode("utf-8")
         request = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}",
+            f"http://127.0.0.1:{self._control_port}{path}",
             data=data,
             method=method,
             headers={
-                "Authorization": f"Bearer {self.token}",
+                "Authorization": f"Bearer {self._private_token}",
                 "Content-Type": "application/json",
             },
         )
@@ -1138,6 +1177,7 @@ def run_agent(
     adapter_manifest: Path | None = None,
     openshell: OpenShellClient | None = None,
     broker_rates: object | None = None,
+    sdk_simulation: bool = False,
 ) -> RunResult:
     adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
@@ -1145,10 +1185,31 @@ def run_agent(
         raise AgentSandboxError("interface must be 'robotctl' or 'mcp'")
     if interface == "mcp" and (adapter_manifest is not None or adapter.name not in {"hermes", "codex"}):
         raise AgentSandboxError("MCP currently requires the built-in Hermes or Codex adapter")
-    chosen_profile = (
-        CapabilityProfile.from_file(capability_profile)
-        if capability_profile is not None else CapabilityProfile.full()
-    )
+    if sdk_simulation and capability_profile is None:
+        chosen_profile = CapabilityProfile.from_document({
+            "schema_version": 1,
+            "name": "sandbox-sdk-simulation",
+            "tools": [
+                "robot_health", "robot_capabilities", "robot_state",
+                "jog_joint", "stop",
+            ],
+            "cameras": [], "limits": {"max_joint_delta_deg": 1.0},
+        })
+    else:
+        chosen_profile = (
+            CapabilityProfile.from_file(capability_profile)
+            if capability_profile is not None else CapabilityProfile.full()
+        )
+    if sdk_simulation and (
+        chosen_profile.allowed_cameras
+        or chosen_profile.allowed_tools.intersection({
+            "capture_camera", "jog_cartesian",
+        })
+    ):
+        raise AgentSandboxError(
+            "SDK agent simulation does not expose physical cameras "
+            "or measured-workspace Cartesian movements"
+        )
     if not {"robot_capabilities", "robot_state"}.issubset(chosen_profile.allowed_tools):
         raise AgentSandboxError("agent sandbox profile must permit capabilities and state")
     if read_only:
@@ -1223,8 +1284,10 @@ def run_agent(
         broker_kwargs: dict[str, object] = {
             "port": broker_port, "token": token, "event_path": broker_events
         }
-        if read_only or capability_profile is not None or interface == "mcp":
+        if read_only or capability_profile is not None or interface == "mcp" or sdk_simulation:
             broker_kwargs["profile_path"] = profile_file
+        if sdk_simulation:
+            broker_kwargs["sdk_simulation"] = True
         if broker_rates is not None:
             from soarm101_motion.broker import AgentMotionRates
             if not isinstance(broker_rates, AgentMotionRates):
@@ -1251,6 +1314,7 @@ def run_agent(
                 auth=selected_auth.name,
                 adapter_manifest=adapter_manifest,
                 interface=interface,
+                allowed_tools=chosen_profile.allowed_tools if sdk_simulation else None,
             ),
             encoding="utf-8",
         )
@@ -1308,6 +1372,10 @@ def run_agent(
                 broker_event_offset = len(_read_broker_events(broker_events))
             else:
                 capabilities = broker.require_authority()
+                if sdk_simulation:
+                    # STOP cannot open a brand-new session. Connect the
+                    # simulated SDK now, before handing motion to the agent.
+                    broker.request("GET", "/v1/state")
                 agent_motion_handed_off = True
 
             create_result = client.create(
@@ -1368,6 +1436,14 @@ def run_agent(
                         "provider": selected_provider,
                         "read_only": bool(read_only),
                         "interface": interface,
+                        "broker_backend": (
+                            "persistent_sdk_simulation" if sdk_simulation
+                            else "cli_subprocess"
+                        ),
+                        "broker_transport": (
+                            "separate_token_agent_relay" if sdk_simulation
+                            else "legacy_host_listener"
+                        ),
                         "broker_profile": chosen_profile.public(),
                         "input_sha256": input_sha256,
                         "sensitive_inputs": sensitive_inputs,

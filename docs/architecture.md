@@ -1,6 +1,24 @@
 # Architecture
 
-## PR #92 — persistent native-SDK simulated broker (unmerged)
+## PR #93 — one SDK owner behind separate OpenShell relay (open)
+
+For simulation only: OpenShell → per-run authenticated/profile-restricted
+relay → same-process loopback `RobotBrokerService` →
+persistent `SDKAgentExecutor`. The relay neither owns a second SDK
+nor has any serial hardware access. The trusted host uses a different
+private token on the loopback controller to STOP independently of the
+agent's allowed tools. The relay exposes only agent-authorized endpoints
+and truthful tool discovery. Agent teardown invokes private STOP before
+destroying the sandbox, and prior SDK state preflight guarantees STOP
+never implicitly opens a fresh session.
+
+Physical SDK POST remains disabled for general OpenShell agents;
+#94 must implement/validate watchdogs and explicit bounded hardware
+authorization separately. The legacy physical CLI-backed broker remains
+the default until that later validated cutover.
+
+
+## PR #92 — persistent native-SDK simulated broker (merged)
 
 The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
 one persistent simulated SO-ARM101 SDK session and dispatches a

@@ -910,11 +910,101 @@ class RobotBrokerHTTPServer(ThreadingHTTPServer):
         super().__init__(address, _BrokerHandler)
 
 
+class BrokerRelayService:
+    """Thin authenticated *agent* facade; private SDK broker owns execution.
+
+    The agent has a different token and a narrower profile. A trusted host
+    supervisor reaches the loopback broker directly, so it can STOP even when
+    an agent has no STOP tool. No additional SDK/motor state exists here.
+    """
+
+    def __init__(
+        self, *, backend: RobotBrokerService, token: str,
+        agent_profile: CapabilityProfile,
+    ) -> None:
+        if not token or token == backend.token:
+            raise ValueError("agent relay requires a separate, nonempty token")
+        self.backend = backend
+        self.token = token
+        self.agent_profile = agent_profile
+
+    def authorized(self, authorization: str | None) -> bool:
+        return bool(
+            authorization is not None
+            and hmac.compare_digest(authorization, f"Bearer {self.token}")
+        )
+
+    def dispatch(
+        self, method: str, path: str,
+        payload: Mapping[str, object] | None = None,
+    ) -> BrokerResponse:
+        request = dict(payload or {})
+        if method.upper() == "GET" and path == "/v1/profile":
+            return BrokerResponse(
+                HTTPStatus.OK, {
+                    "ok": True, "result": self.agent_profile.public(),
+                },
+            )
+        try:
+            self.agent_profile.check(method.upper(), path, request)
+        except (PermissionError, ProfileError) as exc:
+            return BrokerResponse(
+                HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)},
+            )
+        response = self.backend.dispatch(method, path, request)
+        if method.upper() == "GET" and path == "/v1/capabilities" and response.status == HTTPStatus.OK:
+            result = response.body.get("result")
+            if isinstance(result, dict):
+                # Do not claim the external agent may call host-only STOP.
+                allowed_actions = {
+                    "robot_state": "state", "go_pose": "go_pose",
+                    "jog_joint": "joint", "jog_cartesian": "jog",
+                    "move_gripper": "gripper", "sleep": "sleep",
+                    "sleep_up": "sleep_up", "stop": "stop",
+                    "capture_camera": "capture",
+                }
+                original = result.get("actions")
+                if isinstance(original, dict):
+                    result = dict(result)
+                    result["actions"] = {
+                        name: value for name, value in original.items()
+                        if name not in allowed_actions.values()
+                        or any(
+                            tool in self.agent_profile.allowed_tools
+                            and action == name
+                            for tool, action in allowed_actions.items()
+                        )
+                    }
+                    response = BrokerResponse(
+                        response.status, {**response.body, "result": result},
+                    )
+        return response
+
+
+class BrokerRelayHTTPServer(ThreadingHTTPServer):
+    """Per-run token-scoped OpenShell facade; never owns or opens motors."""
+
+    daemon_threads = True
+
+    def __init__(
+        self, address: tuple[str, int], service: BrokerRelayService,
+    ) -> None:
+        if not service.backend._allow_simulated_sdk_posts:
+            raise ValueError("agent relay only supports native SDK simulation")
+        self.service = service
+        super().__init__(address, _BrokerHandler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_BROKER_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_BROKER_PORT)
     parser.add_argument("--robot-id", default="so101")
+    parser.add_argument(
+        "--sdk-agent-relay-port", type=int,
+        help="simulation-only OpenShell ingress with separate agent token; "
+             "trusted SDK executor remains bound to 127.0.0.1",
+    )
     simulated_modes = parser.add_mutually_exclusive_group()
     simulated_modes.add_argument(
         "--sdk-simulation-preview", action="store_true",
@@ -1014,6 +1104,13 @@ def main(argv: list[str] | None = None) -> int:
         gripper_acceleration_raw=args.agent_gripper_acceleration_raw,
     ).validated(config)
     simulated_actions = bool(args.sdk_simulation_actions)
+    relay_port = args.sdk_agent_relay_port
+    if relay_port is not None and (
+        not simulated_actions or not 1 <= relay_port <= 65535
+    ):
+        raise SystemExit(
+            "--sdk-agent-relay-port requires --sdk-simulation-actions and a valid port"
+        )
     if args.sdk_simulation_preview or simulated_actions:
         if args.host != "127.0.0.1":
             raise SystemExit("SDK simulation broker must bind only to 127.0.0.1")
@@ -1030,10 +1127,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(
                     "SDK simulation actions cannot authorize cameras or Cartesian jogs"
                 )
-            required = {"robot_capabilities", "robot_state", "stop"}
-            if not required.issubset(preview.allowed_tools):
+            required = {"robot_capabilities", "robot_state"}
+            if not required.issubset(preview.allowed_tools) or (
+                relay_port is None and "stop" not in preview.allowed_tools
+            ):
                 raise SystemExit(
-                    "SDK simulation actions profile requires capabilities, state and STOP"
+                    "SDK simulation actions profile requires capabilities, state and STOP "
+                    "(agent relay may omit STOP from its external profile)"
                 )
         else:
             if args.profile is not None:
@@ -1054,14 +1154,40 @@ def main(argv: list[str] | None = None) -> int:
     else:
         preview = CapabilityProfile.from_file(args.profile) if args.profile else None
         executor = AgentCommandExecutor(config=config, rates=rates)
+    # The loopback controller always retains STOP even if the external
+    # agent profile omits it. The relay independently enforces exactly
+    # the agent profile and uses a different bearer token.
+    backend_profile = preview
+    if relay_port is not None:
+        agent_token = os.environ.get("SOARM101_RELAY_TOKEN", "").strip()
+        if not agent_token or agent_token == token:
+            raise SystemExit(
+                "SOARM101_RELAY_TOKEN must be a distinct per-run agent token"
+            )
+        backend_document = preview.as_dict()
+        backend_document["tools"] = sorted(
+            preview.allowed_tools | {"stop"}
+        )
+        backend_profile = CapabilityProfile.from_document(backend_document)
     service = RobotBrokerService(
         executor=executor,
         token=token,
         event_path=args.events,
-        profile=preview,
+        profile=backend_profile,
         allow_simulated_sdk_posts=simulated_actions,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
+    relay_server = None
+    if relay_port is not None:
+        relay_service = BrokerRelayService(
+            backend=service, token=agent_token, agent_profile=preview,
+        )
+        # Exposure is explicit, authenticated, confined to the restricted
+        # agent facade, and supported only in simulation. Physical rollout
+        # needs separately reviewed host networking and authentication.
+        relay_server = BrokerRelayHTTPServer(
+            ("0.0.0.0", relay_port), relay_service,
+        )
     limits = config.motion_limits_human
     print(
         f"SO-ARM101 agent broker listening on http://{args.host}:{args.port}; "
@@ -1077,11 +1203,24 @@ def main(argv: list[str] | None = None) -> int:
         f"Cartesian={rates.cartesian_speed_mm_s:g} mm/s, "
         f"{rates.cartesian_acceleration_mm_s2:g} mm/s^2"
     )
+    relay_worker = None
     try:
-        server.serve_forever()
+        if relay_server is not None:
+            relay_worker = threading.Thread(
+                target=server.serve_forever, daemon=True,
+            )
+            relay_worker.start()
+            relay_server.serve_forever()
+        else:
+            server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if relay_server is not None:
+            relay_server.server_close()
+            server.shutdown()
+            if relay_worker is not None:
+                relay_worker.join(timeout=5)
         server.server_close()
         if isinstance(executor, SDKAgentExecutor):
             executor.close()

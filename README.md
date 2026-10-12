@@ -1,6 +1,29 @@
 # SO-ARM101 Motion SDK
 
-## PR #92 — persistent native-SDK simulated broker (unmerged)
+## PR #93 — isolated SDK simulation for Hermes and Codex (unmerged)
+
+The explicit `soarm101 agent sandbox run --sdk-simulation` option routes
+Hermes/Codex MCP or robotctl through a **separate-token, profile-limited
+OpenShell relay** into a **single loopback-bound persistent simulated SDK
+broker**. Agent permission never grants the host supervisor's private
+STOP token. Discovery hides host-only STOP when the agent is not allowed
+to call it. Motion authority is checked before handoff, the SDK is
+connected via state read before moving, and STOP is supervisor-owned on
+exit. Real cameras, physical workspace jogs and hardware are unavailable.
+Default sandbox behavior remains the CLI-based broker.
+
+Simulation-only example, after merging #93:
+```bash
+soarm101 agent arm --simulation --minutes 10
+soarm101 agent sandbox run --agent codex --auth installed \
+  --interface mcp --sdk-simulation --task TASK.md \
+  --output runs/codex-sdk-sim
+```
+This does **not** operate the actual SO-ARM101. PR #94 must pass a
+separate local physical-control/host-watchdog gate before cutover.
+
+
+## PR #92 — persistent native-SDK simulated broker (merged)
 
 The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
 one persistent simulated SO-ARM101 SDK session and dispatches a

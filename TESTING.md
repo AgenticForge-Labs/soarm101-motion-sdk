@@ -1,6 +1,26 @@
 # Testing
 
-## PR #92 — persistent native-SDK simulated broker (unmerged)
+## PR #93 — SDK simulation relay + supervisor acceptance (open)
+
+Without physical hardware, test restricted agent HTTP relay versus private
+host STOP, two-token noninterchangeability, MCP/profile capability
+projection, multiple joint actions on one simulated SDK connection,
+STOP lease revocation, after-STOP denial, read-only policy and
+Ctrl+C/SIGTERM STOP-before-teardown. The default CLI-backed broker
+continues to behave unchanged. Real OpenShell/Hermes/Codex provider and
+credential checks require local Codex; CI uses synthetic OpenShell.
+
+```bash
+ruff check .
+python -m pytest --no-cov -q tests/test_broker_sdk.py tests/test_agent_sandbox.py
+python -m pytest --no-cov -q
+```
+
+No real servo devices, services or deployments are part of this test.
+Before a later physical run, #94 must pass its independent safety gate.
+
+
+## PR #92 — persistent native-SDK simulated broker (merged)
 
 The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
 one persistent simulated SO-ARM101 SDK session and dispatches a

@@ -1,6 +1,22 @@
 # Development plan
 
-## PR #92 — persistent native-SDK simulated broker (unmerged)
+## #93 — OpenShell persistent SDK integration (open, simulation only)
+
+`--sdk-simulation` in the agent runner starts a host-owned persistent
+simulated SDK controller with a distinct-token, bounded relay for
+Hermes/Codex MCP or robotctl. The host supervisor owns the private
+STOP path and invokes it before teardown. The default physical broker
+remains CLI-backed. Hardware/multi-action SDK agent authorization is
+NOT provided by #93.
+
+**Next dependent #94:** add broker-owned heartbeat/fault handling and
+physically bounded multi-action profile, validate locally through Codex
+with real joint encoder and STOP evidence, then decide on an explicit
+configuration cutover. Do not begin dependent work from main until
+#93 passes CI and merges. No production services were changed.
+
+
+## PR #92 — persistent native-SDK simulated broker (merged)
 
 The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
 one persistent simulated SO-ARM101 SDK session and dispatches a

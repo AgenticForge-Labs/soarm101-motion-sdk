@@ -328,6 +328,122 @@ def test_simulation_action_mode_cannot_enable_real_arm() -> None:
         )
 
 
+def test_agent_relay_scopes_bearer_and_preserves_host_only_stop(
+    tmp_path,
+) -> None:
+    """Real HTTP relay and private SDK broker; no hardware or agent models."""
+    from soarm101_motion.broker import (
+        BrokerRelayHTTPServer, BrokerRelayService,
+    )
+    auth = AgentAuthorityStore(tmp_path / "simulation-lease.json")
+    auth.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    agent = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "agent-no-stop",
+        "tools": ["robot_health", "robot_capabilities", "robot_state",
+                  "jog_joint"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 0.5},
+    })
+    backend_doc = agent.as_dict()
+    backend_doc["tools"] = sorted(agent.allowed_tools | {"stop"})
+    backend = SDKAgentExecutor(
+        config=SOARM101Config(robot_id="so101"),
+        rates=AgentMotionRates(), simulation=True, simulation_actions=True,
+        authority_store=auth,
+    )
+    controller = RobotBrokerService(
+        executor=backend, token="trusted-host-secret",
+        profile=CapabilityProfile.from_document(backend_doc),
+        allow_simulated_sdk_posts=True, event_path=tmp_path / "events.jsonl",
+    )
+    host = RobotBrokerHTTPServer(("127.0.0.1", 0), controller)
+    relay = BrokerRelayHTTPServer(
+        ("127.0.0.1", 0),
+        BrokerRelayService(
+            backend=controller, token="agent-only-secret", agent_profile=agent,
+        ),
+    )
+    threads = [
+        threading.Thread(target=server.serve_forever, daemon=True)
+        for server in (host, relay)
+    ]
+    for thread in threads:
+        thread.start()
+
+    def call(server, method, path, token, payload=None):
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            data=data, method=method,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=3) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+    try:
+        assert call(relay, "GET", "/v1/health", "trusted-host-secret")[0] == 401
+        assert call(host, "GET", "/v1/health", "agent-only-secret")[0] == 401
+        code, profile = call(relay, "GET", "/v1/profile", "agent-only-secret")
+        assert code == 200 and "stop" not in profile["result"]["tools"]
+        visible = call(relay, "GET", "/v1/capabilities", "agent-only-secret")
+        assert visible[0] == 200
+        assert "stop" not in visible[1]["result"]["actions"]
+        assert "joint" in visible[1]["result"]["actions"]
+        assert call(relay, "POST", "/v1/stop", "agent-only-secret", {})[0] == 403
+        assert call(host, "GET", "/v1/state", "trusted-host-secret")[0] == 200
+        first = backend.session_evidence["id"]
+        assert call(
+            relay, "POST", "/v1/joint", "agent-only-secret",
+            {"joint": "shoulder_pan", "delta_deg": 0.2},
+        )[0] == 200
+        assert call(
+            relay, "POST", "/v1/joint", "agent-only-secret",
+            {"joint": "shoulder_pan", "delta_deg": -0.2},
+        )[0] == 200
+        assert backend.session_evidence["id"] == first
+        assert backend.connection_count == 1
+        assert call(
+            relay, "POST", "/v1/joint", "agent-only-secret",
+            {"joint": "shoulder_pan", "delta_deg": 2.0},
+        )[0] == 403
+        assert call(host, "POST", "/v1/stop", "trusted-host-secret", {})[0] == 200
+        assert auth.status()["armed"] is False
+        assert call(
+            relay, "POST", "/v1/joint", "agent-only-secret",
+            {"joint": "shoulder_pan", "delta_deg": 0.2},
+        )[0] == 409
+    finally:
+        for server in (relay, host):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=3)
+        backend.close()
+
+
+def test_relay_denies_equal_tokens_and_physical_mode(tmp_path) -> None:
+    from soarm101_motion.broker import BrokerRelayService
+
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(robot_id="so101"),
+        rates=AgentMotionRates(), simulation=True,
+    )
+    backend = RobotBrokerService(executor=executor, token="secret")
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "ro",
+        "tools": ["robot_state"], "cameras": [], "limits": {},
+    })
+    with pytest.raises(ValueError, match="separate"):
+        BrokerRelayService(
+            backend=backend, token="secret", agent_profile=profile,
+        )
+    executor.close()
+
+
 def test_native_executor_stop_can_interrupt_a_fake_inflight_move(tmp_path) -> None:
     """Executor unit proof only; NOT a real serial/HOLD or HTTP-level STOP proof."""
     started = threading.Event()
