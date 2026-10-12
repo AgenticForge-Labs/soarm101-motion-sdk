@@ -1,4 +1,17 @@
-## PR #92 — persistent native-SDK simulated broker (unmerged)
+## PR #92 — persistent native-SDK simulated broker (merged)
+
+## PR #93 — native SDK simulation + trusted sandbox ingress (open)
+
+`soarm101 agent sandbox run --sdk-simulation` starts one simulated
+persistent SDK controller bound to `127.0.0.1`, and a different-token
+restricted OpenShell ingress for MCP or robotctl. The relay has no
+independent hardware control. It rejects disallowed capabilities and
+does not advertise private host-only STOP as an agent tool. The host
+supervisor calls the loopback STOP endpoint with its private token
+even when the agent profile omits STOP. Shutdown still stops before
+sandbox/broker teardown. No camera, real serial I/O, or physical
+Cartesian workspace is available in this simulation experiment.
+
 
 The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
 one persistent simulated SO-ARM101 SDK session and dispatches a
