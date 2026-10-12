@@ -615,16 +615,23 @@ class BrokerProcess:
         profile_path: Path | None = None,
         rates: object | None = None,
         sdk_simulation: bool = False,
+        sdk_physical_supervised: bool = False,
+        serial_port: str | None = None,
     ) -> None:
+        if sdk_simulation and sdk_physical_supervised:
+            raise AgentSandboxError("cannot mix simulated and physical SDK sessions")
         self.sdk_simulation = sdk_simulation
-        if sdk_simulation and profile_path is None:
+        self.sdk_physical_supervised = sdk_physical_supervised
+        self.serial_port = serial_port
+        self._native_sdk = sdk_simulation or sdk_physical_supervised
+        if self._native_sdk and profile_path is None:
             raise AgentSandboxError(
                 "SDK simulation relay requires an explicit immutable profile"
             )
         self._private_token = (
-            secrets.token_urlsafe(32) if sdk_simulation else token
+            secrets.token_urlsafe(32) if self._native_sdk else token
         )
-        if sdk_simulation:
+        if self._native_sdk:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
                 probe.bind(("127.0.0.1", 0))
                 self._control_port = int(probe.getsockname()[1])
@@ -643,21 +650,30 @@ class BrokerProcess:
     def start(self) -> None:
         env = os.environ.copy()
         env["SOARM101_BROKER_TOKEN"] = self._private_token
-        if self.sdk_simulation:
+        if self._native_sdk:
             env["SOARM101_RELAY_TOKEN"] = self.token
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
         command = [
             sys.executable, "-m", "soarm101_motion.broker",
-            "--host", ("127.0.0.1" if self.sdk_simulation else DEFAULT_BROKER_HOST),
+            "--host", ("127.0.0.1" if self._native_sdk else DEFAULT_BROKER_HOST),
             "--port", str(self._control_port),
             "--events", str(self.event_path),
         ]
-        if self.sdk_simulation:
+        if self._native_sdk:
             command.extend([
-                "--sdk-simulation-actions",
                 "--sdk-agent-relay-port", str(self.port),
                 "--sdk-supervisor-timeout-s", "5",
             ])
+            if self.sdk_simulation:
+                command.append("--sdk-simulation-actions")
+            else:
+                if not self.serial_port:
+                    raise AgentSandboxError("physical SDK trial requires serial device")
+                command.extend([
+                    "--sdk-physical-agent-trial",
+                    "--serial-port", self.serial_port,
+                    "--physical-trace", str(self.event_path.with_suffix(".motor.jsonl")),
+                ])
         if self.profile_path is not None:
             command.extend(["--profile", str(self.profile_path)])
         if self.rates is not None:
@@ -687,7 +703,7 @@ class BrokerProcess:
                 )
             try:
                 self.request("GET", "/v1/health")
-                if self.sdk_simulation:
+                if self._native_sdk:
                     relay_req = urllib.request.Request(
                         f"http://127.0.0.1:{self.port}/v1/health",
                         headers={"Authorization": f"Bearer {self.token}"},
@@ -764,7 +780,7 @@ class BrokerProcess:
         The CLI-backed broker currently cannot attest independent braking;
         only the physical SDK trial's stability proof establishes that.
         """
-        if self.sdk_simulation:
+        if self._native_sdk:
             # There must be no late keepalive racing with STOP. Once stopped,
             # a new human-authorized session is required for any movement.
             self._heartbeat_done.set()
@@ -1221,6 +1237,8 @@ def run_agent(
     openshell: OpenShellClient | None = None,
     broker_rates: object | None = None,
     sdk_simulation: bool = False,
+    sdk_physical_supervised: bool = False,
+    serial_port: str | None = None,
 ) -> RunResult:
     adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
@@ -1228,6 +1246,18 @@ def run_agent(
         raise AgentSandboxError("interface must be 'robotctl' or 'mcp'")
     if interface == "mcp" and (adapter_manifest is not None or adapter.name not in {"hermes", "codex"}):
         raise AgentSandboxError("MCP currently requires the built-in Hermes or Codex adapter")
+    if sdk_simulation and sdk_physical_supervised:
+        raise AgentSandboxError("cannot combine SDK simulation and physical agent trial")
+    if sdk_physical_supervised:
+        if read_only or not serial_port or not capability_profile:
+            raise AgentSandboxError(
+                "physical agent trial requires a serial port, explicit "
+                "capability profile and motion-capable run"
+            )
+        if not sys.stdin.isatty():
+            raise AgentSandboxError(
+                "physical agent trial requires a local interactive operator terminal"
+            )
     if sdk_simulation and capability_profile is None:
         chosen_profile = CapabilityProfile.from_document({
             "schema_version": 1,
@@ -1255,6 +1285,21 @@ def run_agent(
         )
     if not {"robot_capabilities", "robot_state"}.issubset(chosen_profile.allowed_tools):
         raise AgentSandboxError("agent sandbox profile must permit capabilities and state")
+    if sdk_physical_supervised:
+        if (
+            chosen_profile.allowed_cameras
+            or chosen_profile.allowed_tools - {
+                "robot_health", "robot_state", "robot_capabilities",
+                "jog_joint", "stop",
+            }
+            or "jog_joint" not in chosen_profile.allowed_tools
+            or chosen_profile.max_joint_delta_deg is None
+            or chosen_profile.max_joint_delta_deg > 1.0
+        ):
+            raise AgentSandboxError(
+                "physical trial profile limited to <=1-degree joint jogs, "
+                "state/capabilities and STOP; no cameras"
+            )
     if read_only:
         # Read-only is broker-enforced even if the input profile permits motion.
         restricted = chosen_profile.as_dict()
@@ -1287,6 +1332,19 @@ def run_agent(
         raise AgentSandboxError(f"output directory must be new or empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if sdk_physical_supervised:
+        print(
+            "EXPERIMENTAL PHYSICAL SDK AGENT TRIAL. Ensure the arm is "
+            "unloaded, stationary, torque-held by your separate "
+            "'soarm101 agent arm' command, and the entire swept workspace "
+            "and power cutoff are accessible. Only <=1-degree joint "
+            "jogs are permitted. No automatic recovery.",
+            flush=True,
+        )
+        if input("Type PHYSICAL_AGENT_START to authorize one attended run: ").strip() != (
+            "PHYSICAL_AGENT_START"
+        ):
+            raise AgentSandboxError("operator declined physical agent trial")
     client = openshell or OpenShellClient()
     readiness = doctor(
         agent=adapter.name,
@@ -1327,10 +1385,14 @@ def run_agent(
         broker_kwargs: dict[str, object] = {
             "port": broker_port, "token": token, "event_path": broker_events
         }
-        if read_only or capability_profile is not None or interface == "mcp" or sdk_simulation:
+        if (read_only or capability_profile is not None or interface == "mcp"
+                or sdk_simulation or sdk_physical_supervised):
             broker_kwargs["profile_path"] = profile_file
         if sdk_simulation:
             broker_kwargs["sdk_simulation"] = True
+        if sdk_physical_supervised:
+            broker_kwargs["sdk_physical_supervised"] = True
+            broker_kwargs["serial_port"] = serial_port
         if broker_rates is not None:
             from soarm101_motion.broker import AgentMotionRates
             if not isinstance(broker_rates, AgentMotionRates):
@@ -1338,6 +1400,20 @@ def run_agent(
             broker_kwargs["rates"] = broker_rates.validated(
                 SOARM101Config(robot_id="so101")
             )
+        if sdk_physical_supervised:
+            from soarm101_motion.broker import AgentMotionRates
+            if "rates" not in broker_kwargs:
+                broker_kwargs["rates"] = AgentMotionRates(
+                    joint_speed_deg_s=2.0, joint_acceleration_deg_s2=10.0,
+                )
+            policy_rates = broker_kwargs["rates"]
+            if (
+                policy_rates.joint_speed_deg_s > 6
+                or policy_rates.joint_acceleration_deg_s2 > 30
+            ):
+                raise AgentSandboxError(
+                    "physical agent joint rates limited to <=6 deg/s and 30 deg/s^2"
+                )
         broker = BrokerProcess(**broker_kwargs)
         policy = root / "policy.yaml"
         skill = root / "SKILL.md"
@@ -1357,7 +1433,10 @@ def run_agent(
                 auth=selected_auth.name,
                 adapter_manifest=adapter_manifest,
                 interface=interface,
-                allowed_tools=chosen_profile.allowed_tools if sdk_simulation else None,
+                allowed_tools=(
+                    chosen_profile.allowed_tools
+                    if (sdk_simulation or sdk_physical_supervised) else None
+                ),
             ),
             encoding="utf-8",
         )
@@ -1415,7 +1494,7 @@ def run_agent(
                 broker_event_offset = len(_read_broker_events(broker_events))
             else:
                 capabilities = broker.require_authority()
-                if sdk_simulation:
+                if sdk_simulation or sdk_physical_supervised:
                     # STOP cannot open a brand-new session. Connect the
                     # simulated SDK now, before handing motion to the agent.
                     broker.request("GET", "/v1/state")
@@ -1480,11 +1559,14 @@ def run_agent(
                         "read_only": bool(read_only),
                         "interface": interface,
                         "broker_backend": (
-                            "persistent_sdk_simulation" if sdk_simulation
-                            else "cli_subprocess"
+                            "persistent_sdk_physical_supervised"
+                            if sdk_physical_supervised
+                            else ("persistent_sdk_simulation" if sdk_simulation
+                                  else "cli_subprocess")
                         ),
                         "broker_transport": (
-                            "separate_token_agent_relay" if sdk_simulation
+                            "separate_token_agent_relay"
+                            if (sdk_simulation or sdk_physical_supervised)
                             else "legacy_host_listener"
                         ),
                         "broker_profile": chosen_profile.public(),
@@ -1652,7 +1734,9 @@ def run_agent(
                     agent_exit_code=int(process.returncode),
                 )
 
-            if sdk_simulation and getattr(broker, "supervision_error", None):
+            if (sdk_simulation or sdk_physical_supervised) and getattr(
+                broker, "supervision_error", None
+            ):
                 raise AgentSandboxError(
                     "trusted host heartbeat failed during agent execution: "
                     + str(broker.supervision_error)
