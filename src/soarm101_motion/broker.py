@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from soarm101_motion.arm import SOARM101
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
@@ -61,6 +62,9 @@ _PHYSICAL_TRIAL_SHORT_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"jog_joint", "slee
 # Separately approved one-shot saved Overhead trial: no Sleep or other pose
 # and no automatic return. Exact payload and phases are enforced below.
 _PHYSICAL_TRIAL_OVERHEAD_SINGLE_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"go_pose"}
+# A separately human-approved, low-energy physical agent trial. It is NOT
+# a production agent profile: only <=1-degree joint moves, state and STOP.
+_PHYSICAL_SUPERVISED_AGENT_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"jog_joint"}
 DEFAULT_EVENT_PATH = Path.home() / ".local" / "state" / "soarm101" / "broker" / "events.jsonl"
 
 
@@ -300,6 +304,7 @@ class RobotBrokerService:
             raise ValueError("cannot combine simulated and physical broker modes")
         physical_short_stop_trial = False
         physical_overhead_single_trial = False
+        physical_supervised_agent_trial = False
         if allow_physical_sdk_trial:
             if profile is None or profile.allowed_cameras:
                 raise ValueError("physical trial requires a restricted camera-free profile")
@@ -318,8 +323,14 @@ class RobotBrokerService:
                 and profile.max_joint_delta_deg is None
                 and profile.max_model_jog_mm is None
             )
+            physical_supervised_agent_trial = (
+                profile.allowed_tools == _PHYSICAL_SUPERVISED_AGENT_TOOLS
+                and profile.max_joint_delta_deg is not None
+                and 0 < profile.max_joint_delta_deg <= 1.0
+                and profile.max_model_jog_mm is None
+            )
             if not (physical_short_stop_trial or physical_pose_trial
-                    or physical_overhead_single_trial):
+                    or physical_overhead_single_trial or physical_supervised_agent_trial):
                 raise ValueError(
                     "physical trial profile must be an approved short-pan, "
                     "historical pose, or one-shot saved Overhead STOP set"
@@ -333,6 +344,7 @@ class RobotBrokerService:
         self._allow_physical_sdk_trial = allow_physical_sdk_trial
         self._physical_short_stop_trial = physical_short_stop_trial
         self._physical_overhead_single_trial = physical_overhead_single_trial
+        self._physical_supervised_agent_trial = physical_supervised_agent_trial
         # One motion from the measured pose directly to saved Overhead;
         # the local operator must confirm it, and no second move is permitted.
         self._physical_overhead_phase = (
@@ -360,10 +372,12 @@ class RobotBrokerService:
     ) -> None:
         if not (
             isinstance(self.executor, SDKAgentExecutor)
-            and self._allow_simulated_sdk_posts
+            and (self._allow_simulated_sdk_posts
+                 or self._physical_supervised_agent_trial)
         ):
             raise ValueError(
-                "trusted heartbeat watchdog currently requires simulated native SDK"
+                "supervisor watchdog requires native SDK simulation or "
+                "a tightly bounded physical agent trial"
             )
         if self._supervisor_watchdog is not None:
             raise ValueError("supervisor watchdog already attached")
@@ -1037,8 +1051,13 @@ class BrokerRelayHTTPServer(ThreadingHTTPServer):
     def __init__(
         self, address: tuple[str, int], service: BrokerRelayService,
     ) -> None:
-        if not service.backend._allow_simulated_sdk_posts:
-            raise ValueError("agent relay only supports native SDK simulation")
+        if not (
+            service.backend._allow_simulated_sdk_posts
+            or service.backend._physical_supervised_agent_trial
+        ):
+            raise ValueError(
+                "agent relay requires SDK simulation or supervised joint-only physical trial"
+            )
         self.service = service
         super().__init__(address, _BrokerHandler)
 
@@ -1067,6 +1086,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--sdk-simulation-actions", action="store_true",
         help="opt-in persistent SDK simulation with bounded POST actions; "
              "requires a trusted camera-free --profile and loopback",
+    )
+    simulated_modes.add_argument(
+        "--sdk-physical-agent-trial", action="store_true",
+        help="EXPERIMENTAL human-attended physical SDK joint-only agent trial; "
+             "not a production broker cutover",
+    )
+    parser.add_argument("--serial-port", help="required device port for supervised physical trial")
+    parser.add_argument(
+        "--physical-trace", type=Path,
+        help="motor evidence JSONL for attended physical agent trial",
     )
     parser.add_argument("--events", type=Path, default=DEFAULT_EVENT_PATH)
     parser.add_argument(
@@ -1157,20 +1186,69 @@ def main(argv: list[str] | None = None) -> int:
         gripper_acceleration_raw=args.agent_gripper_acceleration_raw,
     ).validated(config)
     simulated_actions = bool(args.sdk_simulation_actions)
+    physical_agent = bool(args.sdk_physical_agent_trial)
     relay_port = args.sdk_agent_relay_port
     if args.sdk_supervisor_timeout_s is not None and (
-        not simulated_actions or relay_port is None
+        not (simulated_actions or physical_agent) or relay_port is None
     ):
         raise SystemExit(
-            "--sdk-supervisor-timeout-s requires the SDK simulation agent relay"
+            "--sdk-supervisor-timeout-s requires the SDK agent relay"
         )
     if relay_port is not None and (
-        not simulated_actions or not 1 <= relay_port <= 65535
+        not (simulated_actions or physical_agent)
+        or not 1 <= relay_port <= 65535
     ):
         raise SystemExit(
-            "--sdk-agent-relay-port requires --sdk-simulation-actions and a valid port"
+            "--sdk-agent-relay-port requires SDK simulation or physical trial and a valid port"
         )
-    if args.sdk_simulation_preview or simulated_actions:
+    if physical_agent:
+        if args.host != "127.0.0.1":
+            raise SystemExit("physical SDK controller must bind to IPv4 loopback")
+        if not args.serial_port or relay_port is None or args.profile is None:
+            raise SystemExit(
+                "physical agent trial requires --serial-port, "
+                "--sdk-agent-relay-port and restricted --profile"
+            )
+        if args.sdk_supervisor_timeout_s is None:
+            raise SystemExit("physical agent trial requires a supervisor watchdog")
+        if not args.physical_trace:
+            raise SystemExit("physical agent trial requires --physical-trace evidence")
+        if (rates.joint_speed_deg_s > 6
+                or rates.joint_acceleration_deg_s2 > 30):
+            raise SystemExit(
+                "physical agent trial must be <=6 deg/s and <=30 deg/s^2"
+            )
+        preview = CapabilityProfile.from_file(args.profile)
+        if (
+            preview.allowed_tools - _PHYSICAL_SUPERVISED_AGENT_TOOLS
+            or preview.allowed_cameras
+            or preview.max_joint_delta_deg is None
+            or preview.max_joint_delta_deg > 1.0
+            or "jog_joint" not in preview.allowed_tools
+            or not {"robot_state", "robot_capabilities"}.issubset(
+                preview.allowed_tools
+            )
+        ):
+            raise SystemExit(
+                "physical agent trial accepts only state, capabilities, "
+                "<=1-degree joint jog and optional STOP, with no cameras"
+            )
+        config = SOARM101Config.from_motion_limits(
+            port=args.serial_port, robot_id=args.robot_id,
+            auto_enable_torque=False,
+            max_joint_speed_deg_s=args.max_joint_speed_deg_s,
+            max_joint_acceleration_deg_s2=args.max_joint_acceleration_deg_s2,
+            max_linear_speed_mm_s=args.max_linear_speed_mm_s,
+            max_linear_acceleration_mm_s2=args.max_linear_acceleration_mm_s2,
+            max_tool_angular_speed_deg_s=args.max_tool_angular_speed_deg_s,
+            max_tool_angular_acceleration_deg_s2=args.max_tool_angular_acceleration_deg_s2,
+        )
+        executor = SDKAgentExecutor(
+            config=config, rates=rates, physical_trial=True,
+            arm_factory=lambda: SOARM101(config=config),
+            trace_path=args.physical_trace,
+        )
+    elif args.sdk_simulation_preview or simulated_actions:
         if args.host != "127.0.0.1":
             raise SystemExit("SDK simulation broker must bind only to 127.0.0.1")
         if simulated_actions:
@@ -1234,6 +1312,7 @@ def main(argv: list[str] | None = None) -> int:
         event_path=args.events,
         profile=backend_profile,
         allow_simulated_sdk_posts=simulated_actions,
+        allow_physical_sdk_trial=physical_agent,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     watchdog = None
