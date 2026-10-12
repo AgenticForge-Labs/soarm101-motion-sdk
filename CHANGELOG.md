@@ -5,7 +5,9 @@
   completion, Ctrl+C and failure, with `supervisor-stop.json` and
   failed-run treatment if STOP does not confirm HOLD. Read-only runs
   do not issue STOP. The legacy CLI broker revokes human motion
-  authority on STOP admission. This does not add independent
+  authority on STOP admission. Physical CLI STOP now avoids a
+  redundant Feetech 1/1 torque-enable latch and fails when torque is
+  already off rather than secretly rearming. This does not add independent
   interruption to in-flight CLI subprocesses or activate persistent
   native physical broker for agents.
 
