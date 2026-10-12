@@ -1,5 +1,23 @@
 # Architecture
 
+## #94 draft — one motor owner plus independent host watchdog
+
+The trusted host owns a heartbeat separate from OpenShell. The model's
+external relay token **cannot call the private heartbeat**. The
+broker-owned watchdog gates motion, expires independently of the
+agent's prompt, issues STOP through the same SDK/broker primitive, and
+latches the session so a lost-supervisor run cannot rearm. The host
+ends heartbeats before final STOP on ordinary teardown.
+
+An explicit operator-only physical trial extends that SAME persistent
+SDK/broker primitive to extremely small joint moves; it does not
+create competing driver or motor state. Calibration, servo limits,
+healthy existing torque HOLD, authority lease, trace and physical
+post-STOP stability remain SDK-owned. No production cutover is made
+before local Codex and operator physically verify these behaviors.
+Details: `docs/physical-agent-trial-handoff.md`.
+
+
 ## PR #93 — one SDK owner behind separate OpenShell relay (open)
 
 For simulation only: OpenShell → per-run authenticated/profile-restricted
