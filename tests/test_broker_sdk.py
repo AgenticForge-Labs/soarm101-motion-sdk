@@ -1159,6 +1159,96 @@ def test_physical_broker_trace_requires_operator_tty_and_has_no_yes_bypass(
     assert not list(tmp_path.iterdir())
 
 
+def test_supervised_physical_agent_profile_is_exact_and_low_delta(
+    tmp_path,
+) -> None:
+    """Hardware-free physical-session policy gate; no serial/servo access."""
+    from soarm101_motion import SOARM101
+
+    config = SOARM101Config(
+        port="/dev/fake", robot_id="so101", auto_enable_torque=False,
+    )
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(
+            joint_speed_deg_s=2, joint_acceleration_deg_s2=10,
+        ), physical_trial=True,
+        arm_factory=lambda: SOARM101.simulated(config=config),
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
+    )
+    def profile(delta, tools=None):
+        return CapabilityProfile.from_document({
+            "schema_version": 1, "name": "operator-attended",
+            "tools": tools or [
+                "robot_health", "robot_capabilities", "robot_state",
+                "jog_joint", "stop",
+            ], "cameras": [],
+            "limits": {"max_joint_delta_deg": delta},
+        })
+    service = RobotBrokerService(
+        executor=executor, token="private", profile=profile(1),
+        allow_physical_sdk_trial=True,
+    )
+    assert service._physical_supervised_agent_trial is True
+    with pytest.raises(ValueError, match="physical trial profile"):
+        RobotBrokerService(
+            executor=executor, token="private", profile=profile(2),
+            allow_physical_sdk_trial=True,
+        )
+    with pytest.raises(ValueError, match="physical trial profile"):
+        RobotBrokerService(
+            executor=executor, token="private",
+            profile=profile(1, tools=[
+                "robot_health", "robot_capabilities", "robot_state",
+                "jog_joint", "stop", "sleep",
+            ]), allow_physical_sdk_trial=True,
+        )
+    executor.close()
+
+
+def test_supervised_physical_jog_never_implicitly_rearms_torque(
+    tmp_path, monkeypatch,
+) -> None:
+    """A fake physical SDK factory keeps real serial devices unopened."""
+    from soarm101_motion import SOARM101
+    from soarm101_motion.exceptions import HardwareFaultError
+
+    config = SOARM101Config(
+        port="/dev/fake", robot_id="so101", auto_enable_torque=False,
+    )
+    arm = SOARM101.simulated(config=config, realtime=False)
+    arm.connect()
+    arm.enable()
+    authority = AgentAuthorityStore(tmp_path / "lease.json")
+    authority.issue(robot_id="so101", calibration_id="simulation", minutes=5)
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(
+            joint_speed_deg_s=2, joint_acceleration_deg_s2=10,
+        ), physical_trial=True, arm_factory=lambda: arm,
+        authority_store=authority,
+    )
+    monkeypatch.setattr(
+        executor, "_calibration_id", lambda current: "simulation",
+    )
+    monkeypatch.setattr(
+        arm, "enable", lambda: pytest.fail("unexpected 1/1 servo rearm latch"),
+    )
+    try:
+        motion = executor.execute(
+            "joint", {"joint": "shoulder_pan", "delta_deg": 0.1},
+        )
+        assert motion["completed"] is True
+        assert executor.connection_count == 1
+        arm.tool.disable()
+        # A torque-off target may not silently enable motor power.
+        # The fake arm state remains usable for deterministic refusal.
+        with pytest.raises((HardwareFaultError, RuntimeError)):
+            executor.execute(
+                "joint", {"joint": "shoulder_pan", "delta_deg": 0.1},
+            )
+    finally:
+        executor.close()
+
+
 def test_joint_only_physical_overhead_reuses_human_torque_hold(
     tmp_path, monkeypatch,
 ) -> None:
