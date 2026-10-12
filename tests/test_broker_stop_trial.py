@@ -503,6 +503,11 @@ def test_short_physical_trial_profile_can_construct_broker_without_hardware(
     assert all(called[1][1][key] == value for key, value in exact.items())
     assert called[1][1]["speed_deg_s"] == 8.0
     assert called[1][1]["acceleration_deg_s2"] == 25.0
+    assert service.dispatch("POST", "/v1/stop", {}).status == 200
+    assert service.dispatch(
+        "POST", "/v1/sleep", {"joint_only": True},
+    ).status == 409
+    assert service.dispatch("POST", "/v1/joint", exact).status == 409
     assert executor.connection_count == 0
     executor.close()
 
