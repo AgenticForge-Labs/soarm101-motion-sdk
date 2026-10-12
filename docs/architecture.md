@@ -1,5 +1,19 @@
 # Architecture
 
+## PR #90: live servo torque authority across broker reconnect (unmerged)
+
+The owning Feetech backend synchronizes torque state on connection from
+read-only on-device `Torque_Enable` registers. State held by a prior
+CLI process is not inferred from its own new process-local
+`_torque_enabled=False` constructor default. All six actuators
+must agree on all-ON or all-OFF; partial/malformed states fail closed.
+A physical trial's joint-only Sleep consumes an existing healthy
+torque hold without issuing a redundant 1/1 torque-enable position
+goal. This is SDK/hardware state reconciliation, **not** agent authority
+or a new broker implementation. Operator approval and the trusted
+Sleep → pan → STOP state machine remain distinct deterministic gates.
+
+
 ## PR #90 Sleep-first attended physical STOP qualification (draft/unmerged)
 
 The trusted-host loopback physical trial now uses one deterministic SDK
