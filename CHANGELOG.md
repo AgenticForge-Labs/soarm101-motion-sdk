@@ -1,5 +1,16 @@
 # Changelog
 
+- Draft PR #90: repair the attended short physical STOP trial failing
+  `Sleep preparation requires a stationary, healthy torque HOLD`
+  after a human `agent arm`. Feetech now reads all motor
+  `Torque_Enable` registers on a fresh connection (all enabled/off
+  accepted; mixed/invalid rejected) without sending motor goals.
+  Joint-only physical Sleep reuses an existing healthy HOLD instead
+  of repeating an all-motor 1/1 latch. Preflight failure emits
+  precise flags and read-only per-motor diagnostics. Added fake
+  hardware and SDK tests; physical STOP remains unqualified.
+
+
 - **Draft PR #90, next physical STOP gate (2026-10-11):** replace the
   short trial's assumed Sleep starting posture with an operator-approved
   canonical **joint-only** Sleep action from a healthy, calibrated
