@@ -798,6 +798,9 @@ def test_loopback_trial_sleep_http_reuses_one_sdk_connection_without_cli(
             "capture_saved_pose", sdk._arm(),
             {"robot_id": "so101", "name": pose_name, "source": "follower"},
         )
+    # The real operator arms through a separate CLI process before the
+    # broker opens; simulate that already-active torque HOLD here.
+    sdk._arm().enable()
     monkeypatch.setattr(
         AgentCommandExecutor, "run",
         lambda *a, **k: pytest.fail("physical persistent broker invoked CLI"),
