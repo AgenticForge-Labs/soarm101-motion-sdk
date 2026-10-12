@@ -1,6 +1,28 @@
 # SO-ARM101 Motion SDK
 
-## PR #93 — isolated SDK simulation for Hermes and Codex (unmerged)
+## PR #94 — broker watchdog and bounded physical-agent trial (draft)
+
+Merged #90–#93 provide verified operator-controlled STOP, host
+Ctrl+C cancellation, persistent simulated SDK execution and a separate-token
+OpenShell relay. Draft #94 adds a trusted-host heartbeat watchdog:
+motion requires a fresh private heartbeat, a lost host invokes
+independent STOP once, and the broker cannot silently rearm afterward.
+
+A **nondefault, human-confirmed physical trial** is staged: only
+profile-pinned <=1° joint jogs, default 2°/s and 10°/s² (hard cap
+6°/s and 30°/s²), a single persistent calibrated SDK owner,
+mandatory trace and watchdog, and private host STOP. No gripper,
+Cartesian, cameras, Sleep, pose playback or general hardware access.
+An arm's physical power cutoff must remain accessible.
+
+**NOT VALIDATED ON REAL HARDWARE YET.** See
+`docs/physical-agent-trial-handoff.md` for exact local Codex
+software and supervised robot commands. Do not merge/cut over physical
+control before the documented encoder/fault/STOP gates pass. The
+normal physical broker and human CLI remain unchanged.
+
+
+## PR #93 — isolated SDK simulation for Hermes and Codex (merged)
 
 The explicit `soarm101 agent sandbox run --sdk-simulation` option routes
 Hermes/Codex MCP or robotctl through a **separate-token, profile-limited
