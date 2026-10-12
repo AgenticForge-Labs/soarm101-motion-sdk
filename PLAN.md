@@ -34,12 +34,12 @@ python -m pytest --no-cov -q
 ```bash
 SOARM101_BROKER_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(24))')"
 export SOARM101_BROKER_TOKEN
-soarm101 agent-broker --sdk-simulation-actions --host 127.0.0.1 \
+soarm101-broker --sdk-simulation-actions --host 127.0.0.1 \
   --port 8765 --profile docs/examples/sdk-broker-simulation-actions.json
 ```
-If your installed entrypoint is `soarm101-broker`, use its help to
-confirm the equivalent flags. The test suite exercises full protocol
-behavior with an isolated simulation lease; no real-arm arming is used.
+The `soarm101-broker` entrypoint is defined in `pyproject.toml`.
+The test suite exercises full protocol behavior with an isolated
+simulation lease; no real-arm arming is used.
 
 **Next dependent steps:** #93 will add a trusted OpenShell/MCP
 transport and supervisor integration; #94 will cover broker-owned watchdog,
