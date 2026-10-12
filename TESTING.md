@@ -1,5 +1,24 @@
 # Testing
 
+## Draft #90: preflight-only physical session teardown remains command-free
+
+Live Feetech torque reattachment now adopts the six actual hardware
+`Torque_Enable` states on connection. Because a human CLI might already
+be holding the arm, a trial which only reads state and then **rejects**
+Sleep preflight must not send a new servo position HOLD on ordinary
+session cleanup. `SDKAgentExecutor` now records whether any actual
+movement action was attempted; when none was, physical `close()`
+disconnects transport without the implicit `motion.stop` position write.
+This also applies when the trial simply opens and reports status before
+operator declines preparation. After attempted movement, existing fault,
+STOP ownership and hold behavior remain.
+
+Software regression: `test_read_only_physical_trial_close_does_not_issue_motor_hold`
+in `tests/test_stop_ownership.py`. Keep both the real hardware
+`get_hardware_state` checks and the script's read-only failure diagnostics;
+never bypass a continuing `Moving` or `Status` motor fault.
+
+
 ## PR #90 local failure: live torque state not adopted on second process
 
 Operator trial `short-stop-20261011-211824` stopped **before any scripted
