@@ -551,3 +551,59 @@ def test_physical_trial_broker_still_rejects_widened_short_profiles(
     executor.close()
 
 
+def test_short_sleep_preparation_from_distant_measured_pose(monkeypatch) -> None:
+    import math
+    from types import SimpleNamespace
+    trial = _load_trial(monkeypatch)
+    measured = {"shoulder_pan": 0.0, "shoulder_lift": math.radians(10.0)}
+    sleep = {"shoulder_pan": 0.0, "shoulder_lift": math.radians(-76.23)}
+    limits = {name: (-math.pi / 2, math.pi / 2) for name in measured}
+    assert trial._pose_joint_errors(
+        measured, sleep, label="initial Sleep",
+    )["shoulder_lift"] == pytest.approx(86.23)
+    trial._preflight_joints_within_limits(measured, limits)
+    hardware = SimpleNamespace(
+        connected=True, faulted=False, torque_enabled=True, moving=False,
+    )
+    trial._authorize_sleep_preparation(
+        state=hardware, motion_active=False, confirm=lambda _: "PREPARE_SLEEP",
+    )
+    assert max(trial._verify_measured_pose(
+        sleep, sleep, label="prepared Sleep",
+    ).values()) == 0
+    assert trial._preflight_short_joint(sleep, limits)["delta_deg"] == 8.0
+
+
+@pytest.mark.parametrize("condition", [
+    "disconnected", "faulted", "torque_disabled", "moving", "host_moving",
+])
+def test_sleep_preparation_rejects_unsafe_state(monkeypatch, condition) -> None:
+    from types import SimpleNamespace
+    trial = _load_trial(monkeypatch)
+    hardware = SimpleNamespace(
+        connected=condition != "disconnected",
+        faulted=condition == "faulted",
+        torque_enabled=condition != "torque_disabled",
+        moving=condition == "moving",
+    )
+    with pytest.raises(RuntimeError, match="stationary, healthy torque HOLD"):
+        trial._authorize_sleep_preparation(
+            state=hardware, motion_active=condition == "host_moving",
+            confirm=lambda _: pytest.fail("must not request approval"),
+        )
+
+
+def test_sleep_preparation_decline_and_joint_limit_rejection(monkeypatch) -> None:
+    from types import SimpleNamespace
+    trial = _load_trial(monkeypatch)
+    healthy = SimpleNamespace(
+        connected=True, faulted=False, torque_enabled=True, moving=False,
+    )
+    with pytest.raises(PermissionError, match="declined"):
+        trial._authorize_sleep_preparation(
+            state=healthy, motion_active=False, confirm=lambda _: "NO",
+        )
+    with pytest.raises(RuntimeError, match="outside executable"):
+        trial._preflight_joints_within_limits(
+            {"shoulder_pan": 2.0}, {"shoulder_pan": (-1.0, 1.0)},
+        )
