@@ -132,6 +132,12 @@ class FakeBroker:
             "cameras": ["overhead", "wrist"],
         }
 
+    def request(self, method, path, payload=None):
+        assert (method, path) == ("GET", "/v1/capabilities")
+        return {"ok": True, "result": {
+            "authority": {"armed": False}, "cameras": [],
+        }}
+
     def request_motion_stop(self):
         assert self.started and not self.stopped
         self.stop_requests += 1
@@ -1335,6 +1341,10 @@ def test_supervisor_does_not_command_stop_for_read_only_run(
             openshell=True, gateway=True, docker=True, image=True,
             provider=True, details={},
         ),
+    )
+    monkeypatch.setattr(
+        agent_sandbox, "_validate_read_only_evidence",
+        lambda **kwargs: {},
     )
     fake = FakeOpenShell()
     agent_sandbox.run_agent(
