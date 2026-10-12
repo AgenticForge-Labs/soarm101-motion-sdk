@@ -1,5 +1,17 @@
 # Safety
 
+## Draft #90 preflight teardown ownership
+
+Connection to previously torque-enabled servos is a **read-only observation**,
+not new motion authority. If the trusted physical trial declines, fails
+calibration/health validation or reads state only, `SDKAgentExecutor.close()`
+must release the serial transport **without issuing another position-latch
+STOP command**. The new `_motion_action_attempted` state distinguishes
+this path from a session that actually attempted movement and may require
+the existing STOP/cleanup safeguards. Never infer physical stationary state
+from the absence of commanded motion alone.
+
+
 ## Live torque state across physical broker reconnection (draft #90)
 
 After a separate human `soarm101 agent arm`, a fresh SDK/broker process
