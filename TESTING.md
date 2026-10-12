@@ -1,106 +1,63 @@
 # Testing
 
-## PR #90 measured starting posture preflight — 2026-10-11
+## PR #90 revised attended STOP test — Sleep preparation then moving-servo check
 
-The next operator trial aborted before any scripted motor movement:
-`initial Sleep: not within 5 deg of expected pose (largest error 86.23 deg)`.
-`soarm101 agent arm` latches and holds the **present encoder positions**;
-it does not move to Sleep. This is a test precondition failure, not
-evidence of a servo/STOP fault or changed calibration. The observed
-86.23° discrepancy cannot be assigned to a particular joint without
-the summary/motor readings.
+**Current draft behavior (supersedes older preflight proposals below):**
 
-For the fixed short +8° shoulder-pan STOP experiment only, use
-`--trial short --short-start measured` when Sleep is not the actual
-posture. After first verifying the branch SHA and running the software
-tests, the operator's command is:
+The operator-reported first trial failed before movement because the broker
+did not admit the short profile. The next trial failed its expected-Sleep
+check, because `agent arm` holds the **current** posture, not Sleep.
+The first subsequently passing short test from Sleep cancelled a host
+request cleanly and measured stable encoder HOLD, but occurred near the
+8° endpoint, with unchanged pan encoder and Moving=false before STOP.
+Therefore **physical braking was not demonstrated**; its unchanged
+original trace is described in
+`docs/physical-stop-short-trial-20261011.md`.
 
+The new default `--trial short` makes Sleep a real prerequisite action
+rather than expecting it magically after `agent arm`:
+
+1. After a calibration-bound human lease, read all joint encoders, check
+   executable calibration and healthy stationary torque HOLD. Inspect the
+   entire physical route to the selected Sleep and type `PREPARE_SLEEP`.
+   Clear/secure the unloaded arm, cabling, table and obstacles.
+2. Through the **same authenticated local physical broker** execute exactly
+   one joint-only canonical `POST /v1/sleep` (no gripper close), with
+   bounded rates. Verify its completion, session continuity and measured
+   Sleep position. No pan action if preparation fails.
+3. Then operator types `START` for a single fixed +8° shoulder-pan action.
+   Press ENTER *early while movement is visibly in progress*. The broker
+   still sends independent STOP, verifies 1.5-s physical settling and
+   rejects completion of the interrupted action. Type `STATIONARY` only
+   if the arm actually holds.
+4. In addition to stable post-STOP feedback, check a passive **pre-STOP**
+   tracer snapshot: latest encoder feedback and moving flag are fresh;
+   pan encoder changed just before STOP; travel is >=0.5° and >=2°
+   remains. A host active flag alone or a near-endpoint HOLD is
+   **inconclusive**, never a physical braking PASS. No additional serial
+   reads during the moving leg or autonomous retry/REARM.
+5. A new operator trial is not authorized if clearance is uncertain.
+   Invalid calibration, motion/effort/transport errors, faulted status,
+   STOP timeout, or repeated STOP goals are blockers.
+
+Software-only first:
+```bash
+ruff check .
+python -m pytest --no-cov -q tests/test_broker_stop_trial.py \
+  tests/test_broker_sdk.py tests/test_stop_ownership.py \
+  tests/test_broker_stop_faults.py
+python -m pytest --no-cov -q
+```
+
+The attended physical test remains a *separately approved* local step.
 ```bash
 soarm101 agent arm --minutes 30
 python examples/persistent_broker_stop_trial.py \
-  --trial short --short-start measured \
-  --port /dev/ttyACM1 --robot-id so101 \
+  --trial short --port /dev/ttyACM1 --robot-id so101 \
   --output "$HOME/soarm-motion-tests/short-stop-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
-
-Only use this after directly confirming a clear supported swept volume.
-The authorization command does not move to Sleep; it holds the current pose. The script prints each actual/expected joint, preserves the
-comparison in summary JSON, checks all measured joint limits and a
-5° pan inset, demands a healthy stationary torque-enabled arm, and
-requires the local operator to type `MEASURED` after verifying that
-rotating pan +8° will not hit objects, wiring, the table or a stop.
-It then separately asks `START` and accepts ENTER during active motion;
-it does not auto-reposition, use saved poses or permit REARM. Default
-`--short-start sleep` and the full Overhead trial still require Sleep.
-
-Software tests: `python -m pytest --no-cov -q tests/test_broker_stop_trial.py`.
-The stationary, clear-workspace, no-payload, physical-cutoff gates are
-still mandatory. Treat any unexpected powered motion as failure. The
-previous unsafe STOP is not qualified by a corrected preflight.
-
-## PR #90 short STOP broker-profile admission repair — 2026-10-11
-
-The operator's first short trial aborted **before physical movement**:
-`RobotBrokerService.__init__` rejected `jog_joint` because its
-local physical-trial allowlist accepted only the earlier
-pose/Sleep/STOP profile. This was a deterministic profile contract mismatch,
-not a hardware fault or evidence of STOP/braking behavior.
-
-The trusted broker now accepts either **the exact legacy pose/Sleep/STOP
-profile** or **the exact local short STOP profile**, never their union.
-The latter requires `jog_joint` plus `max_joint_delta_deg=8`, has
-no cameras or other movement routes, and admits only the exact
-`{"joint":"shoulder_pan","delta_deg":8}` request. Requests for other
-joints, negative/reduced/oversized steps or extra fields are rejected
-before any SDK connection. Constants are owned by the broker and reused
-in the supervised test script.
-
-Hardware-free tests construct the *actual script profile* through the
-*actual physical broker constructor*, covering the originally failing
-path and rejection cases. The ordinary broker remains unchanged.
-Verify exact-head CI and the focused tests before making another
-operator-attended attempt. The first failed constructor run generated
-no moving-STOP evidence and **does not pass the hardware gate**.
-
-## PR #90 first low-energy STOP gate — new default, hardware not yet qualified
-
-The operator-only trial defaults to `--trial short`. It verifies all
-Sleep joints by encoder first, then sends exactly one authenticated
-`POST /v1/joint` for **shoulder_pan +8°** at default 2°/s and 10°/s²
-(hard maxima 3°/s and 15°/s²). The fixed target must be at least
-5° inside calibrated joint limits. No saved Overhead pose, baseline
-roundtrip, gripper action, automatic recovery or post-STOP REARM is used.
-
-After direct human `START`, press ENTER **while moving** to call independent
-STOP. The broker must confirm physical encoder settling across 1.5 seconds,
-the worker must return interrupted failure, and another readback after
-1 additional second must not drift more than 1° from the latched
-position. Only then may the operator type `STATIONARY`. Success
-does **not** certify an emergency stop, servo braking distance or
-unloaded stability beyond the sampled interval.
-
-```bash
-cd ~/AgenticForge/soarm101-motion-sdk
-git switch feature/broker-independent-stop-faults
-git pull --ff-only
-source .venv/bin/activate
-ruff check .
-python -m pytest --no-cov -q tests/test_broker_stop_trial.py tests/test_stop_ownership.py tests/test_broker_stop_faults.py
-python -m pytest --no-cov -q
-# Only after software checks, deliberate operator approval and bench safety review:
-soarm101 agent arm --minutes 30
-python examples/persistent_broker_stop_trial.py --trial short \
-  --port /dev/ttyACM1 --robot-id so101 \
-  --output "$HOME/soarm-motion-tests/short-stop-$(date +%Y%m%d-%H%M%S).jsonl"
-```
-
-Do not repeat the previous large-angle STOP test to troubleshoot
-braking. Never run this from a sandbox, unattended Codex or CI.
-Stop the trial on any unanticipated motion, warning or incomplete HOLD,
-and do not issue REARM. Save the trace, broker events, JSON summary
-and human observations. This is **a candidate protocol for review**,
-not authorization to move an unsafe or unsupported arm.
-
+Do not assume the test may safely move to Sleep from an obstructed or
+unknown physical starting configuration. No production broker cutover.
 
 ## STOP qualification blocker from supplied 2026-10-11 logs
 
