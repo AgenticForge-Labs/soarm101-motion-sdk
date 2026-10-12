@@ -40,7 +40,7 @@ class SupervisorHeartbeatWatchdog:
         with self._lock:
             if self._state not in {"unarmed", "armed"}:
                 raise PermissionError(
-                    "supervisor watchdog is latched; restart broker to rearm"
+                    f"supervisor watchdog is {self._state}; restart broker to rearm"
                 )
             self._state = "armed"
             self._deadline = self._clock() + self.timeout_s
