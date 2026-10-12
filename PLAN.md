@@ -2,6 +2,19 @@
 
 ## PR #90 first short-motion STOP gate (draft, hardware result unknown)
 
+**2026-10-11 measured-start follow-up:** The short operator trial next
+failed its pre-motion Sleep posture gate by 86.23°. Inspecting the CLI
+confirms `soarm101 agent arm` only enables torque/HOLD at current
+encoder positions; it does not park to Sleep. Preserve default Sleep
+mode and add a strictly short-only `--short-start measured` with
+per-joint discrepancy evidence, executable-calibration validation,
+5° pan inset, stationary/fault-free torque check, and explicit
+`MEASURED` operator swept-volume approval before any motion. The
+Overhead trial remains Sleep-only. No reported STOP hardware result;
+keep #90 draft and blocked on actual safety evidence.
+
+
+
 The operator's first attempt failed during `RobotBrokerService`
 construction before any trial movement: the short `jog_joint` profile
 was not admitted by the local physical-trial constructor. The fix
