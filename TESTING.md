@@ -1,5 +1,29 @@
 # Testing
 
+## PR #90 short STOP broker-profile admission repair — 2026-10-11
+
+The operator's first short trial aborted **before physical movement**:
+`RobotBrokerService.__init__` rejected `jog_joint` because its
+local physical-trial allowlist accepted only the earlier
+pose/Sleep/STOP profile. This was a deterministic profile contract mismatch,
+not a hardware fault or evidence of STOP/braking behavior.
+
+The trusted broker now accepts either **the exact legacy pose/Sleep/STOP
+profile** or **the exact local short STOP profile**, never their union.
+The latter requires `jog_joint` plus `max_joint_delta_deg=8`, has
+no cameras or other movement routes, and admits only the exact
+`{"joint":"shoulder_pan","delta_deg":8}` request. Requests for other
+joints, negative/reduced/oversized steps or extra fields are rejected
+before any SDK connection. Constants are owned by the broker and reused
+in the supervised test script.
+
+Hardware-free tests construct the *actual script profile* through the
+*actual physical broker constructor*, covering the originally failing
+path and rejection cases. The ordinary broker remains unchanged.
+Verify exact-head CI and the focused tests before making another
+operator-attended attempt. The first failed constructor run generated
+no moving-STOP evidence and **does not pass the hardware gate**.
+
 ## PR #90 first low-energy STOP gate — new default, hardware not yet qualified
 
 The operator-only trial defaults to `--trial short`. It verifies all
