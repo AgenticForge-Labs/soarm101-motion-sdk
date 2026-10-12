@@ -42,6 +42,18 @@ from soarm101_motion.constants import (
 
 DEFAULT_BROKER_HOST = "127.0.0.1"
 DEFAULT_BROKER_PORT = 8765
+
+# Trusted-host-only physical STOP qualifications. These are not public broker
+# capabilities: the regular broker CLI still rejects SDK motion POST routes.
+# Keep the fixed single-joint envelope here so the example and the server
+# cannot drift apart.
+PHYSICAL_SHORT_STOP_JOINT = "shoulder_pan"
+PHYSICAL_SHORT_STOP_DELTA_DEG = 8.0
+_PHYSICAL_TRIAL_COMMON_TOOLS = frozenset({
+    "robot_health", "robot_capabilities", "robot_state", "stop",
+})
+_PHYSICAL_TRIAL_POSE_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"go_pose", "sleep"}
+_PHYSICAL_TRIAL_SHORT_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"jog_joint"}
 DEFAULT_EVENT_PATH = Path.home() / ".local" / "state" / "soarm101" / "broker" / "events.jsonl"
 
 
@@ -279,12 +291,25 @@ class RobotBrokerService:
             raise ValueError("physical trial requires a real explicitly provisioned SDK executor")
         if allow_simulated_sdk_posts and allow_physical_sdk_trial:
             raise ValueError("cannot combine simulated and physical broker modes")
+        physical_short_stop_trial = False
         if allow_physical_sdk_trial:
-            if profile is None or profile.allowed_tools != frozenset({
-                "robot_health", "robot_capabilities", "robot_state",
-                "go_pose", "sleep", "stop",
-            }) or profile.allowed_cameras:
-                raise ValueError("physical trial profile must restrict actions to state, pose, Sleep and STOP")
+            if profile is None or profile.allowed_cameras:
+                raise ValueError("physical trial requires a restricted camera-free profile")
+            physical_short_stop_trial = (
+                profile.allowed_tools == _PHYSICAL_TRIAL_SHORT_TOOLS
+                and profile.max_joint_delta_deg == PHYSICAL_SHORT_STOP_DELTA_DEG
+                and profile.max_model_jog_mm is None
+            )
+            physical_pose_trial = (
+                profile.allowed_tools == _PHYSICAL_TRIAL_POSE_TOOLS
+                and profile.max_joint_delta_deg is None
+                and profile.max_model_jog_mm is None
+            )
+            if not (physical_short_stop_trial or physical_pose_trial):
+                raise ValueError(
+                    "physical trial profile must be the existing pose/Sleep/STOP "
+                    "set or the fixed +8-degree shoulder-pan STOP qualification"
+                )
         if not str(token):
             raise ValueError("broker token cannot be empty")
         self.executor = executor or AgentCommandExecutor()
@@ -292,6 +317,7 @@ class RobotBrokerService:
         # disabled until physical STOP/ownership/workspace gates are passed.
         self._allow_simulated_sdk_posts = allow_simulated_sdk_posts
         self._allow_physical_sdk_trial = allow_physical_sdk_trial
+        self._physical_short_stop_trial = physical_short_stop_trial
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
         self.profile = profile if profile is not None else CapabilityProfile.full()
@@ -493,6 +519,19 @@ class RobotBrokerService:
             )
         try:
             self.profile.check(method, path, request)
+            if self._physical_short_stop_trial and method == "POST" and path == "/v1/joint":
+                # The signed/local broker profile caps the magnitude, and
+                # this exact-payload gate prevents other axes, reversed motion,
+                # rate overrides, or extra fields in a physical STOP bench run.
+                if not (
+                    set(request) == {"joint", "delta_deg"}
+                    and request["joint"] == PHYSICAL_SHORT_STOP_JOINT
+                    and type(request["delta_deg"]) in (int, float)
+                    and request["delta_deg"] == PHYSICAL_SHORT_STOP_DELTA_DEG
+                ):
+                    raise PermissionError(
+                        "short physical STOP trial permits only shoulder_pan +8 degrees"
+                    )
         except (PermissionError, ProfileError) as exc:
             self._record(
                 request_id=request_id,
