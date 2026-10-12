@@ -1,5 +1,7 @@
 ## Draft #90 — experimental attended saved-Overhead STOP
 
+**2026-10-12 repair:** The first `overhead-single` run on real hardware performed no scripted movement: an extra 5° near-stop requirement conflicted with valid canonical Sleep. The trial now relies on the Motion SDK's already margin-adjusted executable calibrated bounds and preserves measured start/saved target/limit diagnostics in the summary. Other preflight, broker one-shot and STOP policies are unchanged.
+
 The `overhead-single` trial is NOT a production broker capability or
 agent-accessible tool. The operator must authenticate on trusted
 loopback, inspect full route clearance and type `OVERHEAD_START`
