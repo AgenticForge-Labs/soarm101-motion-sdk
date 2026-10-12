@@ -1,5 +1,18 @@
 # Agent instructions
 
+**#94 staged, not merged — agent watchdog and physical test:** A
+trusted-host heartbeat is required for native agent motion. It must
+never be delegated to LLM prompts or exposed through the external
+relay. Expiry triggers independent STOP and a latched session fault.
+Physical SDK agents are gated behind an interactive
+`PHYSICAL_AGENT_START`, calibrated human-issued authority, explicitly
+selected serial device, <=1° joint profile, low speed, and local operator
+with accessible cutoff. Hardware stop and watchdog qualification are
+NOT yet complete; never treat this draft as production capability.
+The existing human CLI/production broker remains unchanged. See
+`docs/physical-agent-trial-handoff.md`.
+
+
 **PR #93 integration (open; simulation only):** Merged #90/#91/#92
 provide physical-trial STOP, supervisor cancellation and persistent
 simulated SDK broker. The staged #93 `--sdk-simulation` OpenShell relay
