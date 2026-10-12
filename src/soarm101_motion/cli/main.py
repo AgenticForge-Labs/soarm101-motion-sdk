@@ -1253,7 +1253,8 @@ def _confirm_agent_arm_interactive(minutes: float) -> None:
         )
     input(
         "AGENT MOTION AUTHORITY\n"
-        f"This will park/hold the follower and authorize bounded agent motion for "
+        f"This will HOLD the follower at its CURRENT encoder posture (not move to Sleep) "
+        f"and authorize bounded agent motion for "
         f"{minutes:g} minutes. Keep physical power accessible.\n"
         "Press ENTER to arm the agent session, or Ctrl-C to cancel: "
     )
@@ -2269,7 +2270,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_arm = agent_sub.add_parser(
         "arm",
-        help="human-authorize a time-bounded agent motion session and park the follower",
+        help="authorize bounded agent motion and hold the follower at current posture (no parking move)",
     )
     add_session_options(agent_arm)
     agent_arm.add_argument(
