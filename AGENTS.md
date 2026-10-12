@@ -1,6 +1,16 @@
 # Agent instructions
 
-**Draft PR #90, short STOP gate:** The attended physical trial now
+**Draft PR #90, short STOP gate:** The first operator attempt
+aborted at physical-trial broker construction before any movement:
+the broker only allowlisted pose/Sleep/STOP, but the short trial
+requested `jog_joint`. The owning broker now admits a separate exact
+short trial profile with `max_joint_delta_deg=8` and rejects anything
+except an explicit `shoulder_pan +8°` request. Do not widen the
+production/native-preview broker or merge the pose and joint tool
+allowlists. Verify the actual trial profile constructor in software
+tests before local hardware work.
+
+ The attended physical trial now
 defaults to a fixed +8° shoulder-pan move from measured Sleep,
 operator-initiated STOP and measured post-HOLD stability checks.
 There is no preliminary Overhead roundtrip or post-STOP REARM.
