@@ -449,7 +449,8 @@ def test_physical_agent_stop_does_not_reenable_held_or_torque_off_motors(
     from types import SimpleNamespace
     from contextlib import contextmanager
 
-    import soarm101_motion.cli.main as cli
+    import importlib
+    cli = importlib.import_module("soarm101_motion.cli.main")
 
     class Arm:
         def __init__(self, torque_enabled):
