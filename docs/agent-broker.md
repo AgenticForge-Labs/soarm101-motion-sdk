@@ -9,7 +9,9 @@ Read-only agent sessions do not issue STOP during teardown.
 
 On a legacy `AgentCommandExecutor` STOP, the broker revokes the
 calibration-bound human authority *before* waiting for its ordinary
-CLI-subprocess lock. This blocks future CLI tools but cannot cancel
+CLI-subprocess lock. Physical `soarm101 agent stop` now uses the live
+already-held torque state, not another low-speed 1/1 enable latch;
+real torque-off/faulted states refuse STOP rather than silently rearm. This blocks future CLI tools but cannot cancel
 an already executing separate physical CLI subprocess. The production
 broker is STILL CLI-backed and must not be represented as the
 physically qualified persistent-SDK trial of merged PR #90. The
