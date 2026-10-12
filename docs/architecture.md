@@ -1,5 +1,9 @@
 # Architecture
 
+## 2026-10-12 Overhead preflight correction (draft #90)
+
+The first attended `overhead-single` attempt was rejected **before any saved-pose movement** because its added 5° inset disagreed with a valid, stationary near-Sleep shoulder-lift starting position (-101.89°; calculated Sleep -102.05°). The Motion SDK already computes effective limits with configured mechanical-stop margins and derives canonical Sleep at an additional 2° executable inset. The trial no longer duplicates a larger inset. It checks both measured start and saved pose endpoints against those SDK effective limits; SDK planning/validation owns all actual motion. Out-of-range targets, calibration provenance mismatches, excessive displacements, missing HOLD, and fault states still refuse before motion. The preflight preserves read-only positions/limits in the summary to expose the earliest authoritative cause of rejection.
+
 ## Draft #90 — bounded single saved-Overhead STOP qualification
 
 The trusted `RobotBrokerService` remains the sole physical-trial
@@ -16,7 +20,7 @@ preview still denies all physical POST.
 One source of truth remains the SDK's saved-pose calibration/provenance,
 joint planning, limit, effort/fault, rate and STOP contracts. This
 physical experiment adds operator-visible read-only measured-state,
-saved-target and joint-stop-inset checks. A human authorizes ONE
+saved-target and authoritative effective-calibration-range checks. A human authorizes ONE
 movement at 6°/s 30°/s² default (8°/s 40°/s² maximum); no Sleep
 roundtrip, autonomous rearm/recovery or raw motor access. The SDK
 preserves human-established live Feetech torque HOLD on joint-only
