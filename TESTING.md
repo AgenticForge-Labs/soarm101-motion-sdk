@@ -1,5 +1,31 @@
 # Testing
 
+## PR #90 measured starting posture preflight — 2026-10-11
+
+The next operator trial aborted before any scripted motor movement:
+`initial Sleep: not within 5 deg of expected pose (largest error 86.23 deg)`.
+`soarm101 agent arm` latches and holds the **present encoder positions**;
+it does not move to Sleep. This is a test precondition failure, not
+evidence of a servo/STOP fault or changed calibration. The observed
+86.23° discrepancy cannot be assigned to a particular joint without
+the summary/motor readings.
+
+For the fixed short +8° shoulder-pan STOP experiment only, use
+`--trial short --short-start measured` when Sleep is not the actual
+posture. The script prints each actual/expected joint, preserves the
+comparison in summary JSON, checks all measured joint limits and a
+5° pan inset, demands a healthy stationary torque-enabled arm, and
+requires the local operator to type `MEASURED` after verifying that
+rotating pan +8° will not hit objects, wiring, the table or a stop.
+It then separately asks `START` and accepts ENTER during active motion;
+it does not auto-reposition, use saved poses or permit REARM. Default
+`--short-start sleep` and the full Overhead trial still require Sleep.
+
+Software tests: `python -m pytest --no-cov -q tests/test_broker_stop_trial.py`.
+The stationary, clear-workspace, no-payload, physical-cutoff gates are
+still mandatory. Treat any unexpected powered motion as failure. The
+previous unsafe STOP is not qualified by a corrected preflight.
+
 ## PR #90 short STOP broker-profile admission repair — 2026-10-11
 
 The operator's first short trial aborted **before physical movement**:
