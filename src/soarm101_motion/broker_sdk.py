@@ -652,7 +652,25 @@ class SDKAgentExecutor:
                 "message": result.message,
             }
         if action in ("sleep", "sleep_up"):
-            arm.enable()
+            if self.physical_trial and action == "sleep" and request.get("joint_only") is True:
+                # The attended Sleep-first trial begins from a human-armed
+                # torque HOLD established in an earlier CLI process. Our
+                # fresh Feetech backend now reconciles the live servo torque
+                # registers on connect. Do NOT blindly call arm.enable()
+                # again here: enable_torque() issues a new all-motor 1/1
+                # position latch, which could alter the servo inner loop.
+                # Refuse an unsafe or unverified hold rather than changing it.
+                initial_hold = arm.get_state()
+                if (
+                    not initial_hold.connected or initial_hold.faulted
+                    or not initial_hold.torque_enabled or initial_hold.moving
+                ):
+                    raise HardwareFaultError(
+                        "joint-only physical Sleep requires an already healthy "
+                        "stationary torque HOLD"
+                    )
+            else:
+                arm.enable()
             result = SDK_CAPABILITIES.dispatch(
                 action, arm, {
                     "speed_rad_s": float(rates["speed_deg_s"]) * pi / 180.0,
