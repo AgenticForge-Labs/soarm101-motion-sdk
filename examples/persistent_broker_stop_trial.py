@@ -276,6 +276,26 @@ def _operator_rearm_for_completion(
     }
 
 
+def _physical_trial_profile(trial: str) -> CapabilityProfile:
+    """Build the exact capability envelope the trusted broker will accept."""
+    if trial not in ("short", "overhead"):
+        raise ValueError(f"unknown supervised STOP trial {trial!r}")
+    return CapabilityProfile.from_document({
+        "schema_version": 1, "name": "physical-supervised-stop-qualification",
+        "tools": (
+            ["robot_health", "robot_capabilities", "robot_state", "jog_joint", "stop"]
+            if trial == "short"
+            else ["robot_health", "robot_capabilities", "robot_state",
+                  "go_pose", "sleep", "stop"]
+        ),
+        "cameras": [],
+        "limits": (
+            {"max_joint_delta_deg": SHORT_DELTA_DEG}
+            if trial == "short" else {}
+        ),
+    })
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True)
@@ -342,20 +362,7 @@ def main(argv: list[str] | None = None) -> int:
         config=config, rates=rates, simulation=False, physical_trial=True,
         trace_path=output, arm_factory=lambda: SOARM101(config),
     )
-    profile = CapabilityProfile.from_document({
-        "schema_version": 1, "name": "physical-supervised-stop-qualification",
-        "tools": (
-            ["robot_health", "robot_capabilities", "robot_state", "jog_joint", "stop"]
-            if args.trial == "short"
-            else ["robot_health", "robot_capabilities", "robot_state",
-                  "go_pose", "sleep", "stop"]
-        ),
-        "cameras": [],
-        "limits": (
-            {"max_joint_delta_deg": SHORT_DELTA_DEG}
-            if args.trial == "short" else {}
-        ),
-    })
+    profile = _physical_trial_profile(args.trial)
     service = RobotBrokerService(
         executor=executor, token=token, event_path=events_path,
         profile=profile, allow_physical_sdk_trial=True,
