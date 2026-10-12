@@ -3,13 +3,13 @@
 ## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)
 
 **Unmerged, operator-only physical experiment, not production motor control.**
-New \`--trial overhead-single\` uses the CURRENT measured, calibrated and
+New `--trial overhead-single` uses the CURRENT measured, calibrated and
 stationary torque-held posture and moves **once** toward the existing saved
-\`agent_start_overhead\` pose, joint-only (no gripper, preparatory Sleep,
+`agent_start_overhead` pose, joint-only (no gripper, preparatory Sleep,
 Overhead roundtrip, retry, automatic recovery or REARM). The operator must
 review every joint's printed displacement and swept-route clearance and
-type \`OVERHEAD_START\`. ENTER during physical motion requests independent
-broker STOP; \`STATIONARY\` is only for confirmed stable physical HOLD.
+type `OVERHEAD_START`. ENTER during physical motion requests independent
+broker STOP; `STATIONARY` is only for confirmed stable physical HOLD.
 
 The speed is **6°/s, acceleration 30°/s²** by default (3x faster than
 the earlier 2°/s short-pan trial); hard caps are **8°/s, 40°/s²**
@@ -35,7 +35,7 @@ and a reachable physical power cutoff.
 
 ### Software validation (no hardware)
 
-\`\`\`bash
+```bash
 cd ~/AgenticForge/soarm101-motion-sdk
 git switch feature/broker-independent-stop-faults
 git pull --ff-only
@@ -44,25 +44,25 @@ source .venv/bin/activate
 ruff check .
 python -m pytest --no-cov -q tests/test_broker_stop_trial.py tests/test_broker_sdk.py tests/test_broker_stop_faults.py tests/test_stop_ownership.py
 python -m pytest --no-cov -q
-\`\`\`
+```
 
 ### Attended test (only after exact-head CI, human readiness and clearance)
 
-\`\`\`bash
+```bash
 soarm101 agent arm --minutes 30
 python examples/persistent_broker_stop_trial.py \
   --trial overhead-single --port /dev/ttyACM1 --robot-id so101 \
   --output "$HOME/soarm-motion-tests/overhead-stop-$(date +%Y%m%d-%H%M%S).jsonl"
-\`\`\`
+```
 
-Decline at \`OVERHEAD_START\` for a read-only pose/torque preflight;
+Decline at `OVERHEAD_START` for a read-only pose/torque preflight;
 the script reports a nonpassing qualification, with no scripted motion
 when declined. Human arming itself can enable motors. After confirmation,
 press ENTER **early, when more than one joint is physically moving**.
 If anything behaves unexpectedly, use the accessible power cutoff
 rather than retrying software STOP. Do not issue a recovery move.
 
-Share \`*.summary.json\`, \`*.broker-events.jsonl\`, and motor \`*.jsonl\`
+Share `*.summary.json`, `*.broker-events.jsonl`, and motor `*.jsonl`
 together (redact tokens/leases). Distinguish raw stop-latch timing,
 braking response, and the separate 1.5-s stabilization-monitor HTTP
 duration. Never edit these original evidence files.
