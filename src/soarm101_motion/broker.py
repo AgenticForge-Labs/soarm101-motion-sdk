@@ -951,7 +951,34 @@ class BrokerRelayService:
             return BrokerResponse(
                 HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)},
             )
-        return self.backend.dispatch(method, path, request)
+        response = self.backend.dispatch(method, path, request)
+        if method.upper() == "GET" and path == "/v1/capabilities" and response.status == HTTPStatus.OK:
+            result = response.body.get("result")
+            if isinstance(result, dict):
+                # Do not claim the external agent may call host-only STOP.
+                allowed_actions = {
+                    "robot_state": "state", "go_pose": "go_pose",
+                    "jog_joint": "joint", "jog_cartesian": "jog",
+                    "move_gripper": "gripper", "sleep": "sleep",
+                    "sleep_up": "sleep_up", "stop": "stop",
+                    "capture_camera": "capture",
+                }
+                original = result.get("actions")
+                if isinstance(original, dict):
+                    result = dict(result)
+                    result["actions"] = {
+                        name: value for name, value in original.items()
+                        if name not in allowed_actions.values()
+                        or any(
+                            tool in self.agent_profile.allowed_tools
+                            and action == name
+                            for tool, action in allowed_actions.items()
+                        )
+                    }
+                    response = BrokerResponse(
+                        response.status, {**response.body, "result": result},
+                    )
+        return response
 
 
 class BrokerRelayHTTPServer(ThreadingHTTPServer):
