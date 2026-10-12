@@ -764,6 +764,12 @@ class BrokerProcess:
         The CLI-backed broker currently cannot attest independent braking;
         only the physical SDK trial's stability proof establishes that.
         """
+        if self.sdk_simulation:
+            # There must be no late keepalive racing with STOP. Once stopped,
+            # a new human-authorized session is required for any movement.
+            self._heartbeat_done.set()
+            if self._heartbeat_thread is not None:
+                self._heartbeat_thread.join(timeout=3)
         if self.process is None or self.process.poll() is not None:
             raise AgentSandboxError(
                 "cannot request STOP: trusted broker is not running"
