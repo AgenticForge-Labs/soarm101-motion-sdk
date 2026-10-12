@@ -1,5 +1,18 @@
 # Agent instructions
 
+**PR #90 reattachment STOP trial:** Separate `agent arm` and trusted
+broker processes do not share Feetech's Python-local torque cache. A
+fresh backend now reads **all six** physical `Torque_Enable` registers
+on connection and refuses mixed states; no position writes on connect.
+An already-torque-held joint-only Sleep must not issue another 1/1
+torque-enable latch. Preserve stationary/fault/moving preflight and
+read-only diagnostic evidence on any failure. The last operator run
+(`short-stop-20261011-211824`) aborted before movement; neither STOP
+braking nor hardware safety was newly qualified. Do not autonomously
+rearm, move Sleep or repeat STOP. Do not merge draft PR #90 until
+software and operator physical evidence pass.
+
+
 **Draft PR #90 — current safety workflow:** The short attended STOP
 trial now requires an explicit, local human `PREPARE_SLEEP` authorization
 after checking all measured joint calibration limits, physical
