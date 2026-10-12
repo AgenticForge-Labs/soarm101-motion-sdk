@@ -12,7 +12,19 @@ the summary/motor readings.
 
 For the fixed short +8° shoulder-pan STOP experiment only, use
 `--trial short --short-start measured` when Sleep is not the actual
-posture. The script prints each actual/expected joint, preserves the
+posture. After first verifying the branch SHA and running the software
+tests, the operator's command is:
+
+```bash
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_stop_trial.py \
+  --trial short --short-start measured \
+  --port /dev/ttyACM1 --robot-id so101 \
+  --output "$HOME/soarm-motion-tests/short-stop-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+Only use this after directly confirming a clear supported swept volume.
+The authorization command does not move to Sleep; it holds the current pose. The script prints each actual/expected joint, preserves the
 comparison in summary JSON, checks all measured joint limits and a
 5° pan inset, demands a healthy stationary torque-enabled arm, and
 requires the local operator to type `MEASURED` after verifying that
