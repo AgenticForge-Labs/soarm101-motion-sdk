@@ -636,6 +636,9 @@ class BrokerProcess:
         self.token = token
         self.event_path = event_path
         self.process: subprocess.Popen[str] | None = None
+        self._heartbeat_done = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
+        self.supervision_error: str | None = None
 
     def start(self) -> None:
         env = os.environ.copy()
@@ -653,6 +656,7 @@ class BrokerProcess:
             command.extend([
                 "--sdk-simulation-actions",
                 "--sdk-agent-relay-port", str(self.port),
+                "--sdk-supervisor-timeout-s", "5",
             ])
         if self.profile_path is not None:
             command.extend(["--profile", str(self.profile_path)])
@@ -691,10 +695,35 @@ class BrokerProcess:
                     with urllib.request.urlopen(relay_req, timeout=2) as relay_response:
                         if relay_response.status != 200:
                             raise AgentSandboxError("agent relay health unavailable")
+                    # The agent cannot send this heartbeat through its relay.
+                    # Only the trusted host knows the controller credential.
+                    self.request("POST", "/v1/supervisor-heartbeat", {})
+                    self._start_heartbeat()
                 return
             except Exception:
                 time.sleep(0.2)
         raise AgentSandboxError("robot broker did not become ready within 15 seconds")
+
+    def _start_heartbeat(self) -> None:
+        if self._heartbeat_thread is not None:
+            return
+
+        def keepalive() -> None:
+            while not self._heartbeat_done.wait(1.0):
+                try:
+                    self.request("POST", "/v1/supervisor-heartbeat", {})
+                except Exception as exc:
+                    # A failed trusted pulse must not be patched up by an
+                    # agent message or an automatic rearm. The independent
+                    # child broker watchdog will expire and attempt STOP.
+                    self.supervision_error = str(exc)
+                    return
+
+        self._heartbeat_thread = threading.Thread(
+            target=keepalive,
+            name="soarm101-trusted-host-heartbeat", daemon=True,
+        )
+        self._heartbeat_thread.start()
 
     def request(
         self,
@@ -759,6 +788,9 @@ class BrokerProcess:
         return result
 
     def stop(self) -> tuple[str, str]:
+        self._heartbeat_done.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=3)
         if self.process is None:
             return "", ""
         if self.process.poll() is None:
@@ -1609,6 +1641,11 @@ def run_agent(
                     agent_exit_code=int(process.returncode),
                 )
 
+            if sdk_simulation and getattr(broker, "supervision_error", None):
+                raise AgentSandboxError(
+                    "trusted host heartbeat failed during agent execution: "
+                    + str(broker.supervision_error)
+                )
             return RunResult(
                 sandbox=sandbox,
                 exit_code=int(process.returncode),
