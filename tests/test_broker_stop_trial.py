@@ -407,3 +407,123 @@ def test_short_mode_caps_command_frequency(monkeypatch) -> None:
     ])
     with pytest.raises(ValueError, match="at most 20 Hz"):
         trial._require_operator(args)
+
+
+def test_short_physical_trial_profile_can_construct_broker_without_hardware(
+    tmp_path, monkeypatch,
+) -> None:
+    """Regression: old constructor rejected every short trial before motion."""
+    from soarm101_motion import SOARM101, SOARM101Config
+    from soarm101_motion.broker import (
+        AgentMotionRates, RobotBrokerService,
+        PHYSICAL_SHORT_STOP_DELTA_DEG, PHYSICAL_SHORT_STOP_JOINT,
+    )
+    from soarm101_motion.broker_sdk import SDKAgentExecutor
+    from soarm101_motion.capability_profile import CapabilityProfile
+
+    trial = _load_trial(monkeypatch)
+    config = SOARM101Config(port="/dev/fake", robot_id="so101")
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: SOARM101.simulated(config=config),
+    )
+    short = trial._physical_trial_profile("short")
+    assert short.allowed_tools == frozenset({
+        "robot_health", "robot_capabilities", "robot_state",
+        "jog_joint", "stop",
+    })
+    assert short.max_joint_delta_deg == PHYSICAL_SHORT_STOP_DELTA_DEG == 8.0
+
+    service = RobotBrokerService(
+        executor=executor, token="local-only-token",
+        event_path=tmp_path / "events.jsonl",
+        profile=short, allow_physical_sdk_trial=True,
+    )
+    assert executor.connection_count == 0
+    assert executor._session is None
+
+    # Reject a different joint, opposite direction, magnitude change and
+    # an injected rate field BEFORE connecting or dispatching the SDK.
+    wrong = [
+        {"joint": "wrist_roll", "delta_deg": 8.0},
+        {"joint": "shoulder_pan", "delta_deg": -8.0},
+        {"joint": "shoulder_pan", "delta_deg": 7.0},
+        {"joint": "shoulder_pan", "delta_deg": 8.1},
+        {"joint": "shoulder_pan", "delta_deg": 8.0, "speed_deg_s": 3.0},
+        {"joint": "shoulder_pan", "delta_deg": True},
+    ]
+    for payload in wrong:
+        response = service.dispatch("POST", "/v1/joint", payload)
+        assert response.status == 403, payload
+        assert response.body["ok"] is False
+    for path, payload in [
+        ("/v1/go-pose", {"name": "agent_start_overhead"}),
+        ("/v1/sleep", {}),
+        ("/v1/jog", {"x_mm": 2.0}),
+        ("/v1/gripper", {"target": "open"}),
+    ]:
+        assert service.dispatch("POST", path, payload).status == 403
+    assert executor._session is None
+    assert executor.connection_count == 0
+
+    called = []
+    monkeypatch.setattr(
+        executor, "execute",
+        lambda action, payload: (
+            called.append((action, dict(payload)))
+            or {"accepted": True, "completed": True, "action": action}
+        ),
+    )
+    exact = {
+        "joint": PHYSICAL_SHORT_STOP_JOINT,
+        "delta_deg": PHYSICAL_SHORT_STOP_DELTA_DEG,
+    }
+    accepted = service.dispatch("POST", "/v1/joint", exact)
+    assert accepted.status == 200
+    assert accepted.body["ok"] is True
+    assert called == [("joint", exact)]
+    assert executor.connection_count == 0
+    executor.close()
+
+
+def test_physical_trial_broker_still_rejects_widened_short_profiles(
+    tmp_path, monkeypatch,
+) -> None:
+    from soarm101_motion import SOARM101, SOARM101Config
+    from soarm101_motion.broker import AgentMotionRates, RobotBrokerService
+    from soarm101_motion.broker_sdk import SDKAgentExecutor
+    from soarm101_motion.capability_profile import CapabilityProfile
+
+    trial = _load_trial(monkeypatch)
+    config = SOARM101Config(port="/dev/fake", robot_id="so101")
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(),
+        simulation=False, physical_trial=True,
+        arm_factory=lambda: SOARM101.simulated(config=config),
+    )
+    short = trial._physical_trial_profile("short")
+    for changes in (
+        {"limits": {}},
+        {"limits": {"max_joint_delta_deg": 20.0}},
+        {"tools": sorted(set(short.allowed_tools) | {"go_pose"})},
+        {"tools": sorted(set(short.allowed_tools) | {"sleep"})},
+    ):
+        document = short.as_dict()
+        document.update(changes)
+        widened = CapabilityProfile.from_document(document)
+        with pytest.raises(ValueError, match="physical trial profile"):
+            RobotBrokerService(
+                executor=executor, token="local-only-token",
+                event_path=tmp_path / "events.jsonl",
+                profile=widened, allow_physical_sdk_trial=True,
+            )
+    # The previous Overhead route remains accepted as a separate
+    # narrowly authorized trial, not an accidental capability union.
+    old = trial._physical_trial_profile("overhead")
+    RobotBrokerService(
+        executor=executor, token="local-only-token",
+        event_path=tmp_path / "events.jsonl",
+        profile=old, allow_physical_sdk_trial=True,
+    )
+    executor.close()
