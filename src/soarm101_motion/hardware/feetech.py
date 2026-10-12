@@ -205,6 +205,27 @@ class FeetechBackend(SO101HardwareBackend):
                     self.calibration,
                     robot_id=self.config.robot_id,
                 )
+            # A previous, human-authorized CLI process may have left the
+            # servos torque-held after releasing the serial port. This fresh
+            # backend cannot infer live actuator authority from its initial
+            # process-local False flag: read every servo's actual Torque_Enable
+            # register BEFORE reporting a connected state. Never issue a
+            # motor goal or change torque while adopting this read-only state.
+            torque = {
+                name: self.read_register(name, "Torque_Enable")
+                for name in ALL_MOTORS
+            }
+            if any(value not in (0, 1) for value in torque.values()):
+                raise RobotConnectionError(
+                    "invalid live Torque_Enable register(s): "
+                    + ", ".join(f"{name}={value}" for name, value in torque.items())
+                )
+            if len(set(torque.values())) != 1:
+                raise RobotConnectionError(
+                    "mixed servo torque state on connect; no movement authorized: "
+                    + ", ".join(f"{name}={value}" for name, value in torque.items())
+                )
+            self._torque_enabled = all(value == 1 for value in torque.values())
             self._connected = True
         except Exception:
             self._connected = False
