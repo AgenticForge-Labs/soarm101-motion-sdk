@@ -1,5 +1,14 @@
 # Changelog
 
+- Continue draft #90 after a physical-trial **preflight** (no motion)
+  rejected an 86.23° difference from Sleep. Confirmed `agent arm` holds
+  current position rather than parking. Add a short-only measured-start
+  option with per-joint diagnostic evidence, validated all-joint limits,
+  healthy stationary torque HOLD and explicit human `MEASURED` clearance
+  approval. Preserve Sleep defaults and the Overhead Sleep-only gate.
+  Physical STOP remains unqualified.
+
+
 - Repair PR #90 trusted-host short STOP bootstrap: the physical-trial
   broker's previous pose/Sleep-only allowlist rejected the new
   `jog_joint` short trial before motion. Support two exact, distinct
