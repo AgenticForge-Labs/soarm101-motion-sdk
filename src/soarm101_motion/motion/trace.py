@@ -103,6 +103,54 @@ class PassiveBackendTrace:
     def mark(self, event: str, **fields: Any) -> None:
         self._record("marker", marker=event, **fields)
 
+    def feedback_window(
+        self, joint: str, *, window_s: float = 0.35,
+    ) -> dict[str, Any]:
+        """Snapshot ALREADY OBSERVED feedback; never touch serial hardware.
+
+        Called immediately after the operator requests STOP, before the
+        independent STOP request is dispatched. Retain the capture instant
+        and every encoder sample in the trailing interval for the physical
+        qualification; an active host trajectory alone is not moving-servo
+        evidence.
+        """
+        if not math.isfinite(window_s) or window_s <= 0:
+            raise ValueError("feedback window must be finite and positive")
+        captured = time.perf_counter() - self._started
+        with self._lock:
+            samples = [
+                {
+                    "elapsed_s": float(event["monotonic_s"]),
+                    "raw": int(event["joints_raw"][joint]),
+                    "rad": float(event["joints_rad"][joint]),
+                }
+                for event in self._events
+                if (
+                    event.get("event") == "feedback"
+                    and joint in event.get("joints_raw", {})
+                    and joint in event.get("joints_rad", {})
+                    and captured - window_s <= float(event["monotonic_s"]) <= captured
+                )
+            ]
+            status = [
+                {
+                    "elapsed_s": float(event["monotonic_s"]),
+                    "moving": bool(event["moving"]),
+                }
+                for event in self._events
+                if (
+                    event.get("event") == "hardware_state"
+                    and captured - window_s <= float(event["monotonic_s"]) <= captured
+                )
+            ]
+        return {
+            "captured_s": captured,
+            "joint": joint,
+            "window_s": window_s,
+            "samples": samples,
+            "hardware_moving_samples": status,
+        }
+
     def _wrap(self, name: str, factory: Any) -> None:
         original = getattr(self.backend, name, None)
         if not callable(original):
