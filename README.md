@@ -1,54 +1,50 @@
 # SO-ARM101 Motion SDK
 
-## PR #90 short-motion physical STOP candidate (open, unmerged)
+## PR #90 attended Sleep-first, encoder-verified STOP trial (draft/unmerged)
 
-**Measured-start correction (2026-10-11):** The second operator trial aborted
-before movement at a 86.23° difference from calculated Sleep. The command
-`soarm101 agent arm` only holds the current encoder posture; it does not
-park to Sleep. The short pan test now supports explicit
-`--short-start measured` in addition to the original default
-`--short-start sleep`. Measured-start validates all measured arm joints
-against executable calibration limits and the fixed pan target with a
-5° endpoint inset, requires healthy stationary torque HOLD, prints the
-per-joint difference from Sleep and requires operator `MEASURED`
-confirmation of the actual +8° swept-volume clearance. No auto-move to
-Sleep, no additional broker movement capabilities, no automatic REARM.
-The historical `--trial overhead` still **requires Sleep**. This change
-remains unmerged and physically unqualified.
+The default trusted-host script `examples/persistent_broker_stop_trial.py
+--trial short` can begin from **any healthy measured and calibrated arm posture
+whose entire route to Sleep is physically clear**. This is **not** a license
+to command arbitrary unsafe/obstructed starting poses. An operator first
+issues a calibration-bound human lease, inspects the arm and intended entire
+Sleep swept volume, and types `PREPARE_SLEEP`. The trusted broker then
+permits **one** canonical joint-only SDK Sleep action, on its existing
+persistent connection, and the script validates encoder-measured Sleep.
+No gripper closing, raw motor/agent path, external CLI session or unreviewed
+automatic parking is introduced. If Sleep fails or a motor is outside
+limits, the pan action is never admitted.
 
+Only after successful Sleep does the broker admit the single fixed
+`shoulder_pan +8°` move (2°/s, 10°/s² by default; hard caps 3°/s,
+15°/s², 20 Hz). The operator types `START`, then presses ENTER
+**early while the servo actually moves**. STOP always goes to the independent
+SDK cancellation path. The test additionally evaluates already-collected
+passive encoder readbacks from immediately before STOP. It refuses a
+*physical braking qualification* unless feedback shows changing position,
+hardware Moving=true, >=0.5° progress and >=2° remaining. This does
+**not** add concurrent serial reads. A prior near-endpoint hold passed
+cancellation but did not prove braking, so it would fail this new criterion.
+Stable HOLD, lease revocation, human `STATIONARY` and no post-STOP REARM
+remain mandatory.
 
+The exact older Overhead experiment is preserved only via
+`--trial overhead`; it is **not** the next hardware gate.
+See `TESTING.md`, `docs/safety.md`, and
+`docs/physical-stop-short-trial-20261011.md`.
 
-**Trial bootstrap repair (2026-10-11):** An earlier attempt raised
-`ValueError: physical trial profile must restrict actions to state,
-pose, Sleep and STOP` before connecting to the arm or issuing any
-movement, because the broker still required the old exact pose/Sleep
-tool set. Draft #90 now supports the separate short `jog_joint`
-trial profile, fixed at shoulder-pan +8° with an 8° profile ceiling.
-The old pose/Sleep test remains separately gated. Other joints,
-reverse movement, alternate deltas and rate overrides remain denied;
-no public broker physical motion permission was added.
+Example operator-run command **only after local software tests pass and
+a separately reviewed physical safety setup**:
 
+```bash
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_stop_trial.py --trial short \
+  --port /dev/ttyACM1 --robot-id so101 \
+  --output "$HOME/soarm-motion-tests/short-stop-$(date +%Y%m%d-%H%M%S).jsonl"
+```
 
-
-The trusted-host `examples/persistent_broker_stop_trial.py` now defaults
-to a **single fixed +8° shoulder-pan movement** from encoder-verified Sleep
-at 2°/s and 10°/s², with hard caps of 3°/s and 15°/s².
-There is **no baseline Overhead roundtrip**, no gripper movement, no
-automatic return and **no REARM** in the short mode. The operator
-types `START`, presses ENTER while motion is underway to request STOP,
-then types `STATIONARY` only after directly observing a settled HOLD.
-A positive broker response must include measured post-STOP stability, and
-a subsequent readback must also remain within 1° of the STOP latch.
-The authority lease is revoked. The original bigger Overhead test is
-retained only under explicit `--trial overhead` after separate approval.
-
-This is **unmerged, software-tested candidate code only**. The original
-2026-10-11 trace had an 18.4° powered excursion after STOP; do not
-mistake a green CI result for proof of physical braking. Conduct any
-trial only on an unloaded, secured follower with a clear workspace,
-human observation, supported posture and immediately reachable cutoff.
-Do not use automated agent hardware control.
-
+Never run active hardware trials from CI, Codex, or an unattended agent.
+This is not a safety-rated stop. The original 18.4° powered elbow
+excursion remains a failed hardware gate until broader, reviewed evidence.
 
 ## STOP/HOLD hardware safety blocker (2026-10-11)
 
