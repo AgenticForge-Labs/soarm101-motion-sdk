@@ -6,9 +6,12 @@ in reach throughout. No agent is permitted to invoke or parameterize it.
 
 Start with an unloaded, secured, calibrated SO-ARM101 already physically at
 Sleep; require a human-issued `soarm101 agent arm --minutes 30` lease.
-The default short trial verifies measured Sleep without moving, then
-interrupts one fixed +8° shoulder-pan movement through the restricted
-broker. There is no baseline roundtrip or post-STOP rearm in short mode.
+The default short trial takes a measured starting pose, requires explicit
+operator clearance approval, moves to calibrated Sleep through the same
+authenticated broker with the joint-only SDK Sleep primitive, verifies
+measured Sleep, then interrupts one fixed +8° shoulder-pan movement.
+No automatic REARM or post-STOP return is permitted. The software
+qualification requires fresh physical encoder-motion evidence at STOP.
 The historical, larger Overhead trial is available only via explicit
 --trial overhead after separate safety review. STOP always revokes authority.
 No mode automatically resumes a cancelled trajectory.
@@ -114,6 +117,25 @@ def _verify_meaningful_overhead_travel(
     return displacement
 
 
+def _preflight_joints_within_limits(
+    measured: Mapping[str, float],
+    limits: Mapping[str, tuple[float, float]],
+) -> None:
+    """Refuse invalid or uncalibrated measured poses before any Sleep move."""
+    if not limits:
+        raise ValueError("Sleep preflight has no executable joint limits")
+    for name, (lower, upper) in limits.items():
+        if name not in measured:
+            raise ValueError(f"Sleep preflight: measured joint {name} is missing")
+        value = float(measured[name])
+        if not all(math.isfinite(number) for number in (value, lower, upper)):
+            raise ValueError(f"Sleep preflight: nonfinite measured {name} or limit")
+        if not lower <= value <= upper:
+            raise RuntimeError(
+                f"Sleep preflight: {name} is outside executable calibrated range"
+            )
+
+
 def _preflight_short_joint(
     measured: Mapping[str, float],
     limits: Mapping[str, tuple[float, float]],
@@ -123,16 +145,7 @@ def _preflight_short_joint(
     All arm joints must be present and within the active executable
     calibration; the moving pan joint also requires a 5° endpoint inset.
     """
-    for name, (lower, upper) in limits.items():
-        if name not in measured:
-            raise ValueError(f"short STOP: measured joint {name} is missing")
-        value = float(measured[name])
-        if not all(math.isfinite(number) for number in (value, lower, upper)):
-            raise ValueError(f"short STOP: nonfinite measured {name} or limit")
-        if not lower <= value <= upper:
-            raise RuntimeError(
-                f"short STOP: {name} is outside its executable calibrated range"
-            )
+    _preflight_joints_within_limits(measured, limits)
     if SHORT_JOINT not in measured or SHORT_JOINT not in limits:
         raise ValueError("short STOP: calibrated shoulder_pan is unavailable")
     actual = float(measured[SHORT_JOINT])
@@ -192,35 +205,35 @@ def _verify_post_stop_stability(
     return drifts
 
 
-def _authorize_measured_short_start(
+def _authorize_sleep_preparation(
     *,
     state: Any,
     motion_active: bool,
     confirm: Callable[[str], str],
 ) -> None:
-    """Require healthy stationary HOLD and explicit local swept-volume approval.
+    """Require healthy stationary HOLD and human clearance for the Sleep route.
 
-    This is an operator acknowledgement, not inferred clearance/collision
-    certification from unvalidated workspace calibration.
+    This does not claim validated physical clearance from a paper workspace.
+    The SDK owns the canonical path and limits, not the trial script.
     """
     if (
         not state.connected or state.faulted
         or not state.torque_enabled or state.moving or motion_active
     ):
         raise RuntimeError(
-            "short measured start requires a stationary, healthy torque HOLD"
+            "Sleep preparation requires a stationary, healthy torque HOLD"
         )
     print(
-        "Measured-start experiment, NOT a Sleep posture. Inspect the whole "
-        "arm and the full +8 degree pan swept volume for clearance, cables, "
-        "floor/contact and base stability. No motion has been commanded.",
+        "Preparing calibrated Sleep from the CURRENT encoder position. "
+        "Inspect the full multi-joint route to Sleep, floor, table, "
+        "payload, cabling and physical power cutoff. The clearance "
+        "cannot be certified from the current workspace map.",
         flush=True,
     )
     if confirm(
-        "Type MEASURED to confirm clearance and authorize the "
-        "measured starting posture: "
-    ).strip() != "MEASURED":
-        raise PermissionError("operator declined measured-start physical preflight")
+        "Type PREPARE_SLEEP to authorize ONE joint-only calibrated Sleep move: "
+    ).strip() != "PREPARE_SLEEP":
+        raise PermissionError("operator declined canonical Sleep preparation")
 
 
 def _execute_verified_roundtrip(
@@ -341,7 +354,8 @@ def _physical_trial_profile(trial: str) -> CapabilityProfile:
     return CapabilityProfile.from_document({
         "schema_version": 1, "name": "physical-supervised-stop-qualification",
         "tools": (
-            ["robot_health", "robot_capabilities", "robot_state", "jog_joint", "stop"]
+            ["robot_health", "robot_capabilities", "robot_state",
+             "sleep", "jog_joint", "stop"]
             if trial == "short"
             else ["robot_health", "robot_capabilities", "robot_state",
                   "go_pose", "sleep", "stop"]
@@ -363,12 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--trial", choices=("short", "overhead"), default="short",
         help="short is the default single-joint STOP gate; overhead is the older large route",
     )
-    parser.add_argument(
-        "--short-start", choices=("sleep", "measured"), default="sleep",
-        help="short only: keep verified-Sleep default, or require explicit "
-             "operator approval to start from actual measured posture",
-    )
-    parser.add_argument("--speed-deg-s", type=float)
+     parser.add_argument("--speed-deg-s", type=float)
     parser.add_argument("--acceleration-deg-s2", type=float)
     parser.add_argument("--command-frequency-hz", type=float, default=20.0)
     return parser
@@ -383,9 +392,7 @@ def _require_operator(args: argparse.Namespace) -> None:
         value = getattr(args, name)
         if value is not None and (not math.isfinite(value) or value <= 0):
             raise ValueError(f"{name} must be finite and positive")
-    if args.trial != "short" and args.short_start != "sleep":
-        raise ValueError("--short-start measured applies only to --trial short")
-    if args.trial == "short":
+     if args.trial == "short":
         speed = 2.0 if args.speed_deg_s is None else args.speed_deg_s
         accel = 10.0 if args.acceleration_deg_s2 is None else args.acceleration_deg_s2
         if speed > SHORT_MAX_SPEED_DEG_S or accel > SHORT_MAX_ACCEL_DEG_S2:
@@ -440,7 +447,8 @@ def main(argv: list[str] | None = None) -> int:
         "kind": "persistent_broker_stop_qualification", "passed": False,
         "trial": args.trial,
         "initial_pose_policy": (
-            f"short_{args.short_start}" if args.trial == "short" else "overhead_sleep"
+            "broker_prepares_and_verifies_sleep"
+            if args.trial == "short" else "overhead_sleep"
         ),
         "automatic_recovery_after_stop": False,
         "robot_id": args.robot_id, "port": args.port,
