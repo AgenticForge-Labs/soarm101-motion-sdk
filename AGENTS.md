@@ -1,11 +1,13 @@
 # Agent instructions
 
+**2026-10-12 Overhead preflight regression (PR #90 unmerged):** The first `overhead-single` attempt failed before any scripted motor goal because a redundant 5° stop inset rejected `shoulder_lift=-101.89°` near canonical Sleep `-102.05°`. The SDK already incorporates calibrated mechanical-stop margins and Sleep's own 2° executable inset. The new experimental preflight checks measured starts and saved targets against those authoritative effective limits only, retaining other speed/travel/identity/HOLD rules. Regression reproduces this normal start and ensures actual out-of-range values fail. No physical Overhead braking evidence yet.
+
 **Draft PR #90 Overhead-one-shot trial:** New operator-only
 `--trial overhead-single` moves ONCE from measured healthy torque HOLD to
 calibration-bound saved `agent_start_overhead`, with no gripper, Sleep
 roundtrip, auto-REARM, retry or second move. Defaults 6°/s 30°/s²,
 hard caps 8°/s 40°/s² and 20 Hz. A trusted broker exact-payload
-one-shot phase, read-only joint travel and endpoint-stop insets,
+one-shot phase, read-only joint travel and SDK effective calibrated joint limits,
 explicit `OVERHEAD_START` and live multi-joint encoder evidence are
 mandatory. A fresh physical broker must preserve prior human torque
 HOLD rather than reissue 1/1 enable latch. STOP remains an ordinary
