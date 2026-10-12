@@ -500,32 +500,53 @@ def main(argv: list[str] | None = None) -> int:
                 flush=True,
             )
         if args.trial == "short":
-            # The trial uses a fixed single-joint broker route, not an
-            # unchecked raw servo command or operator-selected direction.
-            # The canonical SDK is still responsible for motion validation.
+            # Never issue an unrestricted move to Sleep. Require a measured,
+            # calibrated, physically stationary start and an explicit human
+            # approval of the FULL joint-space path first. The canonical
+            # SDK Sleep primitive, not bespoke motor targets, owns execution.
             limits = sdk_arm.motion._effective_limits()
-            summary["short_preflight"] = _preflight_short_joint(
-                measured_joints, limits,
+            _preflight_joints_within_limits(measured_joints, limits)
+            _authorize_sleep_preparation(
+                state=sdk_arm.get_state(),
+                motion_active=bool(sdk_arm.motion.is_moving),
+                confirm=input,
             )
-            if args.short_start == "sleep":
-                _verify_measured_pose(
-                    measured_joints, sleep_target, label="initial Sleep",
-                )
-                print("Verified measured Sleep; no initial movement.", flush=True)
-            else:
-                # The agent-arm CLI enables torque and HOLD at current encoder
-                # positions; it does not park the arm in Sleep. A small pan
-                # qualification may start from another pose only after
-                # calibrated limit checks and a separate physical operator
-                # confirmation of the swept volume and support/clearance.
-                _authorize_measured_short_start(
-                    state=sdk_arm.get_state(),
-                    motion_active=bool(sdk_arm.motion.is_moving),
-                    confirm=input,
-                )
-                summary["measured_start_operator_confirmed"] = True
+            summary["prepare_sleep_operator_confirmed"] = True
+            print(
+                "Executing ONE joint-only canonical Sleep through the trusted "
+                "broker; no gripper motion or separate CLI session.",
+                flush=True,
+            )
+            sleep_reply = _request(
+                url, token, "POST", "/v1/sleep",
+                {"joint_only": True}, timeout_s=200.0,
+            )
+            sleep_result = sleep_reply["result"]
+            if not (sleep_result.get("accepted") and sleep_result.get("completed")):
+                raise RuntimeError("Sleep preparation did not complete")
+            prepared = _request(url, token, "GET", "/v1/state")["result"]
+            if prepared["broker_session"]["id"] != summary["broker_session"]["id"]:
+                raise RuntimeError("Sleep preparation changed broker SDK session")
+            if not prepared["authority"]["armed"]:
+                raise RuntimeError("Sleep preparation lost calibration-bound authority")
+            summary["prepared_sleep_errors_deg"] = _verify_measured_pose(
+                prepared["joint_positions_rad"], sleep_target,
+                label="prepared Sleep",
+            )
+            summary["sleep_preparation"] = {
+                "request_id": sleep_reply["request_id"],
+                "action": "sleep", "joint_only": True,
+                "completed": True,
+            }
+            summary["short_preflight"] = _preflight_short_joint(
+                prepared["joint_positions_rad"], limits,
+            )
+            summary["short_start_pan_rad"] = float(
+                prepared["joint_positions_rad"][SHORT_JOINT]
+            )
             summary["route"] = [
-                f"verify {args.short_start} starting posture (no movement)",
+                "human-confirmed joint-only Sleep from measured posture",
+                "verify encoder-measured Sleep",
                 "shoulder_pan +8 deg (manual STOP while moving)",
             ]
             movement_path = "/v1/joint"
@@ -534,9 +555,10 @@ def main(argv: list[str] | None = None) -> int:
                 "delta_deg": SHORT_DELTA_DEG,
             }
             print(
-                "SHORT STOP trial: one +8 deg shoulder-pan move at up to "
-                f"{args.speed_deg_s:g} deg/s. No baseline legs, no "
-                "automatic return or post-STOP REARM.",
+                "Prepared Sleep verified. SHORT STOP trial: one +8 deg "
+                f"shoulder-pan move at {args.speed_deg_s:g} deg/s. "
+                "Press ENTER EARLY while pan is visibly moving, not at "
+                "the end. No automatic return or REARM.",
                 flush=True,
             )
         else:
