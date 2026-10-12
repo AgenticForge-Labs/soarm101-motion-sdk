@@ -1,41 +1,34 @@
 # Safety
 
-## Single-joint STOP candidate (draft PR #90; physical result unknown)
+## Draft PR #90 — operator-approved joint-only Sleep then in-motion STOP
 
-**New measured-start gate:** The `soarm101 agent arm` CLI enables/holds
-at the actual encoder posture, not Sleep. When the short STOP trial
-cannot meet its default Sleep preflight, it must not command a large
-unreviewed move to Sleep or silently loosen the 5° tolerance.
-An explicitly requested `--short-start measured` applies only to the
-single-joint +8° pan test, checks all joint executable limits and pan
-limit inset, requires stationary healthy torque HOLD, and asks the
-human to inspect actual pan swept-volume clearance and type `MEASURED`.
-The calculated workspace height is not used as an automatic clearance
-certificate; paper/workspace calibration alone cannot verify the scene.
-No trial motion, STOP or REARM has occurred from the 86.23° failure.
-The larger Overhead route still requires measured Sleep. A human must
-not use measured-start if the full swept volume cannot be observed clear.
+A successful `agent arm` only torque-holds the **current** encoder pose.
+The new short physical test no longer assumes it is Sleep. It first
+checks all measured joints against executable calibrated limits and
+the physical stationary/torque/fault state; the human must inspect the
+*whole* swept joint-space route to the SDK's calculated Sleep before
+typing `PREPARE_SLEEP`. The existing restricted authenticated broker
+then performs one canonical, joint-only Sleep at bounded rates. After
+fresh encoder verification at Sleep it admits one fixed +8° pan move.
+No attempt is made to infer safe clearance from an unvalidated paper
+workspace, and no gripper close is commanded.
 
+During pan movement, the operator presses ENTER, which still triggers
+independent STOP regardless of confidence in the motion sample. The
+script reviews passively collected pre-STOP feedback: actual changing
+pan position, servo Moving status and >=2° travel remaining are needed
+to count this as a *physical moving-servo* trial. Stable joint feedback
+after a STOP is required independently. An incomplete or ambiguous trace
+**fails the physical braking evidence gate**; it does not justify another
+automatic move, repeated HOLD, rearm, or a software-only safety claim.
 
-
-The short qualification profile is now the default for the attended
-`persistent_broker_stop_trial.py`: one fixed 8° `shoulder_pan` motion
-from encoder-verified Sleep, 2°/s and 10°/s² defaults, with hard rate
-caps and 5° calibrated-limit inset. No preliminary Overhead roundtrip,
-no tool motion, and no automatic rearm or return follow STOP. The
-operator presses ENTER while moving; the broker's measured HOLD
-stability gate and another one-second encoder readback must pass
-before entering `STATIONARY`. Normal SDK cancellation, safeguards and
-broker authentication remain authoritative. The larger Overhead route
-requires explicit `--trial overhead` and separate physical review.
-
-**This is not a safety-rated emergency STOP.** The previous powered
-excursion remains a failed hardware gate. Keep external physical
-power cutoff reachable and discontinue on any unexpected movement.
-Use the short protocol only under approved, unloaded, secured,
-operator-controlled bench conditions. The short trial has not yet
-produced hardware evidence. CI cannot establish braking performance.
-
+The previous near-endpoint +8° test passed cancellation/holding but did
+not show active physical braking. A still-unresolved earlier large-angle
+test produced 18.4° powered elbow travel after STOP. Do not attempt a
+larger Overhead interruption as an automatic next step. Test only on a
+secured unloaded arm, with full visible clearance, physical cutoff at
+hand, and active local human supervision. This remains draft code, not
+a safety-rated emergency stop or production route.
 
 ## PR #89 broker lifecycle guard (merged, not a physical STOP qualification)
 
