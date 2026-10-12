@@ -1,5 +1,15 @@
 # Changelog
 
+- Repair PR #90 trusted-host short STOP bootstrap: the physical-trial
+  broker's previous pose/Sleep-only allowlist rejected the new
+  `jog_joint` short trial before motion. Support two exact, distinct
+  allowlisted local trial profiles, require an 8° joint profile cap and
+  reject any physical short command other than shoulder-pan +8° with
+  no extra fields. Regression-test the script's profile through the
+  real broker constructor. No production broker change or physical
+  qualification claimed.
+
+
 - Stage PR #90's default supervised short STOP profile: a single
   calibrated-inset +8° pan command from encoder-verified Sleep at
   narrow rates, manual ENTER interrupt, verified hold plus a later
