@@ -1,5 +1,20 @@
 # Agent instructions
 
+**Draft PR #90 Overhead-one-shot trial:** New operator-only
+`--trial overhead-single` moves ONCE from measured healthy torque HOLD to
+calibration-bound saved `agent_start_overhead`, with no gripper, Sleep
+roundtrip, auto-REARM, retry or second move. Defaults 6°/s 30°/s²,
+hard caps 8°/s 40°/s² and 20 Hz. A trusted broker exact-payload
+one-shot phase, read-only joint travel and endpoint-stop insets,
+explicit `OVERHEAD_START` and live multi-joint encoder evidence are
+mandatory. A fresh physical broker must preserve prior human torque
+HOLD rather than reissue 1/1 enable latch. STOP remains an ordinary
+position HOLD, NOT a hardware-rated emergency stop. Prior 18.4° elbow
+continuation remains unresolved at multi-joint speeds. Hardware only
+after CI and human supervised clearance with cutoff accessible; do not
+allow Codex/OpenShell/CI to move, auto-rearm or merge this change.
+
+
 **2026-10-12 physical evidence / #90 (unmerged):** The attended +8° pan STOP at 2°/s physically stopped with <=0.088° post-latch drift; raw feedback advanced immediately before STOP even though all sampled Feetech `Moving` flags were false. The script's old rejection was a misdated encoder-transition timestamp and an over-trusted Moving bit, not observed post-STOP movement. Respect real encoder movement/freshness, remaining travel, human command and stationarity verification. This does NOT certify multi-joint Overhead/loaded/high-speed braking or clear the previous 18.4° elbow incident. Do not automatically run the Overhead trial or merge before an independently reviewed physical qualification.
 
 **PR #90 reattachment STOP trial:** Separate `agent arm` and trusted
