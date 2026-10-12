@@ -1,5 +1,19 @@
 # Changelog
 
+- **Draft PR #90, next physical STOP gate (2026-10-11):** replace the
+  short trial's assumed Sleep starting posture with an operator-approved
+  canonical **joint-only** Sleep action from a healthy, calibrated
+  measured posture. The trusted broker enforces one Sleep, one +8°
+  pan move, independent STOP, and no motion replay. The passive
+  tracer provides read-only, pre-STOP encoder/Moving evidence, with
+  >=2° remaining and a recent changing encoder requirement to
+  distinguish actual moving-servo interruption from the earlier
+  stable near-endpoint cancellation. Tests exercise denial of
+  pan-before-Sleep, duplicate Sleep, invalid start, and stationary
+  STOP evidence. No autonomous hardware run, production broker
+  cutover, or emergency-stop certification.
+
+
 - Continue draft #90 after a physical-trial **preflight** (no motion)
   rejected an 86.23° difference from Sleep. Confirmed `agent arm` holds
   current position rather than parking. Add a short-only measured-start
