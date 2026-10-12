@@ -118,6 +118,7 @@ class FakeBroker:
         self.event_path = Path(event_path)
         self.started = False
         self.stopped = False
+        self.stop_requests = 0
         type(self).instances.append(self)
 
     def start(self):
@@ -130,6 +131,11 @@ class FakeBroker:
             "authority": {"armed": True, "remaining_seconds": 300},
             "cameras": ["overhead", "wrist"],
         }
+
+    def request_motion_stop(self):
+        assert self.started and not self.stopped
+        self.stop_requests += 1
+        return {"accepted": True, "completed": True, "holding": True}
 
     def stop(self):
         self.stopped = True
@@ -1239,6 +1245,104 @@ def test_full_control_run_requires_task(
             read_only=False,
             openshell=FakeOpenShell(),
         )
+
+
+def test_host_supervisor_requests_stop_before_sandbox_delete_on_ctrl_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "TASK.md"
+    task.write_text("One joint move.\\n", encoding="utf-8")
+    fake = FakeOpenShell()
+    original_exec = fake.exec
+    original_delete = fake.delete
+
+    def interrupted(name, command, **kwargs):
+        if command and command[0] == "hermes":
+            raise KeyboardInterrupt()
+        return original_exec(name, command, **kwargs)
+
+    def delete_only_after_stop(name, **kwargs):
+        assert FakeBroker.instances[-1].stop_requests == 1
+        return original_delete(name, **kwargs)
+
+    fake.exec = interrupted
+    fake.delete = delete_only_after_stop
+    FakeBroker.instances.clear()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        agent_sandbox.run_hermes(
+            task=task, output_dir=tmp_path / "out", openshell=fake,
+        )
+    broker = FakeBroker.instances[-1]
+    assert broker.stop_requests == 1
+    assert broker.stopped is True
+    assert fake.deleted
+    record = json.loads((tmp_path / "out" / "supervisor-stop.json").read_text())
+    assert record["attempted"] is True
+    assert record["completed"] is True
+    assert record["holding"] is True
+    # CLI-backed broker's completed STOP lacks SDK encoder verification.
+    assert record["verified_physical_hold"] is False
+
+
+def test_supervisor_stop_failure_is_never_a_successful_agent_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "TASK.md"
+    task.write_text("Make a bounded move.\\n", encoding="utf-8")
+    fake = FakeOpenShell()
+    class FailedBroker(FakeBroker):
+        def request_motion_stop(self):
+            self.stop_requests += 1
+            raise agent_sandbox.AgentSandboxError("injected STOP timeout")
+
+    FakeBroker.instances.clear()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FailedBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="STOP/HOLD was not confirmed"):
+        agent_sandbox.run_hermes(
+            task=task, output_dir=tmp_path / "out", openshell=fake,
+        )
+    broker = FakeBroker.instances[-1]
+    assert broker.stop_requests == 1
+    assert broker.stopped and fake.deleted
+    record = json.loads((tmp_path / "out" / "supervisor-stop.json").read_text())
+    assert record["completed"] is False
+    assert "STOP timeout" in record["error"]
+
+
+def test_supervisor_does_not_command_stop_for_read_only_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeBroker.instances.clear()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", FakeBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    fake = FakeOpenShell()
+    agent_sandbox.run_agent(
+        agent="hermes", task=None, output_dir=tmp_path / "out",
+        read_only=True, openshell=fake,
+    )
+    assert FakeBroker.instances[-1].stop_requests == 0
+    assert not (tmp_path / "out" / "supervisor-stop.json").exists()
 
 
 def test_cleanup_failure_invalidates_otherwise_successful_run(
