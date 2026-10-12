@@ -556,6 +556,164 @@ def test_physical_trial_broker_still_rejects_widened_short_profiles(
     executor.close()
 
 
+@pytest.mark.parametrize("speed,acceleration,permitted", [
+    (6.0, 30.0, True),
+    (8.0, 40.0, True),
+    (8.01, 30.0, False),
+    (6.0, 40.01, False),
+])
+def test_overhead_single_rates_are_faster_but_bounded(
+    monkeypatch, speed, acceleration, permitted,
+) -> None:
+    trial = _load_trial(monkeypatch)
+    monkeypatch.setattr(trial.sys, "stdin", type("TTY", (), {
+        "isatty": lambda self: True,
+    })())
+    args = trial.build_parser().parse_args([
+        "--port", "/dev/ttyACM1", "--output", "/tmp/unused.jsonl",
+        "--trial", "overhead-single",
+        "--speed-deg-s", str(speed),
+        "--acceleration-deg-s2", str(acceleration),
+    ])
+    if permitted:
+        trial._require_operator(args)
+    else:
+        with pytest.raises(ValueError, match="overhead-single rate caps"):
+            trial._require_operator(args)
+    args.command_frequency_hz = 30
+    with pytest.raises(ValueError, match="at most 20 Hz"):
+        trial._require_operator(args)
+
+
+def test_overhead_single_preflight_rejects_limits_distance_and_one_axis(
+    monkeypatch,
+) -> None:
+    import math
+    trial = _load_trial(monkeypatch)
+    p = {"shoulder_pan": 0.0, "elbow_flex": 0.0}
+    t = {"shoulder_pan": math.radians(35), "elbow_flex": math.radians(-50)}
+    limits = {name: (math.radians(-120), math.radians(120)) for name in p}
+    assert trial._preflight_overhead_single(p, t, limits) == pytest.approx({
+        "shoulder_pan": 35, "elbow_flex": -50,
+    })
+    with pytest.raises(RuntimeError, match="at least two"):
+        trial._preflight_overhead_single(
+            p, {"shoulder_pan": math.radians(35), "elbow_flex": 0.0}, limits,
+        )
+    with pytest.raises(RuntimeError, match="too close"):
+        trial._preflight_overhead_single(
+            p, {"shoulder_pan": math.radians(6), "elbow_flex": math.radians(3)},
+            limits,
+        )
+    with pytest.raises(RuntimeError, match="exceeding"):
+        trial._preflight_overhead_single(
+            p, {"shoulder_pan": math.radians(101), "elbow_flex": math.radians(-20)},
+            limits,
+        )
+    with pytest.raises(RuntimeError, match="calibrated stop"):
+        trial._preflight_overhead_single(
+            p, t, {"shoulder_pan": (math.radians(-120), math.radians(35)),
+                   "elbow_flex": limits["elbow_flex"]},
+        )
+    with pytest.raises(ValueError, match="matching"):
+        trial._preflight_overhead_single(
+            p, {"shoulder_pan": 0.0}, limits,
+        )
+
+
+def test_overhead_single_broker_admits_only_one_fixed_joint_only_pose(
+    tmp_path, monkeypatch,
+) -> None:
+    from soarm101_motion import SOARM101, SOARM101Config
+    from soarm101_motion.agent_control import AgentAuthorityStore
+    from soarm101_motion.broker import AgentMotionRates, RobotBrokerService
+    from soarm101_motion.broker_sdk import SDKAgentExecutor
+
+    trial = _load_trial(monkeypatch)
+    config = SOARM101Config(port="/dev/fake", robot_id="so101")
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(
+            joint_speed_deg_s=6.0,
+            joint_acceleration_deg_s2=30.0,
+        ), physical_trial=True,
+        arm_factory=lambda: SOARM101.simulated(config=config),
+        authority_store=AgentAuthorityStore(tmp_path / "lease.json"),
+    )
+    profile = trial._physical_trial_profile("overhead-single")
+    assert "sleep" not in profile.allowed_tools
+    assert "jog_joint" not in profile.allowed_tools
+    assert "go_pose" in profile.allowed_tools
+    service = RobotBrokerService(
+        executor=executor, token="local-only",
+        event_path=tmp_path / "events.jsonl",
+        profile=profile, allow_physical_sdk_trial=True,
+    )
+    for method, path, body in [
+        ("POST", "/v1/sleep", {"joint_only": True}),
+        ("POST", "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 8}),
+        ("POST", "/v1/go-pose", {"name": "agent_other", "joint_only": True}),
+        ("POST", "/v1/go-pose", {"name": "agent_start_overhead"}),
+        ("POST", "/v1/go-pose", {"name": "agent_start_overhead",
+                               "joint_only": False}),
+        ("POST", "/v1/go-pose", {"name": "agent_start_overhead",
+                               "joint_only": True, "speed_deg_s": 10}),
+    ]:
+        assert service.dispatch(method, path, body).status == 403
+    assert executor._session is None
+    called = []
+    monkeypatch.setattr(
+        executor, "execute",
+        lambda action, request: (
+            called.append((action, dict(request)))
+            or {"accepted": True, "completed": True}
+        ),
+    )
+    payload = {"name": "agent_start_overhead", "joint_only": True}
+    response = service.dispatch("POST", "/v1/go-pose", payload)
+    assert response.status == 200
+    assert len(called) == 1
+    assert called[0][1]["speed_deg_s"] == 6.0
+    assert called[0][1]["acceleration_deg_s2"] == 30.0
+    assert service.dispatch("POST", "/v1/go-pose", payload).status == 409
+    assert service.dispatch("POST", "/v1/stop", {}).status == 200
+    assert service.dispatch("POST", "/v1/go-pose", payload).status == 409
+    executor.close()
+
+
+def test_overhead_moving_evidence_requires_two_directional_joint_encoders(
+    monkeypatch,
+) -> None:
+    import math
+    trial = _load_trial(monkeypatch)
+    def moving_window(direction=1.0, changing=True):
+        angles = [5.0, 5.5, 6.0] if changing else [6.0, 6.0, 6.0]
+        return {
+            "captured_s": 1.0,
+            "samples": [
+                {"elapsed_s": t, "raw": int(a * 20),
+                 "rad": math.radians(direction * a)}
+                for t, a in zip([0.76, 0.90, 0.96], angles)
+            ],
+            "hardware_moving_samples": [{"elapsed_s": 0.95, "moving": False}],
+        }
+    start = {"shoulder_pan": 0.0, "elbow_flex": 0.0}
+    end = {"shoulder_pan": math.radians(40), "elbow_flex": math.radians(-50)}
+    yes = trial._assess_overhead_inflight_feedback(
+        {"shoulder_pan": moving_window(),
+         "elbow_flex": moving_window(-1.0)},
+        start_joints=start, target_joints=end,
+    )
+    assert yes["verified"] is True
+    assert yes["observed_moving_joints"] == ["shoulder_pan", "elbow_flex"]
+    no = trial._assess_overhead_inflight_feedback(
+        {"shoulder_pan": moving_window(),
+         "elbow_flex": moving_window(-1.0, changing=False)},
+        start_joints=start, target_joints=end,
+    )
+    assert no["verified"] is False
+    assert len(no["observed_moving_joints"]) == 1
+
+
 def test_short_sleep_preparation_from_distant_measured_pose(monkeypatch) -> None:
     import math
     from types import SimpleNamespace

@@ -13,8 +13,11 @@ authenticated broker with the joint-only SDK Sleep primitive, verifies
 measured Sleep, then interrupts one fixed +8° shoulder-pan movement.
 No automatic REARM or post-STOP return is permitted. The software
 qualification requires fresh physical encoder-motion evidence at STOP.
-The historical, larger Overhead trial is available only via explicit
---trial overhead after separate safety review. STOP always revokes authority.
+A separate --trial overhead-single performs ONE faster, supervised,
+joint-only move toward the validated saved Overhead from current encoder
+pose. It neither moves to Sleep first nor authorizes a subsequent move.
+The historical, larger Overhead route remains an explicit legacy opt-in.
+STOP always revokes authority.
 No mode automatically resumes a cancelled trajectory.
 """
 
@@ -60,6 +63,17 @@ SHORT_DELTA_DEG = PHYSICAL_SHORT_STOP_DELTA_DEG
 SHORT_MAX_SPEED_DEG_S = 3.0
 SHORT_MAX_ACCEL_DEG_S2 = 15.0
 SHORT_LIMIT_INSET_DEG = 5.0
+# A different physical qualification with explicit rate/travel ceilings.
+# 6 deg/s is 3x the previous 2 deg/s short-pan trial; all motors remain
+# under the canonical SDK's per-joint rate/acceleration/fault guards.
+OVERHEAD_SINGLE_DEFAULT_SPEED_DEG_S = 6.0
+OVERHEAD_SINGLE_DEFAULT_ACCEL_DEG_S2 = 30.0
+OVERHEAD_SINGLE_MAX_SPEED_DEG_S = 8.0
+OVERHEAD_SINGLE_MAX_ACCEL_DEG_S2 = 40.0
+OVERHEAD_SINGLE_MAX_JOINT_TRAVEL_DEG = 100.0
+OVERHEAD_SINGLE_MIN_TRAVEL_DEG = 12.0
+OVERHEAD_SINGLE_LIMIT_INSET_DEG = 5.0
+OVERHEAD_POSE = "agent_start_overhead"
 
 
 def _pose_joint_errors(
@@ -166,6 +180,118 @@ def _preflight_short_joint(
         "target_deg": math.degrees(target),
         "lower_deg": math.degrees(lower),
         "upper_deg": math.degrees(upper),
+    }
+
+
+def _load_compatible_overhead(
+    robot_id: str, calibration_id: str,
+) -> Mapping[str, float]:
+    """Use only the existing calibration-bound saved pose."""
+    pose = PoseLibrary(robot_id).require(OVERHEAD_POSE)
+    require_calibration_compatibility(
+        {
+            "source_robot_id": pose.source_robot_id,
+            "source_calibration_id": pose.source_calibration_id,
+            "target_robot_id": pose.target_robot_id,
+            "target_calibration_id": pose.target_calibration_id,
+        },
+        current_robot_id=robot_id,
+        current_calibration_id=calibration_id,
+        artifact_label=OVERHEAD_POSE,
+    )
+    return pose.joints
+
+
+def _preflight_overhead_single(
+    measured: Mapping[str, float],
+    target: Mapping[str, float],
+    limits: Mapping[str, tuple[float, float]],
+) -> dict[str, float]:
+    """Fail closed on large or near-stop saved Overhead trajectories."""
+    if not measured or set(measured) != set(target) or set(target) != set(limits):
+        raise ValueError("Overhead trial requires matching measured, pose and limit joints")
+    _preflight_joints_within_limits(measured, limits)
+    delta: dict[str, float] = {}
+    inset = math.radians(OVERHEAD_SINGLE_LIMIT_INSET_DEG)
+    for name in measured:
+        start = float(measured[name])
+        end = float(target[name])
+        lower, upper = limits[name]
+        if not all(math.isfinite(x) for x in (start, end, lower, upper)):
+            raise ValueError(f"nonfinite Overhead pose/limit for {name}")
+        if not (lower + inset <= start <= upper - inset
+                and lower + inset <= end <= upper - inset):
+            raise RuntimeError(
+                f"Overhead trial: {name} starts or ends within "
+                f"{OVERHEAD_SINGLE_LIMIT_INSET_DEG:g} deg of calibrated stop"
+            )
+        degrees = abs(math.degrees(end - start))
+        if degrees > OVERHEAD_SINGLE_MAX_JOINT_TRAVEL_DEG:
+            raise RuntimeError(
+                f"Overhead trial: {name} has {degrees:.2f} deg travel, "
+                f"exceeding {OVERHEAD_SINGLE_MAX_JOINT_TRAVEL_DEG:g} deg limit"
+            )
+        delta[name] = math.degrees(end - start)
+    if max(abs(value) for value in delta.values()) < OVERHEAD_SINGLE_MIN_TRAVEL_DEG:
+        raise RuntimeError("saved Overhead is too close to current pose for STOP trial")
+    if sum(abs(value) >= OVERHEAD_SINGLE_MIN_TRAVEL_DEG for value in delta.values()) < 2:
+        raise RuntimeError(
+            "Overhead trial requires at least two significant moving joints"
+        )
+    return delta
+
+
+def _assess_overhead_inflight_feedback(
+    windows: Mapping[str, Mapping[str, Any]],
+    *,
+    start_joints: Mapping[str, float],
+    target_joints: Mapping[str, float],
+) -> dict[str, Any]:
+    """Assess a *multi-joint* STOP using only passively recorded encoders.
+
+    Each moving joint is normalized into its direction of travel so the
+    existing 0.5-deg progress / 2-deg remaining / 0.15-deg recent motion
+    evidence gates are identical for positive and negative joint rotation.
+    """
+    findings: dict[str, dict[str, Any]] = {}
+    observed: list[str] = []
+    reasons: list[str] = []
+    if set(start_joints) != set(target_joints):
+        raise ValueError("Overhead evidence joints changed")
+    for name, start in start_joints.items():
+        delta_deg = math.degrees(float(target_joints[name]) - float(start))
+        if abs(delta_deg) < OVERHEAD_SINGLE_MIN_TRAVEL_DEG:
+            continue
+        window = windows.get(name)
+        if window is None:
+            reasons.append(f"{name}: missing passive feedback")
+            continue
+        direction = 1.0 if delta_deg > 0 else -1.0
+        oriented = {
+            **window,
+            "samples": [
+                {**sample, "rad": direction * float(sample["rad"])}
+                for sample in window.get("samples", [])
+            ],
+        }
+        evidence = _assess_physical_inflight_feedback(
+            oriented,
+            start_pan_rad=direction * float(start),
+            target_delta_deg=abs(delta_deg),
+        )
+        findings[name] = evidence
+        if evidence["verified"]:
+            observed.append(name)
+    if len(observed) < 2:
+        reasons.append(
+            "fewer than two joints had fresh moving-encoder evidence with "
+            "at least 2 degrees of travel remaining"
+        )
+    return {
+        "verified": not reasons,
+        "reasons": reasons,
+        "observed_moving_joints": observed,
+        "by_joint": findings,
     }
 
 
@@ -479,7 +605,7 @@ def _operator_rearm_for_completion(
 
 def _physical_trial_profile(trial: str) -> CapabilityProfile:
     """Build the exact capability envelope the trusted broker will accept."""
-    if trial not in ("short", "overhead"):
+    if trial not in ("short", "overhead", "overhead-single"):
         raise ValueError(f"unknown supervised STOP trial {trial!r}")
     return CapabilityProfile.from_document({
         "schema_version": 1, "name": "physical-supervised-stop-qualification",
@@ -487,8 +613,11 @@ def _physical_trial_profile(trial: str) -> CapabilityProfile:
             ["robot_health", "robot_capabilities", "robot_state",
              "sleep", "jog_joint", "stop"]
             if trial == "short"
-            else ["robot_health", "robot_capabilities", "robot_state",
-                  "go_pose", "sleep", "stop"]
+            else (["robot_health", "robot_capabilities", "robot_state",
+                   "go_pose", "stop"]
+                  if trial == "overhead-single"
+                  else ["robot_health", "robot_capabilities", "robot_state",
+                        "go_pose", "sleep", "stop"])
         ),
         "cameras": [],
         "limits": (
@@ -504,8 +633,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--robot-id", default="so101")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--trial", choices=("short", "overhead"), default="short",
-        help="short is the default single-joint STOP gate; overhead is the older large route",
+        "--trial", choices=("short", "overhead-single", "overhead"), default="short",
+        help="short is single pan; overhead-single is one faster saved-pose movement; "
+             "overhead is the older multi-leg route",
     )
     parser.add_argument("--speed-deg-s", type=float)
     parser.add_argument("--acceleration-deg-s2", type=float)
@@ -529,15 +659,36 @@ def _require_operator(args: argparse.Namespace) -> None:
             raise ValueError("short STOP rate caps: at most 3 deg/s and 15 deg/s²")
         if args.command_frequency_hz > 20:
             raise ValueError("short STOP command frequency must be at most 20 Hz")
+    if args.trial == "overhead-single":
+        speed = (OVERHEAD_SINGLE_DEFAULT_SPEED_DEG_S
+                 if args.speed_deg_s is None else args.speed_deg_s)
+        accel = (OVERHEAD_SINGLE_DEFAULT_ACCEL_DEG_S2
+                 if args.acceleration_deg_s2 is None else args.acceleration_deg_s2)
+        if (speed > OVERHEAD_SINGLE_MAX_SPEED_DEG_S
+                or accel > OVERHEAD_SINGLE_MAX_ACCEL_DEG_S2):
+            raise ValueError(
+                "overhead-single rate caps: at most "
+                "8 deg/s and 40 deg/s²"
+            )
+        if args.command_frequency_hz > 20:
+            raise ValueError("overhead-single command frequency must be at most 20 Hz")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _require_operator(args)  # Before touching files, devices or a lease.
     if args.speed_deg_s is None:
-        args.speed_deg_s = 2.0 if args.trial == "short" else 8.0
+        args.speed_deg_s = (
+            2.0 if args.trial == "short"
+            else (OVERHEAD_SINGLE_DEFAULT_SPEED_DEG_S
+                  if args.trial == "overhead-single" else 8.0)
+        )
     if args.acceleration_deg_s2 is None:
-        args.acceleration_deg_s2 = 10.0 if args.trial == "short" else 25.0
+        args.acceleration_deg_s2 = (
+            10.0 if args.trial == "short"
+            else (OVERHEAD_SINGLE_DEFAULT_ACCEL_DEG_S2
+                  if args.trial == "overhead-single" else 25.0)
+        )
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     events_path = output.with_suffix(".broker-events.jsonl")
@@ -578,7 +729,9 @@ def main(argv: list[str] | None = None) -> int:
         "trial": args.trial,
         "initial_pose_policy": (
             "broker_prepares_and_verifies_sleep"
-            if args.trial == "short" else "overhead_sleep"
+            if args.trial == "short"
+            else ("measured_start_direct_overhead" if args.trial == "overhead-single"
+                  else "overhead_sleep")
         ),
         "automatic_recovery_after_stop": False,
         "robot_id": args.robot_id, "port": args.port,
@@ -708,6 +861,62 @@ def main(argv: list[str] | None = None) -> int:
                 "the end. No automatic return or REARM.",
                 flush=True,
             )
+        elif args.trial == "overhead-single":
+            # No preparatory Sleep/Overhead roundtrip; validate the measured
+            # current pose against the already-saved calibration-bound target.
+            limits = sdk_arm.motion._effective_limits()
+            overhead_target = _load_compatible_overhead(
+                args.robot_id, calibration_id,
+            )
+            deltas = _preflight_overhead_single(
+                measured_joints, overhead_target, limits,
+            )
+            summary["overhead_delta_by_joint_deg"] = deltas
+            hold = sdk_arm.get_state()
+            summary["preparation_hardware_state"] = {
+                "connected": hold.connected,
+                "torque_enabled": hold.torque_enabled,
+                "moving": hold.moving,
+                "faulted": hold.faulted,
+                "fault_message": hold.fault_message,
+                "host_motion_active": bool(sdk_arm.motion.is_moving),
+            }
+            if (not hold.connected or hold.faulted or not hold.torque_enabled
+                    or hold.moving or sdk_arm.motion.is_moving):
+                try:
+                    summary["preparation_motor_diagnostics"] = [
+                        {
+                            "name": item.name, "moving": item.moving,
+                            "status": item.status, "position_raw": item.position_raw,
+                            "error": item.error,
+                        }
+                        for item in sdk_arm.backend.diagnostics()
+                    ]
+                except Exception as exc:
+                    summary["preparation_diagnostic_error"] = repr(exc)
+                raise RuntimeError(
+                    "one-shot Overhead requires healthy stationary torque HOLD"
+                )
+            print(
+                "One-shot Overhead: CURRENT measured posture -> "
+                f"{OVERHEAD_POSE} (joint-only, no gripper) at "
+                f"{args.speed_deg_s:g} deg/s, {args.acceleration_deg_s2:g} deg/s².",
+                flush=True,
+            )
+            for joint, difference in deltas.items():
+                print(f"  {joint:16s} travel {difference:+.2f} deg", flush=True)
+            print(
+                "Inspect the entire swept Overhead route, cables, table and "
+                "reachable power cutoff before authorizing it. "
+                "No automatic return, recovery or second motor goal.",
+                flush=True,
+            )
+            summary["route"] = [
+                "measured calibrated current posture; no preparatory motion",
+                "human-approved single saved Overhead (STOP while moving)",
+            ]
+            movement_path = "/v1/go-pose"
+            movement_payload = {"name": OVERHEAD_POSE, "joint_only": True}
         else:
             # Preserve the historical Sleep-only gate for the larger route.
             _verify_measured_pose(
@@ -755,7 +964,10 @@ def main(argv: list[str] | None = None) -> int:
                 "name": "agent_start_overhead", "joint_only": True,
             }
 
-        if input("Type START to begin the movement you will interrupt: ").strip() != "START":
+        start_word = "OVERHEAD_START" if args.trial == "overhead-single" else "START"
+        if input(
+            f"Type {start_word} to begin the ONE movement you will interrupt: "
+        ).strip() != start_word:
             raise PermissionError("operator declined manual STOP trial")
 
         def move():
@@ -796,13 +1008,21 @@ def main(argv: list[str] | None = None) -> int:
         # before independent STOP, without ANY additional motor bus reads.
         # Always issue the requested STOP even if this evidence is weak.
         pre_stop_window = None
-        if args.trial == "short":
+        overhead_windows = None
+        if args.trial in {"short", "overhead-single"}:
             if executor._trace is None:
-                raise RuntimeError("short STOP evidence recorder unavailable")
-            pre_stop_window = executor._trace.feedback_window(
-                SHORT_JOINT, window_s=0.35,
-            )
-            summary["pre_stop_passive_window"] = pre_stop_window
+                raise RuntimeError("STOP evidence recorder unavailable")
+            if args.trial == "short":
+                pre_stop_window = executor._trace.feedback_window(
+                    SHORT_JOINT, window_s=0.35,
+                )
+                summary["pre_stop_passive_window"] = pre_stop_window
+            else:
+                overhead_windows = {
+                    joint: executor._trace.feedback_window(joint, window_s=0.35)
+                    for joint in overhead_target
+                }
+                summary["pre_stop_passive_windows"] = overhead_windows
         try:
             stop_attempted = True
             stop = _request(url, token, "POST", "/v1/stop", {}, timeout_s=5.0)
@@ -850,14 +1070,28 @@ def main(argv: list[str] | None = None) -> int:
                     "STOP was stable but moving-servo braking NOT qualified: "
                     + "; ".join(evidence["reasons"])
                 )
+        if args.trial == "overhead-single":
+            if overhead_windows is None:
+                raise RuntimeError("missing multi-joint passive STOP evidence")
+            evidence = _assess_overhead_inflight_feedback(
+                overhead_windows,
+                start_joints=measured_joints,
+                target_joints=overhead_target,
+            )
+            summary["physical_inflight_stop_evidence"] = evidence
+            if not evidence["verified"]:
+                raise RuntimeError(
+                    "STOP was stable but multi-joint Overhead braking "
+                    "NOT qualified: " + "; ".join(evidence["reasons"])
+                )
         summary["stop_qualification_passed"] = True
         summary["passed"] = True
 
-        if args.trial == "short":
+        if args.trial in {"short", "overhead-single"}:
             # No rearm or second motor command, even after a verified hold.
             summary["post_stop_recovery_requested"] = False
             print(
-                "SHORT STOP gate complete. No REARM or new position goal. "
+                "ONE-SHOT STOP gate complete. No REARM or new position goal. "
                 "The arm remains held; review saved trace before any further test.",
                 flush=True,
             )
