@@ -1,5 +1,13 @@
 # Changelog
 
+- **Draft #93:** Connect simulated OpenShell Hermes/Codex to the
+  persistent SDK using a separate-token, capability-restricted ingress
+  while the controller remains loopback-only. Supervisor STOP uses a
+  private token independently of exposed agent tools. Add policy/tool
+  discovery projection and simulated HTTP/sandbox regressions. No
+  physical agent mode or deployment change.
+
+
 - **Draft PR #92:** Introduce `--sdk-simulation-actions` as an explicit,
   loopback-only, camera-free, profile-restricted broker option. Reuse one
   simulated SDK session and native independent STOP across bounded HTTP
