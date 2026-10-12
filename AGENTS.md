@@ -1,6 +1,17 @@
 # Agent instructions
 
-**Draft PR #90, short STOP gate:** The first operator attempt
+**Draft PR #90, short STOP gate:** The 2026-10-11 next operator attempt
+failed the Sleep starting check by 86.23° before trial motion; the
+agent-arm command only holds the current encoder pose, not Sleep.
+The short test now has an explicit, operator-confirmed measured-start
+option (`--short-start measured`) with all joint-limit checks, a
+5° pan limit inset, stationary torque verification, per-joint printed
+errors and a required `MEASURED` swept-volume clearance approval. Do
+not loosen the normal Sleep gate or use this option for Overhead. No
+new hardware STOP result has been obtained; preserve safety cutoff
+and the unmerged PR hardware qualification blocker.
+
+ The first operator attempt
 aborted at physical-trial broker construction before any movement:
 the broker only allowlisted pose/Sleep/STOP, but the short trial
 requested `jog_joint`. The owning broker now admits a separate exact
