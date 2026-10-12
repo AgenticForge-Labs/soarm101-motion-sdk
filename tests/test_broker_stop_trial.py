@@ -662,3 +662,64 @@ def test_passive_stop_feedback_snapshot_does_not_read_bus(tmp_path) -> None:
     assert len(record["samples"]) == 1
     assert record["samples"][0]["raw"] == 2048
     assert record["hardware_moving_samples"][-1]["moving"] is True
+
+
+def test_script_prepares_sleep_before_other_moves_even_from_distant_start(
+    monkeypatch,
+) -> None:
+    import math
+    trial = _load_trial(monkeypatch)
+    expected = {"shoulder_pan": 0.0, "elbow_flex": math.radians(94)}
+    calls = []
+    def request(method, path, payload):
+        calls.append((method, path, payload))
+        if path == "/v1/sleep":
+            assert payload == {"joint_only": True}
+            return {"request_id": "sleep-1", "result": {
+                "accepted": True, "completed": True,
+            }}
+        assert path == "/v1/state"
+        return {"result": {
+            "joint_positions_rad": expected,
+            "authority": {"armed": True},
+            "broker_session": {"id": "one-session"},
+        }}
+    measured, evidence = trial._execute_prepared_sleep(
+        request, sleep_target=expected, expected_session_id="one-session",
+    )
+    assert measured["joint_positions_rad"] == expected
+    assert evidence["joint_only"] is True
+    assert evidence["request_id"] == "sleep-1"
+    assert calls == [
+        ("POST", "/v1/sleep", {"joint_only": True}),
+        ("GET", "/v1/state", None),
+    ]
+
+
+@pytest.mark.parametrize("failure", ["incomplete", "wrong_pose", "new_session", "lease_lost"])
+def test_prepared_sleep_never_authorizes_pan_without_verified_result(
+    monkeypatch, failure,
+) -> None:
+    trial = _load_trial(monkeypatch)
+    calls = []
+    def request(method, path, payload):
+        calls.append(path)
+        if path == "/v1/sleep":
+            return {"request_id": "sleep-1", "result": {
+                "accepted": True, "completed": failure != "incomplete",
+            }}
+        return {"result": {
+            "joint_positions_rad": {
+                "shoulder_pan": 0.5 if failure == "wrong_pose" else 0.0,
+            },
+            "authority": {"armed": failure != "lease_lost"},
+            "broker_session": {
+                "id": "different" if failure == "new_session" else "one",
+            },
+        }}
+    with pytest.raises(RuntimeError):
+        trial._execute_prepared_sleep(
+            request, sleep_target={"shoulder_pan": 0.0},
+            expected_session_id="one",
+        )
+    assert all(path in ("/v1/sleep", "/v1/state") for path in calls)
