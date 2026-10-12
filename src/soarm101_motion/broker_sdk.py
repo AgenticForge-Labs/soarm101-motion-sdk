@@ -121,6 +121,9 @@ class SDKAgentExecutor:
         self._create_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
         self._stop_lock = threading.Lock()
+        # Once physical STOP is requested, this broker session cannot
+        # issue another motion or final HOLD target. Human must restart.
+        self._physical_stop_requested = threading.Event()
         self._lifecycle_lock = threading.RLock()
         self._lifecycle = "new"  # new -> open -> closing/closed; failure -> faulted
         self._fault_kind: str | None = None
@@ -331,8 +334,18 @@ class SDKAgentExecutor:
     def execute(self, action: str, request: Mapping[str, object]) -> dict[str, object]:
         """Validate and serialize ordinary SDK actions; do not block STOP."""
         self._validate(action, request)
+        if self.physical_trial and action == "stop":
+            self._physical_stop_requested.set()
         def run() -> dict[str, object]:
             self._require_active(stop=action == "stop")
+            if (
+                self.physical_trial
+                and action in {"go_pose", "joint", "jog", "gripper", "sleep", "sleep_up"}
+                and self._physical_stop_requested.is_set()
+            ):
+                raise PermissionError(
+                    "physical motion is disabled after STOP; human restart required"
+                )
             if action in {"go_pose", "joint", "jog", "gripper", "sleep", "sleep_up"}:
                 self._verified_physical_stop = False
                 self._motion_action_attempted = True
@@ -607,6 +620,8 @@ class SDKAgentExecutor:
                 {"robot_id": self.robot_id, "name": name,
                  "include_gripper": not joint_only, **rates},
             )
+            if self.physical_trial and self._physical_stop_requested.is_set():
+                raise RuntimeError("saved pose interrupted by STOP")
             if not (moved.accepted and moved.completed
                     and (gripper is None or (gripper.accepted and gripper.completed))):
                 raise RuntimeError("saved pose playback did not complete successfully")
@@ -645,9 +660,13 @@ class SDKAgentExecutor:
             else:
                 arm.enable()
             result = SDK_CAPABILITIES.dispatch("jog_joint", arm, arguments)
-            arm.hold()
+            if self.physical_trial and self._physical_stop_requested.is_set():
+                # STOP owns the one final latch. The ordinary worker must not
+                # append another HOLD/goal after independent interruption.
+                raise RuntimeError("joint motion interrupted by STOP")
             if not result.accepted or not result.completed:
                 raise RuntimeError("joint motion did not complete successfully")
+            arm.hold()
             after = dict(arm.get_joint_positions().positions)
             return {
                 "accepted": result.accepted, "completed": result.completed,
@@ -747,9 +766,11 @@ class SDKAgentExecutor:
                        if action == "sleep" else {}),
                 }
             )
-            arm.hold()
+            if self.physical_trial and self._physical_stop_requested.is_set():
+                raise RuntimeError("Sleep interrupted by STOP")
             if not result.accepted or not result.completed:
                 raise RuntimeError("Sleep operation did not complete successfully")
+            arm.hold()
             return {**asdict(result), "action": action, "holding": True,
                     "authority": authority}
         raise AssertionError(f"missing SDK broker action handler for {action}")
