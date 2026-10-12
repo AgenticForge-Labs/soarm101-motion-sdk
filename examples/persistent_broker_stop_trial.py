@@ -274,7 +274,6 @@ def _assess_physical_inflight_feedback(
     if samples and math.isfinite(captured) and math.isfinite(start_pan_rad):
         final = samples[-1]
         last_rad = float(final["rad"])
-        last_raw = int(final["raw"])
         age = captured - float(final["elapsed_s"])
         progress = math.degrees(last_rad - start_pan_rad)
         remaining = target_delta_deg - progress
