@@ -1,36 +1,21 @@
 # Agent instructions
 
-**Draft PR #90, short STOP gate:** The 2026-10-11 next operator attempt
-failed the Sleep starting check by 86.23° before trial motion; the
-agent-arm command only holds the current encoder pose, not Sleep.
-The short test now has an explicit, operator-confirmed measured-start
-option (`--short-start measured`) with all joint-limit checks, a
-5° pan limit inset, stationary torque verification, per-joint printed
-errors and a required `MEASURED` swept-volume clearance approval. Do
-not loosen the normal Sleep gate or use this option for Overhead. No
-new hardware STOP result has been obtained; preserve safety cutoff
-and the unmerged PR hardware qualification blocker.
-
- The first operator attempt
-aborted at physical-trial broker construction before any movement:
-the broker only allowlisted pose/Sleep/STOP, but the short trial
-requested `jog_joint`. The owning broker now admits a separate exact
-short trial profile with `max_joint_delta_deg=8` and rejects anything
-except an explicit `shoulder_pan +8°` request. Do not widen the
-production/native-preview broker or merge the pose and joint tool
-allowlists. Verify the actual trial profile constructor in software
-tests before local hardware work.
-
- The attended physical trial now
-defaults to a fixed +8° shoulder-pan move from measured Sleep,
-operator-initiated STOP and measured post-HOLD stability checks.
-There is no preliminary Overhead roundtrip or post-STOP REARM.
-This is software-only staged code until an operator-approved, supervised
-low-energy bench run confirms it. Retain the previous 18.4° unsafe STOP
-trace as a failed hardware gate, keep physical cutoff accessible, and
-never run robot motion via autonomous agents or CI. Full Overhead
-interruption requires `--trial overhead` and is not qualified.
-
+**Draft PR #90 — current safety workflow:** The short attended STOP
+trial now requires an explicit, local human `PREPARE_SLEEP` authorization
+after checking all measured joint calibration limits, physical
+stationary torque HOLD, and visual clearance of the **entire** route
+to Sleep. The trusted loopback broker executes ONE canonical joint-only
+SDK Sleep (no gripper close), verifies Sleep and only then admits ONE
+fixed pan +8° command. Operator ENTER triggers independent STOP while
+host motion is active. Qualify *actual* physical in-motion STOP only
+if existing passive encoder evidence proves recent movement, fresh
+Moving status and >=2° travel remaining. Regardless of evidence, STOP
+must always run; a failed evidence gate must not retry motion or STOP.
+The original 18.4° elbow excursion remains unsafe evidence, and the
+near-endpoint short test did NOT demonstrate braking. Never let Codex,
+OpenShell, normal broker or CI run this physical experiment. No
+production route, automatic rearm or mechanical safety certification.
+Stay on draft PR #90 until separately supervised physical validation.
 
 This repository is used in two different ways: agents may **develop the SDK**, or they may
 **operate and inspect an SO-ARM101 through the SDK/CLI**. Keep those roles separate. Code
