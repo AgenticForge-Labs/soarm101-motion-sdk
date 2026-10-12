@@ -4,7 +4,9 @@
 
 CI-only tests use fake OpenShell and broker processes. They exercise
 ordinary success, injected KeyboardInterrupt, STOP failure, read-only
-no-motor cleanup and lease revocation before a CLI STOP subprocess.
+no-motor cleanup and lease revocation before a CLI STOP subprocess. Physical CLI STOP
+regressions assert no redundant torque-enable latch in a healthy HOLD
+and no implicit rearm when torque is genuinely disabled.
 STOP must be requested **while broker is alive and before sandbox
 deletion**, even on agent error, not added to a model prompt. On STOP
 failure, `supervisor-stop.json` must say `completed=false` and the
