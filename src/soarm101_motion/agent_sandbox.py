@@ -1436,6 +1436,14 @@ def run_agent(
                         "provider": selected_provider,
                         "read_only": bool(read_only),
                         "interface": interface,
+                        "broker_backend": (
+                            "persistent_sdk_simulation" if sdk_simulation
+                            else "cli_subprocess"
+                        ),
+                        "broker_transport": (
+                            "separate_token_agent_relay" if sdk_simulation
+                            else "legacy_host_listener"
+                        ),
                         "broker_profile": chosen_profile.public(),
                         "input_sha256": input_sha256,
                         "sensitive_inputs": sensitive_inputs,
