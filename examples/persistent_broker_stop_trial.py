@@ -31,7 +31,13 @@ from typing import Any
 from persistent_broker_motion_trace import _request
 
 from soarm101_motion import SOARM101, SOARM101Config
-from soarm101_motion.broker import AgentMotionRates, RobotBrokerHTTPServer, RobotBrokerService
+from soarm101_motion.broker import (
+    AgentMotionRates,
+    PHYSICAL_SHORT_STOP_DELTA_DEG,
+    PHYSICAL_SHORT_STOP_JOINT,
+    RobotBrokerHTTPServer,
+    RobotBrokerService,
+)
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.capability_profile import CapabilityProfile
@@ -44,8 +50,9 @@ from soarm101_motion.provenance import require_calibration_compatibility
 # Overhead/Sleep transition must also have meaningful joint travel.
 START_POSE_TOLERANCE_DEG = 5.0
 MIN_OVERHEAD_SEPARATION_DEG = 10.0
-SHORT_JOINT = "shoulder_pan"
-SHORT_DELTA_DEG = 8.0
+# Single source of truth for the hardware trial's broker-side action policy.
+SHORT_JOINT = PHYSICAL_SHORT_STOP_JOINT
+SHORT_DELTA_DEG = PHYSICAL_SHORT_STOP_DELTA_DEG
 SHORT_MAX_SPEED_DEG_S = 3.0
 SHORT_MAX_ACCEL_DEG_S2 = 15.0
 SHORT_LIMIT_INSET_DEG = 5.0
@@ -343,7 +350,11 @@ def main(argv: list[str] | None = None) -> int:
             else ["robot_health", "robot_capabilities", "robot_state",
                   "go_pose", "sleep", "stop"]
         ),
-        "cameras": [], "limits": {},
+        "cameras": [],
+        "limits": (
+            {"max_joint_delta_deg": SHORT_DELTA_DEG}
+            if args.trial == "short" else {}
+        ),
     })
     service = RobotBrokerService(
         executor=executor, token=token, event_path=events_path,
