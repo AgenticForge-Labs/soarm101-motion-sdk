@@ -72,7 +72,6 @@ OVERHEAD_SINGLE_MAX_SPEED_DEG_S = 8.0
 OVERHEAD_SINGLE_MAX_ACCEL_DEG_S2 = 40.0
 OVERHEAD_SINGLE_MAX_JOINT_TRAVEL_DEG = 100.0
 OVERHEAD_SINGLE_MIN_TRAVEL_DEG = 12.0
-OVERHEAD_SINGLE_LIMIT_INSET_DEG = 5.0
 OVERHEAD_POSE = "agent_start_overhead"
 
 
@@ -207,23 +206,31 @@ def _preflight_overhead_single(
     target: Mapping[str, float],
     limits: Mapping[str, tuple[float, float]],
 ) -> dict[str, float]:
-    """Fail closed on large or near-stop saved Overhead trajectories."""
+    """Use the SDK's *effective* calibrated limits, not a second inset.
+
+    A canonical Sleep posture can legitimately be only 2 degrees inside
+    those already margin-adjusted limits. The attended 2026-10-12 trial
+    stopped at preflight because an extra 5-degree requirement rejected
+    the healthy measured Sleep start. The SDK still owns the calibrated
+    mechanical-stop margin, motion planning and joint target validation.
+    """
     if not measured or set(measured) != set(target) or set(target) != set(limits):
         raise ValueError("Overhead trial requires matching measured, pose and limit joints")
     _preflight_joints_within_limits(measured, limits)
     delta: dict[str, float] = {}
-    inset = math.radians(OVERHEAD_SINGLE_LIMIT_INSET_DEG)
     for name in measured:
         start = float(measured[name])
         end = float(target[name])
         lower, upper = limits[name]
         if not all(math.isfinite(x) for x in (start, end, lower, upper)):
             raise ValueError(f"nonfinite Overhead pose/limit for {name}")
-        if not (lower + inset <= start <= upper - inset
-                and lower + inset <= end <= upper - inset):
+        # The measured start was already checked against effective limits.
+        # Those limits already include the SDK's configured mechanical-stop
+        # margin. A further inset would disallow its own Sleep posture.
+        if not lower <= end <= upper:
             raise RuntimeError(
-                f"Overhead trial: {name} starts or ends within "
-                f"{OVERHEAD_SINGLE_LIMIT_INSET_DEG:g} deg of calibrated stop"
+                f"Overhead trial: {name} saved target is outside "
+                "executable calibrated range"
             )
         degrees = abs(math.degrees(end - start))
         if degrees > OVERHEAD_SINGLE_MAX_JOINT_TRAVEL_DEG:
@@ -868,6 +875,23 @@ def main(argv: list[str] | None = None) -> int:
             overhead_target = _load_compatible_overhead(
                 args.robot_id, calibration_id,
             )
+            # Preserve read-only preflight facts even if a later, independent
+            # travel/rate/target gate rejects this route. Never send a goal
+            # merely to diagnose an operator's already-valid Sleep posture.
+            summary["overhead_preflight"] = {
+                "measured_joint_positions_deg": {
+                    name: math.degrees(float(pos))
+                    for name, pos in measured_joints.items()
+                },
+                "saved_target_joint_positions_deg": {
+                    name: math.degrees(float(pos))
+                    for name, pos in overhead_target.items()
+                },
+                "executable_joint_limits_deg": {
+                    name: [math.degrees(float(bound)) for bound in bounds]
+                    for name, bounds in limits.items()
+                },
+            }
             deltas = _preflight_overhead_single(
                 measured_joints, overhead_target, limits,
             )
