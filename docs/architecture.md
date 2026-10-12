@@ -1,5 +1,17 @@
 # Architecture
 
+## Trusted broker physical read-only preflight cleanup (draft PR #90)
+
+The broker-owned `SDKAgentExecutor` separates a session that merely
+observed a physical robot (with torque held under earlier human authority)
+from a session that attempted any consequential motion. On a read-only
+preflight exit, closing the transport does not create a fresh actuator
+position-latch command. When movement was attempted, the normal
+stop/fault cleanup and human-authority revocation still apply. This
+extends live torque-register reconciliation without conflating connection
+with motor-goal ownership.
+
+
 ## PR #90: live servo torque authority across broker reconnect (unmerged)
 
 The owning Feetech backend synchronizes torque state on connection from
