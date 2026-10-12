@@ -1,5 +1,16 @@
 # Changelog
 
+- Draft PR #90: added operator-only `overhead-single` stopped-pose
+  qualification. One trusted-broker joint-only saved Overhead action
+  from measured stationary pose, no initial Sleep/roundtrip/rearm,
+  only exact fixed go-pose payload and one-shot phase. 6°/s 30°/s²
+  defaults (hard caps 8°/s 40°/s²), joint margin/travel checks,
+  two-joint passive moving feedback at STOP and unchanged fault/settling
+  gates. Physical go-pose reuses human torque HOLD, avoids 1/1 latch;
+  fake-hardware tests cover rate/profile/replay/refused torque-off.
+  Real multi-joint braking remains to be validated locally.
+
+
 - **Draft PR #90, 2026-10-12:** Reconcile real short STOP trace with measured
   2°/s in-flight pan encoder changes, one 0/254 stop latch and <=0.088°
   post-latch drift. Fix the evaluator's previous-sample timestamp error
