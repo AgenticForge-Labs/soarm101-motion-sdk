@@ -46,8 +46,9 @@ qualifier implementation, not missing STOP/cancellation evidence.
   Human lease was revoked and no further movement was requested.
 - STOP HTTP response took 1.546 s including the mandatory 1.5-s
   stabilization monitor. This is **not a measured braking latency**.
-  Pre/post encoder sampling (approx. 46 ms first post-STOP feedback) bounds
-  what can be observed; true stopping time is not resolved more precisely.
+  The last pre-STOP and first post-STOP encoder samples were ~46 ms apart;
+  first post-latch feedback arrived ~19 ms after the raw write. True
+  stopping time is not resolved more precisely by this sampling cadence.
 
 The trace reports 138 raw transport position writes: 85 during preparation,
 52 during the pan move, **one during STOP**. Its
