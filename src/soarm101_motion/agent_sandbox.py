@@ -713,6 +713,11 @@ class BrokerProcess:
                 try:
                     self.request("POST", "/v1/supervisor-heartbeat", {})
                 except Exception as exc:
+                    if "watchdog is stopped" in str(exc):
+                        # An agent may have independently requested STOP;
+                        # that ends motion authority but is not lost-host
+                        # liveness. Do not resume heartbeat after STOP.
+                        return
                     # A failed trusted pulse must not be patched up by an
                     # agent message or an automatic rearm. The independent
                     # child broker watchdog will expire and attempt STOP.
