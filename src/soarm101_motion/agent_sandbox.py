@@ -655,6 +655,29 @@ class BrokerProcess:
             raise AgentSandboxError(f"broker request failed: {result}")
         return result
 
+    def request_motion_stop(self) -> dict[str, object]:
+        """Host-owned STOP before an agent/sandbox is destroyed.
+
+        This is a control-plane action; never ask the LLM to stop itself.
+        It must be attempted while the authenticated broker is still alive.
+        The CLI-backed broker currently cannot attest independent braking;
+        only the physical SDK trial's stability proof establishes that.
+        """
+        if self.process is None or self.process.poll() is not None:
+            raise AgentSandboxError(
+                "cannot request STOP: trusted broker is not running"
+            )
+        payload = self.request("POST", "/v1/stop", {})
+        result = payload.get("result")
+        if not isinstance(result, dict) or not (
+            result.get("accepted") and result.get("completed")
+            and result.get("holding")
+        ):
+            raise AgentSandboxError(
+                "trusted broker STOP did not confirm completed HOLD"
+            )
+        return result
+
     def require_authority(self) -> dict[str, object]:
         payload = self.request("GET", "/v1/capabilities")
         result = payload.get("result")
@@ -1157,6 +1180,9 @@ def run_agent(
     created = False
     capabilities: dict[str, object] = {}
     broker_event_offset = 0
+    # Only request host-owned STOP after a human-authorized agent run has
+    # actually acquired a live broker. Read-only runs never move hardware.
+    agent_motion_handed_off = False
 
     with tempfile.TemporaryDirectory(
         prefix=f"soarm101-{adapter.name}-run-"
@@ -1254,6 +1280,7 @@ def run_agent(
                 broker_event_offset = len(_read_broker_events(broker_events))
             else:
                 capabilities = broker.require_authority()
+                agent_motion_handed_off = True
 
             create_result = client.create(
                 name=sandbox,
@@ -1489,7 +1516,35 @@ def run_agent(
             )
         finally:
             active_error = sys.exc_info()[1]
+            stop_error: Exception | None = None
             cleanup_error: Exception | None = None
+
+            # STOP is the supervisor's LAST ROBOT COMMAND, not a prompt
+            # to Hermes/Codex. It must precede sandbox deletion and broker
+            # process termination even on KeyboardInterrupt, timeout, tool
+            # error or ordinary successful agent completion.
+            if agent_motion_handed_off:
+                stop_record: dict[str, object] = {
+                    "attempted": True,
+                    "command": "POST /v1/stop",
+                    "verified_physical_hold": False,
+                }
+                try:
+                    stop_result = broker.request_motion_stop()
+                    stability = stop_result.get("post_stop_stability")
+                    stop_record["completed"] = True
+                    stop_record["holding"] = bool(stop_result["holding"])
+                    stop_record["verified_physical_hold"] = bool(
+                        isinstance(stability, dict)
+                        and stability.get("verified") is True
+                    )
+                except Exception as exc:
+                    stop_error = exc
+                    stop_record["completed"] = False
+                    stop_record["error"] = str(exc)
+                (output_dir / "supervisor-stop.json").write_text(
+                    json.dumps(stop_record, indent=2) + "\n", encoding="utf-8",
+                )
             if created:
                 try:
                     client.delete(sandbox)
@@ -1499,15 +1554,24 @@ def run_agent(
                         str(exc) + "\n",
                         encoding="utf-8",
                     )
-            broker_stdout, broker_stderr = broker.stop()
-            (output_dir / "broker-stdout.txt").write_text(
-                broker_stdout,
-                encoding="utf-8",
-            )
-            (output_dir / "broker-stderr.txt").write_text(
-                broker_stderr,
-                encoding="utf-8",
-            )
+            try:
+                broker_stdout, broker_stderr = broker.stop()
+                (output_dir / "broker-stdout.txt").write_text(
+                    broker_stdout, encoding="utf-8",
+                )
+                (output_dir / "broker-stderr.txt").write_text(
+                    broker_stderr, encoding="utf-8",
+                )
+            except Exception as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+            if stop_error is not None:
+                raise AgentSandboxError(
+                    "supervisor STOP/HOLD was not confirmed; agent run must "
+                    "not be considered safe or successful; use the physical "
+                    "power cutoff if the robot is still moving: "
+                    f"{stop_error}"
+                ) from stop_error
             if cleanup_error is not None and active_error is None:
                 raise AgentSandboxError(
                     f"agent sandbox completed but cleanup failed: {cleanup_error}"
