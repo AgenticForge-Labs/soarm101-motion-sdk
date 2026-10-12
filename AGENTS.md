@@ -1,5 +1,19 @@
 # Agent instructions
 
+**Current authority (2026-10-12):** #90 (attended physical independent
+STOP) and #91 (host-supervisor STOP on cancellation) are merged in
+`main`. #92 is simulation-only native broker execution in an open PR,
+not physically deployed. The canonical Motion SDK remains sole motor
+owner; Hermes/Codex may not use the new mode to reach physical motion.
+Use the trusted broker profile and human arming; STOP is deterministic,
+out of band and never a model prompt. CI must not open hardware.
+
+The following earlier incident notes describe **historical investigations
+and now-merged PRs**, not present open blockers. The physical scope of
+the 6°/s supervised STOP trial remains limited.
+
+## Historical #90 and #91 safety investigations (merged)
+
 **PR #91 draft agent-supervisor STOP:** The trusted host runner must
 request STOP before deleting an OpenShell sandbox or stopping its broker
 on *every* human-authorized motion-capable agent-run exit, including

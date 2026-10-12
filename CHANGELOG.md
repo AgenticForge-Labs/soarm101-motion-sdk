@@ -1,5 +1,13 @@
 # Changelog
 
+- **Draft PR #92:** Introduce `--sdk-simulation-actions` as an explicit,
+  loopback-only, camera-free, profile-restricted broker option. Reuse one
+  simulated SDK session and native independent STOP across bounded HTTP
+  requests, with truthful capability/lease projections and regressions for
+  session reuse, stop revocation, denied profiles and forbidden external
+  binding. **No physical SDK agent motion or OpenShell cutover.**
+
+
 - **PR #91 (draft):** Trusted OpenShell agent supervisor now requests
   broker STOP before sandbox deletion/broker termination on normal
   completion, Ctrl+C and failure, with `supervisor-stop.json` and
