@@ -53,7 +53,9 @@ _PHYSICAL_TRIAL_COMMON_TOOLS = frozenset({
     "robot_health", "robot_capabilities", "robot_state", "stop",
 })
 _PHYSICAL_TRIAL_POSE_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"go_pose", "sleep"}
-_PHYSICAL_TRIAL_SHORT_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"jog_joint"}
+# Joint-only canonical Sleep PREP precedes exactly one pan move. The
+# profile alone never authorizes an arbitrary sequence of these actions.
+_PHYSICAL_TRIAL_SHORT_TOOLS = _PHYSICAL_TRIAL_COMMON_TOOLS | {"jog_joint", "sleep"}
 DEFAULT_EVENT_PATH = Path.home() / ".local" / "state" / "soarm101" / "broker" / "events.jsonl"
 
 
@@ -318,6 +320,11 @@ class RobotBrokerService:
         self._allow_simulated_sdk_posts = allow_simulated_sdk_posts
         self._allow_physical_sdk_trial = allow_physical_sdk_trial
         self._physical_short_stop_trial = physical_short_stop_trial
+        # This trusted trial progresses one way only: Sleep -> pan -> STOP.
+        # It is not a second unrestricted physical broker.
+        self._physical_short_phase = (
+            "await_sleep" if physical_short_stop_trial else None
+        )
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
         self.profile = profile if profile is not None else CapabilityProfile.full()
@@ -404,9 +411,25 @@ class RobotBrokerService:
                 # even if the backend STOP itself raises.
                 with self._sdk_epoch_lock:
                     self._sdk_stop_epoch += 1
+                    if self._physical_short_stop_trial:
+                        self._physical_short_phase = "stopped"
                 result = self.executor.execute(action, request)
             else:
                 with self._operation_lock:
+                    if self._physical_short_stop_trial and action in {"sleep", "joint"}:
+                        with self._sdk_epoch_lock:
+                            required = "await_sleep" if action == "sleep" else "ready"
+                            if self._physical_short_phase != required:
+                                raise PermissionError(
+                                    f"short STOP trial action {action} denied in "
+                                    f"phase {self._physical_short_phase}"
+                                )
+                            # Mark consumed BEFORE execution to reject retries
+                            # even if hardware returns an error or STOP races.
+                            self._physical_short_phase = (
+                                "sleep_in_flight" if action == "sleep"
+                                else "joint_in_flight"
+                            )
                     if isinstance(self.executor, SDKAgentExecutor):
                         with self._sdk_epoch_lock:
                             if admitted_epoch != self._sdk_stop_epoch:
@@ -430,6 +453,14 @@ class RobotBrokerService:
                                     "request interrupted by a newer STOP; "
                                     "completion is not confirmed"
                                 )
+                            if self._physical_short_stop_trial and action == "sleep":
+                                if not (result.get("accepted") and result.get("completed")):
+                                    raise BrokerCommandError(
+                                        "short STOP preparation Sleep incomplete"
+                                    )
+                                self._physical_short_phase = "ready"
+                            elif self._physical_short_stop_trial and action == "joint":
+                                self._physical_short_phase = "joint_finished"
                     else:
                         result = self.executor.run(arguments)
         except (BrokerCommandError, SOARM101Error, RuntimeError, ValueError,
@@ -519,6 +550,11 @@ class RobotBrokerService:
             )
         try:
             self.profile.check(method, path, request)
+            if self._physical_short_stop_trial and method == "POST" and path == "/v1/sleep":
+                if request != {"joint_only": True}:
+                    raise PermissionError(
+                        "short physical STOP preparation requires joint-only Sleep"
+                    )
             if self._physical_short_stop_trial and method == "POST" and path == "/v1/joint":
                 # The signed/local broker profile caps the magnitude, and
                 # this exact-payload gate prevents other axes, reversed motion,
