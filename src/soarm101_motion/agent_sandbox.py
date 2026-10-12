@@ -12,12 +12,15 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -43,6 +46,31 @@ OPENSHELL_SANDBOX_NAME_MAX_LENGTH = 19
 
 class AgentSandboxError(RuntimeError):
     """OpenShell/Hermes sandbox setup or execution failed."""
+
+
+@contextmanager
+def _interruptible_agent_execution():
+    """Translate a SIGTERM during the blocking agent CLI into safe teardown.
+
+    SIGINT/Ctrl+C already raises KeyboardInterrupt in Python. Installing
+    this handler only for active CLI execution preserves unrelated CLI
+    commands and makes the existing run_agent finally request broker STOP.
+    SIGKILL / power failure cannot be handled from this process.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def on_terminate(signum, frame):
+        del signum, frame
+        raise KeyboardInterrupt("agent SIGTERM requested safe STOP")
+
+    signal.signal(signal.SIGTERM, on_terminate)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _sandbox_name(agent_name: str) -> str:
@@ -1444,12 +1472,13 @@ def run_agent(
                         "--auth installed'. Otherwise inspect the preflight error "
                         "and the retained openshell-effective-policy.yaml."
                     )
-            process = client.exec(
-                sandbox,
-                command,
-                env=environment,
-                timeout=timeout,
-            )
+            with _interruptible_agent_execution():
+                process = client.exec(
+                    sandbox,
+                    command,
+                    env=environment,
+                    timeout=timeout,
+                )
 
             (output_dir / f"{adapter.name}-stdout.jsonl").write_text(
                 (process.stdout or "").replace(token, "<redacted-soarm101-broker-token>"),
