@@ -557,8 +557,22 @@ class SDKAgentExecutor:
                 "validate_saved_pose", arm,
                 {"robot_id": self.robot_id, "name": name},
             )
-            arm.enable()
             joint_only = bool(request.get("joint_only", False))
+            if self.physical_trial and joint_only:
+                # A separately human-armed process may already own the servo
+                # torque HOLD. A redundant enable_torque() would issue a new
+                # all-motor 1/1 position latch before the approved Overhead
+                # trajectory and change Feetech inner-loop tracking settings.
+                # Preserve that verified live HOLD just as physical Sleep does.
+                hold = arm.get_state()
+                if (not hold.connected or hold.faulted
+                        or not hold.torque_enabled or hold.moving):
+                    raise HardwareFaultError(
+                        "joint-only physical saved pose requires an already "
+                        "healthy stationary torque HOLD"
+                    )
+            else:
+                arm.enable()
             moved, gripper = SDK_CAPABILITIES.dispatch(
                 "replay_saved_pose", arm,
                 {"robot_id": self.robot_id, "name": name,
