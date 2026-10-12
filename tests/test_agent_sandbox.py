@@ -712,6 +712,75 @@ def test_run_codex_chatgpt_uses_dedicated_login_state(
         for key in metadata["input_sha256"]
     )
 
+def test_sdk_simulation_sandbox_uses_separate_host_stop_and_bounded_agent_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "TASK.md"
+    task.write_text("Move shoulder pan by 0.1 degree, then report.\n", encoding="utf-8")
+    fake = FakeOpenShell()
+    class SimulatedSDKBroker(FakeBroker):
+        def __init__(self, *, sdk_simulation=False, **kwargs):
+            assert sdk_simulation is True
+            super().__init__(**kwargs)
+            self.connected_preflight = False
+
+        def request(self, method, path, payload=None):
+            if (method, path) == ("GET", "/v1/state"):
+                self.connected_preflight = True
+                return {"ok": True, "result": {"robot_id": "so101"}}
+            return super().request(method, path, payload)
+
+        def request_motion_stop(self):
+            assert self.connected_preflight is True
+            return super().request_motion_stop()
+
+    FakeBroker.instances.clear()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", SimulatedSDKBroker)
+    monkeypatch.setattr(
+        agent_sandbox, "doctor",
+        lambda **kwargs: agent_sandbox.DoctorResult(
+            openshell=True, gateway=True, docker=True, image=True,
+            provider=True, details={},
+        ),
+    )
+    result = agent_sandbox.run_agent(
+        agent="hermes", task=task, output_dir=tmp_path / "run",
+        sdk_simulation=True, interface="mcp", openshell=fake,
+    )
+    assert result.exit_code == 0
+    broker = FakeBroker.instances[-1]
+    assert broker.connected_preflight is True
+    assert broker.stop_requests == 1
+    assert broker.stopped is True
+    assert fake.deleted
+    policy = str(fake.created["policy"])
+    assert "/v1/joint" in policy
+    assert "/v1/state" in policy
+    assert "/v1/stop" in policy
+    assert "/v1/capture" not in policy
+    assert "/v1/jog" not in policy
+    assert "/v1/gripper" not in policy
+    record = json.loads((tmp_path / "run" / "supervisor-stop.json").read_text())
+    assert record["completed"] is True
+    assert record["verified_physical_hold"] is False
+
+
+def test_sdk_simulation_rejects_physical_cameras_and_workspace_before_start(
+    tmp_path: Path,
+) -> None:
+    file = tmp_path / "overbroad.json"
+    file.write_text(json.dumps({
+        "schema_version": 1, "name": "forbidden-in-sdk-sim",
+        "tools": ["robot_state", "robot_capabilities", "capture_camera"],
+        "cameras": ["overhead"], "limits": {},
+    }), encoding="utf-8")
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="does not expose"):
+        agent_sandbox.run_agent(
+            task=tmp_path / "task.md", output_dir=tmp_path / "out",
+            capability_profile=file, sdk_simulation=True,
+        )
+
+
 def test_read_only_run_skips_human_authority_and_omits_motion_routes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
