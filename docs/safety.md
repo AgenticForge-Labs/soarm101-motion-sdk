@@ -1,5 +1,73 @@
 # Safety
 
+## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)
+
+**Unmerged, operator-only physical experiment, not production motor control.**
+New \`--trial overhead-single\` uses the CURRENT measured, calibrated and
+stationary torque-held posture and moves **once** toward the existing saved
+\`agent_start_overhead\` pose, joint-only (no gripper, preparatory Sleep,
+Overhead roundtrip, retry, automatic recovery or REARM). The operator must
+review every joint's printed displacement and swept-route clearance and
+type \`OVERHEAD_START\`. ENTER during physical motion requests independent
+broker STOP; \`STATIONARY\` is only for confirmed stable physical HOLD.
+
+The speed is **6°/s, acceleration 30°/s²** by default (3x faster than
+the earlier 2°/s short-pan trial); hard caps are **8°/s, 40°/s²**
+and 20 Hz. The measured pose and saved Overhead must match calibrated
+joint identities, retain 5° inset from every stop, require at least two
+joints moving ≥12°, and no joint may travel more than 100°. The broker
+accepts only one exact joint-only Overhead POST and STOP; it blocks any
+second pose, other pose, Sleep, jog, gripper, rate override or post-STOP
+replay. The physical joint-only pose reuses existing human torque HOLD
+rather than issuing another 1/1 servo latch.
+
+The STOP qualification requires fresh measured encoder progress from
+at least **two** distinct joints with ≥2° remaining, one corrected
+0/254 HOLD, ≤1° 1.5-s settling, fault-free connected torque state,
+cancellation of the interrupted action, human STATIONARY observation
+and revoked authority. The Feetech Moving bit can be false even as an
+encoder changes: preserve it as diagnostic, not sole motion authority.
+Neither software success nor a hobby arm implies certified braking.
+An earlier real elbow STOP continued ~18.4°; the later short 2°/s
+pan test stopped with ~0.088° settling. The multi-joint physical gate
+still requires separate supervised evidence, clear workspace, no load
+and a reachable physical power cutoff.
+
+### Software validation (no hardware)
+
+\`\`\`bash
+cd ~/AgenticForge/soarm101-motion-sdk
+git switch feature/broker-independent-stop-faults
+git pull --ff-only
+git rev-parse HEAD
+source .venv/bin/activate
+ruff check .
+python -m pytest --no-cov -q tests/test_broker_stop_trial.py tests/test_broker_sdk.py tests/test_broker_stop_faults.py tests/test_stop_ownership.py
+python -m pytest --no-cov -q
+\`\`\`
+
+### Attended test (only after exact-head CI, human readiness and clearance)
+
+\`\`\`bash
+soarm101 agent arm --minutes 30
+python examples/persistent_broker_stop_trial.py \
+  --trial overhead-single --port /dev/ttyACM1 --robot-id so101 \
+  --output "$HOME/soarm-motion-tests/overhead-stop-$(date +%Y%m%d-%H%M%S).jsonl"
+\`\`\`
+
+Decline at \`OVERHEAD_START\` for a read-only pose/torque preflight;
+the script reports a nonpassing qualification, with no scripted motion
+when declined. Human arming itself can enable motors. After confirmation,
+press ENTER **early, when more than one joint is physically moving**.
+If anything behaves unexpectedly, use the accessible power cutoff
+rather than retrying software STOP. Do not issue a recovery move.
+
+Share \`*.summary.json\`, \`*.broker-events.jsonl\`, and motor \`*.jsonl\`
+together (redact tokens/leases). Distinguish raw stop-latch timing,
+braking response, and the separate 1.5-s stabilization-monitor HTTP
+duration. Never edit these original evidence files.
+
+
 ## Draft #90 preflight teardown ownership
 
 Connection to previously torque-enabled servos is a **read-only observation**,
