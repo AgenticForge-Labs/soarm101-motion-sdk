@@ -389,6 +389,10 @@ def test_agent_relay_scopes_bearer_and_preserves_host_only_stop(
         assert call(host, "GET", "/v1/health", "agent-only-secret")[0] == 401
         code, profile = call(relay, "GET", "/v1/profile", "agent-only-secret")
         assert code == 200 and "stop" not in profile["result"]["tools"]
+        visible = call(relay, "GET", "/v1/capabilities", "agent-only-secret")
+        assert visible[0] == 200
+        assert "stop" not in visible[1]["result"]["actions"]
+        assert "joint" in visible[1]["result"]["actions"]
         assert call(relay, "POST", "/v1/stop", "agent-only-secret", {})[0] == 403
         assert call(host, "GET", "/v1/state", "trusted-host-secret")[0] == 200
         first = backend.session_evidence["id"]
