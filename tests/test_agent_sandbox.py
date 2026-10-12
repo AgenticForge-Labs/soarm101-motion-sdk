@@ -765,6 +765,39 @@ def test_sdk_simulation_sandbox_uses_separate_host_stop_and_bounded_agent_policy
     assert record["verified_physical_hold"] is False
 
 
+def test_physical_agent_trial_denies_noninteractive_start_and_oversized_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "TASK.md"
+    task.write_text("Move shoulder pan by 0.1 degree\n", encoding="utf-8")
+    profile = tmp_path / "agent.json"
+    profile.write_text(json.dumps({
+        "schema_version": 1, "name": "bounded-physical",
+        "tools": ["robot_health", "robot_state", "robot_capabilities",
+                  "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 0.5},
+    }), encoding="utf-8")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="interactive"):
+        agent_sandbox.run_agent(
+            task=task, output_dir=tmp_path / "out",
+            sdk_physical_supervised=True, serial_port="/dev/fake",
+            capability_profile=profile,
+        )
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(json.dumps({
+        "schema_version": 1, "name": "too-large",
+        "tools": ["robot_state", "robot_capabilities", "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 3.0},
+    }), encoding="utf-8")
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="<=1-degree"):
+        agent_sandbox.run_agent(
+            task=task, output_dir=tmp_path / "out2",
+            sdk_physical_supervised=True, serial_port="/dev/fake",
+            capability_profile=invalid,
+        )
+
+
 def test_sdk_simulation_rejects_physical_cameras_and_workspace_before_start(
     tmp_path: Path,
 ) -> None:
