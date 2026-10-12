@@ -442,6 +442,58 @@ def test_agent_stop_does_not_require_motion_authority(
     assert payload["holding"] is True
 
 
+def test_physical_agent_stop_does_not_reenable_held_or_torque_off_motors(
+    monkeypatch, capsys,
+) -> None:
+    """CLI adapter avoids an extra 1/1 Feetech enable latch."""
+    from types import SimpleNamespace
+    from contextlib import contextmanager
+
+    import soarm101_motion.cli.main as cli
+
+    class Arm:
+        def __init__(self, torque_enabled):
+            self.torque_enabled = torque_enabled
+            self.enable_calls = 0
+            self.stop_calls = 0
+
+        def get_state(self):
+            return SimpleNamespace(
+                connected=True, faulted=False,
+                torque_enabled=self.torque_enabled,
+            )
+
+        def enable(self):
+            self.enable_calls += 1
+
+        def stop(self):
+            self.stop_calls += 1
+
+        def get_joint_positions(self):
+            return SimpleNamespace(positions={"shoulder_pan": 0.0})
+
+    held = Arm(True)
+    torque_off = Arm(False)
+
+    @contextmanager
+    def from_args(*args, **kwargs):
+        del args, kwargs
+        yield chosen[0]
+
+    chosen = [held]
+    monkeypatch.setattr(cli, "_arm_from_args", from_args)
+    assert main(["agent", "stop", "--port", "/dev/mock"]) == 0
+    assert held.enable_calls == 0
+    assert held.stop_calls == 1
+    assert json.loads(capsys.readouterr().out)["holding"] is True
+
+    chosen[0] = torque_off
+    assert main(["agent", "stop", "--port", "/dev/mock"]) == 1
+    assert torque_off.enable_calls == 0
+    assert torque_off.stop_calls == 0
+    assert "no implicit rearm" in capsys.readouterr().err
+
+
 def test_agent_jog_is_not_enabled_without_measured_workspace(
     tmp_path,
     monkeypatch,
