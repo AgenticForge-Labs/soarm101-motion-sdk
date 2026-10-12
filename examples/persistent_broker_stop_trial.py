@@ -92,7 +92,8 @@ def _verify_measured_pose(
         raise RuntimeError(
             f"{label}: not within {tolerance_deg:g} deg of expected pose "
             f"({worst_joint} differs by {errors[worst_joint]:.2f} deg); "
-            "do not auto-correct or bypass a required Sleep pose"
+            "reposition manually only if safe, or use the short trial's "
+            "explicit measured-start option; do not auto-correct"
         )
     return errors
 
