@@ -2,6 +2,22 @@
 
 ## PR #90 short-motion physical STOP candidate (open, unmerged)
 
+**Measured-start correction (2026-10-11):** The second operator trial aborted
+before movement at a 86.23° difference from calculated Sleep. The command
+`soarm101 agent arm` only holds the current encoder posture; it does not
+park to Sleep. The short pan test now supports explicit
+`--short-start measured` in addition to the original default
+`--short-start sleep`. Measured-start validates all measured arm joints
+against executable calibration limits and the fixed pan target with a
+5° endpoint inset, requires healthy stationary torque HOLD, prints the
+per-joint difference from Sleep and requires operator `MEASURED`
+confirmation of the actual +8° swept-volume clearance. No auto-move to
+Sleep, no additional broker movement capabilities, no automatic REARM.
+The historical `--trial overhead` still **requires Sleep**. This change
+remains unmerged and physically unqualified.
+
+
+
 **Trial bootstrap repair (2026-10-11):** An earlier attempt raised
 `ValueError: physical trial profile must restrict actions to state,
 pose, Sleep and STOP` before connecting to the arm or issuing any
