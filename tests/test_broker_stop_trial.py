@@ -607,3 +607,58 @@ def test_sleep_preparation_decline_and_joint_limit_rejection(monkeypatch) -> Non
         trial._preflight_joints_within_limits(
             {"shoulder_pan": 2.0}, {"shoulder_pan": (-1.0, 1.0)},
         )
+
+
+def test_stop_evidence_requires_real_movement_with_travel_remaining(monkeypatch) -> None:
+    import math
+    trial = _load_trial(monkeypatch)
+    def sample(t, deg):
+        return {"elapsed_s": t, "raw": round(deg * 20), "rad": math.radians(deg)}
+    def window(values, moving=True):
+        return {
+            "captured_s": 1.0,
+            "samples": [
+                sample(0.76, values[0]), sample(0.90, values[1]),
+                sample(0.96, values[2]),
+            ],
+            "hardware_moving_samples": [{"elapsed_s": 0.95, "moving": moving}],
+        }
+    good = trial._assess_physical_inflight_feedback(
+        window([1.0, 1.3, 1.5]), start_pan_rad=0.0,
+    )
+    assert good["verified"] is True
+    assert good["remaining_deg"] == pytest.approx(6.5)
+    old = trial._assess_physical_inflight_feedback(
+        window([7.3, 7.3, 7.3], moving=False), start_pan_rad=0.0,
+    )
+    assert old["verified"] is False
+    assert any("near pan target" in r for r in old["reasons"])
+    assert any("did not report Moving" in r for r in old["reasons"])
+    stopped = trial._assess_physical_inflight_feedback(
+        window([1.5, 1.5, 1.5], moving=False), start_pan_rad=0.0,
+    )
+    assert stopped["verified"] is False
+    stale = window([1.0, 1.3, 1.5])
+    stale["samples"][-1]["elapsed_s"] = 0.8
+    assert trial._assess_physical_inflight_feedback(
+        stale, start_pan_rad=0.0,
+    )["verified"] is False
+
+
+def test_passive_stop_feedback_snapshot_does_not_read_bus(tmp_path) -> None:
+    import time
+    from soarm101_motion import SOARM101
+    from soarm101_motion.motion.trace import PassiveBackendTrace
+    tracer = PassiveBackendTrace(
+        SOARM101.simulated(), tmp_path / "trace.jsonl",
+    )
+    tracer._started = time.perf_counter()
+    tracer._record(
+        "feedback", joints_raw={"shoulder_pan": 2048},
+        joints_rad={"shoulder_pan": 0.0},
+    )
+    tracer._record("hardware_state", moving=True)
+    record = tracer.feedback_window("shoulder_pan")
+    assert len(record["samples"]) == 1
+    assert record["samples"][0]["raw"] == 2048
+    assert record["hardware_moving_samples"][-1]["moving"] is True
