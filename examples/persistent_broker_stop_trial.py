@@ -45,9 +45,9 @@ from soarm101_motion.poses import PoseLibrary
 from soarm101_motion.provenance import require_calibration_compatibility
 
 
-# The trial must begin from a measured posture reasonably close to the
-# calibration-relative Sleep target, not move there silently. A genuine
-# Overhead/Sleep transition must also have meaningful joint travel.
+# The historical Overhead trial requires the calibration-relative Sleep
+# starting target. The short pan trial can instead use an independently
+# confirmed measured starting posture; neither mode auto-repositions.
 START_POSE_TOLERANCE_DEG = 5.0
 MIN_OVERHEAD_SEPARATION_DEG = 10.0
 # Single source of truth for the hardware trial's broker-side action policy.
@@ -58,14 +58,13 @@ SHORT_MAX_ACCEL_DEG_S2 = 15.0
 SHORT_LIMIT_INSET_DEG = 5.0
 
 
-def _verify_measured_pose(
+def _pose_joint_errors(
     measured: Mapping[str, float],
     expected: Mapping[str, float],
     *,
     label: str,
-    tolerance_deg: float = START_POSE_TOLERANCE_DEG,
 ) -> dict[str, float]:
-    """Fail before issuing the next move if measured joints mismatch."""
+    """Read-only per-joint comparison; retain evidence on a failed start."""
     errors: dict[str, float] = {}
     for joint, target in expected.items():
         if joint not in measured:
@@ -76,11 +75,24 @@ def _verify_measured_pose(
         errors[joint] = abs(math.degrees(actual - float(target)))
     if not errors:
         raise ValueError(f"{label}: no pose joints to verify")
+    return errors
+
+
+def _verify_measured_pose(
+    measured: Mapping[str, float],
+    expected: Mapping[str, float],
+    *,
+    label: str,
+    tolerance_deg: float = START_POSE_TOLERANCE_DEG,
+) -> dict[str, float]:
+    """Fail before issuing the next move if measured joints mismatch."""
+    errors = _pose_joint_errors(measured, expected, label=label)
     if max(errors.values()) > tolerance_deg:
+        worst_joint = max(errors, key=errors.__getitem__)
         raise RuntimeError(
             f"{label}: not within {tolerance_deg:g} deg of expected pose "
-            f"(largest error {max(errors.values()):.2f} deg); "
-            "reposition manually and restart; do not auto-correct"
+            f"({worst_joint} differs by {errors[worst_joint]:.2f} deg); "
+            "do not auto-correct or bypass a required Sleep pose"
         )
     return errors
 
@@ -105,7 +117,21 @@ def _preflight_short_joint(
     measured: Mapping[str, float],
     limits: Mapping[str, tuple[float, float]],
 ) -> dict[str, float | str]:
-    """Accept only a fixed, inwardly bounded pan move from measured Sleep."""
+    """Accept only the fixed pan move from a validated measured posture.
+
+    All arm joints must be present and within the active executable
+    calibration; the moving pan joint also requires a 5° endpoint inset.
+    """
+    for name, (lower, upper) in limits.items():
+        if name not in measured:
+            raise ValueError(f"short STOP: measured joint {name} is missing")
+        value = float(measured[name])
+        if not all(math.isfinite(number) for number in (value, lower, upper)):
+            raise ValueError(f"short STOP: nonfinite measured {name} or limit")
+        if not lower <= value <= upper:
+            raise RuntimeError(
+                f"short STOP: {name} is outside its executable calibrated range"
+            )
     if SHORT_JOINT not in measured or SHORT_JOINT not in limits:
         raise ValueError("short STOP: calibrated shoulder_pan is unavailable")
     actual = float(measured[SHORT_JOINT])
@@ -305,6 +331,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--trial", choices=("short", "overhead"), default="short",
         help="short is the default single-joint STOP gate; overhead is the older large route",
     )
+    parser.add_argument(
+        "--short-start", choices=("sleep", "measured"), default="sleep",
+        help="short only: keep verified-Sleep default, or require explicit "
+             "operator approval to start from actual measured posture",
+    )
     parser.add_argument("--speed-deg-s", type=float)
     parser.add_argument("--acceleration-deg-s2", type=float)
     parser.add_argument("--command-frequency-hz", type=float, default=20.0)
@@ -320,6 +351,8 @@ def _require_operator(args: argparse.Namespace) -> None:
         value = getattr(args, name)
         if value is not None and (not math.isfinite(value) or value <= 0):
             raise ValueError(f"{name} must be finite and positive")
+    if args.trial != "short" and args.short_start != "sleep":
+        raise ValueError("--short-start measured applies only to --trial short")
     if args.trial == "short":
         speed = 2.0 if args.speed_deg_s is None else args.speed_deg_s
         accel = 10.0 if args.acceleration_deg_s2 is None else args.acceleration_deg_s2
@@ -374,7 +407,9 @@ def main(argv: list[str] | None = None) -> int:
     summary: dict[str, Any] = {
         "kind": "persistent_broker_stop_qualification", "passed": False,
         "trial": args.trial,
-        "initial_pose_assumed": "Sleep, verified from measured joint angles",
+        "initial_pose_policy": (
+            f"short_{args.short_start}" if args.trial == "short" else "overhead_sleep"
+        ),
         "automatic_recovery_after_stop": False,
         "robot_id": args.robot_id, "port": args.port,
         "speed_deg_s": args.speed_deg_s,
