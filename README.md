@@ -1,5 +1,30 @@
 # SO-ARM101 Motion SDK
 
+## PR #90 repair: reconnect to an already-held robot (2026-10-11)
+
+An attended `--trial short` returned
+`Sleep preparation requires a stationary, healthy torque HOLD`
+before motion. The short script opens a **new broker backend process** after
+`soarm101 agent arm` has enabled servo torque from an earlier CLI process.
+The Feetech backend previously initialized `_torque_enabled=False` and
+never synchronized that flag with the **live servo Torque_Enable registers**
+during a new connection, yielding a false torque-disabled state despite
+the human's prior authorization.
+
+The backend now **reads all six live Torque_Enable registers on connect**
+without issuing servo goals. All-ON or all-OFF states are reflected
+truthfully; mixed or invalid states abort device connection. The
+operator-only joint-only Sleep uses the already verified torque hold,
+rather than resending an all-servo 1/1 latch. Unsafe/Moving/faulted
+hardware still blocks Sleep, and the script now reports its exact status
+plus per-servo read-only diagnostics on failed preflight.
+
+The following command is **not authorized yet** until exact-head CI and
+operator review pass. The next human test remains the supervised
+`PREPARE_SLEEP` → `START` → ENTER → `STATIONARY` short gate. The earlier
+powered STOP excursion remains an unresolved physical safety constraint.
+
+
 ## PR #90 attended Sleep-first, encoder-verified STOP trial (draft/unmerged)
 
 The default trusted-host script `examples/persistent_broker_stop_trial.py
