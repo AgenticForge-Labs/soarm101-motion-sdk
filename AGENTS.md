@@ -1,5 +1,15 @@
 # Agent instructions
 
+**PR #93 integration (open; simulation only):** Merged #90/#91/#92
+provide physical-trial STOP, supervisor cancellation and persistent
+simulated SDK broker. The staged #93 `--sdk-simulation` OpenShell relay
+has two **different bearer tokens**. The agent sees only its approved
+profile on a host-facing relay, while the host supervisor retains a
+private loopback STOP path. Do not extend this relay to physical
+hardware, expose raw motor commands or claim physical agent control
+is already deployed. Hardware cutover requires #94's separate gate.
+
+
 **Current authority (2026-10-12):** #90 (attended physical independent
 STOP) and #91 (host-supervisor STOP on cancellation) are merged in
 `main`. #92 is simulation-only native broker execution in an open PR,
