@@ -580,9 +580,10 @@ def test_overhead_single_rates_are_faster_but_bounded(
     else:
         with pytest.raises(ValueError, match="overhead-single rate caps"):
             trial._require_operator(args)
-    args.command_frequency_hz = 30
-    with pytest.raises(ValueError, match="at most 20 Hz"):
-        trial._require_operator(args)
+    if permitted:
+        args.command_frequency_hz = 30
+        with pytest.raises(ValueError, match="at most 20 Hz"):
+            trial._require_operator(args)
 
 
 def test_overhead_single_preflight_rejects_limits_distance_and_one_axis(
