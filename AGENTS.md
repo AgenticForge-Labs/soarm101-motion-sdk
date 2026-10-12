@@ -1,5 +1,19 @@
 # Agent instructions
 
+**PR #91 draft agent-supervisor STOP:** The trusted host runner must
+request STOP before deleting an OpenShell sandbox or stopping its broker
+on *every* human-authorized motion-capable agent-run exit, including
+Ctrl+C and failures. The model is not responsible for its own final
+STOP. Retain `supervisor-stop.json` and fail if STOP is unconfirmed.
+Read-only runs must not send motor commands on exit. Legacy CLI broker
+STOP revokes the existing human authority immediately but still lacks
+independent cancellation of an already-running CLI subprocess. Do not
+equate this with merged PR #90's physical native SDK STOP, enable
+unrestricted physical agent control, or hide a STOP failure during
+teardown. The dependent native broker cutover/attended testing remains
+separate.
+
+
 **2026-10-12 Overhead preflight regression (PR #90 unmerged):** The first `overhead-single` attempt failed before any scripted motor goal because a redundant 5° stop inset rejected `shoulder_lift=-101.89°` near canonical Sleep `-102.05°`. The SDK already incorporates calibrated mechanical-stop margins and Sleep's own 2° executable inset. The new experimental preflight checks measured starts and saved targets against those authoritative effective limits only, retaining other speed/travel/identity/HOLD rules. Regression reproduces this normal start and ensures actual out-of-range values fail. No physical Overhead braking evidence yet.
 
 **Draft PR #90 Overhead-one-shot trial:** New operator-only
