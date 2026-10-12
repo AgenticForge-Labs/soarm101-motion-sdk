@@ -1,5 +1,26 @@
 # Development plan
 
+## 2026-10-11 PR #90 — reconnected live torque preflight repair
+
+The attended Sleep-first short STOP script failed before motion:
+`Sleep preparation requires a stationary, healthy torque HOLD`.
+Root-cause source review established that `FeetechBackend.connect()`
+did not recover the live `Torque_Enable` register state left by the
+previous human `agent arm` process, so its new local cache could
+incorrectly report torque off. The branch now reads all six real servo
+torque registers on connect, rejects mixed/invalid states, and keeps
+connection side-effect free. Joint-only physical Sleep does not
+re-enable torque or send another 1/1 latch when already held. The
+preflight logs exact flags and per-servo read-only diagnostics on failure.
+
+Added software tests for new-session all-ON, all-OFF, mixed torque, no
+goal write, joint-only Sleep reuse, and genuine torque-off refusal.
+Keep the existing short STOP physical gate **blocked** until exact-head
+software tests pass and the operator reviews hardware state. If moving,
+faulted, or gripper-state issues persist, investigate original state
+rather than bypassing the gate. No new physical STOP evidence yet.
+
+
 ## Draft PR #90 — prepared Sleep and actual in-motion evidence
 
 2026-10-11 subsequent operator evidence shows a stable, single 0/254
