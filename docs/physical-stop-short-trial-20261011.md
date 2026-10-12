@@ -3,7 +3,7 @@
 **Repository:** `AgenticForge-Labs/soarm101-motion-sdk`  
 **PR:** [#90](https://github.com/AgenticForge-Labs/soarm101-motion-sdk/pull/90), draft and unmerged  
 **Implementation tested:** `ee7f9100ddb66e8ab85865e904b0683f0acf7eef`  
-**Result:** **PASS for the attended, low-speed, near-endpoint short STOP test only.** The previous large-motion STOP failure is **not** superseded as an emergency-stop or broader physical safety qualification.
+**Result:** **PASS for the script's software cancellation / stable encoder HOLD gates**, but **INCONCLUSIVE for actual moving-servo braking**. The host motion request was active, yet the pan servo's last pre-STOP `Moving` flag was false and its encoder was already unchanged before STOP. The previous large-motion STOP failure remains unresolved as a physical braking qualification.
 
 ## Evidence and immutable fingerprints
 
@@ -27,9 +27,10 @@ Source files remain unchanged operator-owned evidence; do not repair/replace tra
 - `elbow_flex` changed by **+0.1758° (2 encoder ticks)** *during the commanded pan motion*, then remained unchanged through and after STOP. Other non-pan arm joints were unchanged at encoder resolution.
 - Underlying raw write at trace **+9.717019 s** sent a **single** all-six-motor STOP/HOLD goal at the live encoder positions, `speed_raw=0`, `acceleration_raw=254`. The broker recorded STOP action start at **+9.714796 s**: approximately **2.22 ms** to the transport write. The last ordinary streamed command was at **+9.676964 s**, about **40.1 ms before** the STOP write. There were **no new raw position goals after the STOP latch**.
 - The raw event record contains **86** position writes total: **84** ordinary position-stream writes (0/254), **1** initial all-motor latch (1/1) *before the moving trajectory*, and **1** corrected all-motor STOP latch (0/254). The initial 1/1 hold should not be mistaken for a second STOP write. `duplicate_raw_commands=0` in the tracer; the raw event counts independently confirm no repeated STOP latch.
+- **Critical caveat: servo may already have been stationary before STOP.** The encoder first reached **2127 ticks** at trace **+9.589263 s**, and stayed 2127 at **+9.688587 s** before STOP began at **+9.714796 s**—about **125.5 ms without an observed step before STOP**. The latest sampled hardware `Moving` flag before STOP, at **+9.686727 s**, was **false** (as were its six immediately preceding samples). The host motion controller still reported an in-flight request, but this cannot be treated as proof that a physically moving joint was braked. The first post-write `Moving` sample at **+9.732984 s** was briefly **true**, despite encoder 2127; the terminal sample at **+11.255685 s** was **false**. The sampled `Moving` flag is not by itself a velocity measurement.
 - The cancelled joint request returned **`ok=false`** with `joint motion cancelled`, not a late successful completion. STOP returned `ok=true`, `completed=true`, `holding=true` and `post_stop_stability.verified=true` with `max_drift_deg=0.0`. Agent authority was **revoked**; no operator recovery/rearm was requested.
 - STOP HTTP action duration was **1.541 s**, deliberately including the **1.5 s stabilization monitor**. This is **not physical stopping latency**; direct write latency was ~2.2 ms from traced broker STOP start, while true electromechanical deceleration can only be bounded by sampled encoder feedback, not certified from this trace.
-- All sampled hardware states were connected, nonfaulted and torque-enabled; stationary after the latch. Recorded effort showed at most pan load 56 raw, elbow load 40 raw, and current 1 raw during the trace; not a high-load validation.
+- All sampled hardware states were connected, nonfaulted and torque-enabled; the post-settle final state reported not moving. A brief `Moving=true` readback appeared immediately after the STOP write, without any measurable encoder step. This test did **not** certify active braking. Recorded effort showed at most pan load 56 raw, elbow load 40 raw, and current 1 raw during the trace; not a high-load validation.
 
 ## Comparison to original physical failure
 
@@ -37,7 +38,7 @@ The original operator-supplied `stop-debug-20261011-113611` trial (see `docs/fee
 
 ## Qualification limits / follow-up gate
 
-1. **Passing one near-endpoint 2°/s pan interruption does not qualify mid-trajectory STOP**, nor the larger Overhead motion, the elbow moving under load, all joint directions, failure responses or emergency stopping. STOP occurred at 91.2% of the requested 8° travel, when little command displacement remained.
+1. **The present test does not demonstrate braking of a physically moving joint**: host-side motion remained active but the last pre-STOP pan encoder readings were unchanged and the servo `Moving` flag was already false. Passing one near-endpoint 2°/s cancellation does not qualify mid-trajectory STOP, the larger Overhead motion, elbow under load, all joint directions, fault-response dynamics or emergency stopping.
 2. Do **not** close the original physical incident or release production native broker motion based on `passed=true` alone. Keep #90 draft pending operator-approved broader qualification, explicitly scoped measurement criteria and review of any physical traces.
 3. Require code-reviewed and human-approved test plans before further moving hardware tests. Keep power cutoff accessible, reject drift/fault/rearm attempts and never automate a new START/STOP from agents or CI.
 4. Preserve post-STOP stationary feedback checking; assess command-to-readback timing and ensure physical braking limits can be established independently of broker HTTP completion.
