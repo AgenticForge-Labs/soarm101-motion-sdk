@@ -1264,7 +1264,7 @@ def test_host_supervisor_requests_stop_before_sandbox_delete_on_ctrl_c(
     original_delete = fake.delete
 
     def interrupted(name, command, **kwargs):
-        if command and command[0] == "hermes":
+        if command and command[0] == "hermes" and "--version" not in command:
             raise KeyboardInterrupt()
         return original_exec(name, command, **kwargs)
 
@@ -1309,7 +1309,7 @@ def test_sigterm_during_active_agent_exec_uses_supervisor_stop(
     old_handler = signal.getsignal(signal.SIGTERM)
 
     def terminated(name, command, **kwargs):
-        if command and command[0] == "hermes":
+        if command and command[0] == "hermes" and "--version" not in command:
             handler = signal.getsignal(signal.SIGTERM)
             assert callable(handler)
             handler(signal.SIGTERM, None)
