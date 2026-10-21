@@ -7,6 +7,12 @@ It translates a fixed set of typed MCP tools into the **existing authenticated**
 the broker's trusted-host motion envelope, interactive human arming/calibration lease,
 and Motion SDK's deterministic safety rules.
 
+## NVIDIA OpenShell integration
+
+The SDK's [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) runners can place either the `robotctl` client or this stdio MCP client inside an isolated Hermes/Codex sandbox. OpenShell controls the agent's filesystem and network access; MCP is a typed transport for requested capabilities, **not** the authority or the robot controller.
+
+The same trusted broker verifies the per-run capability profile, human-issued physical motion lease and requested speed/step limits regardless of which client is used. The opt-in `--sdk-simulation` runner also supports MCP tools against the persistent **simulation-only** native SDK relay, with a separate host-supervisor STOP token. Do not confuse this with physical native-SDK control. See [Agent sandbox](agent-sandbox.md) and [Broker](agent-broker.md).
+
 MCP is optional: `pip install -e '.[mcp]'`. Base SDK, CLI, broker, and GUI
 installations require no MCP dependency.
 
