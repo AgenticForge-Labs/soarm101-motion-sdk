@@ -1,213 +1,32 @@
-## PR #92 — persistent native-SDK simulated broker (merged)
-
-## PR #93 — native SDK simulation + trusted sandbox ingress (open)
-
-`soarm101 agent sandbox run --sdk-simulation` starts one simulated
-persistent SDK controller bound to `127.0.0.1`, and a different-token
-restricted OpenShell ingress for MCP or robotctl. The relay has no
-independent hardware control. It rejects disallowed capabilities and
-does not advertise private host-only STOP as an agent tool. The host
-supervisor calls the loopback STOP endpoint with its private token
-even when the agent profile omits STOP. Shutdown still stops before
-sandbox/broker teardown. No camera, real serial I/O, or physical
-Cartesian workspace is available in this simulation experiment.
-
-
-The **only new CLI execution mode** is `--sdk-simulation-actions`. It creates
-one persistent simulated SO-ARM101 SDK session and dispatches a
-human-profiled subset of the existing broker HTTP API **without spawning
-a CLI process for each action**. It requires a trusted, camera-free
-`--profile`, includes `robot_state`, `robot_capabilities` and `stop`,
-and binds **only to 127.0.0.1**. A bounded example profile is
-`docs/examples/sdk-broker-simulation-actions.json`. Production and
-physical-agent brokers remain CLI-backed. `--sdk-simulation-preview`
-remains read-only and mutually exclusive with the new option.
-
-With a local human-issued **simulation** authority lease, multiple
-bounded simulated joint actions reuse one SDK session. STOP uses
-the existing independent SDK dispatch, invalidates queued actions,
-revokes the lease and writes broker events. STOP completion in
-simulation is **not proof of physical servo braking**. This PR does
-not change the OpenShell listener, start/stop live services, turn on
-real-hardware POST, or use the trial's restricted physical capability
-bypass. The ordinary physical broker does not have a `--sdk-physical`
-mode. Real-world integration belongs to later #93/#94.
-
-**Local software check (no physical hardware):**
-```bash
-ruff check .
-python -m pytest --no-cov -q tests/test_broker_sdk.py tests/test_broker.py \
-  tests/test_broker_stop_faults.py tests/test_broker_session_lifecycle.py
-python -m pytest --no-cov -q
-```
-
-**Isolated simulated HTTP broker example (terminal 1):**
-```bash
-SOARM101_BROKER_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(24))')"
-export SOARM101_BROKER_TOKEN
-soarm101-broker --sdk-simulation-actions --host 127.0.0.1 \
-  --port 8765 --profile docs/examples/sdk-broker-simulation-actions.json
-```
-The `soarm101-broker` entrypoint is defined in `pyproject.toml`.
-The test suite exercises full protocol behavior with an isolated
-simulation lease; no real-arm arming is used.
-
-## Host-supervisor STOP and legacy lease revocation (#91 merged)
-
-The `agent sandbox run` host requests authenticated STOP while the
-broker remains alive and before OpenShell deletion. On failure, the
-runner retains `supervisor-stop.json` with `completed=false` and
-does not report the run as successful; a CLI HOLD reply without physical
-stability samples is recorded as **not physically verified**.
-Read-only agent sessions do not issue STOP during teardown.
-
-On a legacy `AgentCommandExecutor` STOP, the broker revokes the
-calibration-bound human authority *before* waiting for its ordinary
-CLI-subprocess lock. Physical `soarm101 agent stop` now uses the live
-already-held torque state, not another low-speed 1/1 enable latch;
-real torque-off/faulted states refuse STOP rather than silently rearm. This blocks future CLI tools but cannot cancel
-an already executing separate physical CLI subprocess. The production
-broker is STILL CLI-backed and must not be represented as the
-physically qualified persistent-SDK trial of merged PR #90. The
-MCP `stop` and robotctl `stop` remain ordinary bounded agent tools;
-supervisor STOP is separate, unconditional cleanup when motion access
-was handed off. A future native SDK physical agent profile, broker
-watchdog and attended cancellation test are required before deployment.
-
-## Draft #90 — experimental attended saved-Overhead STOP
-
-**2026-10-12 repair:** The first `overhead-single` run on real hardware performed no scripted movement: an extra 5° near-stop requirement conflicted with valid canonical Sleep. The trial now relies on the Motion SDK's already margin-adjusted executable calibrated bounds and preserves measured start/saved target/limit diagnostics in the summary. Other preflight, broker one-shot and STOP policies are unchanged.
-
-The `overhead-single` trial is NOT a production broker capability or
-agent-accessible tool. The operator must authenticate on trusted
-loopback, inspect full route clearance and type `OVERHEAD_START`
-to command a single calibration-compatible joint-only
-`agent_start_overhead` movement at a default 6°/s and 30°/s²
-(hard caps 8°/s and 40°/s²). The broker denies any second
-pose, arbitrary saved pose, gripper action, preparatory Sleep,
-rate override or post-STOP replay. A human ENTER triggers STOP
-and never authorizes recovery; the trial logs multi-joint moving
-encoders, post-latch settling, cancelled action and revoked authority.
-Use the local commands and acceptance boundary in `TESTING.md`.
-The earlier 18.4° elbow displacement remains a physical blocker,
-irrespective of hobby-arm scale.
-
 # Agent robot broker
 
-## Draft #90 bounded physical STOP qualification
+The `soarm101-broker` is the **trusted, authenticated host-side** transport boundary between a sandboxed reasoning agent and the SO-ARM101 Motion SDK. It does not invent new robot behaviors or grant independent safety authority. The host operator selects immutable profiles and motion rate ceilings; the SDK owns calibration, motion planning/guards, fault state, motor communication and STOP/HOLD.
 
-**2026-10-11 physical-trial constructor fix:** The previous exact
-allowlist only accepted the legacy `go_pose/sleep/stop` physical trial,
-so the new short profile containing `jog_joint` failed before motion.
-The broker now admits two separately strict local-only profiles, never
-a union: the historical pose/Sleep profile, or short STOP with
-`max_joint_delta_deg=8`. The latter additionally rejects every
-joint request except exactly `shoulder_pan +8°`, without extra
-fields or per-action rate overrides. The script reads these fixed
-action values from the broker owner; standard production/MCP paths
-are not affected.
+## NVIDIA OpenShell, MCP and agent pipelines
 
-
-
-The attended loopback broker defaults to one fixed +8° pan
-joint movement from encoder-verified Sleep and an independent STOP
-triggered by the human pressing ENTER during motion. It uses the
-same authenticated `/v1/joint` route and SDK validation as other
-trusted operator calls, with narrow speed/acceleration ceilings.
-The physical STOP reply must include encoder settling evidence and
-a subsequent stable readback. There is no baseline Overhead route,
-automatic recovery or post-STOP REARM in short mode. The historical
-full Overhead test is explicit `--trial overhead` and remains
-physically blocked until the short gate and trace inspection pass.
-Production/native-public broker paths are unchanged.
-
-
-## PR #90 independent STOP semantics (draft, unmerged)
-
-The operator-run `examples/persistent_broker_stop_trial.py` supplies
-a physical qualification procedure, not completed qualification,
-without changing the public broker: it uses the
-restricted existing broker profile and per-run localhost token.
-It verifies measured initial Sleep without moving, performs a complete
-Overhead -> Sleep baseline and starts a *subsequent* Overhead movement.
-The operator then presses ENTER during motion to request independent
-authenticated STOP. After a verified stationary HOLD, an explicit
-`REARM` confirmation may issue a new short calibration-bound lease for
-a **new** joint-only Overhead movement; no cancelled trajectory resumes. The human must confirm the arm is
-stationary; JSONL motor/event
-traces and a summary preserve timing and denied completion. This script
-cannot run inside OpenShell or without an interactive operator terminal.
-
-The native SDK trial's authenticated STOP bypasses the ordinary broker
-motion queue. Queued native requests are cancelled by broker generation
-and late SDK responses are not allowed to report completed motion after
-a newer STOP. The underlying SDK motion controller remains the single
-owner of hardware cancellation. A failed HOLD or faulted/disconnected
-post-STOP readback returns an error, latches a native session fault
-and revokes physical-trial authority. Its event record is `ok=false`;
-never interpret HTTP 409 as a successful HOLD.
-
-This does not enable physical native dispatch in the normal broker,
-does not guarantee hard real-time STOP, and does not prove physical
-servo bus interruption. An operator-attended active-motion trial is
-required before treating #90 as complete.
-
-## Operator-only direct physical session test (PR #88)
-
-A separate local example, `examples/persistent_broker_motion_trace.py`,
-can create a **narrow loopback-only physical trial broker** whose
-only moving routes are `/v1/go-pose`, `/v1/sleep`, and
-`/v1/stop`. Every request still requires the broker bearer
-token; motion also requires a valid human-issued calibration-bound
-lease. The client tests the full five-pose sequence, and the
-broker retains a stable in-process SDK connection throughout.
-The operator can set joint rates and choose `joint_only=True`
-for this trial to avoid commanded gripper closure; there are
-no speed-policy carveouts. Any larger agent surface or
-physical persistent production startup remains **disabled**.
-
-Normal broker startup remains `AgentCommandExecutor` (CLI
-subprocesses) and `--sdk-simulation-preview` continues to
-deny every POST. This experiment alone does not establish
-the required hardware STOP, ownership, and Cartesian tests.
-
-
-## PR 2 experimental read-only SDK session
-
-The normal broker still invokes the bounded agent CLI; do not deploy the
-SDK preview as a physical-motion service.
-
-For safe, local simulated inspection only (requires a broker token):
-```bash
-SOARM101_BROKER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(24))')" \
-  soarm101-broker --sdk-simulation-preview --host 127.0.0.1 --port 8765
+```text
+Hermes/Codex (NVIDIA OpenShell sandbox)
+     → robotctl or stdio MCP client
+     → profiled, authenticated host broker
+     → physical default: bounded agent CLI → SOARM101 SDK → servo hardware
+     OR explicit simulation: restricted relay → one persistent simulated SDK
 ```
 
-This mode creates one simulated SDK session lazily and supports only the
-authenticated health, profile, state and capabilities GET endpoints. It
-rejects every POST, including STOP and all movement/camera actions; no serial
-port is opened and no torque is enabled. It exists to validate the persistent-session/transport approach.
-PR #88's internal simulated HTTP tests exercise authorization, STOP
-while a fake joint move is in progress, queued-command cancellation and
-lease revocation; this cannot establish safe Feetech
-bus cancellation, cross-process ownership, physical workspace correctness,
-or hardware HOLD success. Those require separate validation on this PR
-before activating a physical SDK executor.
-The standard broker behavior remains unchanged until a supervised
-physical validation and merge.
+OpenShell governs the agent's files, network and process access. It is not a robot safety controller. Profile filtering is enforced at broker admission in addition to truthful MCP/tool discovery. An agent cannot arm a robot, override host-selected rates, reach raw servos or recover forbidden commands by changing clients.
 
+## Current execution paths
 
+| Path | Behavior | Hardware authority |
+| --- | --- | --- |
+| Standard physical agent broker | Dispatches existing bounded `soarm101 agent` CLI processes, with human authorization and SDK guards | Only operator-armed, permitted actions |
+| `--sdk-simulation-preview` | Persistent simulated SDK, read-only inspection | None |
+| `--sdk-simulation-actions` | Single persistent simulated SDK session, profile-limited actions and independent STOP, private loopback controller | None |
+| `soarm101 agent sandbox run --sdk-simulation` | Adds isolated NVIDIA OpenShell ingress for agent MCP/robotctl, with separate relay and host STOP tokens | None |
+| Dedicated physical qualification scripts | Narrow trusted-host, attended experiments, not normal agent ingress | Operator-only and separately reviewed |
 
-MCP-capable local agents can optionally use the stdio adapter described in
-[agent-mcp.md](agent-mcp.md). MCP is another client of these routes, not a
-second motion or authorization implementation.
+In the persistent simulation relay, the agent-facing token cannot call private host-only STOP. The trusted supervisor uses its **own token** and invokes STOP before a motion-capable sandbox exits. A session fault must not cause implicit reconnect or rearming. STOP completion in simulation is not physical braking evidence.
 
-The broker is a narrow host-side transport boundary for sandboxed reasoning agents.
-
-It does not define new robot behavior. It serializes HTTP/JSON requests and delegates every
-physical action to the existing bounded `soarm101 agent ...` CLI on the trusted host. The
-Motion SDK therefore remains authoritative for calibration identity, human-issued authority
-leases, motion validation, workspace policy, hold/stop behavior, and named camera capture.
+**No general persistent native SDK physical agent broker mode is released.** An additional watchdog and attended hardware safety gate are required for that transition. Software STOP/HOLD is not a safety-rated emergency stop; see [Safety](safety.md) and [Agent sandbox](agent-sandbox.md).
 
 ## Trust boundary
 
