@@ -1,6 +1,14 @@
 # Testing
 
-## PR #93 — SDK simulation relay + supervisor acceptance (open)
+## Current validation boundary (2026-10-21)
+
+The software integration for **PRs #90–#93** is merged on `main`. Tests below describe the simulated native SDK broker, separate-token NVIDIA OpenShell relay, MCP profile enforcement and host-supervisor STOP, as well as dated operator-only physical investigations. **Software acceptance is not physical braking certification or approval for general persistent-SDK physical agent control.**
+
+Standard physical agent commands remain bounded-CLI-backed. Any future native physical multi-action cutover needs its own broker-owned watchdog and local attended servo/encoder STOP qualification; **PR #94 was README maintenance, not that future gate**. These dated test sections may refer to PRs as open or draft because they preserve the original trial-time record. Do not interpret those labels as current release status.
+
+## Historical test plans and qualification evidence
+
+## PR #93 — SDK simulation relay + supervisor acceptance (merged; simulation only)
 
 Without physical hardware, test restricted agent HTTP relay versus private
 host STOP, two-token noninterchangeability, MCP/profile capability
@@ -17,7 +25,7 @@ python -m pytest --no-cov -q
 ```
 
 No real servo devices, services or deployments are part of this test.
-Before a later physical run, #94 must pass its independent safety gate.
+Before any later physical cutover, the separate unassigned hardware milestone needs its own independent safety gate.
 
 
 ## PR #92 — persistent native-SDK simulated broker (merged)
@@ -40,7 +48,7 @@ simulation is **not proof of physical servo braking**. This PR does
 not change the OpenShell listener, start/stop live services, turn on
 real-hardware POST, or use the trial's restricted physical capability
 bypass. The ordinary physical broker does not have a `--sdk-physical`
-mode. Real-world integration belongs to later #93/#94.
+mode. Real-world integration is a separate future physical cutover (not implemented by #93).
 
 **Local software check (no physical hardware):**
 ```bash
@@ -62,7 +70,7 @@ The test suite exercises full protocol behavior with an isolated
 simulation lease; no real-arm arming is used.
 
 
-## PR #91 — supervisor STOP lifecycle acceptance (unmerged)
+## PR #91 — supervisor STOP lifecycle acceptance (merged; historical test plan)
 
 CI-only tests use fake OpenShell and broker processes. They exercise
 ordinary success, injected KeyboardInterrupt, STOP failure, read-only
