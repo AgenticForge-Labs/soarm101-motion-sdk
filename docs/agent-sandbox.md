@@ -1,23 +1,25 @@
-# Self-contained agent sandbox
+# NVIDIA OpenShell agent sandbox for SO-ARM101
 
-## PR #93 — SDK-backed simulated OpenShell agent sessions (unmerged)
+The Motion SDK integrates [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) to host a planning/reasoning agent in a **separate, policy-restricted environment**. OpenShell provides process/filesystem/network isolation; the SDK owns robot capability policy, the authenticated host broker, calibration/authority checks, and deterministic hardware execution. Sandboxing an agent does **not** make robot motion intrinsically safe.
 
-Use `--sdk-simulation` with the trusted sandbox runner to use the
-persistent SDK **simulation only**. A single broker subprocess owns
-a private `127.0.0.1` controller and a separate, authenticated,
-profile-constrained OpenShell relay on the agent-accessible host port.
-The agent receives only the relay token. The host owns a distinct private
-token for STOP, even when the agent profile does not expose a STOP tool.
-Both the agent-visible capability listing and MCP profile show only
-permitted tools. Host STOP is dispatched before sandbox deletion and
-broker teardown, never as an agent instruction.
+## Agentic control flow and supported modes
 
-Read-only runs issue no STOP. Physical cameras, workspace Cartesian
-commands and real servo connection are unavailable in this mode. Before
-motion-capable handoff, the host reads SDK state to establish a session
-that can be stopped without opening a new device during cancellation.
-The legacy CLI broker is unchanged and remains the normal physical path.
-#94 will separately review watchdog and supervised physical cutover.
+```text
+Human operator: configures host policy and arms any permitted physical motion
+    → NVIDIA OpenShell sandbox: Hermes, Codex or approved adapter
+    → robotctl (default) or stdio MCP client
+    → trusted SDK-managed host broker and pinned capability profile
+    → standard physical mode: bounded soarm101 agent CLI → SDK → hardware/cameras
+       OR explicit --sdk-simulation: private persistent simulated SDK broker
+```
+
+The human decides which trusted host profile and requested-motion ceilings apply. The model can request only allowed state, camera and motion capabilities; it never gets serial devices, host calibration files, raw motor writes, or the unrestricted SDK. The broker independently enforces the profile, and read-only sandbox runs cannot move the robot.
+
+### Persistent SDK simulation with separate supervisor STOP
+
+`--sdk-simulation` runs a **simulated arm only**. The host starts one persistent native SDK simulator behind a private `127.0.0.1` controller. A separate authenticated, profile-restricted relay is accessible to the sandbox. The agent receives a relay token; the host retains a distinct private STOP token. Discovery lists only the agent's authorized capabilities even when the supervisor has additional control.
+
+Before handing simulated authority to an agent, the host reads SDK state to establish a session that can be stopped without connecting a new physical device. For motion-capable runs, the trusted host asks STOP before sandbox deletion and broker teardown. Read-only runs send no STOP. The simulation mode has no real servo I/O, physical cameras or physical-workspace Cartesian motion and is not a hardware validation.
 
 ```bash
 soarm101 agent arm --simulation --minutes 10
@@ -25,55 +27,11 @@ soarm101 agent sandbox run --agent hermes --interface mcp \
   --sdk-simulation --task TASK.md --output runs/hermes-sdk-sim
 ```
 
+The ordinary physical agent broker remains bounded-CLI-backed. A general native-SDK physical agent cutover requires a separate watchdog, policy and supervised hardware qualification. A supervisor-initiated software STOP is **not** an emergency stop, especially when a process crashes or a motor bus becomes unresponsive.
 
-## Agent supervisor STOP on cancellation (PR #91, unmerged)
+### Human-controlled motion ceilings
 
-The trusted host runner—not Hermes, Codex, or an LLM prompt—owns final
-STOP when a human-authorized full-control sandbox run exits. It now sends
-authenticated `POST /v1/stop` **before** deleting the OpenShell sandbox
-or terminating the trusted broker, for ordinary success, agent failure,
-timeout, and Python `KeyboardInterrupt` (Ctrl+C). A failed STOP is a
-failed run, and the host writes `supervisor-stop.json` containing the
-request result and whether actual physical encoder settling was verified.
-Read-only runs never issue a STOP/motor command on cleanup.
-
-The legacy CLI-backed broker now revokes the agent lease on STOP
-admission, so a new CLI tool cannot acquire stale authority. The
-physical CLI STOP also refuses torque-off/faulted hardware instead of
-silently re-enabling the motors or writing an extra 1/1 enable latch. However,
-a CLI process already moving the arm can outlive that revocation, and
-legacy STOP may queue behind it. Its CLI `completed`/HOLD reply is
-**not** encoder-proven independent braking; the supervisor therefore
-records `verified_physical_hold=false` for that result. This is a
-lifecycle improvement, NOT the full deployment of PR #90's real-time
-independent native physical STOP.
-
-Until the persistent native SDK broker supports an explicit operator-
-approved multi-action agent profile and local physical validation,
-full-control physical Hermes/Codex sessions remain a separate hardware
-qualification. Start with `--read-only`, then locally supervised,
-small/bounded agent commands. Never treat Ctrl+C as an emergency stop,
-and keep the physical power cutoff accessible. A process killed by
-SIGKILL, power loss, or kernel failure cannot execute Python cleanup;
-a future broker-owned heartbeat/watchdog is required.
-
-
-## Human-pinned motion rate ceilings (PR #88, unmerged)
-
-The OpenShell runner starts the broker itself. For full-control Codex/Hermes
-sessions, the human can now choose a per-run upper bound on joint speed
-and acceleration using `--agent-joint-speed-deg-s 15` and
-`--agent-joint-acceleration-deg-s2 150`. The same caps cover
-`go_pose`, `sleep`, `sleep_up` and `jog_joint`; there are
-no hard-coded saved-pose exceptions. The runner also accepts
-`--agent-cartesian-speed-mm-s`, `--agent-cartesian-acceleration-mm-s2`,
-`--agent-gripper-speed-raw`, and `--agent-gripper-acceleration-raw`.
-Each action may request slower rates, but cannot increase them.
-The flags are host-side trusted settings, not arguments an agent can
-change inside the sandbox. A human still must arm the robot and select
-a motion-capable profile. This has not yet been validated through
-Codex-controlled physical motion.
-
+A trusted operator can pin per-run joint, Cartesian and gripper rates using the documented `--agent-joint-speed-deg-s`, `--agent-joint-acceleration-deg-s2`, `--agent-cartesian-speed-mm-s` and associated gripper options. Agent requests may choose lower rates, not widen the broker's fixed ceilings. Human `soarm101 agent arm` remains separate from the sandbox. Real-hardware motion requires the operating procedures in [Safety](safety.md) and [Physical run](physical-run.md).
 
 The Motion SDK ships a canonical OpenShell environment for operating an SO-ARM101 with a
 reasoning agent without exposing the unrestricted SDK, serial bus, or camera devices to that
@@ -107,7 +65,7 @@ robot-specific sandbox policy, adapter contract, broker lifecycle, standalone `r
 and the packaged Hermes/Codex recipes. An external manifest selects an existing OpenShell
 image/provider and direct harness argv; it does not define robot behavior.
 
-## Native MCP agent interface (PR 4)
+## Optional MCP agent interface
 
 If the read-only MCP run reports an **isolated MCP tool handshake** failure,
 inspect its redacted subprocess exit code and stdout/stderr before repeating.

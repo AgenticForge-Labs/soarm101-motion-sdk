@@ -1,6 +1,14 @@
 # Development plan
 
-## #93 — OpenShell persistent SDK integration (open, simulation only)
+## Current roadmap status (2026-10-21)
+
+The native SDK simulator, separate-token NVIDIA OpenShell relay and host-supervisor STOP were merged in **PRs #90–#93**. The **default physical agent broker still uses the bounded CLI**; native-SDK multi-action physical agent control is not released. The next hardware milestone needs a broker-owned watchdog/fault path, bounded physical policy, locally attended encoder/STOP checks and an explicit deployment decision. It has **no assigned PR number**: merged **PR #94 was a documentation cleanup**, not the previously proposed physical cutover.
+
+The development entries below retain original experimental details and historical decision context. Where an older section calls a PR open/draft or assigns future work to “#94”, that is its **at-the-time status**, not the present merged or production state. Consult `README.md`, `AGENTS.md` and `docs/architecture.md` for today's architectural boundary.
+
+## Historical implementation plans and qualification records
+
+## #93 — OpenShell persistent SDK integration (merged; simulation only)
 
 `--sdk-simulation` in the agent runner starts a host-owned persistent
 simulated SDK controller with a distinct-token, bounded relay for
@@ -9,11 +17,10 @@ STOP path and invokes it before teardown. The default physical broker
 remains CLI-backed. Hardware/multi-action SDK agent authorization is
 NOT provided by #93.
 
-**Next dependent #94:** add broker-owned heartbeat/fault handling and
+**Next physical hardware milestone (not PR #94):** add broker-owned heartbeat/fault handling and
 physically bounded multi-action profile, validate locally through Codex
 with real joint encoder and STOP evidence, then decide on an explicit
-configuration cutover. Do not begin dependent work from main until
-#93 passes CI and merges. No production services were changed.
+configuration cutover. #93 is merged; no physical production service cutover was made.
 
 
 ## PR #92 — persistent native-SDK simulated broker (merged)
@@ -57,10 +64,10 @@ The `soarm101-broker` entrypoint is defined in `pyproject.toml`.
 The test suite exercises full protocol behavior with an isolated
 simulation lease; no real-arm arming is used.
 
-**Next dependent steps:** #93 will add a trusted OpenShell/MCP
-transport and supervisor integration; #94 will cover broker-owned watchdog,
-fault-injection, supervised physical tests and an explicit cutover decision.
-Neither is implemented by #92.
+**Historical sequence:** #93 subsequently added the trusted OpenShell/MCP
+transport and supervisor integration. Broker-owned watchdog, fault-injection,
+supervised physical testing and any deployment cutover remain a separate,
+unassigned milestone; they were not part of #92.
 
 
 ## Draft #90 — faster one-shot Overhead STOP qualification (2026-10-12)

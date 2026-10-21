@@ -10,6 +10,41 @@ The SO-ARM101 Motion SDK is a Python-first toolkit for low-cost desktop robotics
 
 > **Hardware safety:** This is experimental software for an educational/hobby arm, not a safety-rated industrial controller. Never rely on software STOP/HOLD as an emergency stop. Keep a physical power cutoff within reach, start without a payload, and supervise initial motion. Read [Safety](docs/safety.md) and the [physical-run procedure](docs/physical-run.md) before moving hardware.
 
+## NVIDIA OpenShell and agentic robotics
+
+The Motion SDK integrates with [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell), an open-source runtime that isolates AI agents and governs their filesystem and network access. This lets developers explore **agent-driven robot workflows** without handing a language model raw servo access or unrestricted control of the host workstation. OpenShell handles sandbox isolation; the Motion SDK provides the trusted, robot-specific execution boundary.
+
+```text
+Human operator: configures policy, approves capabilities, arms when appropriate
+                 |
+                 v
+Hermes / Codex / other supported agent (reasoning, planning, camera interpretation)
+                 |
+                 v
+NVIDIA OpenShell sandbox (isolated agent, scoped files and network)
+                 |
+        robotctl or stdio MCP client
+                 |
+                 v
+Authenticated host broker (pinned capabilities, lease, audit, lifecycle)
+                 |
+         bounded agent CLI on the physical path
+                 |
+                 v
+SO-ARM101 Motion SDK (calibration, trajectories, rate and fault checks)
+                 |
+                 v
+SO-ARM101 robot + named USB cameras
+```
+
+An agent can inspect live state and allowed camera observations, decide which *approved* saved pose or bounded motion to request, observe the result, and iterate. Manual and agent-driven tasks ultimately use the same deterministic SDK operations. The broker does not expose arbitrary motor register writes, raw serial devices, or an unrestricted Python interpreter on the robot host.
+
+The SDK packages **Hermes and Codex adapters**, optional **MCP tools** and `robotctl`, human-pinned capability profiles, and a self-contained `soarm101 agent sandbox` workflow. Agent tool discovery does not create authority: physical motion requires a separate operator-issued lease and all motion requests remain subject to SDK validation. Host-supervisor STOP is executed outside the agent at teardown; it is not a safety-rated emergency stop.
+
+**Current boundary:** NVIDIA OpenShell integration and a persistent native-SDK action broker can run together in **simulation**. The ordinary physical agent broker remains bounded-CLI-backed. The native-SDK simulation relay uses separate agent and host-supervisor tokens, and **does not grant physical native-SDK motion**. Broader physical agent operations need separate watchdog and attended hardware qualification.
+
+See [Agent sandbox](docs/agent-sandbox.md), [MCP](docs/agent-mcp.md), and [Agent broker](docs/agent-broker.md) for supported modes, setup and safety restrictions.
+
 ## What you can do
 
 - **Set up and calibrate the arm.** Discover serial devices, inspect motor status, confirm leader/follower assignment, and guide mechanical-stop calibration. Saved calibrations have identities used to guard motion replay.
