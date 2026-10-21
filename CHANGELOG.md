@@ -1,6 +1,8 @@
 # Changelog
 
-- **Draft #93:** Connect simulated OpenShell Hermes/Codex to the
+**Current status (2026-10-21):** PRs #90–#93 are merged on `main`. They added supervised native-SDK STOP qualification primitives, host-supervisor STOP handling, a persistent **simulated** SDK broker and an isolated NVIDIA OpenShell relay for Hermes/Codex. Physical agent execution continues to use the bounded CLI broker; general persistent native-SDK physical agent cutover with watchdog/qualification is not released. PR #94 subsequently revised the public README; it is not the earlier proposed hardware milestone. The chronological entries below document development-time experiments, including draft-stage statements that should not be read as present PR status.
+
+- **Merged PR #93:** Connect simulated OpenShell Hermes/Codex to the
   persistent SDK using a separate-token, capability-restricted ingress
   while the controller remains loopback-only. Supervisor STOP uses a
   private token independently of exposed agent tools. Add policy/tool
@@ -8,7 +10,7 @@
   physical agent mode or deployment change.
 
 
-- **Draft PR #92:** Introduce `--sdk-simulation-actions` as an explicit,
+- **Merged PR #92:** Introduce `--sdk-simulation-actions` as an explicit,
   loopback-only, camera-free, profile-restricted broker option. Reuse one
   simulated SDK session and native independent STOP across bounded HTTP
   requests, with truthful capability/lease projections and regressions for
@@ -16,7 +18,7 @@
   binding. **No physical SDK agent motion or OpenShell cutover.**
 
 
-- **PR #91 (draft):** Trusted OpenShell agent supervisor now requests
+- **Merged PR #91:** Trusted OpenShell agent supervisor now requests
   broker STOP before sandbox deletion/broker termination on normal
   completion, Ctrl+C and failure, with `supervisor-stop.json` and
   failed-run treatment if STOP does not confirm HOLD. Read-only runs
