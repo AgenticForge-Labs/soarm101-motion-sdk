@@ -140,9 +140,9 @@ zero, or malformed integer is **rejected**, not clamped or ignored.
 MCP and robotctl use the same HTTP arguments. Capability profiles still
 determine *which* actions are available. The human remains responsible for
 arming the robot; agents cannot change the pinned policy. Changing global
-rates requires restarting the broker. The direct-SDK executor remains a
-**simulation-only read-only public preview**; physical motion still goes
-through the existing bounded CLI broker path.
+rates requires restarting the broker. The default physical path remains the bounded CLI broker. Native SDK simulation
+and experimental attended physical joint modes are explicit opt-ins; the latter
+requires the watchdog and narrow policy described below.
 
 ## Start the broker
 
@@ -298,3 +298,38 @@ The broker is intentionally implemented as a thin transport over the current bou
 A future persistent in-process robot session may replace subprocess delegation if connection
 overhead becomes material, but that optimization must preserve the same public broker
 contract and the same Motion SDK safety ownership.
+
+## Experimental native joint broker and watchdog
+
+`--sdk-physical-actions --host 127.0.0.1 --profile FILE --watchdog-timeout-s 3`
+selects an attended, opt-in persistent SDK session using the persisted workstation
+follower port, robot identity and calibration path. It preserves motor configuration
+and human torque ownership on connect/disconnect. The default remains CLI-backed.
+Only state, capabilities, approved camera capture, STOP and bounded joint actions
+are eligible. A profile must explicitly permit state/capabilities/joint actions and
+cap joint delta at no more than 2°. Requested joint ceilings cannot exceed 8°/s
+and 25°/s². Every physical joint move requires healthy stationary human torque HOLD;
+this mode never enables torque. Existing SDK full-path and fault guards still apply.
+
+The private authenticated controller exposes `POST /v1/supervisor/heartbeat` with
+an empty object and `GET /v1/supervisor/watchdog`. These are supervisor lifecycle
+endpoints, excluded from the external relay regardless of its profile. The first
+heartbeat requires an already connected session and active matching human lease.
+It binds that exact lease; replacing it cannot extend this session. The monotonic
+deadline is 0.5–10 seconds; the OpenShell runner pins 3 seconds and pulses every
+0.5 seconds. Ordinary agent traffic never renews the deadline or authority.
+
+A broker-owned thread checks at most every 0.1 seconds. Expiry, missing/corrupt/
+replaced authority or a terminal SDK fault fences motion, invalidates queued and
+late results through the existing STOP epoch, invokes canonical independent SDK
+STOP, and revokes authority. This is a terminal session requiring human review and
+restart. An explicit STOP also ends supervision. Its first result/error is retained;
+there is no automatic second STOP latch or automatic rearm. Lease-file failure is
+reported as unconfirmed revocation after attempting STOP. Events include
+`watchdog_trip`, its cause and the STOP outcome. The endpoint status also retains
+that outcome for supervisor teardown without another physical STOP.
+
+Native simulation can opt into the same watchdog with `--watchdog-timeout-s`.
+The watchdog requires a live broker process, Python scheduling, responsive SDK/bus
+and host power. It cannot stop hardware after broker/host death or guarantee a
+physical braking distance. Physical watchdog qualification remains outstanding.

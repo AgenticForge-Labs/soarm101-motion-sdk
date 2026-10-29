@@ -1967,6 +1967,7 @@ def _cmd_agent_sandbox_run(args: argparse.Namespace) -> int:
         adapter_manifest=manifest,
         broker_rates=rates,
         sdk_simulation=args.sdk_simulation,
+        sdk_physical=args.sdk_physical,
     )
     payload = result.as_dict()
     print(json.dumps(payload, indent=2))
@@ -2554,10 +2555,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--capability-profile", help="trusted host JSON tool/camera/limit profile for this run",
     )
     agent_sandbox_run.add_argument("--broker-port", type=int, default=8765)
-    agent_sandbox_run.add_argument(
+    sdk_modes = agent_sandbox_run.add_mutually_exclusive_group()
+    sdk_modes.add_argument(
         "--sdk-simulation", action="store_true",
         help="use persistent SDK simulation and a restricted per-run relay; "
              "does not connect to physical hardware",
+    )
+    sdk_modes.add_argument(
+        "--sdk-physical", action="store_true",
+        help="EXPERIMENTAL attended persistent physical SDK joint control; "
+             "requires pinned profile, workstation follower and human authority",
     )
     agent_sandbox_run.add_argument("--agent-joint-speed-deg-s", type=float)
     agent_sandbox_run.add_argument("--agent-joint-acceleration-deg-s2", type=float)

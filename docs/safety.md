@@ -23,7 +23,7 @@ The SDK and trusted native broker implement independent action cancellation, que
 
 The physical agent path uses a trusted authenticated broker and bounded CLI. Human motion authorization is interactive, time-limited and calibration-bound. Agent tools, MCP metadata, prompts, and NVIDIA OpenShell sandbox permissions do not grant physical motion authority.
 
-The host supervisor requests STOP before terminating a motion-capable sandbox and records evidence of the attempt. A failed or unverifiable STOP is an unsafe/unconfirmed result. Agent process death or power loss may prevent software cleanup, so this is not a substitute for a physically implemented safety system or a future broker-owned watchdog.
+The host supervisor requests STOP before terminating a motion-capable sandbox and records evidence of the attempt. A failed or unverifiable STOP is an unsafe/unconfirmed result. Agent process death or power loss may prevent software cleanup, so this is not a substitute for a physically implemented safety system. Native SDK modes additionally use the broker watchdog described below.
 
 The native persistent SDK broker behind `--sdk-simulation` has only **simulated** authority. It does not prove the behavior of the physical Feetech servos or enable general native SDK physical motion. Restricted physical qualification scripts are attended operator experiments, not production agent paths.
 
@@ -370,3 +370,16 @@ Raising the host envelope and removing the hidden arm-side throttle does **not**
 calibrated joint limits, maximum command-step checks, following-error, unexpected-direction,
 effort/current, hardware-fault, workspace, timing, STOP/HOLD, or settle validation.
 Broker clients inherit the trusted host envelope and cannot widen it remotely.
+
+## Broker heartbeat watchdog (experimental native modes)
+
+Native SDK OpenShell runs now have a broker-owned monotonic heartbeat watchdog.
+It fences motion and uses canonical independent STOP when the trusted supervisor
+stops pulsing or its bound lease/session becomes invalid. STOP revokes authority;
+failed/unconfirmed HOLD remains terminal and is never automatically retried.
+The experimental physical joint mode preserves existing human torque HOLD and
+cannot enable torque, arm, extend a lease or execute Cartesian/pose/gripper actions.
+The watchdog is software-tested, **not physically qualified**. A killed broker,
+starved interpreter, failed bus or lost host power can prevent STOP. The 3-second
+heartbeat deadline plus scheduling and physical response are not a guaranteed
+stopping time or distance. Keep the attended physical cutoff available.

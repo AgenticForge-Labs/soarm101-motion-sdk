@@ -2434,3 +2434,47 @@ Automated coverage must verify the backend fallback, explicit streamed 0/254 beh
 human-unit CLI envelope reporting/overrides, broker propagation, and gripper independence.
 Physical validation now has a successful 80 deg/s / 500 deg/s² Sleep-vs-sleep_up run; the remaining full-envelope gate is the supervised 100 deg/s / 1000 deg/s² Sleep-vs-sleep_up
 rerun on the exact branch head.
+
+## Broker watchdog and experimental physical agent mode (software evidence)
+
+Run without hardware:
+
+```bash
+python -m pytest --no-cov -q tests/test_broker_watchdog.py tests/test_broker_sdk.py \
+  tests/test_broker_stop_faults.py tests/test_broker_session_lifecycle.py \
+  tests/test_agent_sandbox.py tests/test_cli.py
+```
+
+Coverage includes monotonic expiry, late heartbeat refusal, authority expiry,
+replacement/revocation/corruption, terminal SDK faults, independent in-flight STOP,
+queued and late success suppression, delayed facade/controller preflight admission,
+failed HOLD, failed lease-file deletion,
+one-shot STOP evidence, token separation, private endpoint rejection and physical
+profile/rate boundaries. A real broker subprocess with simulated motors verifies
+that stopping the supervisor pulse triggers broker STOP without another request.
+Hermes/Codex × robotctl/MCP runner tests use fake OpenShell, not paid model calls.
+Fake-arm physical-route tests verify persistent ownership, reuse of human HOLD
+and refusal of torque-off state without enabling torque. These tests never connect
+a serial device or prove physical braking. See `docs/physical-run.md` for the
+separate attended qualification gate.
+
+Local OpenShell transport check (2026-10-22): real temporary Codex and Hermes
+sandboxes successfully imported the client-only MCP package, discovered exactly
+health/capabilities/state, and read a persistent simulated SDK session through the
+scoped relay. Codex CLI reported 0.162.1; Hermes reported v0.21.4. Both temporary
+sandboxes were deleted. The existing local Hermes image initially lacked
+`/opt/soarm101-mcp/bin/python`; rebuilding the image from the current packaged
+Dockerfile fixed the check. No reasoning-model task, physical connection, camera
+capture or physical authority was used in this transport check.
+
+The real-time simulated CLI Sleep tests can trip the unchanged 50 ms command
+lateness guard under concurrent full-suite/image-build load. Run the supported
+Python suites sequentially when checking this timing-sensitive behavior; do not
+relax motion guards to accommodate a busy validation host.
+
+Final sequential validation (2026-10-22): **797 tests passed** on Python 3.10.20
+and **797 tests passed** on Python 3.12.13, both with **82.01%** coverage (70%
+required). Ruff, compile checks and source/wheel builds passed. The wheel includes
+the watchdog module and both packaged agent Dockerfiles. An additional mypy
+comparison found no new diagnostics in the changed modules; existing repository
+type errors remain outside this change.

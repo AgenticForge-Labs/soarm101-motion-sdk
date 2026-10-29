@@ -353,7 +353,7 @@ def test_agent_relay_scopes_bearer_and_preserves_host_only_stop(
     controller = RobotBrokerService(
         executor=backend, token="trusted-host-secret",
         profile=CapabilityProfile.from_document(backend_doc),
-        allow_simulated_sdk_posts=True, event_path=tmp_path / "events.jsonl",
+        allow_simulated_sdk_posts=True, watchdog_timeout_s=3, event_path=tmp_path / "events.jsonl",
     )
     host = RobotBrokerHTTPServer(("127.0.0.1", 0), controller)
     relay = BrokerRelayHTTPServer(
@@ -395,6 +395,9 @@ def test_agent_relay_scopes_bearer_and_preserves_host_only_stop(
         assert "joint" in visible[1]["result"]["actions"]
         assert call(relay, "POST", "/v1/stop", "agent-only-secret", {})[0] == 403
         assert call(host, "GET", "/v1/state", "trusted-host-secret")[0] == 200
+        assert call(relay, "POST", "/v1/supervisor/heartbeat", "agent-only-secret", {})[0] == 403
+        assert call(host, "POST", "/v1/supervisor/heartbeat", "agent-only-secret", {})[0] == 401
+        assert call(host, "POST", "/v1/supervisor/heartbeat", "trusted-host-secret", {})[0] == 200
         first = backend.session_evidence["id"]
         assert call(
             relay, "POST", "/v1/joint", "agent-only-secret",
@@ -417,6 +420,7 @@ def test_agent_relay_scopes_bearer_and_preserves_host_only_stop(
             {"joint": "shoulder_pan", "delta_deg": 0.2},
         )[0] == 409
     finally:
+        controller.watchdog.close()
         for server in (relay, host):
             server.shutdown()
             server.server_close()

@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "name": "attended-native-joint",
+  "tools": ["robot_health", "robot_capabilities", "robot_state", "capture_camera", "jog_joint", "stop"],
+  "cameras": ["overhead", "wrist"],
+  "limits": {"max_joint_delta_deg": 1.0}
+}

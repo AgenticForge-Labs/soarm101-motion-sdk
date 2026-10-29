@@ -1,9 +1,8 @@
-"""Persistent broker-owned SDK dispatch with a restricted physical bench trial.
+"""Persistent SDK sessions for simulation and explicitly attended physical use.
 
-The production broker retains its CLI fallback, and the opt-in public SDK
-simulation preview remains read-only. Physical execution is available only to
-an explicitly constructed, loopback-only supervised trial broker: never from
-the ordinary broker CLI or an OpenShell sandbox.
+The default physical broker retains its bounded CLI path. Experimental native
+physical joint actions require a pinned policy, existing human HOLD/authority
+and private host-supervisor watchdog. Hardware qualification remains pending.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from soarm101_motion.agent_control import (
     AGENT_CAMERA_NAMES,
     AGENT_JOINT_MAX_DELTA_DEG,
     AGENT_POSE_PREFIX,
+    AgentAuthority,
     AgentAuthorityStore,
     evaluate_agent_jog,
 )
@@ -38,6 +38,7 @@ from soarm101_motion.workstation import WorkstationProfileStore
 
 if TYPE_CHECKING:
     from soarm101_motion.config import SOARM101Config
+    from soarm101_motion.broker import AgentMotionRates
 
 
 # An acknowledged software STOP must not mean merely that a goal write
@@ -74,30 +75,36 @@ _ACTION_FIELDS: Mapping[str, frozenset[str]] = {
 class SDKAgentExecutor:
     """Single lazy SDK session owned by a trusted broker, with explicit dispatch.
 
-    Public broker entrypoints remain CLI-backed or read-only simulated.
-    A dedicated trusted-host trial may explicitly provide one physical
-    SOARM101 factory, a trace path, and a narrowed broker capability profile.
+    The default physical broker is CLI-backed. Native physical joint actions
+    require explicit trusted-host provisioning and watchdog supervision; the
+    separate attended qualification trial retains its fixed action protocol.
     """
 
     def __init__(
         self,
         *,
         config: SOARM101Config,
-        rates: object,
+        rates: AgentMotionRates,
         simulation: bool = False,
         arm_factory: Callable[[], SOARM101] | None = None,
         authority_store: AgentAuthorityStore | None = None,
         physical_trial: bool = False,
         simulation_actions: bool = False,
+        physical_actions: bool = False,
         trace_path: str | Path | None = None,
     ) -> None:
+        if physical_actions and (simulation or physical_trial or not config.port):
+            raise ValueError("physical actions require an explicit real port and exclusive mode")
+        if physical_actions and (config.auto_enable_torque or config.configure_motors_on_connect
+                                 or config.disable_torque_on_disconnect):
+            raise ValueError("physical broker must preserve human torque/configuration ownership")
         if physical_trial and (simulation or arm_factory is None or not config.port):
             raise ValueError("physical trial requires a real port and explicit SDK arm factory")
         if trace_path is not None and not physical_trial:
             raise ValueError("passive broker motion trace requires physical trial mode")
         if simulation_actions and (not simulation or physical_trial):
             raise ValueError("SDK simulation action mode requires a simulated arm only")
-        if not simulation and arm_factory is None:
+        if not simulation and arm_factory is None and not physical_actions:
             raise ValueError(
                 "direct-SDK physical sessions are disabled pending supervised "
                 "STOP, ownership and workspace validation"
@@ -110,12 +117,16 @@ class SDKAgentExecutor:
         self.simulation = simulation
         self.simulation_actions = simulation_actions
         self.physical_trial = physical_trial
+        self.physical_actions = physical_actions
+        self._supervised_lease: AgentAuthority | None = None
+        self.motion_guard: Callable[[], None] | None = None
         self.session_id = uuid.uuid4().hex
         self.connection_count = 0
         self.trace_path = Path(trace_path).expanduser() if trace_path else None
         self._trace: PassiveBackendTrace | None = None
         self._arm_factory = arm_factory or (
-            lambda: SOARM101.simulated(config=config, realtime=False)
+            lambda: (SOARM101(config) if physical_actions
+                     else SOARM101.simulated(config=config, realtime=False))
         )
         self._authority = authority_store or AgentAuthorityStore()
         self._create_lock = threading.Lock()
@@ -124,6 +135,7 @@ class SDKAgentExecutor:
         self._lifecycle_lock = threading.RLock()
         self._lifecycle = "new"  # new -> open -> closing/closed; failure -> faulted
         self._fault_kind: str | None = None
+        self._authority_revoke_error: str | None = None
         # Close after a verified physical STOP must not send another
         # all-motor position latch. Any later motion clears this flag.
         self._verified_physical_stop = False
@@ -145,14 +157,24 @@ class SDKAgentExecutor:
             if self._lifecycle == "faulted" and not stop:
                 raise RuntimeError("SDK broker session faulted; human restart required")
 
+    def _revoke_authority(self) -> None:
+        # A filesystem error cannot prevent the physical STOP attempt. The
+        # executor remains fenced and STOP reports revocation failure below.
+        try:
+            self._authority.clear()
+        except OSError as exc:
+            self._authority_revoke_error = str(exc)
+
     def _fault(self, exc: BaseException) -> None:
         """Latch transport/servo faults; a new executor is required for recovery."""
         with self._lifecycle_lock:
             if self._lifecycle not in {"closing", "closed"}:
                 self._lifecycle = "faulted"
                 self._fault_kind = type(exc).__name__
-        if self.physical_trial:
-            self._authority.clear()
+        if self.motion_guard is not None and isinstance(self._session, SOARM101):
+            self._session.motion.inhibit_new_motion("supervised SDK session faulted")
+        if self.physical_trial or self.physical_actions:
+            self._revoke_authority()
 
     def _assert_session_identity(self, arm: SOARM101) -> None:
         if getattr(arm, "is_connected", True) is False:
@@ -232,7 +254,7 @@ class SDKAgentExecutor:
                         try:
                             if arm is not None:
                                 if (
-                                    self.physical_trial
+                                    (self.physical_trial or self.physical_actions)
                                     and isinstance(arm, SOARM101)
                                     and (
                                         had_unverified_fault
@@ -261,8 +283,8 @@ class SDKAgentExecutor:
             with self._lifecycle_lock:
                 self._lifecycle = "closed"
         finally:
-            if self.physical_trial:
-                self._authority.clear()
+            if self.physical_trial or self.physical_actions:
+                self._revoke_authority()
 
     @property
     def session_evidence(self) -> dict[str, object]:
@@ -270,14 +292,15 @@ class SDKAgentExecutor:
             "id": self.session_id,
             "sdk_connect_count": self.connection_count,
             "mode": (
-                "physical_trial" if self.physical_trial else (
-                    "simulation_actions" if self.simulation_actions
-                    else "simulation_preview"
-                )
+                "physical_actions_experimental" if self.physical_actions else
+                "physical_trial" if self.physical_trial else
+                "simulation_actions" if self.simulation_actions else
+                "simulation_preview"
             ),
             "robot_id": self.robot_id,
             "lifecycle": self._lifecycle,
             "fault_kind": self._fault_kind,
+            "authority_revoke_error": self._authority_revoke_error,
         }
 
     def _calibration_id(self, arm: SOARM101) -> str:
@@ -287,6 +310,23 @@ class SDKAgentExecutor:
         if self.simulation:
             return "simulation"
         raise PermissionError("agent motion requires an active calibrated follower")
+
+    def validate_supervision(self) -> None:
+        """Read the existing lease only; never connect hardware or create authority."""
+        self._require_active()
+        arm = self._session
+        if arm is None:
+            raise PermissionError("connected SDK state preflight required before heartbeat")
+        self._assert_session_identity(arm)
+        if self._bound_calibration_id is None:
+            raise PermissionError("supervision requires bound calibration identity")
+        lease = self._authority.require(
+            robot_id=self.robot_id, calibration_id=self._bound_calibration_id,
+        )
+        if self._supervised_lease is None:
+            self._supervised_lease = lease
+        elif lease != self._supervised_lease:
+            raise PermissionError("human authority changed during supervised session")
 
     def _require_authority(self, arm: SOARM101) -> dict[str, object]:
         lease = self._authority.require(
@@ -331,9 +371,15 @@ class SDKAgentExecutor:
     def execute(self, action: str, request: Mapping[str, object]) -> dict[str, object]:
         """Validate and serialize ordinary SDK actions; do not block STOP."""
         self._validate(action, request)
+        if self.physical_actions and action not in {"state", "capabilities", "capture", "joint", "stop"}:
+            raise PermissionError("experimental physical SDK mode permits bounded joint actions only")
         def run() -> dict[str, object]:
             self._require_active(stop=action == "stop")
             if action in {"go_pose", "joint", "jog", "gripper", "sleep", "sleep_up"}:
+                if self.motion_guard is not None:
+                    self.motion_guard()
+                elif self.physical_actions:
+                    raise PermissionError("physical SDK actions require broker watchdog supervision")
                 self._verified_physical_stop = False
                 self._motion_action_attempted = True
             trace = self._trace
@@ -348,7 +394,7 @@ class SDKAgentExecutor:
                 )
             try:
                 result = self._execute_action(action, request)
-                if action == "stop" and self.physical_trial:
+                if action == "stop" and (self.physical_trial or self.physical_actions):
                     self._verified_physical_stop = bool(
                         result.get("completed")
                         and result.get("holding")
@@ -392,7 +438,21 @@ class SDKAgentExecutor:
             result = _agent_capabilities_payload(self.robot_id, config=self.config)
             # This opt-in preview must not advertise physical authority or
             # motion/camera tools that its HTTP boundary explicitly denies.
-            if self.physical_trial:
+            if self.physical_actions:
+                actions = result.get("actions")
+                if not isinstance(actions, dict):
+                    raise RuntimeError("SDK capabilities are missing actions")
+                visible_actions = {
+                    name: value for name, value in actions.items()
+                    if name in {"state", "joint", "stop", "capture"}
+                }
+                joint_action = visible_actions.get("joint")
+                if isinstance(joint_action, dict):
+                    joint_action["max_abs_delta_deg"] = 2.0
+                result["actions"] = visible_actions
+                result["poses"] = []
+                result["authority"] = self._authority.status()
+            elif self.physical_trial:
                 result["actions"] = {
                     "state": "read_only", "go_pose": True,
                     "sleep": True, "stop": True,
@@ -427,7 +487,8 @@ class SDKAgentExecutor:
                     "available": False,
                     "reason": "simulation preview has no measured physical directions",
                 }
-            result["cameras"] = []
+            if not self.physical_actions:
+                result["cameras"] = []
             return result
         if action == "capture":
             name = self._text(request, "camera")
@@ -443,7 +504,7 @@ class SDKAgentExecutor:
         if action == "stop":
             # Revocation occurs even if the physical/fake HOLD subsequently
             # fails. A human must issue fresh motion authority after STOP.
-            self._authority.clear()
+            self._revoke_authority()
             # DO NOT wait for the motion lock or silently enable torque here.
             # A new session cannot be opened by STOP during an active command.
             arm = self._session
@@ -453,6 +514,8 @@ class SDKAgentExecutor:
                 raise RobotConnectionError(
                     "STOP/HOLD unverified: SDK device is disconnected"
                 )
+            if self.motion_guard is not None and isinstance(arm, SOARM101):
+                arm.motion.inhibit_new_motion("supervised broker STOP requested")
             SDK_CAPABILITIES.dispatch("stop", arm, {})
             # STOP/HOLD was attempted. Verify the device is still connected
             # and not faulted before declaring completion. Never invent an
@@ -529,6 +592,10 @@ class SDKAgentExecutor:
                     "max_drift_deg": max_drift_deg,
                     "samples": samples,
                 }
+            if self._authority_revoke_error is not None:
+                raise HardwareFaultError(
+                    "STOP attempted but authority revocation failed: " + self._authority_revoke_error
+                )
             return {
                 "accepted": True, "completed": True, "action": "stop",
                 "holding": bool(state.torque_enabled),
@@ -555,7 +622,7 @@ class SDKAgentExecutor:
                     error = str(exc)
             return {
                 "authority": self._authority.status() if (
-                    self.physical_trial or self.simulation_actions
+                    self.physical_trial or self.physical_actions or self.simulation_actions
                 ) else {
                     "armed": False, "robot_id": None,
                     "calibration_id": None, "issued_at": None,
@@ -616,7 +683,8 @@ class SDKAgentExecutor:
         if action == "joint":
             joint = self._text(request, "joint")
             delta = self._number(request, "delta_deg")
-            if abs(delta) <= 1e-9 or abs(delta) > AGENT_JOINT_MAX_DELTA_DEG:
+            delta_cap = 2.0 if self.physical_actions else AGENT_JOINT_MAX_DELTA_DEG
+            if abs(delta) <= 1e-9 or abs(delta) > delta_cap:
                 raise PermissionError("agent joint delta must be nonzero and within bounded policy")
             arguments = {
                 "joint": joint, "delta_rad": delta * pi / 180.0,
@@ -625,9 +693,23 @@ class SDKAgentExecutor:
             }
             SDK_CAPABILITIES.get("jog_joint").validate(arguments)
             before = dict(arm.get_joint_positions().positions)
-            arm.enable()
+            if self.physical_actions:
+                self.validate_supervision()
+                hold = arm.get_state()
+                if (not hold.connected or hold.faulted or hold.moving
+                        or not hold.torque_enabled):
+                    raise HardwareFaultError("physical joint action requires healthy stationary torque HOLD")
+            else:
+                arm.enable()
             result = SDK_CAPABILITIES.dispatch("jog_joint", arm, arguments)
-            arm.hold()
+            if self.physical_actions:
+                self._require_active()
+                hold = arm.get_state()
+                if (not hold.connected or hold.faulted or hold.moving
+                        or not hold.torque_enabled):
+                    raise HardwareFaultError("physical joint completion requires healthy stationary HOLD")
+            else:
+                arm.hold()
             if not result.accepted or not result.completed:
                 raise RuntimeError("joint motion did not complete successfully")
             after = dict(arm.get_joint_positions().positions)

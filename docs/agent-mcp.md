@@ -11,7 +11,7 @@ and Motion SDK's deterministic safety rules.
 
 The SDK's [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) runners can place either the `robotctl` client or this stdio MCP client inside an isolated Hermes/Codex sandbox. OpenShell controls the agent's filesystem and network access; MCP is a typed transport for requested capabilities, **not** the authority or the robot controller.
 
-The same trusted broker verifies the per-run capability profile, human-issued physical motion lease and requested speed/step limits regardless of which client is used. The opt-in `--sdk-simulation` runner also supports MCP tools against the persistent **simulation-only** native SDK relay, with a separate host-supervisor STOP token. Do not confuse this with physical native-SDK control. See [Agent sandbox](agent-sandbox.md) and [Broker](agent-broker.md).
+The same trusted broker verifies the per-run capability profile, human-issued physical motion lease and requested speed/step limits regardless of which client is used. The opt-in `--sdk-simulation` runner also supports MCP tools against the persistent **simulation-only** native SDK relay, with a separate host-supervisor STOP token. The separate experimental `--sdk-physical` route is restricted to attended joint actions and approved cameras under the watchdog contract below. See [Agent sandbox](agent-sandbox.md) and [Broker](agent-broker.md).
 
 MCP is optional: `pip install -e '.[mcp]'`. Base SDK, CLI, broker, and GUI
 installations require no MCP dependency.
@@ -236,3 +236,12 @@ MCP resources and prompts are optional agent guidance; they do not supply
 dynamic robot state or enforce motion policy. Specialist perception models and
 Forge Bench orchestration remain separate work. An MCP host cannot bypass
 the trusted broker by discovering another tool.
+
+## Native watchdog lifecycle
+
+The OpenShell `--sdk-simulation` and experimental `--sdk-physical` runners share
+a private host-supervisor heartbeat and STOP channel. These are not MCP tools and
+are never available through the agent relay. MCP discovery still reflects the
+pinned external profile. The physical native rollout only permits approved camera
+observations and bounded joint movement; it excludes saved poses, gripper and
+Cartesian operations. Human arming remains outside both MCP and OpenShell.
