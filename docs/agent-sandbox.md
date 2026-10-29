@@ -11,6 +11,7 @@ Human operator: configures host policy and arms any permitted physical motion
     → trusted SDK-managed host broker and pinned capability profile
     → standard physical mode: bounded soarm101 agent CLI → SDK → hardware/cameras
        OR explicit --sdk-simulation: private persistent simulated SDK broker
+       OR experimental --sdk-physical: private watched native joint broker
 ```
 
 The human decides which trusted host profile and requested-motion ceilings apply. The model can request only allowed state, camera and motion capabilities; it never gets serial devices, host calibration files, raw motor writes, or the unrestricted SDK. The broker independently enforces the profile, and read-only sandbox runs cannot move the robot.
@@ -27,7 +28,7 @@ soarm101 agent sandbox run --agent hermes --interface mcp \
   --sdk-simulation --task TASK.md --output runs/hermes-sdk-sim
 ```
 
-The ordinary physical agent broker remains bounded-CLI-backed. A general native-SDK physical agent cutover requires a separate watchdog, policy and supervised hardware qualification. A supervisor-initiated software STOP is **not** an emergency stop, especially when a process crashes or a motor bus becomes unresponsive.
+The ordinary physical agent broker remains bounded-CLI-backed. The experimental `--sdk-physical` route adds a broker watchdog and restricted joint policy; a general native-SDK physical cutover still requires supervised hardware qualification. A supervisor-initiated software STOP is **not** an emergency stop, especially when a process crashes or a motor bus becomes unresponsive.
 
 ### Human-controlled motion ceilings
 
@@ -574,3 +575,41 @@ each packaged or manifest-defined adapter you intend to operate:
 
 Software STOP/HOLD is not an emergency stop. Keep physical power accessible during every
 hardware validation.
+
+## Attended native physical joint agents (experimental)
+
+Hermes and Codex can use `--sdk-physical` with either `--interface robotctl` or
+`--interface mcp`. This explicitly selects the persistent native SDK relay rather
+than the default bounded CLI broker. It requires a task, an explicit trusted-host
+profile, a configured workstation follower/calibration, and separately issued
+human authority. It cannot combine with `--sdk-simulation` or `--read-only`.
+
+After reviewing clearance and performing the documented attended readiness steps,
+the human issues `soarm101 agent arm --minutes N` in a separate trusted terminal.
+The runner only verifies that authority; it does not issue or extend it.
+For example, using an existing Codex login and an operator-reviewed task:
+
+```bash
+soarm101 agent sandbox run --agent codex --auth installed \
+  --interface mcp --sdk-physical \
+  --capability-profile docs/examples/mcp-profile-attended-native-joint.json \
+  --task /absolute/path/to/approved-task.md
+```
+
+The example profile permits named overhead/wrist cameras and 1° joint steps.
+Remove unavailable cameras from an operator-owned profile before starting.
+This rollout excludes saved poses, gripper actions and Cartesian motion. It is
+experimental software support, not hardware qualification or a production cutover.
+
+Both native simulation and this physical mode preflight SDK state before agent
+handoff, then pulse a **host-private** heartbeat every 0.5 seconds against a
+3-second broker deadline. Agents never receive the supervisor token or endpoints.
+The watchdog runs in the broker independently of action dispatch and catches a
+lost/frozen supervisor or invalid/expired/replaced authority. Agent completion,
+interruption and timeout still request STOP before sandbox deletion. If STOP was
+already attempted, teardown uses its recorded result rather than re-latching the
+servos. A watchdog trip or unconfirmed HOLD fails the run and requires review.
+`supervisor-stop.json`, broker events and run metadata retain the outcome.
+No SDK checkout, calibration, serial/camera devices or private supervisor token
+are mounted into OpenShell. Model and authentication selection stay independent
+of robotctl/MCP and of simulated/physical backend selection.

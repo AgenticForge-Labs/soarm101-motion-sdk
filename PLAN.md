@@ -2,7 +2,7 @@
 
 ## Current roadmap status (2026-10-21)
 
-The native SDK simulator, separate-token NVIDIA OpenShell relay and host-supervisor STOP were merged in **PRs #90–#93**. The **default physical agent broker still uses the bounded CLI**; native-SDK multi-action physical agent control is not released. The next hardware milestone needs a broker-owned watchdog/fault path, bounded physical policy, locally attended encoder/STOP checks and an explicit deployment decision. It has **no assigned PR number**: merged **PR #94 was a documentation cleanup**, not the previously proposed physical cutover.
+The native SDK simulator, separate-token NVIDIA OpenShell relay and host-supervisor STOP were merged in PRs #90–#93. The current working change adds a broker-owned heartbeat/lease watchdog and opt-in attended native physical joint mode. Software fault-injection and simulated HTTP/subprocess tests cover the watchdog; general native physical control is **not hardware-qualified or the default**. The remaining milestone is locally attended encoder/STOP/watchdog qualification, followed by an explicit production deployment decision. Saved poses, gripper and Cartesian actions remain excluded from the experimental physical agent profile. This work has no assigned PR number.
 
 The development entries below retain original experimental details and historical decision context. Where an older section calls a PR open/draft or assigns future work to “#94”, that is its **at-the-time status**, not the present merged or production state. Consult `README.md`, `AGENTS.md` and `docs/architecture.md` for today's architectural boundary.
 

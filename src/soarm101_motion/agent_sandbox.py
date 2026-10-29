@@ -615,16 +615,24 @@ class BrokerProcess:
         profile_path: Path | None = None,
         rates: object | None = None,
         sdk_simulation: bool = False,
+        sdk_physical: bool = False,
     ) -> None:
+        if sdk_simulation and sdk_physical:
+            raise AgentSandboxError("SDK simulation and physical modes are mutually exclusive")
         self.sdk_simulation = sdk_simulation
-        if sdk_simulation and profile_path is None:
+        self.sdk_physical = sdk_physical
+        self._native_sdk = sdk_simulation or sdk_physical
+        self._heartbeat_closed = threading.Event()
+        self._heartbeat_worker: threading.Thread | None = None
+        self._heartbeat_error: Exception | None = None
+        if self._native_sdk and profile_path is None:
             raise AgentSandboxError(
-                "SDK simulation relay requires an explicit immutable profile"
+                "SDK agent relay requires an explicit immutable profile"
             )
         self._private_token = (
-            secrets.token_urlsafe(32) if sdk_simulation else token
+            secrets.token_urlsafe(32) if self._native_sdk else token
         )
-        if sdk_simulation:
+        if self._native_sdk:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
                 probe.bind(("127.0.0.1", 0))
                 self._control_port = int(probe.getsockname()[1])
@@ -640,18 +648,19 @@ class BrokerProcess:
     def start(self) -> None:
         env = os.environ.copy()
         env["SOARM101_BROKER_TOKEN"] = self._private_token
-        if self.sdk_simulation:
+        if self._native_sdk:
             env["SOARM101_RELAY_TOKEN"] = self.token
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
         command = [
             sys.executable, "-m", "soarm101_motion.broker",
-            "--host", ("127.0.0.1" if self.sdk_simulation else DEFAULT_BROKER_HOST),
+            "--host", ("127.0.0.1" if self._native_sdk else DEFAULT_BROKER_HOST),
             "--port", str(self._control_port),
             "--events", str(self.event_path),
         ]
-        if self.sdk_simulation:
+        if self._native_sdk:
             command.extend([
-                "--sdk-simulation-actions",
+                ("--sdk-physical-actions" if self.sdk_physical else "--sdk-simulation-actions"),
+                "--watchdog-timeout-s", "3",
                 "--sdk-agent-relay-port", str(self.port),
             ])
         if self.profile_path is not None:
@@ -683,7 +692,7 @@ class BrokerProcess:
                 )
             try:
                 self.request("GET", "/v1/health")
-                if self.sdk_simulation:
+                if self._native_sdk:
                     relay_req = urllib.request.Request(
                         f"http://127.0.0.1:{self.port}/v1/health",
                         headers={"Authorization": f"Bearer {self.token}"},
@@ -722,6 +731,35 @@ class BrokerProcess:
             raise AgentSandboxError(f"broker request failed: {result}")
         return result
 
+    def _watchdog_status(self) -> dict[str, object]:
+        result = self.request("GET", "/v1/supervisor/watchdog").get("result")
+        if not isinstance(result, dict):
+            raise AgentSandboxError("broker watchdog status is missing")
+        return result
+
+    def start_supervision(self) -> None:
+        """Pulse the private broker from the trusted host, never the agent."""
+        self.request("POST", "/v1/supervisor/heartbeat", {})
+
+        def pulse() -> None:
+            while not self._heartbeat_closed.wait(0.5):
+                try:
+                    self.request("POST", "/v1/supervisor/heartbeat", {})
+                except Exception as exc:
+                    try:
+                        status = self._watchdog_status()
+                        if status["state"] == "stopped":
+                            return  # An explicit STOP terminally ended this run.
+                    except Exception:
+                        pass
+                    self._heartbeat_error = exc
+                    return  # Broker's independent deadline owns STOP.
+
+        self._heartbeat_worker = threading.Thread(
+            target=pulse, name="openshell-supervisor-heartbeat", daemon=True,
+        )
+        self._heartbeat_worker.start()
+
     def request_motion_stop(self) -> dict[str, object]:
         """Host-owned STOP before an agent/sandbox is destroyed.
 
@@ -734,8 +772,25 @@ class BrokerProcess:
             raise AgentSandboxError(
                 "cannot request STOP: trusted broker is not running"
             )
-        payload = self.request("POST", "/v1/stop", {})
-        result = payload.get("result")
+        stopped_result = None
+        if self._native_sdk:
+            self._heartbeat_closed.set()
+            if self._heartbeat_worker is not None:
+                self._heartbeat_worker.join(timeout=2)
+            status = self._watchdog_status()
+            if status["state"] == "tripped":
+                raise AgentSandboxError(
+                    f"broker watchdog tripped; STOP outcome requires review: {status}"
+                )
+            if status["state"] == "stopped":
+                stopped_result = status.get("stop_result")
+                if stopped_result is None:
+                    raise AgentSandboxError(f"prior STOP/HOLD is unconfirmed: {status}")
+        if stopped_result is None:
+            payload = self.request("POST", "/v1/stop", {})
+            result = payload.get("result")
+        else:
+            result = stopped_result
         if not isinstance(result, dict) or not (
             result.get("accepted") and result.get("completed")
             and result.get("holding")
@@ -743,6 +798,8 @@ class BrokerProcess:
             raise AgentSandboxError(
                 "trusted broker STOP did not confirm completed HOLD"
             )
+        if self._heartbeat_error is not None:
+            raise AgentSandboxError("trusted supervisor heartbeat failed during agent run")
         return result
 
     def require_authority(self) -> dict[str, object]:
@@ -759,6 +816,9 @@ class BrokerProcess:
         return result
 
     def stop(self) -> tuple[str, str]:
+        self._heartbeat_closed.set()
+        if self._heartbeat_worker is not None:
+            self._heartbeat_worker.join(timeout=2)
         if self.process is None:
             return "", ""
         if self.process.poll() is None:
@@ -1178,7 +1238,13 @@ def run_agent(
     openshell: OpenShellClient | None = None,
     broker_rates: object | None = None,
     sdk_simulation: bool = False,
+    sdk_physical: bool = False,
 ) -> RunResult:
+    if sdk_physical and (sdk_simulation or read_only or capability_profile is None):
+        raise AgentSandboxError(
+            "--sdk-physical requires an explicit pinned profile and motion mode; "
+            "cannot combine with simulation or read-only"
+        )
     adapter = resolve_agent_adapter(agent, adapter_manifest)
     selected_auth = adapter.auth_mode(auth)
     if interface not in {"robotctl", "mcp"}:
@@ -1200,6 +1266,14 @@ def run_agent(
             CapabilityProfile.from_file(capability_profile)
             if capability_profile is not None else CapabilityProfile.full()
         )
+    if sdk_physical:
+        from soarm101_motion.broker import AgentMotionRates, validate_physical_agent_policy
+        if broker_rates is not None and not isinstance(broker_rates, AgentMotionRates):
+            raise AgentSandboxError("broker_rates must be an AgentMotionRates policy")
+        try:
+            validate_physical_agent_policy(chosen_profile, broker_rates or AgentMotionRates())
+        except ValueError as exc:
+            raise AgentSandboxError(str(exc)) from exc
     if sdk_simulation and (
         chosen_profile.allowed_cameras
         or chosen_profile.allowed_tools.intersection({
@@ -1284,10 +1358,12 @@ def run_agent(
         broker_kwargs: dict[str, object] = {
             "port": broker_port, "token": token, "event_path": broker_events
         }
-        if read_only or capability_profile is not None or interface == "mcp" or sdk_simulation:
+        if read_only or capability_profile is not None or interface == "mcp" or sdk_simulation or sdk_physical:
             broker_kwargs["profile_path"] = profile_file
         if sdk_simulation:
             broker_kwargs["sdk_simulation"] = True
+        if sdk_physical:
+            broker_kwargs["sdk_physical"] = True
         if broker_rates is not None:
             from soarm101_motion.broker import AgentMotionRates
             if not isinstance(broker_rates, AgentMotionRates):
@@ -1314,7 +1390,7 @@ def run_agent(
                 auth=selected_auth.name,
                 adapter_manifest=adapter_manifest,
                 interface=interface,
-                allowed_tools=chosen_profile.allowed_tools if sdk_simulation else None,
+                allowed_tools=chosen_profile.allowed_tools if (sdk_simulation or sdk_physical) else None,
             ),
             encoding="utf-8",
         )
@@ -1372,10 +1448,11 @@ def run_agent(
                 broker_event_offset = len(_read_broker_events(broker_events))
             else:
                 capabilities = broker.require_authority()
-                if sdk_simulation:
+                if sdk_simulation or sdk_physical:
                     # STOP cannot open a brand-new session. Connect the
-                    # simulated SDK now, before handing motion to the agent.
+                    # SDK now, before handing motion to the agent.
                     broker.request("GET", "/v1/state")
+                    broker.start_supervision()
                 agent_motion_handed_off = True
 
             create_result = client.create(
@@ -1437,11 +1514,13 @@ def run_agent(
                         "read_only": bool(read_only),
                         "interface": interface,
                         "broker_backend": (
-                            "persistent_sdk_simulation" if sdk_simulation
-                            else "cli_subprocess"
+                            "persistent_sdk_simulation" if sdk_simulation else (
+                                "persistent_sdk_physical_experimental" if sdk_physical
+                                else "cli_subprocess"
+                            )
                         ),
                         "broker_transport": (
-                            "separate_token_agent_relay" if sdk_simulation
+                            "separate_token_agent_relay" if (sdk_simulation or sdk_physical)
                             else "legacy_host_listener"
                         ),
                         "broker_profile": chosen_profile.public(),
@@ -1539,13 +1618,13 @@ def run_agent(
                         return safe[:2000] or "<empty>"
 
                     raise AgentSandboxError(
-                        "isolated MCP tool handshake failed before Codex started "
+                        f"isolated MCP tool handshake failed before {adapter.name} started "
                         f"(exit={probe.returncode});\n"
                         f"stdout:\n{diagnostic(probe.stdout)}\n"
                         f"stderr:\n{diagnostic(probe.stderr)}\n"
                         "If the MCP Python executable or dependency is absent, "
-                        "rebuild with 'soarm101 agent sandbox setup --agent codex "
-                        "--auth installed'. Otherwise inspect the preflight error "
+                        f"rebuild with 'soarm101 agent sandbox setup --agent {adapter.name} "
+                        f"--auth {selected_auth.name}'. Otherwise inspect the preflight error "
                         "and the retained openshell-effective-policy.yaml."
                     )
             with _interruptible_agent_execution():

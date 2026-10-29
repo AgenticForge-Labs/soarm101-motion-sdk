@@ -584,3 +584,9 @@ an explicit ENTER confirmation before disabling torque.
 - Software STOP/HOLD is not a certified emergency stop.
 - SDK validation and safety failures are command failures; the CLI does not provide bypass flags
   for those guards.
+
+The sandbox runner additionally accepts `--sdk-physical` for the experimental
+persistent native joint backend. It requires an explicit `--capability-profile`,
+a configured workstation follower and existing human authority. It is mutually
+exclusive with `--sdk-simulation` and cannot be used with `--read-only`. See
+[Agent sandbox](agent-sandbox.md) for its operation and qualification boundary.

@@ -41,7 +41,7 @@ An agent can inspect live state and allowed camera observations, decide which *a
 
 The SDK packages **Hermes and Codex adapters**, optional **MCP tools** and `robotctl`, human-pinned capability profiles, and a self-contained `soarm101 agent sandbox` workflow. Agent tool discovery does not create authority: physical motion requires a separate operator-issued lease and all motion requests remain subject to SDK validation. Host-supervisor STOP is executed outside the agent at teardown; it is not a safety-rated emergency stop.
 
-**Current boundary:** NVIDIA OpenShell integration and a persistent native-SDK action broker can run together in **simulation**. The ordinary physical agent broker remains bounded-CLI-backed. The native-SDK simulation relay uses separate agent and host-supervisor tokens, and **does not grant physical native-SDK motion**. Broader physical agent operations need separate watchdog and attended hardware qualification.
+**Current boundary:** OpenShell supports persistent native-SDK simulation and an explicit **experimental, attended physical joint mode** (`--sdk-physical`). The physical mode uses the workstation follower, a pinned profile, existing human authority and torque HOLD, separate agent/supervisor tokens, and a broker-owned heartbeat watchdog. Joint steps are capped at 2° (the example profile uses 1°), speed at 8°/s and acceleration at 25°/s². Saved poses, gripper and Cartesian actions remain outside this experimental mode. The default physical broker remains CLI-backed. Hardware watchdog qualification and production cutover remain outstanding.
 
 See [Agent sandbox](docs/agent-sandbox.md), [MCP](docs/agent-mcp.md), and [Agent broker](docs/agent-broker.md) for supported modes, setup and safety restrictions.
 
@@ -206,7 +206,7 @@ Available interfaces include:
 - An optional stdio MCP adapter that exposes the same permitted broker capabilities.
 - An OpenShell sandbox runner with Hermes, Codex, and operator-defined adapters.
 
-**Important deployment distinction:** The standard physical agent broker remains CLI-backed. The persistent native-SDK broker and OpenShell relay can be exercised in *simulation*; these options do **not** enable general native-SDK physical agent motion. Physical cutover requires separate supervised safety validation, particularly for independent in-motion STOP and watchdog behavior. Acknowledged software HOLD is not certified braking.
+**Important deployment distinction:** The standard physical agent broker remains CLI-backed. Native SDK simulation uses `--sdk-simulation`; the separate `--sdk-physical` option enables only experimental attended joint actions under the [restricted profile and watchdog contract](docs/agent-sandbox.md#attended-native-physical-joint-agents-experimental). General physical cutover still requires supervised in-motion STOP/watchdog qualification. Acknowledged software HOLD is not certified braking.
 
 Example of **simulation-only** Codex/MCP operation:
 

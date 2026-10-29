@@ -158,6 +158,8 @@ class MotionController:
         self.model = model or SO101KinematicModel()
         self.ik = IKSolver(self.model)
         self._state_lock = threading.RLock()
+        self._motion_inhibited = threading.Event()
+        self._motion_inhibit_reason = "motion admission inhibited"
         self._active_handle: MotionHandle[MotionResult] | None = None
         # Events whose cancellation has a dedicated owner already issuing
         # backend STOP. A worker must not send a second servo position latch
@@ -235,7 +237,23 @@ class MotionController:
         if self._joint_stream is not None:
             raise InvalidCommandError("joint streaming is active")
 
+    def inhibit_new_motion(self, reason: str) -> None:
+        """Terminal admission fence; does not replace STOP for active movement.
+
+        A trusted session owner can fence a delayed facade preflight before it
+        registers a motion handle. There is deliberately no in-session reset.
+        Set the event without waiting for planning's state lock; STOP then uses
+        that lock to cancel any handle which won the admission race.
+        """
+        self._motion_inhibit_reason = str(reason)
+        self._motion_inhibited.set()
+
+    def _require_motion_admission(self) -> None:
+        if self._motion_inhibited.is_set():
+            raise MotionCancelledError(self._motion_inhibit_reason)
+
     def _require_ready(self) -> None:
+        self._require_motion_admission()
         state = self.backend.get_hardware_state()
         if not state.connected:
             raise RobotConnectionError("robot is not connected")
@@ -1674,6 +1692,7 @@ class MotionController:
         self,
         operation: Callable[[threading.Event], MotionResult],
     ) -> MotionHandle[MotionResult]:
+        self._require_motion_admission()
         handle = MotionHandle(operation, on_done=self._clear_handle)
         self._active_handle = handle
         handle.start()

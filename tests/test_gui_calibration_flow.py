@@ -49,6 +49,11 @@ def test_setup_connects_selected_arm_without_torque(
 
     from soarm101_motion.gui.window import MainWindow
 
+    # Host port discovery can select the follower port for the leader too,
+    # correctly triggering the same-device guard instead of this connection.
+    monkeypatch.setattr(
+        "soarm101_motion.gui.window.FeetechBackend.candidate_ports", lambda: []
+    )
     app = QApplication.instance() or QApplication([])
     window = MainWindow(port="/dev/ttyACM0")
     follower_requests: list[object] = []

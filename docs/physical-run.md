@@ -224,3 +224,21 @@ could look numerically valid while the physical finger moved laterally into the 
 Calibration changes after any of those recordings invalidate their target binding.
 Physical replay will fail closed until the affected artifact is deliberately reviewed
 and re-saved/re-bound.
+
+## Pending attended native-agent watchdog qualification
+
+The experimental `sandbox run --sdk-physical` route has software/fake-arm tests
+only. Do not treat the implementation as a completed physical acceptance gate.
+Before any broader deployment, separately review the exact code head and operator
+profile, confirm healthy calibrated stationary human torque HOLD, an unloaded
+clear workspace, conservative joint-only task and reachable physical cutoff.
+The example profile caps steps at 1°; the implementation ceiling is 2°, 8°/s and
+25°/s², not recommended characterization targets.
+
+An attended protocol must collect encoder and STOP evidence for normal multiple
+actions, explicit interruption, supervisor heartbeat loss, lease expiry/revocation,
+and refused/faulted HOLD. Confirm motion stops, authority is revoked, queued/late
+actions cannot execute, and no reconnect/rearm/second latch occurs. A supervisor
+loss test leaves the broker running; killing the broker itself cannot demonstrate
+software watchdog protection. Review results before an explicit production cutover.
+No coding agent or CI may run this physical protocol automatically.

@@ -1,9 +1,9 @@
 """Narrow HTTP broker for bounded SO-ARM101 agent capabilities.
 
 The broker is intentionally a transport boundary, not a second robot-control stack.
-Every physical action is serialized and delegated to the existing bounded agent CLI,
-so calibration, authority leases, motion validation, hold semantics, and camera policy
-remain owned by the Motion SDK.
+The default physical path delegates to the bounded agent CLI. Opt-in native SDK
+actions reuse one guarded SDK session with private supervisor/watchdog control.
+Calibration, motion validation, HOLD and device policy remain owned by the SDK.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from soarm101_motion.broker_sdk import SDKAgentExecutor
+from soarm101_motion.broker_watchdog import BrokerWatchdog
 from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
 from soarm101_motion.config import SOARM101Config, rate_within_ceiling
@@ -271,6 +272,21 @@ class AgentCommandExecutor:
         return payload
 
 
+def validate_physical_agent_policy(profile: CapabilityProfile | None, rates: AgentMotionRates) -> None:
+    """Experimental rollout only: observations and small joint-space actions."""
+    permitted = {"robot_health", "robot_capabilities", "robot_state", "capture_camera",
+                 "jog_joint", "stop"}
+    if profile is None or not {"robot_capabilities", "robot_state", "jog_joint"}.issubset(
+        profile.allowed_tools
+    ) or not profile.allowed_tools.issubset(permitted):
+        raise ValueError("physical SDK profile requires state, capabilities and bounded joint tools only")
+    if (profile.max_joint_delta_deg is None or profile.max_joint_delta_deg > 2
+            or profile.max_model_jog_mm is not None):
+        raise ValueError("physical SDK profile requires a joint delta cap at most 2 degrees")
+    if rates.joint_speed_deg_s > 8 or rates.joint_acceleration_deg_s2 > 25:
+        raise ValueError("physical SDK agent rates are capped at 8 deg/s and 25 deg/s^2")
+
+
 class RobotBrokerService:
     """Serialize and audit a narrow set of agent-safe robot/camera requests."""
 
@@ -283,6 +299,8 @@ class RobotBrokerService:
         profile: CapabilityProfile | None = None,
         allow_simulated_sdk_posts: bool = False,
         allow_physical_sdk_trial: bool = False,
+        allow_physical_sdk_actions: bool = False,
+        watchdog_timeout_s: float | None = None,
     ) -> None:
         if allow_simulated_sdk_posts and not (
             isinstance(executor, SDKAgentExecutor) and executor.simulation
@@ -297,6 +315,18 @@ class RobotBrokerService:
             raise ValueError("physical trial requires a real explicitly provisioned SDK executor")
         if allow_simulated_sdk_posts and allow_physical_sdk_trial:
             raise ValueError("cannot combine simulated and physical broker modes")
+        if allow_physical_sdk_actions:
+            if not (isinstance(executor, SDKAgentExecutor) and executor.physical_actions
+                    and not allow_simulated_sdk_posts and not allow_physical_sdk_trial):
+                raise ValueError("physical SDK actions require an exclusive physical executor")
+            validate_physical_agent_policy(profile, executor.rates)
+            if watchdog_timeout_s is None:
+                raise ValueError("physical SDK actions require a trusted supervisor watchdog")
+        if watchdog_timeout_s is not None and not (
+            isinstance(executor, SDKAgentExecutor)
+            and (allow_simulated_sdk_posts or allow_physical_sdk_actions)
+        ):
+            raise ValueError("watchdog requires a persistent SDK action broker")
         physical_short_stop_trial = False
         physical_overhead_single_trial = False
         if allow_physical_sdk_trial:
@@ -326,10 +356,11 @@ class RobotBrokerService:
         if not str(token):
             raise ValueError("broker token cannot be empty")
         self.executor = executor or AgentCommandExecutor()
-        # Not exposed by the broker CLI. The real broker keeps native POST
-        # disabled until physical STOP/ownership/workspace gates are passed.
+        # Native physical POST is an explicit attended joint-only opt-in.
+        # The default broker path and fixed qualification trials stay separate.
         self._allow_simulated_sdk_posts = allow_simulated_sdk_posts
         self._allow_physical_sdk_trial = allow_physical_sdk_trial
+        self._allow_physical_sdk_actions = allow_physical_sdk_actions
         self._physical_short_stop_trial = physical_short_stop_trial
         self._physical_overhead_single_trial = physical_overhead_single_trial
         # One motion from the measured pose directly to saved Overhead;
@@ -352,6 +383,40 @@ class RobotBrokerService:
         self._sdk_stop_epoch = 0
         self._sdk_epoch_lock = threading.Lock()
         self._event_lock = threading.Lock()
+        self.watchdog: BrokerWatchdog | None = None
+        if watchdog_timeout_s is not None:
+            assert isinstance(self.executor, SDKAgentExecutor)
+            self.watchdog = BrokerWatchdog(
+                timeout_s=watchdog_timeout_s,
+                validate=self.executor.validate_supervision, trip=self._watchdog_trip,
+            )
+            self.executor.motion_guard = self.watchdog.check
+
+    def _watchdog_trip(self, reason: str) -> None:
+        # Terminal admission fence first, then use the SAME independent native
+        # STOP as the human supervisor. No competing motor-control path.
+        assert isinstance(self.executor, SDKAgentExecutor)
+        error = RuntimeError(f"broker watchdog: {reason}")
+        self.executor._fault(error)
+        try:
+            response = self._execute(
+                request_id=uuid.uuid4().hex, action="stop", request={}, arguments=[],
+            )
+            result = response.body.get("result", {})
+            if not isinstance(result, dict):
+                result = {}
+            confirmed = response.status == HTTPStatus.OK and bool(
+                result.get("completed") and result.get("holding")
+            )
+            self._record(
+                request_id=uuid.uuid4().hex, action="watchdog_trip",
+                request={"reason": reason}, ok=confirmed, duration_s=0,
+                result=result, error=None if confirmed else str(response.body.get("error")),
+            )
+        finally:
+            self.executor._revoke_authority()
+            self.executor._fault(error)
+
 
     def authorized(self, authorization: str | None) -> bool:
         if authorization is None:
@@ -413,6 +478,7 @@ class RobotBrokerService:
         arguments: Sequence[str],
     ) -> BrokerResponse:
         started = time.monotonic()
+        stop_admitted = False
         if isinstance(self.executor, (AgentCommandExecutor, SDKAgentExecutor)):
             rates = self.executor.rates.selected(action, request)
             request = {**request, **rates}
@@ -428,8 +494,12 @@ class RobotBrokerService:
                 # that requires the persistent SDK control-plane cutover.
                 AgentAuthorityStore().clear()
             if isinstance(self.executor, SDKAgentExecutor) and action == "stop":
-                if not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial):
+                if not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
+                        or self._allow_physical_sdk_actions):
                     raise PermissionError("native SDK STOP is not available in read-only preview")
+                if self.watchdog is not None:
+                    self.watchdog.begin_stop()
+                    stop_admitted = True
                 # An authorized STOP must not queue behind the synchronous
                 # broker command lock. Invalidate previously admitted actions
                 # even if the backend STOP itself raises.
@@ -440,6 +510,8 @@ class RobotBrokerService:
                     if self._physical_overhead_single_trial:
                         self._physical_overhead_phase = "stopped"
                 result = self.executor.execute(action, request)
+                if self.watchdog is not None:
+                    self.watchdog.finish_stop(result=result)
             else:
                 with self._operation_lock:
                     if self._physical_overhead_single_trial and action == "go_pose":
@@ -474,7 +546,8 @@ class RobotBrokerService:
                                 )
                         if (
                             action not in {"state", "capabilities"}
-                            and not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial)
+                            and not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
+                        or self._allow_physical_sdk_actions)
                         ):
                             raise PermissionError("SDK preview currently permits only read-only routes")
                         result = self.executor.execute(action, request)
@@ -504,6 +577,8 @@ class RobotBrokerService:
                         result = self.executor.run(arguments)
         except (BrokerCommandError, SOARM101Error, RuntimeError, ValueError,
                 KeyError, OSError, PermissionError) as exc:
+            if stop_admitted and self.watchdog is not None:
+                self.watchdog.finish_stop(error=str(exc))
             duration = time.monotonic() - started
             self._record(
                 request_id=request_id,
@@ -582,6 +657,20 @@ class RobotBrokerService:
         request = dict(payload or {})
         request_id = uuid.uuid4().hex
 
+        if method == "GET" and path == "/v1/supervisor/watchdog":
+            if self.watchdog is None:
+                return BrokerResponse(HTTPStatus.NOT_FOUND, {"ok": False, "error": "no watchdog"})
+            return BrokerResponse(HTTPStatus.OK, {"ok": True, "result": self.watchdog.status})
+        if method == "POST" and path == "/v1/supervisor/heartbeat":
+            if self.watchdog is None or request:
+                return BrokerResponse(HTTPStatus.BAD_REQUEST, {
+                    "ok": False, "error": "watchdog unavailable or unexpected heartbeat fields",
+                })
+            try:
+                result = self.watchdog.heartbeat()
+            except (PermissionError, RuntimeError, ValueError, OSError) as exc:
+                return BrokerResponse(HTTPStatus.CONFLICT, {"ok": False, "error": str(exc)})
+            return BrokerResponse(HTTPStatus.OK, {"ok": True, "result": result})
         if method == "GET" and path == "/v1/profile":
             return BrokerResponse(
                 HTTPStatus.OK,
@@ -654,6 +743,7 @@ class RobotBrokerService:
             )
         if isinstance(self.executor, SDKAgentExecutor) and not (
             self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
+                        or self._allow_physical_sdk_actions
         ):
             return BrokerResponse(
                 HTTPStatus.FORBIDDEN,
@@ -902,7 +992,8 @@ class RobotBrokerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], service: RobotBrokerService) -> None:
-        if (service._allow_physical_sdk_trial or service._allow_simulated_sdk_posts) and (
+        if (service._allow_physical_sdk_trial or service._allow_simulated_sdk_posts
+                or service._allow_physical_sdk_actions) and (
             address[0] != "127.0.0.1"
         ):
             raise ValueError("native SDK action broker must bind to IPv4 loopback only")
@@ -939,6 +1030,10 @@ class BrokerRelayService:
         payload: Mapping[str, object] | None = None,
     ) -> BrokerResponse:
         request = dict(payload or {})
+        if path.startswith("/v1/supervisor/"):
+            return BrokerResponse(HTTPStatus.FORBIDDEN, {
+                "ok": False, "error": "host supervisor endpoint is private",
+            })
         if method.upper() == "GET" and path == "/v1/profile":
             return BrokerResponse(
                 HTTPStatus.OK, {
@@ -989,8 +1084,9 @@ class BrokerRelayHTTPServer(ThreadingHTTPServer):
     def __init__(
         self, address: tuple[str, int], service: BrokerRelayService,
     ) -> None:
-        if not service.backend._allow_simulated_sdk_posts:
-            raise ValueError("agent relay only supports native SDK simulation")
+        if not (service.backend._allow_simulated_sdk_posts
+                or service.backend._allow_physical_sdk_actions):
+            raise ValueError("agent relay requires a permitted native SDK action broker")
         self.service = service
         super().__init__(address, _BrokerHandler)
 
@@ -1002,7 +1098,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--robot-id", default="so101")
     parser.add_argument(
         "--sdk-agent-relay-port", type=int,
-        help="simulation-only OpenShell ingress with separate agent token; "
+        help="OpenShell native SDK ingress with separate agent token; "
              "trusted SDK executor remains bound to 127.0.0.1",
     )
     simulated_modes = parser.add_mutually_exclusive_group()
@@ -1015,6 +1111,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="opt-in persistent SDK simulation with bounded POST actions; "
              "requires a trusted camera-free --profile and loopback",
     )
+    simulated_modes.add_argument(
+        "--sdk-physical-actions", action="store_true",
+        help="EXPERIMENTAL attended native physical joint actions; requires pinned profile, "
+             "human authority, loopback and supervisor watchdog",
+    )
+    parser.add_argument("--watchdog-timeout-s", type=float, default=None)
     parser.add_argument("--events", type=Path, default=DEFAULT_EVENT_PATH)
     parser.add_argument(
         "--profile", type=Path,
@@ -1104,14 +1206,38 @@ def main(argv: list[str] | None = None) -> int:
         gripper_acceleration_raw=args.agent_gripper_acceleration_raw,
     ).validated(config)
     simulated_actions = bool(args.sdk_simulation_actions)
+    physical_actions = bool(args.sdk_physical_actions)
+    if physical_actions:
+        from dataclasses import replace
+        from soarm101_motion.workstation import WorkstationProfileStore
+        follower = WorkstationProfileStore().load().follower
+        if not follower.port:
+            raise SystemExit("physical SDK actions require a configured workstation follower port")
+        assert follower.calibration is not None  # Validated persisted profile.
+        config = replace(config, port=follower.port, robot_id=follower.robot_id,
+                         calibration_path=Path(follower.calibration),
+                         configure_motors_on_connect=False, disable_torque_on_disconnect=False,
+                         command_frequency_hz=20)
+        if args.watchdog_timeout_s is None:
+            raise SystemExit("physical SDK actions require --watchdog-timeout-s")
+    if args.watchdog_timeout_s is not None and not (simulated_actions or physical_actions):
+        raise SystemExit("--watchdog-timeout-s requires native SDK actions")
     relay_port = args.sdk_agent_relay_port
     if relay_port is not None and (
-        not simulated_actions or not 1 <= relay_port <= 65535
+        not (simulated_actions or physical_actions) or not 1 <= relay_port <= 65535
     ):
         raise SystemExit(
-            "--sdk-agent-relay-port requires --sdk-simulation-actions and a valid port"
+            "--sdk-agent-relay-port requires native SDK actions and a valid port"
         )
-    if args.sdk_simulation_preview or simulated_actions:
+    preview: CapabilityProfile | None
+    executor: AgentCommandExecutor | SDKAgentExecutor
+    if physical_actions:
+        if args.host != "127.0.0.1" or args.profile is None:
+            raise SystemExit("physical SDK actions require loopback and an explicit --profile")
+        preview = CapabilityProfile.from_file(args.profile)
+        validate_physical_agent_policy(preview, rates)
+        executor = SDKAgentExecutor(config=config, rates=rates, physical_actions=True)
+    elif args.sdk_simulation_preview or simulated_actions:
         if args.host != "127.0.0.1":
             raise SystemExit("SDK simulation broker must bind only to 127.0.0.1")
         if simulated_actions:
@@ -1159,6 +1285,7 @@ def main(argv: list[str] | None = None) -> int:
     # the agent profile and uses a different bearer token.
     backend_profile = preview
     if relay_port is not None:
+        assert preview is not None
         agent_token = os.environ.get("SOARM101_RELAY_TOKEN", "").strip()
         if not agent_token or agent_token == token:
             raise SystemExit(
@@ -1166,7 +1293,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         backend_document = preview.as_dict()
         backend_document["tools"] = sorted(
-            preview.allowed_tools | {"stop"}
+            preview.allowed_tools | {"stop", "robot_health"}
         )
         backend_profile = CapabilityProfile.from_document(backend_document)
     service = RobotBrokerService(
@@ -1175,16 +1302,18 @@ def main(argv: list[str] | None = None) -> int:
         event_path=args.events,
         profile=backend_profile,
         allow_simulated_sdk_posts=simulated_actions,
+        allow_physical_sdk_actions=physical_actions,
+        watchdog_timeout_s=args.watchdog_timeout_s,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     relay_server = None
     if relay_port is not None:
+        assert preview is not None
         relay_service = BrokerRelayService(
             backend=service, token=agent_token, agent_profile=preview,
         )
         # Exposure is explicit, authenticated, confined to the restricted
-        # agent facade, and supported only in simulation. Physical rollout
-        # needs separately reviewed host networking and authentication.
+        # agent facade. Private supervisor endpoints never traverse this relay.
         relay_server = BrokerRelayHTTPServer(
             ("0.0.0.0", relay_port), relay_service,
         )
@@ -1204,6 +1333,8 @@ def main(argv: list[str] | None = None) -> int:
         f"{rates.cartesian_acceleration_mm_s2:g} mm/s^2"
     )
     relay_worker = None
+    if service.watchdog is not None:
+        service.watchdog.start()
     try:
         if relay_server is not None:
             relay_worker = threading.Thread(
@@ -1222,6 +1353,10 @@ def main(argv: list[str] | None = None) -> int:
             if relay_worker is not None:
                 relay_worker.join(timeout=5)
         server.server_close()
+        if service.watchdog is not None:
+            if service.watchdog.status["state"] == "watching":
+                service._watchdog_trip("broker shutting down")
+            service.watchdog.close()
         if isinstance(executor, SDKAgentExecutor):
             executor.close()
     return 0

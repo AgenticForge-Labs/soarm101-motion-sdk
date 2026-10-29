@@ -139,6 +139,9 @@ class FakeBroker:
             "authority": {"armed": False}, "cameras": [],
         }}
 
+    def start_supervision(self):
+        self.supervision_started = True
+
     def request_motion_stop(self):
         assert self.started and not self.stopped
         self.stop_requests += 1
@@ -2114,3 +2117,62 @@ def test_openshell_broker_process_receives_human_pinned_rate_flags(
     assert command[command.index("--agent-joint-acceleration-deg-s2") + 1] == "150"
     assert command[command.index("--agent-gripper-speed-raw") + 1] == "250"
     assert command[command.index("--agent-gripper-acceleration-raw") + 1] == "20"
+
+
+@pytest.mark.parametrize("agent", ["hermes", "codex"])
+@pytest.mark.parametrize("interface", ["robotctl", "mcp"])
+def test_physical_sdk_sandbox_preflights_and_supervises_shared_relay(
+    tmp_path, monkeypatch, agent, interface,
+):
+    task = tmp_path / "TASK.md"
+    task.write_text("Inspect and perform one approved small joint action.\n")
+    file = tmp_path / "profile.json"
+    file.write_text(json.dumps({
+        "schema_version": 1, "name": "attended-test",
+        "tools": ["robot_health", "robot_capabilities", "robot_state", "jog_joint"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 1},
+    }))
+    class PhysicalBroker(FakeBroker):
+        def __init__(self, *, sdk_physical=False, **kwargs):
+            assert sdk_physical is True
+            super().__init__(**kwargs)
+            self.preflight = False
+        def request(self, method, path, payload=None):
+            assert (method, path) == ("GET", "/v1/state")
+            self.preflight = True
+            return {"ok": True, "result": {"robot_id": "so101"}}
+        def start_supervision(self):
+            assert self.preflight
+            super().start_supervision()
+        def request_motion_stop(self):
+            assert self.supervision_started
+            return super().request_motion_stop()
+    monkeypatch.setattr(agent_sandbox, "BrokerProcess", PhysicalBroker)
+    monkeypatch.setattr(agent_sandbox, "doctor", lambda **kwargs: agent_sandbox.DoctorResult(
+        openshell=True, gateway=True, docker=True, image=True, provider=True, details={},
+    ))
+    shell = FakeOpenShell()
+    result = agent_sandbox.run_agent(
+        agent=agent, auth=("openrouter" if agent == "hermes" else "api-key"),
+        task=task, output_dir=tmp_path / "run",
+        interface=interface, sdk_physical=True, capability_profile=file, openshell=shell,
+    )
+    assert result.exit_code == 0
+    broker = PhysicalBroker.instances[-1]
+    assert broker.stop_requests == 1 and broker.stopped
+    metadata = json.loads((tmp_path / "run" / "run-metadata.json").read_text())
+    assert metadata["broker_backend"] == "persistent_sdk_physical_experimental"
+    assert metadata["broker_transport"] == "separate_token_agent_relay"
+    policy = str(shell.created["policy"])
+    assert "/v1/joint" in policy
+    assert "/v1/supervisor" not in policy
+    assert "/v1/stop" not in policy  # Host STOP remains independent of agent tools.
+
+
+@pytest.mark.parametrize("kwargs", [
+    {}, {"sdk_simulation": True}, {"read_only": True},
+])
+def test_physical_sdk_requires_explicit_profile_and_exclusive_motion_mode(tmp_path, kwargs):
+    with pytest.raises(agent_sandbox.AgentSandboxError, match="requires an explicit pinned profile"):
+        agent_sandbox.run_agent(agent="hermes", task=None, output_dir=tmp_path / "run",
+                                sdk_physical=True, **kwargs)

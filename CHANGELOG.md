@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — broker watchdog and attended OpenShell physical joint mode
+
+- Add a broker-owned monotonic heartbeat deadline, independent STOP on supervisor loss or lease/session failure, terminal admission fencing, queued/late-result rejection, and recorded STOP outcomes without automatic retries. Lease revocation failure cannot suppress STOP. Canonical controller admission inhibition also fences actions still in facade/path preflight.
+- Pulse the private control endpoint from the trusted OpenShell supervisor, with separate relay credentials for Hermes/Codex over robotctl or MCP. Apply supervision to native SDK simulation too.
+- Add explicit experimental `sandbox run --sdk-physical`, restricted to observed state, approved cameras and small joint actions, using the configured follower and existing human torque HOLD. No arming, Cartesian/pose/gripper cutover, or hardware validation is included.
+
 **Current status (2026-10-21):** PRs #90–#93 are merged on `main`. They added supervised native-SDK STOP qualification primitives, host-supervisor STOP handling, a persistent **simulated** SDK broker and an isolated NVIDIA OpenShell relay for Hermes/Codex. Physical agent execution continues to use the bounded CLI broker; general persistent native-SDK physical agent cutover with watchdog/qualification is not released. PR #94 subsequently revised the public README; it is not the earlier proposed hardware milestone. The chronological entries below document development-time experiments, including draft-stage statements that should not be read as present PR status.
 
 - **Merged PR #93:** Connect simulated OpenShell Hermes/Codex to the
