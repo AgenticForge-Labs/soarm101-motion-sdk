@@ -1,5 +1,17 @@
 # NVIDIA OpenShell agent sandbox for SO-ARM101
 
+> **Puppeteer MCP client migration (SDK cleanup PR):** `--interface mcp`
+> now requires the separately installed `forge-puppeteer[mcp]` on
+> the trusted host. Puppet owns the MCP server, tool schemas, resources,
+> prompts and staged sandbox client. The SDK still owns sandbox creation,
+> host broker, profile grants, independent STOP and hardware safety.
+> The old SDK `soarm101-mcp` script is removed on this branch;
+> its OpenShell runtime dependencies remain isolated at
+> `/opt/soarm101-mcp`. No motor SDK enters the sandbox.
+> Installed-wheel and real Hermes/Codex qualification remain pending.
+> See [Puppeteer MCP guide](agent-mcp.md).
+
+
 The Motion SDK integrates [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) to host a planning/reasoning agent in a **separate, policy-restricted environment**. OpenShell provides process/filesystem/network isolation; the SDK owns robot capability policy, the authenticated host broker, calibration/authority checks, and deterministic hardware execution. Sandboxing an agent does **not** make robot motion intrinsically safe.
 
 ## Agentic control flow and supported modes
