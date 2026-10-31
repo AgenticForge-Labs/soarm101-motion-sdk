@@ -20,13 +20,14 @@ MCP guidance into the standalone
 project, where users can choose a lightweight MCP-only mode without
 Platform or Studio.
 
-**Current transition:** the historical `soarm101-mcp` launcher and SDK's
-OpenShell MCP client bundle still work and have **not been removed**.
-Their transfer must preserve exact tool/profile grants, signed camera
-images, pinned replay identities and watchdog/STOP safety. The
-[ownership reconciliation](docs/puppeteer-mcp-migration.md) lists the
-requirements and dependency order. Do not replace or delete the SDK
-MCP launcher until the tested Puppeteer replacement exists.
+**Source cleanup in progress:** Puppet-owned MCP implementation is merged
+in Forge Puppeteer PRs #4–#6. This SDK cleanup branch removes the old
+`soarm101-mcp` entrypoint and delegates optional OpenShell MCP
+client packaging to Puppeteer. **Local installed-wheel/OpenShell
+acceptance is not yet complete.** The native SDK and its trusted
+broker remain independently usable; do not deploy this cleanup
+until the cross-repository canaries pass. See
+[the migration record](docs/puppeteer-mcp-migration.md).
 
 ## NVIDIA OpenShell and agentic robotics
 
