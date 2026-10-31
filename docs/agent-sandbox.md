@@ -86,7 +86,7 @@ the policy. This permission grants no writes, device access, or physical motion.
 
 The built-in Hermes and Codex agents now support an **opt-in** MCP interface.
 The default `robotctl` mode remains the original comparison baseline.
-The MCP subprocess runs inside the *same* OpenShell sandbox and calls the
+The Puppeteer MCP subprocess runs inside the *same* OpenShell sandbox and calls the
 same authenticated trusted-host broker; there is no extra motion authority,
 unrestricted SDK mount, or external MCP network listener.
 
