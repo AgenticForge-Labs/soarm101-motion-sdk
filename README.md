@@ -20,13 +20,14 @@ MCP guidance into the standalone
 project, where users can choose a lightweight MCP-only mode without
 Platform or Studio.
 
-**Current transition:** the historical `soarm101-mcp` launcher and SDK's
-OpenShell MCP client bundle still work and have **not been removed**.
-Their transfer must preserve exact tool/profile grants, signed camera
-images, pinned replay identities and watchdog/STOP safety. The
-[ownership reconciliation](docs/puppeteer-mcp-migration.md) lists the
-requirements and dependency order. Do not replace or delete the SDK
-MCP launcher until the tested Puppeteer replacement exists.
+**Source cleanup in progress:** Puppet-owned MCP implementation is merged
+in Forge Puppeteer PRs #4–#6. This SDK cleanup branch removes the old
+`soarm101-mcp` entrypoint and delegates optional OpenShell MCP
+client packaging to Puppeteer. **Local installed-wheel/OpenShell
+acceptance is not yet complete.** The native SDK and its trusted
+broker remain independently usable; do not deploy this cleanup
+until the cross-repository canaries pass. See
+[the migration record](docs/puppeteer-mcp-migration.md).
 
 ## NVIDIA OpenShell and agentic robotics
 
@@ -41,7 +42,7 @@ Hermes / Codex / other supported agent (reasoning, planning, camera interpretati
                  v
 NVIDIA OpenShell sandbox (isolated agent, scoped files and network)
                  |
-        robotctl or stdio MCP client
+        robotctl or Puppeteer MCP client (optional)
                  |
                  v
 Authenticated host broker (pinned capabilities, lease, audit, lifecycle)
@@ -57,7 +58,7 @@ SO-ARM101 robot + named USB cameras
 
 An agent can inspect live state and allowed camera observations, decide which *approved* saved pose or bounded motion to request, observe the result, and iterate. Manual and agent-driven tasks ultimately use the same deterministic SDK operations. The broker does not expose arbitrary motor register writes, raw serial devices, or an unrestricted Python interpreter on the robot host.
 
-The SDK packages **Hermes and Codex adapters**, optional **MCP tools** and `robotctl`, human-pinned capability profiles, and a self-contained `soarm101 agent sandbox` workflow. Agent tool discovery does not create authority: physical motion requires a separate operator-issued lease and all motion requests remain subject to SDK validation. Host-supervisor STOP is executed outside the agent at teardown; it is not a safety-rated emergency stop.
+The SDK packages **Hermes and Codex sandbox adapters** and `robotctl` (MCP is supplied by optional Forge Puppeteer), human-pinned capability profiles, and a self-contained `soarm101 agent sandbox` workflow. Agent tool discovery does not create authority: physical motion requires a separate operator-issued lease and all motion requests remain subject to SDK validation. Host-supervisor STOP is executed outside the agent at teardown; it is not a safety-rated emergency stop.
 
 **Current boundary:** OpenShell supports persistent native-SDK simulation and an explicit **experimental, attended physical joint mode** (`--sdk-physical`). The physical mode uses the workstation follower, a pinned profile, existing human authority and torque HOLD, separate agent/supervisor tokens, and a broker-owned heartbeat watchdog. Joint steps are capped at 2° (the example profile uses 1°), speed at 8°/s and acceleration at 25°/s². Saved poses, gripper and Cartesian actions remain outside this experimental mode. The default physical broker remains CLI-backed. Hardware watchdog qualification and production cutover remain outstanding.
 
@@ -221,12 +222,12 @@ Available interfaces include:
 
 - The human/developer `soarm101` CLI and restricted `soarm101 agent ...` CLI.
 - A broker with operator-pinned profiles, authentication, and audit events.
-- An optional stdio MCP adapter that exposes the same permitted broker capabilities.
+- An optional **Forge Puppeteer** stdio MCP interface that exposes reviewed broker capabilities without adding a second SDK MCP server.
 - An OpenShell sandbox runner with Hermes, Codex, and operator-defined adapters.
 
 **Important deployment distinction:** The standard physical agent broker remains CLI-backed. Native SDK simulation uses `--sdk-simulation`; the separate `--sdk-physical` option enables only experimental attended joint actions under the [restricted profile and watchdog contract](docs/agent-sandbox.md#attended-native-physical-joint-agents-experimental). General physical cutover still requires supervised in-motion STOP/watchdog qualification. Acknowledged software HOLD is not certified braking.
 
-Example of **simulation-only** Codex/MCP operation:
+Example of **simulation-only** Codex/Puppeteer MCP operation (install `forge-puppeteer[mcp]` in the trusted host environment first):
 
 ```bash
 soarm101 agent arm --simulation --minutes 10

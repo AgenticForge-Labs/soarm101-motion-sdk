@@ -71,7 +71,7 @@ class FakeOpenShell:
             )
         if command and command[0] == "/opt/soarm101-mcp/bin/python":
             return subprocess.CompletedProcess(
-                command, 0, stdout="soarm101-mcp-ready\n", stderr=""
+                command, 0, stdout="puppeteer-mcp-ready\n", stderr=""
             )
         return subprocess.CompletedProcess(
             command,
@@ -1718,40 +1718,48 @@ def test_openshell_sandbox_names_fit_server_limit_and_preserve_agent_hint(
 
 
 def test_mcp_one_run_configurations_and_closed_client_bundle(tmp_path: Path) -> None:
-    from soarm101_motion.agent_mcp_runtime import (
-        MCP_PYTHON, MCP_CLIENT_MODULES, client_files, config_file, skill_text,
-    )
-
-    bundle = client_files(tmp_path)
+    puppeteer = pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
+    policy_source = Path(agent_sandbox.__file__).with_name("capability_profile.py")
+    bundle = puppeteer.client_files(tmp_path, sdk_profile_path=policy_source)
     destinations = {destination for _, destination in bundle}
-    assert len(bundle) == 1 + len(MCP_CLIENT_MODULES)
-    assert destinations == {
-        "/sandbox/soarm101_motion/__init__.py",
-        *(f"/sandbox/soarm101_motion/{name}" for name in MCP_CLIENT_MODULES),
-    }
-    assert all(Path(source).is_file() for source, _ in bundle)
-    assert not any("hardware" in destination or "calibration" in destination
+    assert "/sandbox/soarm101_motion/capability_profile.py" in destinations
+    assert "/sandbox/forge_puppeteer/mcp/launcher.py" in destinations
+    assert "/sandbox/forge_puppeteer/mcp/soarm101.py" in destinations
+    assert "/sandbox/soarm101_motion/mcp_server.py" not in destinations
+    assert "/sandbox/soarm101_motion/robotctl.py" not in destinations
+    assert not any("calibration" in destination or "motor" in destination
                    for destination in destinations)
+    assert all(Path(source).is_file() for source, _ in bundle)
+    run_config = puppeteer.config_file(
+        tmp_path,
+        allowed_tools=frozenset({"robot_capabilities", "robot_state"}),
+        broker_port=8765, simulation_only=True, physical_authority=False,
+    )
+    config = json.loads(run_config.read_text())
+    assert config["allow_openshell_host"] is True
+    assert config["broker_url"] == "http://host.openshell.internal:8765"
+    assert config["broker_token_env"] == "SOARM101_BROKER_TOKEN"
+    assert "SOARM101_BROKER_TOKEN_VALUE" not in run_config.read_text()
 
     hermes_config = tmp_path / "hermes-config.yaml"
     hermes_config.write_text("_config_version: 45\n", encoding="utf-8")
-    config_file(tmp_path, agent="hermes", hermes_config=hermes_config)
+    puppeteer.agent_config(tmp_path, agent="hermes", hermes_config=hermes_config)
     content = hermes_config.read_text(encoding="utf-8")
     assert "mcp_servers:" in content
     assert "resources: true" in content
     assert "supports_parallel_tool_calls: false" in content
-    assert MCP_PYTHON in content
-    assert "${SOARM101_BROKER_TOKEN}" in content
+    assert puppeteer.MCP_PYTHON in content
+    assert "forge_puppeteer.mcp.launcher" in content
+    assert "soarm101_motion.mcp_server" not in content
 
-    codex_config, destination = config_file(tmp_path, agent="codex")
+    codex_config, destination = puppeteer.agent_config(tmp_path, agent="codex")
     assert destination == "/sandbox/.codex/config.toml"
     codex_text = codex_config.read_text(encoding="utf-8")
     assert "[mcp_servers.soarm101]" in codex_text
-    assert 'env_vars = ["SOARM101_BROKER_URL", "SOARM101_BROKER_TOKEN"]' in codex_text
+    assert 'env_vars = ["SOARM101_BROKER_TOKEN"]' in codex_text
     for agent in ("hermes", "codex"):
-        skill = skill_text(agent=agent)
+        skill = puppeteer.skill_text(agent=agent)
         assert "MCP" in skill
-        assert "world_directions" in skill
         assert "broker" in skill.lower()
 
 
@@ -1830,6 +1838,7 @@ def test_mcp_policy_allows_reading_only_its_isolated_venv(
 def test_mcp_run_uses_pinned_broker_and_temporary_client_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str,
 ) -> None:
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     from soarm101_motion.capability_profile import CapabilityProfile
 
     task = tmp_path / "TASK.md"
@@ -1866,8 +1875,11 @@ def test_mcp_run_uses_pinned_broker_and_temporary_client_only(
     assert FakeBroker.instances[0].profile_path is not None
     destinations = {dest for _, _, dest in fake.uploads}
     assert "/sandbox/robotctl.py" not in destinations
-    assert "/sandbox/soarm101_motion/mcp_server.py" in destinations
-    assert "/sandbox/soarm101_motion/robotctl.py" in destinations
+    assert "/sandbox/forge_puppeteer/mcp/launcher.py" in destinations
+    assert "/sandbox/soarm101_motion/capability_profile.py" in destinations
+    assert "/sandbox/soarm101_motion/mcp_server.py" not in destinations
+    assert "/sandbox/soarm101_motion/robotctl.py" not in destinations
+    assert "/sandbox/puppeteer-soarm101.json" in destinations
     assert "/sandbox/soarm101_motion/calibration.py" not in destinations
     assert "/sandbox/.hermes/config.yaml" in destinations if agent == "hermes" else (
         "/sandbox/.codex/config.toml" in destinations
@@ -1934,6 +1946,7 @@ def test_sandbox_mcp_cli_accepts_interface_and_profile() -> None:
 def test_read_only_mcp_reduces_broker_even_when_input_profile_allows_motion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     from soarm101_motion.capability_profile import CapabilityProfile
 
     seen: list[CapabilityProfile] = []
@@ -1981,6 +1994,7 @@ def test_read_only_mcp_reduces_broker_even_when_input_profile_allows_motion(
 def test_broker_token_is_redacted_from_agent_output_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     class LeakySyntheticAgent(FakeOpenShell):
         def exec(self, name, command, *, workdir="/sandbox", env=None, timeout=1800):
             result = super().exec(name, command, workdir=workdir, env=env, timeout=timeout)
@@ -2031,7 +2045,8 @@ def test_read_only_task_uses_matching_interface() -> None:
 def test_mcp_probe_failure_reports_redacted_diagnostics_before_handoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int, stdout: str,
 ) -> None:
-    from soarm101_motion.agent_mcp_runtime import MCP_PYTHON
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
+    MCP_PYTHON = agent_sandbox.MCP_PYTHON
 
     class FailedMcp(FakeOpenShell):
         leaked_token: str = ""
@@ -2124,6 +2139,8 @@ def test_openshell_broker_process_receives_human_pinned_rate_flags(
 def test_physical_sdk_sandbox_preflights_and_supervises_shared_relay(
     tmp_path, monkeypatch, agent, interface,
 ):
+    if interface == "mcp":
+        pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     task = tmp_path / "TASK.md"
     task.write_text("Inspect and perform one approved small joint action.\n")
     file = tmp_path / "profile.json"

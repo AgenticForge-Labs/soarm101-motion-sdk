@@ -1,16 +1,16 @@
 # Testing
 
-## Broker/Puppeteer MCP migration seam (post SDK PR #97)
+## SDK-owned MCP removal: Puppet-only integration validation (post #97–#98)
 
 The SDK capability registry now has an MCP-independent canonical name,
 `BROKER_CAPABILITY_ROUTES` (`TOOL_ROUTES` is the exact same dictionary
 for compatibility). Preserve source safety and agent sandbox behavior
 during the subsequent Puppeteer migration. Run this **software-only**
-regression first, then the ordinary broker/MCP tests:
+regression first, then the SDK broker tests:
 
 ```bash
 python -m pytest tests/test_broker_mcp_independence.py -q
-python -m pytest tests/test_mcp_server.py tests/test_broker_asset_catalog.py \
+python -m pytest tests/test_broker_asset_catalog.py \
   tests/test_broker_replay.py tests/test_broker_watchdog.py -q
 python -m pytest -m 'not hardware' -q
 ruff check src/soarm101_motion/capability_profile.py \
@@ -18,8 +18,10 @@ ruff check src/soarm101_motion/capability_profile.py \
 ```
 
 Do not interpret successful local tests as an attended physical STOP test.
-The old `soarm101-mcp` remains installed and usable until a separate
-Puppeteer MCP-only implementation is available and accepted. See
+The SDK-owned MCP executable and server source are removed on this
+cleanup branch. The new Puppeteer MCP must pass installed-wheel,
+SO-ARM simulation and OpenShell Hermes/Codex qualification
+**before merging/deploying this branch**. See
 [docs/puppeteer-mcp-migration.md](docs/puppeteer-mcp-migration.md) for
 the tool/prompt/camera/OpenShell parity matrix and dependency order.
 
@@ -987,7 +989,7 @@ during live object approach.
 
 ## MCP guidance contract testing
 
-Run `pytest tests/test_mcp_guidance.py tests/test_mcp_server.py tests/test_capability_profile.py` without hardware. Confirm server initialization exposes MCP-first live
+Run `pytest tests/test_broker_mcp_independence.py tests/test_capability_profile.py` without hardware; run Puppeteer's `tests/robots/test_soarm101_mcp.py`, `test_soarm101_openshell_bundle.py` and its installed-wheel smoke separately. Confirm server initialization exposes MCP-first live
 robot instructions, tool descriptions direct camera/state use through the
 broker, resources/prompts preserve calibrated-coordinate and evidence rules,
 and no guidance changes the active MCP tool allowlist. A separate read-only
@@ -2592,7 +2594,7 @@ M2 sequence execution addition (simulation/fake only):
 
 ```bash
 .venv/bin/pytest --no-cov -q tests/test_broker_replay.py tests/test_replay_preflight.py tests/test_simulated_replay.py
-.venv/bin/ruff check src/soarm101_motion/broker.py src/soarm101_motion/capability_profile.py src/soarm101_motion/mcp_server.py src/soarm101_motion/robotctl.py src/soarm101_motion/simulated_sequence.py tests/test_broker_replay.py
+.venv/bin/ruff check src/soarm101_motion/broker.py src/soarm101_motion/capability_profile.py src/soarm101_motion/robotctl.py src/soarm101_motion/simulated_sequence.py tests/test_broker_replay.py
 ```
 
 The added sequence cases cover a saved pose, gripper, wait and recording in
