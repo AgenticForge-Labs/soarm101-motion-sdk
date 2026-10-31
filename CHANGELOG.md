@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — reconcile SO-ARM101 broker with Puppeteer-owned MCP
+
+- Establish `BROKER_CAPABILITY_ROUTES` as the canonical, MCP-independent
+  SDK/broker route registry. `TOOL_ROUTES` remains a compatibility
+  alias to the same dictionary; grants and routes do not change.
+- Add regression tests for SDK-only profile enforcement and route
+  identities, and document the post-PR-97 Puppeteer handoff.
+- No MCP CLI, OpenShell client, SDK motion path, broker route, physical
+  privilege, simulation replay or other hardware behavior was removed
+  or enabled. The actual MCP implementation migration is staged
+  after Puppeteer's replacement is accepted.
+
+
 ## Unreleased — bounded recording replay (software simulation only)
 
 - Add an explicit broker/profile/robotctl/MCP recording replay capability requiring

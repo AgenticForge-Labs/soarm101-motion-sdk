@@ -10,6 +10,24 @@ The SO-ARM101 Motion SDK is a Python-first toolkit for low-cost desktop robotics
 
 > **Hardware safety:** This is experimental software for an educational/hobby arm, not a safety-rated industrial controller. Never rely on software STOP/HOLD as an emergency stop. Keep a physical power cutoff within reach, start without a payload, and supervise initial motion. Read [Safety](docs/safety.md) and the [physical-run procedure](docs/physical-run.md) before moving hardware.
 
+## SDK independence and Puppeteer MCP migration
+
+The SO-ARM101 Motion SDK is independently useful through Python, CLI,
+GUI, simulation and its authenticated trusted broker; **Puppeteer is not
+required**. We are consolidating robot-to-MCP registration and agent-facing
+MCP guidance into the standalone
+[Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer)
+project, where users can choose a lightweight MCP-only mode without
+Platform or Studio.
+
+**Current transition:** the historical `soarm101-mcp` launcher and SDK's
+OpenShell MCP client bundle still work and have **not been removed**.
+Their transfer must preserve exact tool/profile grants, signed camera
+images, pinned replay identities and watchdog/STOP safety. The
+[ownership reconciliation](docs/puppeteer-mcp-migration.md) lists the
+requirements and dependency order. Do not replace or delete the SDK
+MCP launcher until the tested Puppeteer replacement exists.
+
 ## NVIDIA OpenShell and agentic robotics
 
 The Motion SDK integrates with [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell), an open-source runtime that isolates AI agents and governs their filesystem and network access. This lets developers explore **agent-driven robot workflows** without handing a language model raw servo access or unrestricted control of the host workstation. OpenShell handles sandbox isolation; the Motion SDK provides the trusted, robot-specific execution boundary.

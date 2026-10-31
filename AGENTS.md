@@ -2,6 +2,26 @@
 
 These instructions apply to people and coding agents developing the SO-ARM101 Motion SDK, and to agents using the approved robot interfaces. **Code development and physical robot operation are different roles.** Read the authoritative files and actual capabilities rather than old PR descriptions.
 
+## Cross-repository MCP ownership reconciliation
+
+The intended architecture makes this SDK independent of Puppeteer
+and MCP. Puppeteer will eventually own MCP tool registration, schemas,
+resources, prompts and isolated MCP client packaging, while this SDK
+continues to own all native Python/CLI/GUI/simulation behavior and
+trusted broker/STOP authority. The broker's canonical route registry
+is `BROKER_CAPABILITY_ROUTES`; old `TOOL_ROUTES` is a temporary
+alias to the very same registry, not an independent definition.
+**Do not delete or disable** the present SDK-owned `soarm101-mcp`
+launcher or OpenShell `--interface mcp` before the Puppeteer
+replacement is implemented, installed-wheel-tested, and accepted.
+See [the migration checklist](docs/puppeteer-mcp-migration.md).
+
+The SDK's already merged PR #97 added simulation-only recording
+replay and asset catalog. Preserve its broker policy, revision
+checks, failure quarantine and STOP behavior when changing MCP
+client packaging. Do not move these safety or replay sources to
+Puppeteer.
+
 ## Current integration boundary
 
 The repository includes the NVIDIA OpenShell sandbox integration, packaged Hermes/Codex adapters, `robotctl` and optional stdio MCP clients, an authenticated host broker, operator-pinned profiles, and a deterministic calibrated Motion SDK.

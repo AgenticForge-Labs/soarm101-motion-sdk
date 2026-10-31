@@ -1,5 +1,29 @@
 # Testing
 
+## Broker/Puppeteer MCP migration seam (post SDK PR #97)
+
+The SDK capability registry now has an MCP-independent canonical name,
+`BROKER_CAPABILITY_ROUTES` (`TOOL_ROUTES` is the exact same dictionary
+for compatibility). Preserve source safety and agent sandbox behavior
+during the subsequent Puppeteer migration. Run this **software-only**
+regression first, then the ordinary broker/MCP tests:
+
+```bash
+python -m pytest tests/test_broker_mcp_independence.py -q
+python -m pytest tests/test_mcp_server.py tests/test_broker_asset_catalog.py \
+  tests/test_broker_replay.py tests/test_broker_watchdog.py -q
+python -m pytest -m 'not hardware' -q
+ruff check src/soarm101_motion/capability_profile.py \
+  tests/test_broker_mcp_independence.py
+```
+
+Do not interpret successful local tests as an attended physical STOP test.
+The old `soarm101-mcp` remains installed and usable until a separate
+Puppeteer MCP-only implementation is available and accepted. See
+[docs/puppeteer-mcp-migration.md](docs/puppeteer-mcp-migration.md) for
+the tool/prompt/camera/OpenShell parity matrix and dependency order.
+
+
 ## Current validation boundary (2026-10-21)
 
 The software integration for **PRs #90–#93** is merged on `main`. Tests below describe the simulated native SDK broker, separate-token NVIDIA OpenShell relay, MCP profile enforcement and host-supervisor STOP, as well as dated operator-only physical investigations. **Software acceptance is not physical braking certification or approval for general persistent-SDK physical agent control.**

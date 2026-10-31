@@ -1,8 +1,9 @@
 """Trusted-host, immutable restrictions for bounded robot-broker experiments.
 
 The profile removes permissions from the existing broker; it cannot authorize
-motion, alter calibration, or introduce a new robot action. Keep route mapping
-here shared with the optional MCP facade, not duplicated by client code.
+motion, alter calibration, or introduce a new robot action. This module owns
+the fixed broker API route names and grants independently of MCP. Puppet and
+other clients may adapt this API but do not become policy authorities.
 """
 
 from __future__ import annotations
@@ -16,8 +17,10 @@ from pathlib import Path
 from typing import Mapping, cast
 
 
-# Tool names match the optional MCP facade. Routes are the already-shipped broker API.
-TOOL_ROUTES: dict[str, tuple[str, str]] = {
+# Canonical public *broker* capability identifiers. MCP tool names currently
+# follow these names for compatibility but do not define the broker API.
+# Preserve these stable identities when moving MCP ownership to Forge Puppeteer.
+BROKER_CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     "robot_health": ("GET", "/v1/health"),
     "robot_capabilities": ("GET", "/v1/capabilities"),
     "robot_state": ("GET", "/v1/state"),
@@ -33,7 +36,10 @@ TOOL_ROUTES: dict[str, tuple[str, str]] = {
     "sleep_up": ("POST", "/v1/sleep-up"),
     "stop": ("POST", "/v1/stop"),
 }
-ROUTE_TO_TOOL = {route: name for name, route in TOOL_ROUTES.items()}
+# Compatibility alias until Puppeteer supplies the replacement MCP tool surface.
+# Keep a single underlying registry; never maintain a second route table.
+TOOL_ROUTES = BROKER_CAPABILITY_ROUTES
+ROUTE_TO_TOOL = {route: name for name, route in BROKER_CAPABILITY_ROUTES.items()}
 # Retain the broker's existing alternate spelling under the same permissions.
 ROUTE_TO_TOOL[("POST", "/v1/sleep_up")] = "sleep_up"
 CAMERA_NAMES = frozenset({"overhead", "wrist"})
@@ -83,7 +89,7 @@ class CapabilityProfile:
     def full(cls) -> "CapabilityProfile":
         return cls(
             name="default-full",
-            allowed_tools=frozenset(TOOL_ROUTES) - {"list_assets", "replay_recording", "replay_sequence"},
+            allowed_tools=frozenset(BROKER_CAPABILITY_ROUTES) - {"list_assets", "replay_recording", "replay_sequence"},
             allowed_cameras=CAMERA_NAMES,
         )
 
@@ -100,7 +106,7 @@ class CapabilityProfile:
         name = document.get("name")
         if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", name):
             raise ProfileError("profile name must be a short lowercase identifier")
-        tools = _unique_names(document.get("tools"), frozenset(TOOL_ROUTES), "tools")
+        tools = _unique_names(document.get("tools"), frozenset(BROKER_CAPABILITY_ROUTES), "tools")
         cameras = _unique_names(document.get("cameras"), CAMERA_NAMES, "cameras")
         if cameras and "capture_camera" not in tools:
             raise ProfileError("camera access requires capture_camera in tools")
