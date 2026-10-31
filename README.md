@@ -227,7 +227,7 @@ Available interfaces include:
 
 **Important deployment distinction:** The standard physical agent broker remains CLI-backed. Native SDK simulation uses `--sdk-simulation`; the separate `--sdk-physical` option enables only experimental attended joint actions under the [restricted profile and watchdog contract](docs/agent-sandbox.md#attended-native-physical-joint-agents-experimental). General physical cutover still requires supervised in-motion STOP/watchdog qualification. Acknowledged software HOLD is not certified braking.
 
-Example of **simulation-only** Codex/MCP operation:
+Example of **simulation-only** Codex/Puppeteer MCP operation (install `forge-puppeteer[mcp]` in the trusted host environment first):
 
 ```bash
 soarm101 agent arm --simulation --minutes 10
