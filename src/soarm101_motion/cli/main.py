@@ -122,7 +122,9 @@ def _arm_from_args(
 ) -> SOARM101:
     if getattr(args, "simulation", False):
         return SOARM101.simulated(
-            realtime=True,
+            # CLI simulation is deterministic and must not depend on host
+            # scheduling latency. Real-time pacing is opt-in for sim-demo.
+            realtime=False,
             config=_hardware_config(args, **config_overrides),
         )
     if args.port:

@@ -262,3 +262,23 @@ Open an [issue](https://github.com/AgenticForge-Labs/soarm101-motion-sdk/issues)
 | Project structure and plans | [Architecture](docs/architecture.md) · [PLAN.md](PLAN.md) |
 
 **License:** Apache 2.0. Maintained by AgenticForge Labs.
+
+### Offline asset catalog
+
+`soarm101_motion.asset_catalog.discover_assets` enumerates explicitly selected
+pose, trajectory, and sequence libraries without connecting to a robot. See
+`examples/asset_catalog.py`. Descriptors contain content revisions and calibration
+provenance. A calibration match only compares the supplied identity; sequence
+compatibility remains unchecked because referenced steps must also be validated.
+Discovery does not grant replay, check live authority, or certify physical safety.
+
+
+Explicitly granted recording and ordered sequence replay are available only in
+supervised native SDK simulation, using operator-pinned hashes, calibration,
+start tolerances, broker profile grants, watchdog and STOP fencing. Simulation
+replay remains unarmed and does not create or require physical authority. Replay
+reuses the broker's existing SDK session and retains request identities for
+response reconciliation. Sequence steps include saved poses, recordings, gripper
+targets and waits. See
+[broker replay](docs/agent-broker.md#supervised-recording-replay-simulation-only).
+Automatic entry motion and physical replay remain unavailable.

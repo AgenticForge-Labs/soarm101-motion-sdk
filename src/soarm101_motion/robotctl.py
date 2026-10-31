@@ -103,6 +103,22 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("health")
     sub.add_parser("capabilities")
     sub.add_parser("state")
+    assets = sub.add_parser("assets")
+    assets.add_argument("--offset", type=int, default=0)
+    assets.add_argument("--limit", type=int, default=50)
+    assets.add_argument("--kind", choices=("pose", "recording", "sequence"))
+    replay = sub.add_parser("replay-recording")
+    replay.add_argument("asset_id")
+    replay.add_argument("--revision", required=True)
+    replay.add_argument("--request-id", required=True)
+    replay.add_argument("--session-id", required=True)
+    replay.add_argument("--speed-scale", type=float, required=True)
+    sequence = sub.add_parser("replay-sequence")
+    sequence.add_argument("--request-id", required=True)
+    sequence.add_argument("--session-id", required=True)
+    sequence.add_argument("--asset-id", required=True)
+    sequence.add_argument("--revision", required=True)
+    sequence.add_argument("--speed-scale", type=float, required=True)
 
     capture = sub.add_parser("capture")
     capture.add_argument("camera", choices=("overhead", "wrist"))
@@ -167,6 +183,22 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(_request(method="GET", path="/v1/capabilities"))
         elif args.command == "state":
             _print_result(_request(method="GET", path="/v1/state"))
+        elif args.command == "assets":
+            _print_result(_request(method="POST", path="/v1/assets", payload={
+                "offset": args.offset, "limit": args.limit, "kind": args.kind,
+            }))
+        elif args.command == "replay-recording":
+            _print_result(_request(method="POST", path="/v1/replay-recording", payload={
+                "request_id": args.request_id, "session_id": args.session_id,
+                "asset_id": args.asset_id,
+                "revision": args.revision, "speed_scale": args.speed_scale,
+            }))
+        elif args.command == "replay-sequence":
+            _print_result(_request(method="POST", path="/v1/replay-sequence", payload={
+                "request_id": args.request_id, "session_id": args.session_id,
+                "asset_id": args.asset_id, "revision": args.revision,
+                "speed_scale": args.speed_scale,
+            }))
         elif args.command == "capture":
             return _capture(args)
         elif args.command == "go-pose":

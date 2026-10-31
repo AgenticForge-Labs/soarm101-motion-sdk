@@ -62,6 +62,7 @@ def test_cli_motion_envelope_overrides_apply_to_simulation() -> None:
         ]
     )
     arm = _arm_from_args(args)
+    assert arm.backend.realtime is False
     assert arm.config.motion_limits_human == pytest.approx(
         {
             "max_joint_speed_deg_s": 80.0,

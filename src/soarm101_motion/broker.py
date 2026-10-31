@@ -15,6 +15,7 @@ import hmac
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -28,6 +29,9 @@ from typing import Mapping, Sequence
 
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.broker_watchdog import BrokerWatchdog
+from soarm101_motion.replay_policy import ReplayPolicy
+from soarm101_motion.replay_snapshot import load_pinned_recording
+from soarm101_motion.simulated_replay import ReplayExecutionError, replay_simulated_recording
 from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
 from soarm101_motion.config import SOARM101Config, rate_within_ceiling
@@ -301,6 +305,8 @@ class RobotBrokerService:
         allow_physical_sdk_trial: bool = False,
         allow_physical_sdk_actions: bool = False,
         watchdog_timeout_s: float | None = None,
+        catalog_paths: tuple[Path, Path, Path] | None = None,
+        replay_policy: ReplayPolicy | None = None,
     ) -> None:
         if allow_simulated_sdk_posts and not (
             isinstance(executor, SDKAgentExecutor) and executor.simulation
@@ -355,6 +361,30 @@ class RobotBrokerService:
                 )
         if not str(token):
             raise ValueError("broker token cannot be empty")
+        if profile is not None and "list_assets" in profile.allowed_tools and catalog_paths is None:
+            raise ValueError("asset catalog grant requires operator-selected library paths")
+        if catalog_paths is not None:
+            if profile is None or "list_assets" not in profile.allowed_tools:
+                raise ValueError("asset catalog requires an explicit profile grant")
+            pose_path, trajectory_root, sequence_path = catalog_paths
+            if not pose_path.is_file() or not trajectory_root.is_dir() or not sequence_path.is_file():
+                raise ValueError("catalog paths must identify existing operator-selected libraries")
+            catalog_paths = tuple(path.resolve() for path in catalog_paths)  # type: ignore[assignment]
+        replay_granted = profile is not None and bool(
+            {"replay_recording", "replay_sequence"} & profile.allowed_tools
+        )
+        if replay_granted or replay_policy is not None:
+            if not (replay_granted and replay_policy is not None and catalog_paths is not None
+                    and isinstance(executor, SDKAgentExecutor) and executor.simulation
+                    and executor.simulation_actions and allow_simulated_sdk_posts
+                    and not allow_physical_sdk_trial and not allow_physical_sdk_actions
+                    and watchdog_timeout_s is not None and profile is not None
+                    and "stop" in profile.allowed_tools):
+                raise ValueError("replay requires explicit grant, pinned policy, libraries, "
+                                 "STOP and supervised SDK simulation actions only")
+            if (replay_policy.robot_id != executor.robot_id
+                    or replay_policy.calibration_id != "simulation"):
+                raise ValueError("replay policy does not match simulated SDK identity")
         self.executor = executor or AgentCommandExecutor()
         # Native physical POST is an explicit attended joint-only opt-in.
         # The default broker path and fixed qualification trials stay separate.
@@ -375,7 +405,20 @@ class RobotBrokerService:
         )
         self.token = str(token)
         self.event_path = Path(event_path).expanduser()
+        self._replay_durable_ids: dict[str, dict[str, object]] = {}
+        self._replay_quarantined = self._read_replay_quarantine()
         self.profile = profile if profile is not None else CapabilityProfile.full()
+        self._catalog_paths = catalog_paths
+        self._replay_policy = replay_policy
+        self._replay_policy_sha256 = (
+            hashlib.sha256(json.dumps(asdict(replay_policy), sort_keys=True,
+                                      separators=(",", ":")).encode()).hexdigest()
+            if replay_policy is not None else None
+        )
+        # Process/session lifetime retention, no eviction or retry. Refuse new
+        # identities at capacity; a new SDK session rejects old session IDs.
+        self._replay_requests: dict[str, tuple[dict[str, object], BrokerResponse | None]] = {}
+        self._replay_lock = threading.Lock()
         self._profile_provenance = self.profile.public()
         self._operation_lock = threading.Lock()
         # Native-session queued actions admitted before STOP must never run
@@ -426,7 +469,7 @@ class RobotBrokerService:
     @staticmethod
     def _number(payload: Mapping[str, object], key: str, default: float = 0.0) -> float:
         raw = payload.get(key, default)
-        if isinstance(raw, bool):
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
             raise ValueError(f"{key} must be numeric")
         value = float(raw)
         if not (float("-inf") < value < float("inf")):
@@ -463,11 +506,68 @@ class RobotBrokerService:
             "result": dict(result or {}),
             "error": error,
         }
+        if self._replay_policy_sha256 is not None:
+            event["replay_policy_sha256"] = self._replay_policy_sha256
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(event, sort_keys=True) + "\n"
+        line = (json.dumps(event, sort_keys=True) + "\n").encode("utf-8")
         with self._event_lock:
-            with self.event_path.open("a", encoding="utf-8") as handle:
+            with self.event_path.open("a+b") as handle:
+                # Keep JSONL framing intact after a process died mid-record.
+                # The scanner treats the damaged fragment as ambiguous until a
+                # later confirmed STOP reconciliation record.
+                handle.seek(0, os.SEEK_END)
+                if handle.tell():
+                    handle.seek(handle.tell() - 1)
+                    if handle.read(1) != b"\n":
+                        handle.seek(0, os.SEEK_END)
+                        handle.write(b"\n")
                 handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+    def _read_replay_quarantine(self) -> bool:
+        """Recover ambiguous replay intents across broker process restarts."""
+        if not self.event_path.exists():
+            return False
+        pending = False
+        try:
+            with self.event_path.open(encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    try:
+                        event = json.loads(line)
+                    except (ValueError, TypeError):
+                        pending = True
+                        continue
+                    if not isinstance(event, dict):
+                        pending = True
+                        continue
+                    action = event.get("action")
+                    if action == "replay_identity_reserved":
+                        pending = True
+                        request = event.get("request")
+                        if isinstance(request, dict):
+                            request_id = request.get("request_id")
+                            if isinstance(request_id, str):
+                                self._replay_durable_ids[request_id] = dict(request)
+                    elif action == "replay_reconciled_stop":
+                        pending = False
+        except (OSError, UnicodeError, AttributeError):
+            # A damaged journal cannot prove that no replay was in flight.
+            return True
+        return pending
+
+    def _reserve_replay_identity(self, request_id: str, request: Mapping[str, object]) -> None:
+        self._record(request_id=request_id, action="replay_identity_reserved", request=request,
+                     ok=True, duration_s=0.0)
+        self._replay_quarantined = True
+        identity = request.get("request_id")
+        if isinstance(identity, str):
+            self._replay_durable_ids[identity] = dict(request)
+
+    def _reconcile_replay_stop(self, request_id: str, request: Mapping[str, object]) -> None:
+        self._record(request_id=request_id, action="replay_reconciled_stop", request=request,
+                     ok=True, duration_s=0.0, result={"holding": True})
+        self._replay_quarantined = False
 
     def _execute(
         self,
@@ -476,6 +576,7 @@ class RobotBrokerService:
         action: str,
         request: Mapping[str, object],
         arguments: Sequence[str],
+        expected_epoch: int | None = None,
     ) -> BrokerResponse:
         started = time.monotonic()
         stop_admitted = False
@@ -485,6 +586,12 @@ class RobotBrokerService:
             arguments = [*arguments, *self.executor.rates.arguments(action, request)]
         with self._sdk_epoch_lock:
             admitted_epoch = self._sdk_stop_epoch
+        if expected_epoch is not None and expected_epoch != admitted_epoch:
+            return BrokerResponse(
+                status=HTTPStatus.CONFLICT,
+                body={"ok": False, "request_id": request_id,
+                      "error": "request cancelled by a newer STOP"},
+            )
         try:
             if isinstance(self.executor, AgentCommandExecutor) and action == "stop":
                 # The legacy CLI stop does not revoke the human agent lease.
@@ -550,7 +657,50 @@ class RobotBrokerService:
                         or self._allow_physical_sdk_actions)
                         ):
                             raise PermissionError("SDK preview currently permits only read-only routes")
-                        result = self.executor.execute(action, request)
+                        if action == "replay_recording":
+                            assert self._replay_policy is not None
+                            assert self._catalog_paths is not None and self.watchdog is not None
+                            from soarm101_motion.trajectories import TrajectoryLibrary
+                            snapshot = load_pinned_recording(
+                                self._replay_policy, str(request["asset_id"]),
+                                TrajectoryLibrary(self.executor.robot_id, root=self._catalog_paths[1]),
+                            )
+                            result = replay_simulated_recording(
+                                self.executor, self.watchdog, self._replay_policy, snapshot,
+                                speed_scale=self._number(request, "speed_scale"),
+                            )
+                            result["broker_session"] = self.executor.session_evidence
+                        elif action == "replay_sequence":
+                            assert self._replay_policy is not None
+                            assert self._catalog_paths is not None and self.watchdog is not None
+                            from soarm101_motion.poses import PoseLibrary
+                            from soarm101_motion.sequences import SequenceLibrary
+                            from soarm101_motion.trajectories import TrajectoryLibrary
+                            from soarm101_motion.asset_catalog import discover_assets
+                            from soarm101_motion.replay_preflight import preflight_sequence
+                            from soarm101_motion.simulated_sequence import execute_simulated_sequence
+                            pose_path, trajectory_root, sequence_path = self._catalog_paths
+                            poses = PoseLibrary(self.executor.robot_id, path=pose_path)
+                            trajectories = TrajectoryLibrary(self.executor.robot_id, root=trajectory_root)
+                            sequences = SequenceLibrary(self.executor.robot_id, path=sequence_path)
+                            descriptor = next((item for item in discover_assets(
+                                poses, trajectories, sequences) if item.id == request["asset_id"]), None)
+                            if descriptor is None or descriptor.kind != "sequence":
+                                raise ValueError("sequence is missing from configured library")
+                            if descriptor.revision != request["revision"]:
+                                raise PermissionError("sequence revision differs from pinned policy")
+                            preflight = preflight_sequence(
+                                self._replay_policy, str(request["asset_id"]), poses,
+                                trajectories, sequences,
+                                speed_scale=self._number(request, "speed_scale"),
+                            )
+                            result = execute_simulated_sequence(
+                                self.executor, self.watchdog, self._replay_policy,
+                                preflight, poses, trajectories, sequences,
+                                speed_scale=self._number(request, "speed_scale"),
+                            )
+                        else:
+                            result = self.executor.execute(action, request)
                         # The SDK may return a completed result while an
                         # independent STOP is racing with its final settle or
                         # HOLD. The broker must never acknowledge that stale
@@ -586,11 +736,13 @@ class RobotBrokerService:
                 request=request,
                 ok=False,
                 duration_s=duration,
+                result={"stop": exc.stop} if isinstance(exc, ReplayExecutionError) else None,
                 error=str(exc),
             )
             return BrokerResponse(
                 status=HTTPStatus.CONFLICT,
-                body={"ok": False, "request_id": request_id, "error": str(exc)},
+                body={"ok": False, "request_id": request_id, "error": str(exc),
+                      **({"stop": exc.stop} if isinstance(exc, ReplayExecutionError) else {})},
             )
         duration = time.monotonic() - started
         self._record(
@@ -601,10 +753,121 @@ class RobotBrokerService:
             duration_s=duration,
             result=result,
         )
+        if (action == "stop" and isinstance(self.executor, SDKAgentExecutor)
+                and self.executor.simulation_actions
+                and result.get("completed") is True and result.get("holding") is True):
+            self._reconcile_replay_stop(request_id, request)
         return BrokerResponse(
             status=HTTPStatus.OK,
             body={"ok": True, "request_id": request_id, "result": result},
         )
+
+    def _dispatch_replay(self, request_id: str, request: dict[str, object]) -> BrokerResponse:
+        """Reserve caller identity before queuing; reconcile without executing twice."""
+        def rejected(status: int, detail: str) -> BrokerResponse:
+            return BrokerResponse(status, {"ok": False, "request_id": request_id, "error": detail})
+
+        policy = self._replay_policy
+        if policy is None or not isinstance(self.executor, SDKAgentExecutor):
+            return rejected(HTTPStatus.FORBIDDEN, "recording replay is not configured")
+        if set(request) != {"request_id", "session_id", "asset_id", "revision", "speed_scale"}:
+            return rejected(HTTPStatus.BAD_REQUEST, "invalid recording replay fields")
+        caller_id = request["request_id"]
+        scale = request["speed_scale"]
+        if (not isinstance(caller_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", caller_id)
+                or not isinstance(request["asset_id"], str)
+                or not request["asset_id"].startswith("soarm101/recording/")
+                or not isinstance(request["revision"], str)
+                or isinstance(scale, bool) or not isinstance(scale, (int, float))
+                or not math.isfinite(scale) or not 0 < scale <= policy.max_speed_scale):
+            return rejected(HTTPStatus.BAD_REQUEST, "invalid recording replay identity or speed")
+        if request["session_id"] != self.executor.session_id:
+            return rejected(HTTPStatus.CONFLICT, "SDK session changed; prior outcome is unknown")
+        try:
+            policy.require_asset(request["asset_id"], request["revision"])
+        except PermissionError as exc:
+            return rejected(HTTPStatus.FORBIDDEN, str(exc))
+        with self._replay_lock:
+            prior = self._replay_requests.get(caller_id)
+            if prior is not None:
+                original, response = prior
+                if original != request:
+                    return rejected(HTTPStatus.CONFLICT, "request ID already bound to another payload")
+                if response is None:
+                    return rejected(HTTPStatus.CONFLICT, "replay is pending; outcome unknown")
+                return response
+            durable = self._replay_durable_ids.get(caller_id)
+            if durable is not None:
+                detail = ("request ID already bound to another payload" if durable != request
+                          else "request outcome is unknown after broker restart; never retry this ID")
+                return rejected(HTTPStatus.CONFLICT, detail)
+            if self._replay_quarantined:
+                return rejected(HTTPStatus.CONFLICT,
+                                "prior replay outcome is unknown; confirmed STOP required")
+            if len(self._replay_requests) >= 1000:
+                return rejected(HTTPStatus.CONFLICT, "replay request retention capacity reached")
+            with self._sdk_epoch_lock:
+                admitted_epoch = self._sdk_stop_epoch
+            self._reserve_replay_identity(request_id, request)
+            self._replay_requests[caller_id] = (dict(request), None)
+        # If execution/auditing unexpectedly raises, keep the pending reservation.
+        # An unknown result must never grant a fresh execution of this identity.
+        response = self._execute(request_id=request_id, action="replay_recording",
+                                 request=request, arguments=[], expected_epoch=admitted_epoch)
+        with self._replay_lock:
+            self._replay_requests[caller_id] = (dict(request), response)
+        return response
+
+    def _dispatch_sequence(self, request_id: str, request: dict[str, object]) -> BrokerResponse:
+        """Execute one caller-identified, policy-pinned sequence in simulation."""
+        def rejected(status: int, detail: str) -> BrokerResponse:
+            return BrokerResponse(status, {"ok": False, "request_id": request_id, "error": detail})
+        policy = self._replay_policy
+        if policy is None or not isinstance(self.executor, SDKAgentExecutor):
+            return rejected(HTTPStatus.FORBIDDEN, "sequence replay is not configured")
+        if set(request) != {"request_id", "session_id", "asset_id", "revision", "speed_scale"}:
+            return rejected(HTTPStatus.BAD_REQUEST, "invalid sequence replay fields")
+        caller_id, scale = request["request_id"], request["speed_scale"]
+        if (not isinstance(caller_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", caller_id)
+                or not isinstance(request["asset_id"], str)
+                or not request["asset_id"].startswith("soarm101/sequence/")
+                or not isinstance(request["revision"], str)
+                or isinstance(scale, bool) or not isinstance(scale, (int, float))
+                or not math.isfinite(scale) or not 0 < scale <= policy.max_speed_scale):
+            return rejected(HTTPStatus.BAD_REQUEST, "invalid sequence replay identity or speed")
+        if request["session_id"] != self.executor.session_id:
+            return rejected(HTTPStatus.CONFLICT, "SDK session changed; prior outcome is unknown")
+        try:
+            policy.require_asset(request["asset_id"], request["revision"])
+        except PermissionError as exc:
+            return rejected(HTTPStatus.FORBIDDEN, str(exc))
+        with self._replay_lock:
+            prior = self._replay_requests.get(caller_id)
+            if prior is not None:
+                original, response = prior
+                if original != request:
+                    return rejected(HTTPStatus.CONFLICT, "request ID already bound to another payload")
+                return (rejected(HTTPStatus.CONFLICT, "sequence is pending; outcome unknown")
+                        if response is None else response)
+            durable = self._replay_durable_ids.get(caller_id)
+            if durable is not None:
+                detail = ("request ID already bound to another payload" if durable != request
+                          else "request outcome is unknown after broker restart; never retry this ID")
+                return rejected(HTTPStatus.CONFLICT, detail)
+            if self._replay_quarantined:
+                return rejected(HTTPStatus.CONFLICT,
+                                "prior replay outcome is unknown; confirmed STOP required")
+            if len(self._replay_requests) >= 1000:
+                return rejected(HTTPStatus.CONFLICT, "replay request retention capacity reached")
+            with self._sdk_epoch_lock:
+                admitted_epoch = self._sdk_stop_epoch
+            self._reserve_replay_identity(request_id, request)
+            self._replay_requests[caller_id] = (dict(request), None)
+        response = self._execute(request_id=request_id, action="replay_sequence",
+                                 request=request, arguments=[], expected_epoch=admitted_epoch)
+        with self._replay_lock:
+            self._replay_requests[caller_id] = (dict(request), response)
+        return response
 
     def _project_capabilities(self, response: BrokerResponse) -> BrokerResponse:
         if response.status != HTTPStatus.OK:
@@ -642,6 +905,25 @@ class RobotBrokerService:
                 ]
             visible["actions"] = actions
         visible["broker_profile"] = self.profile.public()
+        if self._replay_policy is not None:
+            assert isinstance(self.executor, SDKAgentExecutor)
+            visible["recording_replay"] = {
+                "mode": "simulation", "session_id": self.executor.session_id,
+                "policy_sha256": self._replay_policy_sha256,
+                "max_speed_scale": self._replay_policy.max_speed_scale,
+                "max_duration_s": self._replay_policy.max_duration_s,
+                "max_start_error_rad": self._replay_policy.max_start_error_rad,
+                "max_start_gripper_error": self._replay_policy.max_start_gripper_error,
+                "request_retention": "SDK session lifetime; maximum 1000 IDs; no eviction",
+                "automatic_entry_motion": False,
+            }
+            visible["sequence_replay"] = {
+                "mode": "simulation", "session_id": self.executor.session_id,
+                "policy_sha256": self._replay_policy_sha256,
+                "max_steps": self._replay_policy.max_steps,
+                "max_duration_s": self._replay_policy.max_duration_s,
+                "request_retention": "SDK session lifetime; maximum 1000 IDs; no eviction",
+            }
         if isinstance(self.executor, (AgentCommandExecutor, SDKAgentExecutor)):
             visible["broker_requested_motion"] = asdict(self.executor.rates)
             visible["broker_motion_rate_limits"] = asdict(self.executor.rates)
@@ -741,6 +1023,44 @@ class RobotBrokerService:
                 request=request,
                 arguments=["state", "--robot-id", self.executor.robot_id],
             )
+        if method == "POST" and path == "/v1/replay-recording":
+            return self._dispatch_replay(request_id, request)
+        if method == "POST" and path == "/v1/replay-sequence":
+            return self._dispatch_sequence(request_id, request)
+        if method == "POST" and path == "/v1/assets":
+            if self._catalog_paths is None:
+                return BrokerResponse(HTTPStatus.FORBIDDEN, {
+                    "ok": False, "request_id": request_id, "error": "asset catalog not configured",
+                })
+            offset, limit, kind = request.get("offset", 0), request.get("limit", 50), request.get("kind")
+            if (set(request) - {"offset", "limit", "kind"} or type(offset) is not int
+                    or type(limit) is not int or not 0 <= offset <= 10000 or not 1 <= limit <= 100
+                    or kind not in (None, "pose", "recording", "sequence")):
+                return BrokerResponse(HTTPStatus.BAD_REQUEST, {
+                    "ok": False, "request_id": request_id, "error": "invalid catalog filter or pagination",
+                })
+            try:
+                from soarm101_motion.asset_catalog import discover_assets
+                from soarm101_motion.poses import PoseLibrary
+                from soarm101_motion.sequences import SequenceLibrary
+                from soarm101_motion.trajectories import TrajectoryLibrary
+                pose_path, trajectory_root, sequence_path = self._catalog_paths
+                assets = discover_assets(
+                    PoseLibrary(self.executor.robot_id, path=pose_path),
+                    TrajectoryLibrary(self.executor.robot_id, root=trajectory_root),
+                    SequenceLibrary(self.executor.robot_id, path=sequence_path),
+                )
+                if len(assets) > 10000:
+                    raise ValueError("catalog exceeds item limit")
+                filtered = [asset for asset in assets if kind is None or asset.kind == kind]
+                page = filtered[offset:offset + limit]
+                result = {"items": [asdict(asset) for asset in page], "offset": offset,
+                          "next_offset": offset + len(page) if offset + len(page) < len(filtered) else None}
+            except Exception:
+                return BrokerResponse(HTTPStatus.CONFLICT, {
+                    "ok": False, "request_id": request_id, "error": "asset catalog unavailable or invalid",
+                })
+            return BrokerResponse(HTTPStatus.OK, {"ok": True, "request_id": request_id, "result": result})
         if isinstance(self.executor, SDKAgentExecutor) and not (
             self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
                         or self._allow_physical_sdk_actions
@@ -1051,6 +1371,9 @@ class BrokerRelayService:
             result = response.body.get("result")
             if isinstance(result, dict):
                 # Do not claim the external agent may call host-only STOP.
+                if "replay_recording" not in self.agent_profile.allowed_tools:
+                    result = dict(result)
+                    result.pop("recording_replay", None)
                 allowed_actions = {
                     "robot_state": "state", "go_pose": "go_pose",
                     "jog_joint": "joint", "jog_cartesian": "jog",
@@ -1122,6 +1445,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile", type=Path,
         help="trusted-host JSON capability profile, pinned for broker process lifetime",
     )
+    parser.add_argument("--catalog-poses", type=Path, help="operator-selected pose library file")
+    parser.add_argument("--catalog-trajectories", type=Path, help="operator-selected trajectory root")
+    parser.add_argument("--catalog-sequences", type=Path, help="operator-selected sequence library file")
+    parser.add_argument("--replay-policy", type=Path,
+                        help="operator-pinned replay policy; supervised simulation actions only")
     envelope = parser.add_argument_group("trusted host motion envelope")
     envelope.add_argument(
         "--max-joint-speed-deg-s",
@@ -1296,6 +1624,17 @@ def main(argv: list[str] | None = None) -> int:
             preview.allowed_tools | {"stop", "robot_health"}
         )
         backend_profile = CapabilityProfile.from_document(backend_document)
+    paths = (args.catalog_poses, args.catalog_trajectories, args.catalog_sequences)
+    if any(path is not None for path in paths) and not all(path is not None for path in paths):
+        raise SystemExit("catalog requires all three operator-selected library paths")
+    catalog_paths = tuple(paths) if all(path is not None for path in paths) else None
+    replay_policy = None
+    if args.replay_policy is not None:
+        if not simulated_actions or args.watchdog_timeout_s is None:
+            raise SystemExit("--replay-policy requires supervised SDK simulation actions")
+        if args.replay_policy.stat().st_size > 262144:
+            raise SystemExit("replay policy exceeds 256 KiB")
+        replay_policy = ReplayPolicy.from_document(json.loads(args.replay_policy.read_text()))
     service = RobotBrokerService(
         executor=executor,
         token=token,
@@ -1304,6 +1643,8 @@ def main(argv: list[str] | None = None) -> int:
         allow_simulated_sdk_posts=simulated_actions,
         allow_physical_sdk_actions=physical_actions,
         watchdog_timeout_s=args.watchdog_timeout_s,
+        catalog_paths=catalog_paths,  # type: ignore[arg-type]
+        replay_policy=replay_policy,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     relay_server = None
@@ -1318,9 +1659,14 @@ def main(argv: list[str] | None = None) -> int:
             ("0.0.0.0", relay_port), relay_service,
         )
     limits = config.motion_limits_human
+    authority_note = (
+        "simulation-only; no physical authority lease"
+        if simulated_actions else
+        "human arming remains external via 'soarm101 agent arm'"
+    )
     print(
         f"SO-ARM101 agent broker listening on http://{args.host}:{args.port}; "
-        "human arming remains external via 'soarm101 agent arm'; "
+        f"{authority_note}; "
         f"motion envelope joint={limits['max_joint_speed_deg_s']:g} deg/s, "
         f"{limits['max_joint_acceleration_deg_s2']:g} deg/s^2; "
         f"linear={limits['max_linear_speed_mm_s']:g} mm/s, "

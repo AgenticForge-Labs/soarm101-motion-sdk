@@ -116,6 +116,7 @@ class SDKAgentExecutor:
         self.rates = rates
         self.simulation = simulation
         self.simulation_actions = simulation_actions
+        self._simulation_stop_requested = False
         self.physical_trial = physical_trial
         self.physical_actions = physical_actions
         self._supervised_lease: AgentAuthority | None = None
@@ -312,7 +313,7 @@ class SDKAgentExecutor:
         raise PermissionError("agent motion requires an active calibrated follower")
 
     def validate_supervision(self) -> None:
-        """Read the existing lease only; never connect hardware or create authority."""
+        """Validate the bound session; physical modes also require their human lease."""
         self._require_active()
         arm = self._session
         if arm is None:
@@ -320,6 +321,10 @@ class SDKAgentExecutor:
         self._assert_session_identity(arm)
         if self._bound_calibration_id is None:
             raise PermissionError("supervision requires bound calibration identity")
+        if self.simulation_actions:
+            if self._bound_calibration_id != "simulation":
+                raise PermissionError("simulation watchdog is bound to a non-simulation identity")
+            return
         lease = self._authority.require(
             robot_id=self.robot_id, calibration_id=self._bound_calibration_id,
         )
@@ -375,6 +380,9 @@ class SDKAgentExecutor:
             raise PermissionError("experimental physical SDK mode permits bounded joint actions only")
         def run() -> dict[str, object]:
             self._require_active(stop=action == "stop")
+            if (self.simulation_actions and self._simulation_stop_requested
+                    and action not in {"state", "capabilities", "stop"}):
+                raise PermissionError("simulation motion was stopped; restart the broker session")
             if action in {"go_pose", "joint", "jog", "gripper", "sleep", "sleep_up"}:
                 if self.motion_guard is not None:
                     self.motion_guard()
@@ -502,6 +510,10 @@ class SDKAgentExecutor:
                 camera_settings=profile.camera(name),
             )
         if action == "stop":
+            if self.simulation_actions:
+                # Keep the simulation permission boundary fail-closed after
+                # STOP, without minting or requiring a physical authority lease.
+                self._simulation_stop_requested = True
             # Revocation occurs even if the physical/fake HOLD subsequently
             # fails. A human must issue fresh motion authority after STOP.
             self._revoke_authority()
@@ -637,8 +649,12 @@ class SDKAgentExecutor:
             }
 
         # Physical state changes always re-evaluate the current human lease.
-        # No preflight on a cached state or static profile grants motion.
-        authority = self._require_authority(arm)
+        # Explicit SDK simulation is never physical authority and must remain
+        # usable without creating an agent lease or touching authority storage.
+        authority = (
+            {"armed": False, "mode": "simulation"}
+            if self.simulation_actions else self._require_authority(arm)
+        )
         rates = self.rates.selected(action, request)
         if action == "go_pose":
             name = self._text(request, "name")

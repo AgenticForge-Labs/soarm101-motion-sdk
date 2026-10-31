@@ -13,3 +13,6 @@ build/
 
 # Local uv resolver state for this library package; not a source artifact.
 uv.lock
+
+# Local agent logs and captured observations may contain sensitive data.
+soarm101-agent-runs/

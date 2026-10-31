@@ -245,3 +245,17 @@ are never available through the agent relay. MCP discovery still reflects the
 pinned external profile. The physical native rollout only permits approved camera
 observations and bounded joint movement; it excludes saved poses, gripper and
 Cartesian operations. Human arming remains outside both MCP and OpenShell.
+
+An operator-configured `list_assets` tool can list approved library metadata in
+bounded pages. It appears only when the pinned broker profile grants it and the
+broker is configured with all three library paths; see [Broker](agent-broker.md).
+It does not authorize or perform playback, and cached revisions do not replace
+live checks. This adds no physical authority or raw file access to MCP callers.
+
+
+`replay_recording(request_id, session_id, asset_id, revision, speed_scale)` is
+exposed only by an explicit profile grant backed by supervised simulation replay
+configuration. Use the current SDK session ID and exact operator-pinned catalog
+revision. Reuse request identity to reconcile a lost response; pending means
+unknown outcome. It does not authorize sequences, entry moves or physical replay.
+See [broker replay](agent-broker.md#supervised-recording-replay-simulation-only).
