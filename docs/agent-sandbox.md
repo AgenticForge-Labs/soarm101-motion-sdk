@@ -157,7 +157,7 @@ requested actions, results, rejections, and camera SHA evidence. Physical
 success is **never** inferred from MCP tool availability or model intention.
 
 **Local validation gate:** run
-`pytest tests/test_agent_sandbox.py tests/test_mcp_server.py
+`pytest tests/test_agent_sandbox.py tests/test_broker_mcp_independence.py
 tests/test_capability_profile.py`, then rebuild images and run read-only
 Hermes/Codex trials; inspect discovered tools, image content, event hashes,
 and profile denial before any human-armed supervised motion trial.
