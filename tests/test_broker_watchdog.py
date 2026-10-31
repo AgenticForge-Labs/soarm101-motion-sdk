@@ -98,8 +98,8 @@ def test_motion_requires_host_heartbeat_and_persistent_session(supervised):
     assert len([event for event in events if event["action"] == "watchdog_trip"]) == 1
 
 
-@pytest.mark.parametrize("change", ["clear", "expire", "replace", "corrupt", "fault"])
-def test_authority_or_session_failure_trips_even_with_fresh_heartbeat(supervised, change):
+@pytest.mark.parametrize("change", ["clear", "expire", "replace", "corrupt"])
+def test_simulation_watchdog_does_not_depend_on_human_motion_lease(supervised, change):
     service, executor, authority, now = supervised
     assert heartbeat(service).status == 200
     if change == "clear":
@@ -117,8 +117,14 @@ def test_authority_or_session_failure_trips_even_with_fresh_heartbeat(supervised
         authority.issue(robot_id="so101", calibration_id="simulation", minutes=2)
     elif change == "corrupt":
         authority.path.write_text("not json")
-    else:
-        executor._fault(OSError("injected transport failure"))
+    assert heartbeat(service).status == 200
+    assert service.watchdog.status["state"] == "watching"
+
+
+def test_simulation_watchdog_still_trips_on_session_fault(supervised):
+    service, executor, authority, _now = supervised
+    assert heartbeat(service).status == 200
+    executor._fault(OSError("injected transport failure"))
     assert heartbeat(service).status == 409
     assert service.watchdog.status["state"] == "tripped"
     assert not authority.path.exists()

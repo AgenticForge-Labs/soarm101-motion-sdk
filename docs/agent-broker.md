@@ -330,6 +330,135 @@ reported as unconfirmed revocation after attempting STOP. Events include
 that outcome for supervisor teardown without another physical STOP.
 
 Native simulation can opt into the same watchdog with `--watchdog-timeout-s`.
-The watchdog requires a live broker process, Python scheduling, responsive SDK/bus
-and host power. It cannot stop hardware after broker/host death or guarantee a
-physical braking distance. Physical watchdog qualification remains outstanding.
+Its heartbeat requires a live, identity-bound simulation session; it does not
+read, create or require a human physical lease. The watchdog still requires a
+live broker process, Python scheduling, responsive SDK and host power. It cannot
+stop a process after broker/host death or establish physical braking distance.
+Physical watchdog qualification remains outstanding.
+
+## Opt-in asset catalog
+
+`list_assets` is disabled in the default profile. To enable this read-only route,
+the trusted operator must select an explicit profile granting `list_assets` and
+supply all three existing library locations using `--catalog-poses`,
+`--catalog-trajectories`, and `--catalog-sequences`. The example profile is
+`docs/examples/mcp-profile-asset-catalog.json`. Startup rejects incomplete
+configuration. Callers cannot supply paths. `POST /v1/assets` accepts only
+`offset` (0..10000), `limit` (1..100), and optional `kind` (`pose`, `recording`,
+`sequence`), returning sorted pages and content revisions. `robotctl assets`
+uses this route. The broker and any agent relay both enforce their pinned profiles.
+Descriptors do not disclose host library paths and compatibility is unchecked.
+Listing is not replay permission; recording replay requires the separate simulation-only grant below.
+Existing experimental physical profiles remain unchanged and do not gain catalog
+access. The catalog may reveal asset names and provenance to granted callers.
+
+### Replay policy work in progress
+
+`ReplayPolicy` validates an operator-owned, versioned mapping from exact asset
+IDs to SHA-256 revisions, binds the policy to a robot and calibration, and bounds
+speed scale, step count, duration, and joint start tolerance. It can compare a
+complete measured start state against a requested one. This is a software
+admission primitive whose recording and sequence routes are wired only to the
+simulation-only broker below. Its bounds are not qualified physical operating
+limits. Separately attended physical qualification remains required before any
+physical replay feature.
+
+`preflight_sequence` is an offline, non-executing validator for a conservative
+subset of sequence steps. It checks the sequence and each pose/trajectory against
+operator-pinned revisions and calibration provenance, bounds loops and known
+recording/wait duration, records each recording entry target, and detects asset
+changes during the preflight. Pose and entry motion duration is unknown, so the
+reported duration is a lower bound, not a deadline guarantee. Cartesian pose
+steps, joint overrides, and primitives are rejected pending explicit validation.
+The result is not a motion plan or authority: runtime must recheck current state,
+all assets, the whole path, rate/effort/workspace constraints, the broker profile
+grant, deadline and STOP epoch. No broker replay endpoint is enabled by this
+validator.
+
+`preflight_recording` also validates one pinned recording, including its
+calibration, scaled recording duration and entry position against supplied joint
+and gripper snapshots. The replay policy separately bounds joint and gripper
+entry error. These values are not a live-state guarantee: an eventual execution
+path must reacquire measured state under broker authority and STOP fencing and
+validate the entry path and every replay frame before movement. Recorded duration
+excludes entry motion and settling.
+
+Recording preflight now loads a bounded in-memory snapshot of the operator-pinned
+NPZ and metadata bytes, verifies their combined revision, checks archive and
+metadata identity, and constructs validated trajectory samples from those bytes.
+A later file change cannot alter that snapshot; a fresh load detects a changed
+revision. This does not replace the required live authority and state checks or
+make the snapshot itself an execution grant.
+
+A simulation-only development helper, `replay_simulated_recording`, exercises a
+pinned recording through an already-connected simulated SDK session. It requires
+simulation action mode, the broker's explicit replay tool grant, an exact
+operator-pinned replay policy and a live trusted watchdog heartbeat. Simulation
+replay is unarmed and does not create or require a human physical lease. It checks
+matching simulation identity, pinned content and entry state, and validates
+planned joint samples against broker rate ceilings. It uses no entry move and
+rejects a start outside the controller's own tolerance. A deadline requests the
+existing STOP path and late completion is rejected. The broker route below reuses
+this helper. Physical replay remains unavailable.
+
+After simulated replay has attempted enabling, a planning or playback failure
+requests the same independent STOP path and reports its separate outcome. An
+already-pending or failed STOP remains unconfirmed rather than being reported as
+cancelled or safe. These semantics are software-only and do not qualify hardware.
+
+
+### Supervised recording replay (simulation only)
+
+`POST /v1/replay-recording`, `robotctl replay-recording` and the MCP tool
+`replay_recording` require an explicit profile grant. Default MCP/profile tools
+exclude replay. The broker requires `list_assets`, `stop`, all three configured
+library paths, `--sdk-simulation-actions`, `--watchdog-timeout-s` and
+`--replay-policy /operator/policy.json`. The immutable `ReplayPolicy` schema v1
+requires `robot_id`, `calibration_id` (`simulation`), `allowed_assets` (an object
+mapping exact catalog IDs to `sha256:…` revisions), `max_speed_scale` (0..1),
+`max_steps` (1..1000), `max_duration_s` (0..300), `max_start_error_rad` (0..0.1)
+and `max_start_gripper_error` (0..0.1), with positive bounds. No caller supplies
+paths, policy, entry moves, rate overrides or sequence steps. Restricted physical
+modes reject replay configuration; no physical replay is enabled.
+
+The complete payload is `request_id`, `session_id`, `asset_id`, `revision` and
+`speed_scale`. Obtain `session_id` from current state `broker_session.id` or
+capabilities `recording_replay.session_id`. The request ID is a caller-chosen
+1..128 character ASCII identifier containing letters, digits, `.`, `_` or `-`.
+The SDK simulation session must already exist with a live trusted supervisor
+heartbeat. The exact profile grant and replay policy authorize this simulation
+route; no human lease is required or created. Playback reuses that session, the
+ordinary broker lock and independent STOP,
+loads a fresh hash-verified in-memory snapshot, checks calibration and live
+joint/gripper entry state, and runs SDK planning, workspace, rate, effort, fault
+and completion checks. It never moves to the entry pose automatically. Joint
+samples obey broker speed/acceleration ceilings; gripper writes receive the
+broker's pinned raw speed and acceleration. The playback deadline starts after simulated enable and includes SDK
+planning, replanning, playback and settling. It is a software
+deadline dependent on Python scheduling and responsive SDK STOP, not a real-time
+guarantee.
+
+Repeated IDs with the same payload return the retained terminal response, even
+after STOP within the current broker process. While pending they return conflict
+with unknown outcome; changed payloads conflict. Responses and pending
+reservations are retained for the SDK session lifetime, up to 1000 IDs with no
+eviction. Capacity exhaustion rejects new IDs. Durable reservation records also
+bind caller IDs to their original payload across broker restarts. A restarted
+broker rejects reused IDs because it cannot reconstruct the original response;
+it keeps all replay quarantined until a later confirmed simulated STOP is
+durably recorded. A damaged or truncated journal also quarantines replay until
+that reconciliation record. Never assign a new ID automatically to retry an
+unknown action. Broker audit events retain caller/session/asset/revision identity. A failed action after enable attempts
+STOP and returns separate `stop.outcome` evidence (`confirmed` or `unconfirmed`).
+STOP, lease expiry/replacement/revocation and watchdog failure fence future work;
+queued work and late success are rejected without rearming or resuming.
+
+Pose-only replay, automatic entry motion, durable terminal response lookup,
+OpenShell runner forwarding of replay policy/library configuration, packaged
+stdio/clean-install replay acceptance and physical qualification remain gaps.
+Sequence execution uses an ordered preflight result, re-resolves pinned
+dependencies before enable and before each step, and rechecks measured start
+state, rate, watchdog, lease and STOP fencing at runtime. Saved poses use the
+SDK's guarded joint path; recordings use the existing guarded replay without
+automatic entry movement; gripper and wait steps retain their declared order.
+This route remains simulation-only and is not hardware qualification.

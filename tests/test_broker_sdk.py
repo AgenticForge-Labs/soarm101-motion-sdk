@@ -193,7 +193,6 @@ def test_broker_cli_sdk_simulation_actions_keep_one_session_and_stop(
     monkeypatch.setenv("SOARM101_AGENT_AUTHORITY_PATH", str(authority_file))
     monkeypatch.setenv("SOARM101_BROKER_TOKEN", "synthetic-test-only-token")
     lease = AgentAuthorityStore(authority_file)
-    lease.issue(robot_id="so101", calibration_id="simulation", minutes=5)
 
     doc = {
         "schema_version": 1, "name": "simulated-small-joint",
@@ -222,7 +221,7 @@ def test_broker_cli_sdk_simulation_actions_keep_one_session_and_stop(
             advertised = caps.body["result"]["actions"]
             assert "joint" in advertised and "stop" in advertised
             assert "go_pose" not in advertised and "jog" not in advertised
-            assert caps.body["result"]["authority"]["armed"] is True
+            assert caps.body["result"]["authority"]["armed"] is False
             first = service.dispatch("GET", "/v1/state")
             assert first.status == 200
             assert first.body["result"]["broker_session"]["sdk_connect_count"] == 1
@@ -243,7 +242,7 @@ def test_broker_cli_sdk_simulation_actions_keep_one_session_and_stop(
                 {"joint": "shoulder_pan", "delta_deg": 0.1},
             )
             assert later.status == 409
-            assert "not armed" in later.body["error"]
+            assert "simulation motion was stopped" in later.body["error"]
             events.extend(json.loads(line) for line in event_path.read_text().splitlines())
 
         def server_close(self):

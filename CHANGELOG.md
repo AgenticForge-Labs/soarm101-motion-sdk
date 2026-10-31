@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — bounded recording replay (software simulation only)
+
+- Add an explicit broker/profile/robotctl/MCP recording replay capability requiring
+  a pinned policy, selected libraries, existing simulated SDK session and trusted
+  watchdog heartbeat. Simulation replay uses the broker's exact profile grant and
+  replay policy; it does not create or require physical authority.
+  Revalidate exact content, calibration, entry state and broker joint rates;
+  forward pinned gripper speed and acceleration through guarded SDK playback.
+- Retain replay request IDs and responses for the session (1000 IDs, no eviction),
+  reject conflicting payloads and stale sessions, fence queued and late work on
+  STOP/watchdog loss, and return separate failure STOP evidence.
+- Keep sequences, automatic entry moves and physical replay disabled. No physical
+  modes are widened and no hardware qualification is claimed.
+
 ## Unreleased — broker watchdog and attended OpenShell physical joint mode
 
 - Add a broker-owned monotonic heartbeat deadline, independent STOP on supervisor loss or lease/session failure, terminal admission fencing, queued/late-result rejection, and recorded STOP outcomes without automatic retries. Lease revocation failure cannot suppress STOP. Canonical controller admission inhibition also fences actions still in facade/path preflight.
@@ -1078,3 +1092,29 @@
 - Expanded CLI/GUI parity with arm discovery, absolute Cartesian moves, named pose capture/replay, trajectory replay, sequence execution, and effort-status inspection through shared SDK operations.
 - Added read-only TCP/table repeated-point calibration support in `examples/tcp_table_calibration.py` for separating base/table offsets from pose-dependent TCP or kinematic error.
 - Reused the workspace-validated Cartesian plan for execution so GUI and CLI linear moves run IK and time-parameterization only once.
+
+### Unreleased — offline asset catalog
+
+- Add read-only descriptors for configured pose, trajectory, and sequence
+  libraries, including revisions, provenance, and calibration-only status.
+  This does not add broker routes or authorize replay.
+- Add explicitly profiled, operator-path-scoped read-only catalog discovery to
+  the broker, `robotctl`, and MCP facade. Defaults and physical grants do not
+  expand; replay remains unavailable.
+- Add non-executing replay policy primitives for operator-pinned asset revisions,
+  calibration identity, resource bounds, and start-state comparison. No replay
+  broker capability or physical authorization is introduced.
+- Add offline, fail-closed preflight for a bounded subset of sequence steps and
+  their pinned pose/trajectory dependencies; replay is not yet exposed.
+- Add non-executing direct-recording preflight and separate joint/gripper entry
+  tolerances; execution remains unavailable pending broker lifecycle integration.
+- Bind offline recording preflight to bounded, revision-checked in-memory
+  snapshots; actual broker replay and physical qualification remain outstanding.
+- Add a simulation-only recording replay development helper using pinned
+  snapshots and the existing watchdog, planner and STOP; it is not exposed as
+  an agent route and has no physical replay authority.
+- Report confirmed versus unconfirmed STOP outcomes on simulated replay failures;
+  use the existing independent arm/gripper STOP path and revoke the lease.
+- Add separately granted, simulation-only pinned sequence execution for ordered
+  saved-pose, recording, gripper, and wait steps, with request reconciliation,
+  live state/rate checks, lease expiry, STOP fencing, and late-success rejection.

@@ -131,6 +131,40 @@ def create_server(
         """Read live measured joints, TCP, gripper and status through MCP, not host CLI."""
         return call("GET", "/v1/state")
 
+    @mcp.tool(annotations=read_only)
+    def list_assets(
+        offset: int = 0, limit: int = 50,
+        kind: Literal["pose", "recording", "sequence"] | None = None,
+    ) -> dict[str, object]:
+        """List approved-library metadata; this does not authorize replay."""
+        return call("POST", "/v1/assets", {"offset": offset, "limit": limit, "kind": kind})
+
+    @mcp.tool(annotations=action)
+    def replay_recording(
+        request_id: str, session_id: str, asset_id: str, revision: str, speed_scale: float,
+    ) -> dict[str, object]:
+        """Replay an operator-pinned recording in supervised simulation only.
+
+        Reuse the same request ID and payload to reconcile a lost response.
+        Never retry an unknown outcome with a new ID. No automatic entry move.
+        """
+        return call("POST", "/v1/replay-recording", {
+            "request_id": request_id, "session_id": session_id,
+            "asset_id": asset_id, "revision": revision,
+            "speed_scale": _finite(speed_scale, "speed_scale"),
+        })
+
+    @mcp.tool(annotations=action)
+    def replay_sequence(
+        request_id: str, session_id: str, asset_id: str, revision: str, speed_scale: float,
+    ) -> dict[str, object]:
+        """Execute an operator-pinned sequence in supervised SDK simulation only."""
+        return call("POST", "/v1/replay-sequence", {
+            "request_id": request_id, "session_id": session_id,
+            "asset_id": asset_id, "revision": revision,
+            "speed_scale": _finite(speed_scale, "speed_scale"),
+        })
+
     @mcp.tool(annotations=read_only, structured_output=False)
     def capture_camera(camera: CameraName):
         """Capture a fresh permitted robot camera image through MCP and inspect its pixels.
@@ -268,13 +302,13 @@ def create_server(
     def operate_robot_task(task: str, strategy: str = "auto") -> str:
         return task_prompt(task, strategy)
 
-    if allowed_tools is not None:
-        enabled = frozenset(allowed_tools)
-        if enabled - frozenset(TOOL_ROUTES):
-            raise ValueError("unknown MCP capability in selected profile")
-        for tool in TOOL_ROUTES:
-            if tool not in enabled:
-                mcp.remove_tool(tool)
+    enabled = (frozenset(allowed_tools) if allowed_tools is not None
+               else frozenset(TOOL_ROUTES) - {"list_assets", "replay_recording", "replay_sequence"})
+    if enabled - frozenset(TOOL_ROUTES):
+        raise ValueError("unknown MCP capability in selected profile")
+    for tool in TOOL_ROUTES:
+        if tool not in enabled:
+            mcp.remove_tool(tool)
 
     return mcp
 

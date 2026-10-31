@@ -13,7 +13,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, cast
 
 
 # Tool names match the optional MCP facade. Routes are the already-shipped broker API.
@@ -21,6 +21,9 @@ TOOL_ROUTES: dict[str, tuple[str, str]] = {
     "robot_health": ("GET", "/v1/health"),
     "robot_capabilities": ("GET", "/v1/capabilities"),
     "robot_state": ("GET", "/v1/state"),
+    "list_assets": ("POST", "/v1/assets"),
+    "replay_recording": ("POST", "/v1/replay-recording"),
+    "replay_sequence": ("POST", "/v1/replay-sequence"),
     "capture_camera": ("POST", "/v1/capture"),
     "go_pose": ("POST", "/v1/go-pose"),
     "jog_joint": ("POST", "/v1/joint"),
@@ -40,6 +43,12 @@ MAX_PROFILE_MODEL_JOG_MM = 50.0
 
 class ProfileError(ValueError):
     """A profile is invalid or requests capabilities not in the bounded API."""
+
+
+def _json_number(value: object) -> float:
+    # Keep float()'s existing acceptance/rejection behavior while telling mypy
+    # which JSON scalar conversion is intended.
+    return float(cast(str | int | float, value))
 
 
 def _unique_names(value: object, allowed: frozenset[str], field: str) -> frozenset[str]:
@@ -74,7 +83,7 @@ class CapabilityProfile:
     def full(cls) -> "CapabilityProfile":
         return cls(
             name="default-full",
-            allowed_tools=frozenset(TOOL_ROUTES),
+            allowed_tools=frozenset(TOOL_ROUTES) - {"list_assets", "replay_recording", "replay_sequence"},
             allowed_cameras=CAMERA_NAMES,
         )
 
@@ -176,14 +185,15 @@ class CapabilityProfile:
                 raise PermissionError("requested camera is not enabled by this profile")
         elif tool == "jog_joint" and self.max_joint_delta_deg is not None:
             try:
-                delta = float(payload.get("delta_deg", 0.0))
+                delta = _json_number(payload.get("delta_deg", 0.0))
             except (TypeError, ValueError) as exc:
                 raise ProfileError("delta_deg must be a finite number") from exc
             if not math.isfinite(delta) or abs(delta) > self.max_joint_delta_deg:
                 raise PermissionError("joint adjustment exceeds profile limit")
         elif tool == "jog_cartesian" and self.max_model_jog_mm is not None:
             try:
-                coords = [float(payload.get(k, 0.0)) for k in ("x_mm", "y_mm", "z_mm")]
+                coords = [_json_number(payload.get(k, 0.0))
+                          for k in ("x_mm", "y_mm", "z_mm")]
             except (TypeError, ValueError) as exc:
                 raise ProfileError("jog coordinates must be finite numbers") from exc
             if any(not math.isfinite(x) for x in coords):

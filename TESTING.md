@@ -40,11 +40,13 @@ and binds **only to 127.0.0.1**. A bounded example profile is
 physical-agent brokers remain CLI-backed. `--sdk-simulation-preview`
 remains read-only and mutually exclusive with the new option.
 
-With a local human-issued **simulation** authority lease, multiple
-bounded simulated joint actions reuse one SDK session. STOP uses
-the existing independent SDK dispatch, invalidates queued actions,
-revokes the lease and writes broker events. STOP completion in
-simulation is **not proof of physical servo braking**. This PR does
+No physical authority lease is used or required for simulation actions.
+Multiple bounded simulated joint actions reuse one SDK session; responses
+identify the session as simulation and report `armed: false`. STOP uses
+the existing independent SDK dispatch, invalidates queued actions, latches
+the simulation session against further motion until restart, and writes
+broker events. STOP completion in simulation is **not proof of physical servo
+braking**. This PR does
 not change the OpenShell listener, start/stop live services, turn on
 real-hardware POST, or use the trial's restricted physical capability
 bypass. The ordinary physical broker does not have a `--sdk-physical`
@@ -2467,10 +2469,10 @@ sandboxes were deleted. The existing local Hermes image initially lacked
 Dockerfile fixed the check. No reasoning-model task, physical connection, camera
 capture or physical authority was used in this transport check.
 
-The real-time simulated CLI Sleep tests can trip the unchanged 50 ms command
-lateness guard under concurrent full-suite/image-build load. Run the supported
-Python suites sequentially when checking this timing-sensitive behavior; do not
-relax motion guards to accommodate a busy validation host.
+CLI `--simulation` uses the deterministic non-real-time backend so ordinary
+software checks do not depend on host scheduling latency. Explicit real-time
+simulation (`sim-demo --realtime`) continues to enforce the unchanged 50 ms
+command lateness guard; do not relax motion guards to accommodate a busy host.
 
 Final sequential validation (2026-10-22): **797 tests passed** on Python 3.10.20
 and **797 tests passed** on Python 3.12.13, both with **82.01%** coverage (70%
@@ -2478,3 +2480,153 @@ required). Ruff, compile checks and source/wheel builds passed. The wheel includ
 the watchdog module and both packaged agent Dockerfiles. An additional mypy
 comparison found no new diagnostics in the changed modules; existing repository
 type errors remain outside this change.
+
+Read-only asset catalog software tests (no hardware):
+
+```bash
+pytest -o addopts='' tests/test_asset_catalog.py tests/test_calibration_provenance.py tests/test_trajectories.py tests/test_poses.py
+```
+
+These tests cover descriptor ordering, calibration status, content mutation, and
+snapshot races. They do not qualify broker replay or physical motion.
+
+Broker asset-catalog software checks:
+
+```bash
+pytest -o addopts='' tests/test_broker_asset_catalog.py tests/test_capability_profile.py tests/test_broker.py tests/test_mcp_server.py tests/test_asset_catalog.py
+```
+
+These use fake libraries and an in-process MCP client; they do not exercise
+physical motion or establish replay authority.
+
+Replay policy admission primitives, without robot motion:
+
+```bash
+pytest -o addopts='' tests/test_replay_policy.py tests/test_asset_catalog.py tests/test_broker_asset_catalog.py
+```
+
+These do not exercise replay or qualify physical limits.
+
+Offline replay sequence preflight checks:
+
+```bash
+pytest -o addopts='' tests/test_replay_preflight.py tests/test_replay_policy.py tests/test_asset_catalog.py tests/test_broker_asset_catalog.py
+```
+
+They cover pinned dependencies, calibration, step and duration bounds, entry
+metadata, unsupported steps and mutation during preflight; they do not execute
+sequence playback or prove physical safety. The preflight report also includes
+an ordered step manifest with the revision of each pose or recording dependency,
+so future execution can preserve interleaving without resolving mutable names.
+
+Recording preflight tests include stale revisions, calibration mismatch, entry
+joint/gripper mismatch and known recording duration. They use supplied fake state,
+not measured hardware feedback.
+
+Pinned recording snapshot and preflight tests:
+
+```bash
+pytest -o addopts='' tests/test_replay_snapshot.py tests/test_replay_preflight.py tests/test_replay_policy.py tests/test_asset_catalog.py tests/test_broker_asset_catalog.py
+```
+
+Simulation-only recording helper and watchdog tests:
+
+```bash
+pytest -o addopts='' tests/test_simulated_replay.py tests/test_replay_snapshot.py tests/test_replay_preflight.py tests/test_replay_policy.py tests/test_broker_watchdog.py
+```
+
+They include simulated completion, STOP during preflight, deadline and lease
+revocation races with deliberately delayed completion. They do not test an agent
+broker replay route, all fault cleanup, or physical hardware.
+
+Simulated replay failure cleanup and existing dual arm/gripper STOP tests:
+
+```bash
+pytest -o addopts='' tests/test_simulated_replay.py tests/test_broker_stop_faults.py tests/test_broker_watchdog.py
+```
+
+
+Broker recording replay software acceptance (no hardware):
+
+```bash
+.venv/bin/pytest --no-cov -q tests/test_broker_replay.py tests/test_simulated_replay.py tests/test_replay_snapshot.py tests/test_replay_preflight.py tests/test_replay_policy.py tests/test_broker_watchdog.py tests/test_broker_stop_faults.py tests/test_trajectories.py
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/pytest -m 'not hardware' -q
+.venv/bin/ruff check .
+```
+
+The broker tests cover explicit grants, strict payloads, pinned revisions and
+mutation, same-session reuse, rate forwarding, request retention/conflicts,
+lease and heartbeat requirements, queued STOP, lease/deadline/STOP late-success
+races, failure cleanup, relay denial and in-process MCP forwarding/filtering.
+These are software evidence only; packaged stdio and clean-install replay acceptance,
+durable restart reconciliation and physical qualification remain outstanding.
+Ordered sequence execution is now covered by the broker tests added here, in
+simulation only. Existing helper-only test descriptions above refer to those
+earlier isolated tests, not to the broker tests added here.
+
+M2 sequence execution addition (simulation/fake only):
+
+```bash
+.venv/bin/pytest --no-cov -q tests/test_broker_replay.py tests/test_replay_preflight.py tests/test_simulated_replay.py
+.venv/bin/ruff check src/soarm101_motion/broker.py src/soarm101_motion/capability_profile.py src/soarm101_motion/mcp_server.py src/soarm101_motion/robotctl.py src/soarm101_motion/simulated_sequence.py tests/test_broker_replay.py
+```
+
+The added sequence cases cover a saved pose, gripper, wait and recording in
+manifest order, request-ID reconciliation, and an independent STOP during pose
+execution with late success rejected. These remain software-only evidence.
+
+M2 broker replay verification (2026-10-29, Python 3.14.4, NumPy 2.5.3,
+MCP 2.3.0; dependency pins unchanged):
+
+- `PATH="$PWD/.venv/bin:$PATH" .venv/bin/pytest -m 'not hardware' -o addopts='--cov=soarm101_motion --cov-report=term --cov-fail-under=70' -q`:
+  **859 passed**, **82.60% coverage**, including all 99 focused replay,
+  preflight, policy, snapshot, watchdog, STOP and trajectory cases.
+- `.venv/bin/ruff check .`, `git diff --check` and compilation of changed
+  implementation modules passed.
+- Targeted mypy could not check project code: installed NumPy stubs use a
+  Python 3.12 `type` statement while the repository targets Python 3.10
+  (`numpy/__init__.pyi:737`). This environment compatibility gap remains.
+- An initial full run lacked `.venv/bin` on PATH, causing three existing
+  `agent-as-code --check` subprocess tests to miss `soarm101`. Correcting PATH
+  resolved them. A symlink diagnostic compatibility regression introduced during
+  implementation was fixed before the successful final run.
+- No hardware, live robot service, physical arming, commits, push or PR operations occurred.
+
+M2 durable simulated replay recovery follow-up (2026-10-30, Python 3.12.13):
+
+- Added broker-restart restoration of replay caller-ID/payload reservations.
+  A previously reserved ID stays unavailable after confirmed STOP because the
+  prior terminal response cannot be reconstructed. Malformed/truncated JSONL
+  fails closed; a later durable confirmed simulated STOP restores framing and
+  releases the global quarantine. Replay admission captures the SDK STOP epoch
+  with its durable reservation, closing the reservation-to-dispatch STOP race.
+- Regression coverage includes same-ID and changed-payload reuse after restart,
+  truncated JSON and invalid UTF-8 journal fragments, and STOP between durable
+  reservation and dispatch. No physical robot or hardware tests were used.
+- `PATH="$PWD/.venv/bin:$PATH" .venv/bin/pytest --no-cov -q tests/test_simulated_replay.py tests/test_broker_replay.py` passed; `.venv/bin/ruff check .` and `git diff --check` passed.
+- Full non-hardware run with coverage produced **869 passed, 1 failed**,
+  **82.48% coverage**. The lone failure was the existing simulated CLI Sleep
+  deadline test, which missed its 50 ms guard by 0.062 s under suite load.
+  Rerunning that test alone passed; the focused replay suites passed afterward.
+  No motion deadline or guard was relaxed.
+- `.venv/bin/mypy src/soarm101_motion/broker.py --follow-imports=silent` passed.
+  Broader project mypy remains limited by the previously recorded NumPy-stub /
+  Python 3.10 target incompatibility (`numpy/__init__.pyi:737`); mypy is not
+  part of this change's required lint gate.
+- No hardware, live robot service, physical arming, commits or pushes occurred.
+
+M2 simulated CLI Sleep timing follow-up (2026-10-30):
+
+- Regular CLI `--simulation` now selects the deterministic non-real-time backend,
+  matching `SimulationBackend`'s documented behavior. `sim-demo --realtime`
+  remains the explicit wall-clock-paced simulation path. The controller's 50 ms
+  command lateness guard is unchanged for real-time backends.
+- `PATH="$PWD/.venv/bin:$PATH" .venv/bin/pytest --no-cov -q` completed with
+  exit code 0; 870 tests were collected and passed. `.venv/bin/ruff check .`
+  and `git diff --check` passed. No hardware tests or hardware were used.
+- `.venv/bin/mypy src/soarm101_motion/cli/main.py --follow-imports=silent`
+  reported 73 existing diagnostics in other CLI code (dynamic config kwargs,
+  result unions, tool protocols and NumPy sequence annotations); it reported no
+  diagnostic at the changed simulation selection. Scoped typing remains
+  non-clean due to those repository baseline issues.
+- No hardware, physical arming, commits or pushes occurred.

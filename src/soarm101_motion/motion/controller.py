@@ -1610,6 +1610,7 @@ class MotionController:
         cancel_event: threading.Event,
         *,
         gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
     ) -> MotionResult:
         samples = plan.command_samples
         gripper_samples = plan.gripper_samples
@@ -1619,6 +1620,7 @@ class MotionController:
                 STOCK_GRIPPER,
                 gripper_samples[0],
                 speed_raw=gripper_speed_raw,
+                acceleration_raw=gripper_acceleration_raw,
             )
             if plan.pre_roll is not None:
                 self._execute_plan(
@@ -1655,6 +1657,7 @@ class MotionController:
                     STOCK_GRIPPER,
                     gripper_samples[index],
                     speed_raw=gripper_speed_raw,
+                    acceleration_raw=gripper_acceleration_raw,
                 )
                 if index % monitor_every == 0 or index == len(samples) - 1:
                     previous_actual = self._monitor_motion(
@@ -2067,6 +2070,7 @@ class MotionController:
         move_to_start: bool = True,
         tcp: Pose | None = None,
         gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
         wait: bool = True,
     ) -> MotionResult | MotionHandle[MotionResult]:
         with self._state_lock:
@@ -2082,6 +2086,7 @@ class MotionController:
                     plan,
                     event,
                     gripper_speed_raw=gripper_speed_raw,
+                    gripper_acceleration_raw=gripper_acceleration_raw,
                 )
             )
         return handle.wait() if wait else handle

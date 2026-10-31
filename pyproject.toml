@@ -22,7 +22,9 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-  "numpy>=1.26",
+  # NumPy 2.5 stubs use Python 3.12 type syntax; keep the declared Python 3.10
+  # target parseable by mypy while upstream's stubs catch up.
+  "numpy>=1.26,<2.5",
   "scipy>=1.11",
   "pyserial>=3.5",
   "ftservo-python-sdk==2.0.0",

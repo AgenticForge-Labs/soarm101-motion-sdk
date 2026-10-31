@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "name": "asset-catalog-read-only",
+  "tools": ["robot_health", "robot_capabilities", "robot_state", "list_assets"],
+  "cameras": [],
+  "limits": {}
+}

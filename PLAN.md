@@ -6,6 +6,26 @@ The native SDK simulator, separate-token NVIDIA OpenShell relay and host-supervi
 
 The development entries below retain original experimental details and historical decision context. Where an older section calls a PR open/draft or assigns future work to “#94”, that is its **at-the-time status**, not the present merged or production state. Consult `README.md`, `AGENTS.md` and `docs/architecture.md` for today's architectural boundary.
 
+## Simulation-only pinned replay package integration (2026-10-30)
+
+Forge Puppeteer now has an isolated installed-wheel smoke at
+`forge-puppeteer/scripts/soarm101-wheel-smoke.sh`. It builds wheels from
+current Forge and SDK source snapshots, stages dependencies, installs into a
+fresh offline Python 3.12 environment, and runs the actual SDK MCP broker in
+SDK simulation through Forge's installed MCP launcher. The smoke verifies a
+pinned sequence, stale revision rejection, and holding-confirmed simulated
+STOP without loading sibling source trees at runtime. It does not exercise
+recording replay separately: each replay reserves its identity until confirmed
+STOP, and STOP ends that simulation session, so recording coverage needs a
+second fresh broker session. No physical operation is part of this check.
+
+The compatible SDK (`0.1.0.dev8`) and Forge bridge (`0.1.0`) are unpublished
+artifacts. Locally built wheel metadata does not identify Git revisions, and
+the default dependency staging resolves version ranges at run time. Reproducing
+the exact build therefore requires retaining the copied source snapshots and
+the complete dependency wheelhouse with hashes; the smoke is software evidence,
+not a released dependency pin or deployment artifact.
+
 ## Historical implementation plans and qualification records
 
 ## #93 — OpenShell persistent SDK integration (merged; simulation only)
@@ -928,6 +948,22 @@ its own persistent connection for live controls; it must not launch CLI subproce
 - [ ] Tag the first hardware-validated alpha release.
 
 ## Later
+
+## M2 simulated replay recovery follow-up (2026-10-30)
+
+Durable replay reservations now restore caller request-ID/payload bindings on
+broker restart. A replay ID with unknown outcome remains unusable after a
+confirmed STOP; new IDs are admitted only after a durable confirmed-STOP
+reconciliation record. Malformed/truncated journal records fail closed and a
+later STOP record restores JSONL framing and clears the quarantine. Replay
+reservation captures the SDK STOP epoch atomically, so a STOP between reservation
+and dispatch cancels the queued replay. These guarantees are simulation/software
+evidence only; durable terminal response reconstruction, clean-install/stdio
+acceptance and physical replay remain unimplemented. Focused replay tests and
+Ruff passed. The full non-hardware suite reported 869 passed and one
+pre-existing timing-sensitive simulated CLI Sleep deadline miss (0.062 s beyond
+its 50 ms guard); the test passed in isolation. Full-run coverage was 82.48%.
+See `TESTING.md` for commands and tooling limitations.
 
 - [ ] Revisit optional agent sandboxing after the bounded CLI/camera robot loop is
   physically validated. The bounded CLI is the robot capability boundary; a sandbox may
