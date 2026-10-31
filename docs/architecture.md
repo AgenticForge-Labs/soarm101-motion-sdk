@@ -6,6 +6,25 @@ The SO-ARM101 Motion SDK is the **deterministic device control boundary** for ca
 
 This repository intentionally does not own higher-level scene perception, lab scheduling, ROS middleware, performer coordination, or reasoning-model decisions. Those remain above the motion/camera layer.
 
+## MCP ownership transition
+
+The native SDK and its trusted host broker remain the single
+source of truth for hardware state, motion admission, calibration,
+resource/session authority, watchdog and STOP. The broker's
+`BROKER_CAPABILITY_ROUTES` registry is independent of an MCP package;
+the previous `TOOL_ROUTES` constant is currently an alias to the
+same underlying registry. Forge Puppeteer is the intended future
+owner of all robot MCP tool registration, resources and prompts,
+including a lightweight standalone MCP-only mode for any agent.
+The **current** SDK-bundled `soarm101-mcp` is still available as a
+migration compatibility path; this is not a completed transfer.
+
+See [Puppeteer MCP migration](puppeteer-mcp-migration.md) for the
+file-by-file handoff and safeguards. It must not create a second
+motor controller or weaken the host broker profile; Intel MCP
+scaffolding, Docker and NVIDIA OpenShell are optional MCP packaging
+or agent isolation choices rather than SDK dependencies.
+
 ## NVIDIA OpenShell agentic robotics integration
 
 ```text
