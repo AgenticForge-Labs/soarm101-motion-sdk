@@ -15,8 +15,8 @@ from soarm101_motion.capability_profile import (
 
 def test_broker_route_map_is_the_canonical_mcp_independent_registry() -> None:
     assert TOOL_ROUTES is BROKER_CAPABILITY_ROUTES
-    assert len(BROKER_CAPABILITY_ROUTES) == 15
-    assert len(set(BROKER_CAPABILITY_ROUTES.values())) == 15
+    assert len(BROKER_CAPABILITY_ROUTES) == 14
+    assert len(set(BROKER_CAPABILITY_ROUTES.values())) == 14
     assert ROUTE_TO_TOOL[("POST", "/v1/sleep_up")] == "sleep_up"
     assert {
         "robot_health", "robot_capabilities", "robot_state", "list_assets",
