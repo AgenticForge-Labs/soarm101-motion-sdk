@@ -7,14 +7,14 @@ watchdog/STOP fencing into SDK `main`. Reconcile the duplicate SDK and
 Puppeteer MCP interfaces according to
 [docs/puppeteer-mcp-migration.md](docs/puppeteer-mcp-migration.md).
 
-This branch prepares a broker-owned, MCP-independent capability
-registry and test coverage. The SDK-owned `soarm101-mcp` and
-OpenShell client bundle are retained **until** Puppeteer's replacement
-is accepted at a fixed version/SHA. A later SDK cleanup can then
-remove those MCP-only files, extras and entrypoints without removing
-the standalone native SDK, agent broker, CLI, GUI, simulation or
-hardware safety system. No physical agent behavior or production
-runtime is altered by this preparatory change.
+Puppeteer's broker-native MCP and isolated client-bundle code is
+merged in its PRs #4–#6. This SDK cleanup branch removes the
+SDK-owned `soarm101-mcp` and its `[mcp]` extra, and delegates
+OpenShell's client-only source staging to
+`forge_puppeteer.mcp.openshell_bundle`. Native SDK, agent broker,
+simulated replay, CLI/GUI and supervisor STOP are unchanged.
+Cross-repository installed-wheel and OpenShell acceptance are
+**still pending**; keep this change off production until qualified.
 
 
 ## Current roadmap status (2026-10-21)
