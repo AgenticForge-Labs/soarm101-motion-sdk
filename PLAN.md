@@ -1,5 +1,22 @@
 # Development plan
 
+## Puppet-owned robot MCP transition (post PR #97)
+
+PR #97 has **merged** its simulation asset catalog, pinned replay and
+watchdog/STOP fencing into SDK `main`. Reconcile the duplicate SDK and
+Puppeteer MCP interfaces according to
+[docs/puppeteer-mcp-migration.md](docs/puppeteer-mcp-migration.md).
+
+This branch prepares a broker-owned, MCP-independent capability
+registry and test coverage. The SDK-owned `soarm101-mcp` and
+OpenShell client bundle are retained **until** Puppeteer's replacement
+is accepted at a fixed version/SHA. A later SDK cleanup can then
+remove those MCP-only files, extras and entrypoints without removing
+the standalone native SDK, agent broker, CLI, GUI, simulation or
+hardware safety system. No physical agent behavior or production
+runtime is altered by this preparatory change.
+
+
 ## Current roadmap status (2026-10-21)
 
 The native SDK simulator, separate-token NVIDIA OpenShell relay and host-supervisor STOP were merged in PRs #90–#93. The current working change adds a broker-owned heartbeat/lease watchdog and opt-in attended native physical joint mode. Software fault-injection and simulated HTTP/subprocess tests cover the watchdog; general native physical control is **not hardware-qualified or the default**. The remaining milestone is locally attended encoder/STOP/watchdog qualification, followed by an explicit production deployment decision. Saved poses, gripper and Cartesian actions remain excluded from the experimental physical agent profile. This work has no assigned PR number.
