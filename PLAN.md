@@ -28,8 +28,8 @@ The development entries below retain original experimental details and historica
 Forge Puppeteer now has an isolated installed-wheel smoke at
 `forge-puppeteer/scripts/soarm101-wheel-smoke.sh`. It builds wheels from
 current Forge and SDK source snapshots, stages dependencies, installs into a
-fresh offline Python 3.12 environment, and runs the actual SDK MCP broker in
-SDK simulation through Forge's installed MCP launcher. The smoke verifies a
+fresh offline Python 3.12 environment, and runs the actual SDK **simulation broker directly** through
+Forge Puppeteer's installed MCP launcher (without a nested SDK MCP). The smoke verifies a
 pinned sequence, stale revision rejection, and holding-confirmed simulated
 STOP without loading sibling source trees at runtime. It does not exercise
 recording replay separately: each replay reserves its identity until confirmed
