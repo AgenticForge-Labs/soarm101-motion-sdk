@@ -222,7 +222,7 @@ Available interfaces include:
 
 - The human/developer `soarm101` CLI and restricted `soarm101 agent ...` CLI.
 - A broker with operator-pinned profiles, authentication, and audit events.
-- An optional stdio MCP adapter that exposes the same permitted broker capabilities.
+- An optional **Forge Puppeteer** stdio MCP interface that exposes reviewed broker capabilities without adding a second SDK MCP server.
 - An OpenShell sandbox runner with Hermes, Codex, and operator-defined adapters.
 
 **Important deployment distinction:** The standard physical agent broker remains CLI-backed. Native SDK simulation uses `--sdk-simulation`; the separate `--sdk-physical` option enables only experimental attended joint actions under the [restricted profile and watchdog contract](docs/agent-sandbox.md#attended-native-physical-joint-agents-experimental). General physical cutover still requires supervised in-motion STOP/watchdog qualification. Acknowledged software HOLD is not certified braking.
