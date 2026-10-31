@@ -84,7 +84,7 @@ generated `openshell-effective-policy.yaml` and broker profile, never bypass
 the policy. This permission grants no writes, device access, or physical motion.
 
 
-The built-in Hermes and Codex agents now support an **opt-in** MCP interface.
+The built-in Hermes and Codex agents support an **opt-in** MCP interface through Forge Puppeteer (which must be installed separately on the trusted host).
 The default `robotctl` mode remains the original comparison baseline.
 The Puppeteer MCP subprocess runs inside the *same* OpenShell sandbox and calls the
 same authenticated trusted-host broker; there is no extra motion authority,
