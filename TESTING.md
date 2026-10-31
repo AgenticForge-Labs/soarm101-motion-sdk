@@ -1,6 +1,6 @@
 # Testing
 
-## Broker/Puppeteer MCP migration seam (post SDK PR #97)
+## SDK-owned MCP removal: Puppet-only integration validation (post #97–#98)
 
 The SDK capability registry now has an MCP-independent canonical name,
 `BROKER_CAPABILITY_ROUTES` (`TOOL_ROUTES` is the exact same dictionary
