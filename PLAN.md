@@ -1,6 +1,6 @@
 # Development plan
 
-## Puppet-owned robot MCP transition (post PR #97)
+## Puppeteer-owned robot MCP transition (post PR #97)
 
 PR #97 has **merged** its simulation asset catalog, pinned replay and
 watchdog/STOP fencing into SDK `main`. Reconcile the duplicate SDK and
