@@ -1,5 +1,15 @@
 # Optional MCP adapter for the bounded SO-ARM101 broker
 
+> **Compatibility implementation:** This SDK-owned `soarm101-mcp`
+> remains the currently supported agent MCP path while its tool
+> registration, resources, prompts, image handling and client-only
+> OpenShell packaging are transferred to Forge Puppeteer. The
+> [ownership handoff](puppeteer-mcp-migration.md) specifies parity and
+> safety acceptance. The broker and SDK remain authoritative for
+> all physical actions. Do not delete this implementation merely
+> because Puppeteer has a partial overlapping MCP adapter.
+
+
 The `soarm101-mcp` command is a **stdio MCP server**, not another robot controller,
 not a new network listener, and not a replacement for the existing `robotctl` client.
 It translates a fixed set of typed MCP tools into the **existing authenticated**
