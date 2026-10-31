@@ -13,11 +13,13 @@ source of truth for hardware state, motion admission, calibration,
 resource/session authority, watchdog and STOP. The broker's
 `BROKER_CAPABILITY_ROUTES` registry is independent of an MCP package;
 the previous `TOOL_ROUTES` constant is currently an alias to the
-same underlying registry. Forge Puppeteer is the intended future
-owner of all robot MCP tool registration, resources and prompts,
-including a lightweight standalone MCP-only mode for any agent.
-The **current** SDK-bundled `soarm101-mcp` is still available as a
-migration compatibility path; this is not a completed transfer.
+same underlying registry. Forge Puppeteer is the source owner of robot-facing MCP tool
+registration, resources and prompts, with an optional standalone
+MCP-only mode for any compatible agent. This SDK cleanup branch
+removes the historical `soarm101-mcp` implementation and retains
+only its own native SDK, broker and trusted host sandbox supervisor.
+Real OpenShell and installed-wheel compatibility remain unvalidated;
+this source migration is not an approved physical deployment.
 
 See [Puppeteer MCP migration](puppeteer-mcp-migration.md) for the
 file-by-file handoff and safeguards. It must not create a second
