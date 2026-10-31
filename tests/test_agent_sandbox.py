@@ -1838,6 +1838,7 @@ def test_mcp_policy_allows_reading_only_its_isolated_venv(
 def test_mcp_run_uses_pinned_broker_and_temporary_client_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str,
 ) -> None:
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     from soarm101_motion.capability_profile import CapabilityProfile
 
     task = tmp_path / "TASK.md"
@@ -1945,6 +1946,7 @@ def test_sandbox_mcp_cli_accepts_interface_and_profile() -> None:
 def test_read_only_mcp_reduces_broker_even_when_input_profile_allows_motion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     from soarm101_motion.capability_profile import CapabilityProfile
 
     seen: list[CapabilityProfile] = []
@@ -1992,6 +1994,7 @@ def test_read_only_mcp_reduces_broker_even_when_input_profile_allows_motion(
 def test_broker_token_is_redacted_from_agent_output_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     class LeakySyntheticAgent(FakeOpenShell):
         def exec(self, name, command, *, workdir="/sandbox", env=None, timeout=1800):
             result = super().exec(name, command, workdir=workdir, env=env, timeout=timeout)
@@ -2042,6 +2045,7 @@ def test_read_only_task_uses_matching_interface() -> None:
 def test_mcp_probe_failure_reports_redacted_diagnostics_before_handoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int, stdout: str,
 ) -> None:
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     MCP_PYTHON = agent_sandbox.MCP_PYTHON
 
     class FailedMcp(FakeOpenShell):
@@ -2135,6 +2139,8 @@ def test_openshell_broker_process_receives_human_pinned_rate_flags(
 def test_physical_sdk_sandbox_preflights_and_supervises_shared_relay(
     tmp_path, monkeypatch, agent, interface,
 ):
+    if interface == "mcp":
+        pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     task = tmp_path / "TASK.md"
     task.write_text("Inspect and perform one approved small joint action.\n")
     file = tmp_path / "profile.json"
