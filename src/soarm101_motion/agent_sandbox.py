@@ -27,8 +27,21 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .agent_adapters import HERMES
-from .agent_mcp_runtime import MCP_PYTHON, client_files as mcp_client_files
-from .agent_mcp_runtime import config_file as mcp_config_file, skill_text as mcp_skill_text
+# The native SDK and its host-side OpenShell broker are independent of MCP.
+# Only an explicit --interface mcp run imports Puppeteer's client packaging.
+MCP_PYTHON = "/opt/soarm101-mcp/bin/python"
+
+
+def _puppeteer_mcp():
+    try:
+        from forge_puppeteer.mcp import openshell_bundle
+    except ImportError:
+        raise AgentSandboxError(
+            "MCP agent mode requires Forge Puppeteer on the trusted host; "
+            "install forge-puppeteer[mcp] separately. SDK Python/CLI/GUI and "
+            "robotctl agent modes do not require Puppeteer."
+        ) from None
+    return openshell_bundle
 from .config import SOARM101Config
 from .capability_profile import CapabilityProfile
 from .agent_adapters import get_agent_adapter
@@ -1395,7 +1408,7 @@ def run_agent(
             encoding="utf-8",
         )
         skill.write_text(
-            mcp_skill_text(agent=adapter.name) if interface == "mcp" else adapter.skill_text(),
+            _puppeteer_mcp().skill_text(agent=adapter.name) if interface == "mcp" else adapter.skill_text(),
             encoding="utf-8",
         )
         prepared_files = list(
@@ -1406,14 +1419,28 @@ def run_agent(
             )
         )
         if interface == "mcp":
+            bundle = _puppeteer_mcp()
+            # Only the SDK's pure broker capability contract is staged in the
+            # sandbox. No motor SDK, calibration, host controller or supervisor
+            # credential is mounted in the agent's namespace.
+            bundled_config = bundle.config_file(
+                root,
+                allowed_tools=chosen_profile.allowed_tools,
+                broker_port=broker_port,
+                simulation_only=sdk_simulation,
+                physical_authority=not read_only and not sdk_simulation,
+            )
+            prepared_files.append((bundled_config, bundle.CONFIG_PATH))
             if adapter.name == "hermes":
                 config_path = root / "hermes-config.yaml"
                 if not config_path.is_file():
                     raise AgentSandboxError("Hermes one-run config is not prepared")
-                mcp_config_file(root, agent="hermes", hermes_config=config_path)
+                bundle.agent_config(root, agent="hermes", hermes_config=config_path)
             else:
-                prepared_files.append(mcp_config_file(root, agent="codex"))
-            prepared_files.extend(mcp_client_files(root))
+                prepared_files.append(bundle.agent_config(root, agent="codex"))
+            prepared_files.extend(bundle.client_files(
+                root, sdk_profile_path=Path(__file__).with_name("capability_profile.py")
+            ))
         if selected_auth.uses_login_state:
             source_auth = _codex_login_auth_path(selected_auth.name)
             if not _valid_codex_chatgpt_auth(source_auth):
@@ -1599,14 +1626,20 @@ def run_agent(
                     sandbox,
                     [
                         MCP_PYTHON, "-c",
-                        "from soarm101_motion.mcp_server import create_server, broker_visible_tools; "
-                        "create_server(allowed_tools=broker_visible_tools()); "
-                        "print('soarm101-mcp-ready')",
+                        "from forge_puppeteer.mcp.launcher import "
+                        "load_config, _soarm_startup_grants, create_execution; "
+                        "from forge_puppeteer.mcp.server import create_server; "
+                        "from forge_puppeteer.mcp.soarm101 import register_soarm101_tools; "
+                        "c=load_config('/sandbox/puppeteer-soarm101.json'); "
+                        "_soarm_startup_grants(c); "
+                        "p,r=create_execution(c); "
+                        "create_server(r, p, c.instance_id, register_soarm101_tools); "
+                        "print('puppeteer-mcp-ready')",
                     ],
                     env=environment,
                     timeout=30,
                 )
-                if probe.returncode != 0 or "soarm101-mcp-ready" not in probe.stdout:
+                if probe.returncode != 0 or "puppeteer-mcp-ready" not in probe.stdout:
                     # Preserve the actual preflight failure while keeping the
                     # one-run broker token out of CLI output and artifacts.
                     # An installed image is not proof the MCP import/network
