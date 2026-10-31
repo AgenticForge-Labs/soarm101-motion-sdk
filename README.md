@@ -42,7 +42,7 @@ Hermes / Codex / other supported agent (reasoning, planning, camera interpretati
                  v
 NVIDIA OpenShell sandbox (isolated agent, scoped files and network)
                  |
-        robotctl or stdio MCP client
+        robotctl or Puppeteer MCP client (optional)
                  |
                  v
 Authenticated host broker (pinned capabilities, lease, audit, lifecycle)
