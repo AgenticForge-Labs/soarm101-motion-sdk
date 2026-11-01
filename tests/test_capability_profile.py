@@ -1,8 +1,7 @@
-"""Profile validation, broker enforcement, and MCP discovery are hardware-free."""
+"""Profile validation and broker enforcement are hardware-free; MCP discovery belongs to Puppeteer."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -10,7 +9,6 @@ import pytest
 
 from soarm101_motion.broker import RobotBrokerService
 from soarm101_motion.capability_profile import CapabilityProfile, ProfileError
-from soarm101_motion.mcp_server import broker_visible_tools, create_server
 
 
 def document(**overrides):
@@ -165,29 +163,6 @@ def test_read_only_profile_enforced_by_broker_not_just_mcp(tmp_path: Path) -> No
     assert executor.calls == [("state", "--robot-id", "so101")]
 
 
-def test_mcp_lists_only_broker_authorized_tools() -> None:
-    pytest.importorskip("mcp")
-    from mcp import Client
-
-    profile = CapabilityProfile.from_document(document())
-
-    def request(*, method: str, path: str, payload=None):
-        assert method == "GET" and path == "/v1/profile"
-        return {"ok": True, "result": profile.public()}
-
-    enabled = broker_visible_tools(request)
-    assert enabled == profile.allowed_tools
-    server = create_server(request_fn=request, allowed_tools=enabled)
-
-    async def run() -> None:
-        async with Client(server) as client:
-            available = {tool.name for tool in (await client.list_tools()).tools}
-            assert available == enabled
-            assert "jog_joint" not in available
-            assert "move_gripper" not in available
-
-    asyncio.run(run())
-
 
 def test_supervised_manipulation_profile_uses_physical_height_guard() -> None:
     example = (
@@ -213,9 +188,3 @@ def test_supervised_manipulation_profile_uses_physical_height_guard() -> None:
         })
 
 
-def test_invalid_broker_tool_list_fails_closed() -> None:
-    def dishonest(*, method: str, path: str, payload=None):
-        return {"ok": True, "result": {"tools": ["arm"]}}
-
-    with pytest.raises(RuntimeError, match="unsupported"):
-        broker_visible_tools(dishonest)
