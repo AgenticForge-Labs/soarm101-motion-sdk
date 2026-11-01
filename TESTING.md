@@ -17,6 +17,22 @@ ruff check src/soarm101_motion/capability_profile.py \
   tests/test_broker_mcp_independence.py
 ```
 
+The SDK's former MCP-specific assertions have been removed from
+`tests/test_broker_asset_catalog.py`, `tests/test_broker_replay.py`, and
+`tests/test_capability_profile.py` because the deleted
+`soarm101_motion.mcp_server` is no longer an SDK capability. The retained
+SDK tests still exercise authoritative asset grants, pinned replay,
+profile validation, STOP and broker enforcement. Agent-facing tool
+discovery, stdio commands, revocation and MCP profile intersection must
+instead be tested in sibling `forge-puppeteer` (not assumed from SDK CI):
+
+```bash
+cd ../forge-puppeteer
+uv run --extra mcp --extra dev pytest tests/robots/test_soarm101_mcp.py \\
+  tests/robots/test_soarm101_broker_http.py \\
+  tests/robots/test_soarm101_openshell_bundle.py -q
+```
+
 Do not interpret successful local tests as an attended physical STOP test.
 The SDK-owned MCP executable and server source are removed on this
 cleanup branch. The new Puppeteer MCP must pass installed-wheel,
