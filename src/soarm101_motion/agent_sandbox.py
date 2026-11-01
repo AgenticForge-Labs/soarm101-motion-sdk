@@ -26,7 +26,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from .agent_adapters import HERMES
+from .agent_adapters import HERMES, get_agent_adapter, resolve_agent_adapter
+from .capability_profile import CapabilityProfile
+from .config import SOARM101Config
+
+
 # The native SDK and its host-side OpenShell broker are independent of MCP.
 # Only an explicit --interface mcp run imports Puppeteer's client packaging.
 MCP_PYTHON = "/opt/soarm101-mcp/bin/python"
@@ -42,10 +46,6 @@ def _puppeteer_mcp():
             "robotctl agent modes do not require Puppeteer."
         ) from None
     return openshell_bundle
-from .config import SOARM101Config
-from .capability_profile import CapabilityProfile
-from .agent_adapters import get_agent_adapter
-from .agent_adapters import resolve_agent_adapter
 
 
 DEFAULT_AGENT = "hermes"
