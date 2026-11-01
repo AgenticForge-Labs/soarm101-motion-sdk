@@ -718,6 +718,9 @@ def test_run_codex_chatgpt_uses_dedicated_login_state(
 def test_sdk_simulation_sandbox_uses_separate_host_stop_and_bounded_agent_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The MCP client is owned by Puppeteer, an optional host dependency.
+    # Exercise this combined-mode test when that package is installed.
+    pytest.importorskip("forge_puppeteer.mcp.openshell_bundle")
     task = tmp_path / "TASK.md"
     task.write_text("Move shoulder pan by 0.1 degree, then report.\n", encoding="utf-8")
     fake = FakeOpenShell()
