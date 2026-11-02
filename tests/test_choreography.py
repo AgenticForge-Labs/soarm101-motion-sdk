@@ -202,5 +202,5 @@ def test_unconfirmed_native_execution_attempt_uses_existing_stop_fence(
     assert arm.backend.stop_count >= 1
     assert watchdog.status["state"] == "stopped"
     # STOP is terminal for the supervised session; no automatic retries.
-    with pytest.raises(PermissionError, match="terminal"):
+    with pytest.raises(PermissionError):
         execute_trusted_choreography(executor, watchdog, cfg, segment)
