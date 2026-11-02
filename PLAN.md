@@ -1,3 +1,17 @@
+## Puppeteer three-robot program — PR 3 of 5 (2026-11-02)
+
+PR #11 and PR #12 are merged into `forge-puppeteer/main`; they provide
+the personality-independent behavior scheduler and native Reachy/StackChan
+expression packs. This SDK PR adds **trusted deterministic choreography**
+as a separate content-pinned, operator-supervised native execution path.
+It does not widen the existing untrusted agent tool/jog envelope or claim
+physical validation. Puppeteer PR 4 must bind this SDK capability under
+the same one-performer execution authority and multiperformer scheduler;
+Conversationalist PR 5 then connects the shared 4G conversation. Local
+Codex hardware qualification occurs after the five software PRs merge.
+
+See [trusted choreography](docs/trusted-choreography.md).
+
 # Development plan
 
 ## Experimental S-curve profiles
