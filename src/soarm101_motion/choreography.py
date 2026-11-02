@@ -25,7 +25,7 @@ import numpy as np
 
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.hardware import SimulationBackend
-from soarm101_motion.replay_preflight import ReplayPreflight
+from soarm101_motion.safety import validate_workspace_path
 from soarm101_motion.simulated_replay import (
     ReplayExecutionError,
     _require_replay_authority,
@@ -234,22 +234,30 @@ def preflight_choreography(
             "choreography_revision": pattern.revision,
         },
     )
-    prepared = arm.motion.plan_recorded_trajectory(
-        trajectory, speed_scale=speed_scale, move_to_start=False, tcp=arm.active_tcp,
-    )
-    # Reuse *native* samples, joint/acceleration and model-workspace validation.
-    # Policy AND host broker ceilings must constrain each physical command.
+    # Pure native SDK validation must work before simulated torque enable.
+    # plan_recorded_trajectory() requires torque, so use the same SDK
+    # retiming/resampling, joint validators and workspace validator here.
+    # The guarded SDK executor performs its own full preflight again at play.
+    samples = trajectory.retime(speed_scale).resample(
+        arm.config.command_frequency_hz
+    ).joint_mappings()
     arm.motion._validate_samples(
-        prepared.command_samples,
-        speed_limit=radians(policy.max_speed_deg_s),
-        acceleration_limit=radians(policy.max_acceleration_deg_s2),
+        samples,
+        speed_limit=min(arm.config.max_joint_speed, radians(policy.max_speed_deg_s)),
+        acceleration_limit=min(
+            arm.config.max_joint_acceleration, radians(policy.max_acceleration_deg_s2)
+        ),
     )
-    if prepared.duration_s > policy.max_duration_s:
+    if arm.config.enable_workspace_checks:
+        validate_workspace_path(
+            arm.model, samples, tcp=arm.active_tcp, **arm._workspace_kwargs()
+        )
+    duration = trajectory.duration_s / speed_scale
+    if duration > policy.max_duration_s:
         raise PermissionError("retimed choreography exceeds reviewed deadline")
     return ChoreographyPreflight(
         pattern.name, pattern.revision, pattern.robot_id, pattern.calibration_id,
-        prepared.duration_s, len(prepared.command_samples), start_error,
-        gripper, trajectory,
+        duration, len(samples), start_error, gripper, trajectory,
     )
 
 
