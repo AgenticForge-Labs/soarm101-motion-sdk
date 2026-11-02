@@ -36,13 +36,13 @@ def test_silent_stretch_and_tail_impulse_are_recovered_from_sparse_writes(tmp_pa
         {"event": "trace_start", "monotonic_s": 0, "command_frequency_hz": 50,
          "kind": "program_motion_quality", "execution_mode": "streamed"},
         {"event": "marker", "monotonic_s": 0, "marker": "leg_start", "destination": "SLEEP"},
-        _event("command", 0.0, 2000, 0.0),
+        _event("command", 0.0, 2000, 0.0, speed_raw={"shoulder_pan": 0}),
         _event("feedback", 0.02, 2000, 0.0),
         _event("feedback", 0.06, 2001, 0.00153),
         _event("feedback", 0.10, 2000, 0.0),
         _event("feedback", 0.14, 2001, 0.00153),
         _event("feedback", 0.18, 2001, 0.00153),
-        _event("command", 0.20, 2001, 0.00153),
+        _event("command", 0.20, 2001, 0.00153, speed_raw={"shoulder_pan": 63}),
         {"event": "marker", "monotonic_s": 0.22, "marker": "leg_end", "destination": "SLEEP"},
     ]
     _write(path, events)
@@ -54,6 +54,11 @@ def test_silent_stretch_and_tail_impulse_are_recovered_from_sparse_writes(tmp_pa
     assert pan["hunting_reversals"] == 2
     assert pan["following_rms"] is not None
     assert pan["subtick_tail_ms_estimate"] == 200.0
+    assert pan["servo_speed_raw_min"] == 0
+    assert pan["servo_speed_raw_max"] == 63
+    assert pan["servo_speed_raw_changes"] == 1
+    assert pan["post_gap_speed_raw_max"] == 63
+    assert pan["post_gap_speed_raw_samples"] == 1
     gripper = output[0]["joints"][5]
     assert gripper["max_zero_cycles"] is None
     assert "no commands for joint" in gripper["notes"]
