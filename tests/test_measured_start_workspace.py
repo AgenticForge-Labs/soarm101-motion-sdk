@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from soarm101_motion.exceptions import SafetyViolationError
-from soarm101_motion.safety import validate_workspace_path_from_measured_start
+from soarm101_motion.safety import MeasuredWorkspaceMonitor, validate_workspace_path_from_measured_start
 
 
 class _MeasuredStartModel:
@@ -20,6 +20,27 @@ class _MeasuredStartModel:
             "wrist_roll": np.array([0.20, clearance, 0.30]),
             "tcp": np.array([0.25, clearance, 0.35]),
         }
+
+
+@pytest.mark.parametrize("samples", [
+    [{"clearance": 0.021}, {"clearance": 0.022}, {"clearance": 0.024}],
+    [{"clearance": 0.021}, {"clearance": 0.019}],
+    [{"clearance": 0.021}, {"clearance": 0.026}, {"clearance": 0.023}],
+    [{"clearance": 0.026}, {"clearance": 0.024}],
+    [{"clearance": 0.021}, {"clearance": 0.022, "floor_violation": True}],
+])
+def test_incremental_monitor_matches_batch_acceptance(samples) -> None:
+    model = _MeasuredStartModel()
+    monitor = MeasuredWorkspaceMonitor(model, minimum_self_clearance_m=0.025)
+    try:
+        validate_workspace_path_from_measured_start(model, samples, minimum_self_clearance_m=0.025)
+    except SafetyViolationError:
+        with pytest.raises(SafetyViolationError):
+            for sample in samples:
+                monitor.check(sample)
+    else:
+        for sample in samples:
+            monitor.check(sample)
 
 
 def test_measured_start_self_clearance_can_improve_without_fully_exiting() -> None:

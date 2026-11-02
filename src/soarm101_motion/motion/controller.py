@@ -20,8 +20,13 @@ from soarm101_motion.constants import (
     ENCODER_MAX,
     JOINT_PROFILE_MODES,
     JointProfileMode,
+    SCURVE_GLIDE_SMOOTH_ACCEL_FLOOR_RAD_S2,
+    SCURVE_GLIDE_SMOOTH_SPEED_FLOOR_RAD_S,
     STOCK_GRIPPER,
+    STS3215_ACCELERATION_STEP_TICKS_S2,
+    STS3215_MAX_PACED_ACCELERATION_RAW,
     STS3215_MAX_POSITION_SPEED_RAW,
+    STS3215_MIN_INTERNAL_SPEED_RAW,
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
@@ -37,6 +42,7 @@ from soarm101_motion.exceptions import (
 from soarm101_motion.hardware.base import SO101HardwareBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
 from soarm101_motion.safety import (
+    MeasuredWorkspaceMonitor,
     resolve_effective_joint_limits,
     validate_command_step,
     validate_joint_targets,
@@ -48,6 +54,7 @@ from soarm101_motion.types import MotionResult, Pose
 
 T = TypeVar("T")
 JointExecutionMode = Literal["streamed", "final_target"]
+ServoPacingMode = Literal["none", "paced", "glide"]
 
 
 class MotionHandle(Generic[T]):
@@ -386,6 +393,110 @@ class MotionController:
         return min(1.0, max(0.0, position / delta))
 
     @staticmethod
+    def _soft_landing_scurve_profile(
+        delta: float,
+        speed: float,
+        acceleration: float,
+        *,
+        accel_scale: float = 0.85,
+        decel_scale: float = 0.45,
+    ) -> tuple[float, float, float, float]:
+        """Return peak speed, accel time, cruise time, and decel time for a C2 S-curve.
+
+        Velocity transitions use the quintic transition ``10 u^3 - 15 u^4 + 6 u^5``
+        whose acceleration ``30 u^2 (1 - u)^2`` has zero acceleration AND zero jerk
+        at liftoff, cruise entry, cruise exit, and final arrival. Using a gentler
+        ``decel_scale`` spreads terminal braking smoothly into the stop position so
+        gear backlash and structural compliance are not excited on arrival.
+        """
+        if delta < 1e-12:
+            return 0.0, 0.0, 0.0, 0.0
+        requested_speed = max(float(speed), 1e-12)
+        up_accel = max(float(acceleration) * float(accel_scale), 1e-12)
+        down_accel = max(float(acceleration) * float(decel_scale), 1e-12)
+        peak_factor = 1.875  # exact maximum of 30 * u^2 * (1 - u)^2 on [0, 1]
+        full_up_time = peak_factor * requested_speed / up_accel
+        full_down_time = peak_factor * requested_speed / down_accel
+        full_ramp_distance = 0.5 * requested_speed * (full_up_time + full_down_time)
+        if delta >= full_ramp_distance:
+            cruise_time = (delta - full_ramp_distance) / requested_speed
+            return requested_speed, full_up_time, cruise_time, full_down_time
+
+        scale = math.sqrt(delta / full_ramp_distance)
+        return (
+            requested_speed * scale,
+            full_up_time * scale,
+            0.0,
+            full_down_time * scale,
+        )
+
+    @classmethod
+    def _soft_landing_scurve_duration(
+        cls,
+        delta: float,
+        speed: float,
+        acceleration: float,
+        *,
+        accel_scale: float = 0.85,
+        decel_scale: float = 0.45,
+    ) -> float:
+        peak_speed, up_time, cruise_time, down_time = cls._soft_landing_scurve_profile(
+            delta,
+            speed,
+            acceleration,
+            accel_scale=accel_scale,
+            decel_scale=decel_scale,
+        )
+        if peak_speed <= 0.0:
+            return 0.0
+        return up_time + cruise_time + down_time
+
+    @classmethod
+    def _soft_landing_scurve_progress(
+        cls,
+        delta: float,
+        speed: float,
+        acceleration: float,
+        elapsed: float,
+        *,
+        accel_scale: float = 0.85,
+        decel_scale: float = 0.45,
+    ) -> float:
+        if delta < 1e-12:
+            return 1.0
+        peak_speed, up_time, cruise_time, down_time = cls._soft_landing_scurve_profile(
+            delta,
+            speed,
+            acceleration,
+            accel_scale=accel_scale,
+            decel_scale=decel_scale,
+        )
+        total = up_time + cruise_time + down_time
+        if elapsed <= 0.0 or total <= 0.0:
+            return 0.0
+        if elapsed >= total:
+            return 1.0
+
+        def ramp_integral(u: float) -> float:
+            # Integral of 10 s^3 - 15 s^4 + 6 s^5 from 0 to u.
+            return 2.5 * u**4 - 3.0 * u**5 + u**6
+
+        up_distance = 0.5 * peak_speed * up_time
+        if elapsed < up_time:
+            u = elapsed / up_time
+            position = peak_speed * up_time * ramp_integral(u)
+        elif elapsed <= up_time + cruise_time:
+            position = up_distance + peak_speed * (elapsed - up_time)
+        else:
+            u = (elapsed - up_time - cruise_time) / down_time
+            position = (
+                up_distance
+                + peak_speed * cruise_time
+                + peak_speed * down_time * (u - ramp_integral(u))
+            )
+        return min(1.0, max(0.0, position / delta))
+
+    @staticmethod
     def _positive(value: float, name: str) -> float:
         value = float(value)
         if not math.isfinite(value) or value <= 0:
@@ -653,7 +764,8 @@ class MotionController:
         profile_mode: JointProfileMode | None = None,
     ) -> PlannedPath:
         resolved_profile = self._resolve_joint_profile_mode(profile_mode)
-        max_delta = max(abs(target[name] - start[name]) for name in ARM_JOINTS)
+        deltas = {name: abs(target[name] - start[name]) for name in ARM_JOINTS}
+        max_delta = max(deltas.values())
         if resolved_profile == "cosine_cruise":
             profile_duration = self._cosine_cruise_duration(
                 max_delta,
@@ -681,6 +793,112 @@ class MotionController:
                     }
                     for index in range(steps)
                 ]
+                samples[0] = {name: float(start[name]) for name in ARM_JOINTS}
+                samples[-1] = {name: float(target[name]) for name in ARM_JOINTS}
+                return tuple(samples)
+        elif resolved_profile == "scurve_paced":
+            profile_duration = self._soft_landing_scurve_duration(
+                max_delta,
+                speed,
+                acceleration,
+                accel_scale=0.85,
+                decel_scale=0.45,
+            )
+            initial = profile_duration
+
+            def builder(duration: float) -> tuple[dict[str, float], ...]:
+                steps = max(
+                    2,
+                    int(math.ceil(duration * self.config.command_frequency_hz)) + 1,
+                )
+                samples = [
+                    {
+                        name: start[name]
+                        + (target[name] - start[name])
+                        * self._soft_landing_scurve_progress(
+                            max_delta,
+                            speed,
+                            acceleration,
+                            (index / (steps - 1)) * profile_duration,
+                            accel_scale=0.85,
+                            decel_scale=0.45,
+                        )
+                        for name in ARM_JOINTS
+                    }
+                    for index in range(steps)
+                ]
+                samples[0] = {name: float(start[name]) for name in ARM_JOINTS}
+                samples[-1] = {name: float(target[name]) for name in ARM_JOINTS}
+                return tuple(samples)
+        elif resolved_profile == "scurve_glide":
+            # Stock STS3215 firmware clamps Goal_Velocity < 50 ticks/s (~4.40 deg/s)
+            # up to 50 ticks/s internally. Strict cross-joint synchronization drags
+            # shorter-travel joints below that hardware floor so they step-and-stall
+            # against Coulomb friction. Keep moving joints at or above a smooth
+            # 5.2 deg/s anti-stiction floor when permitted by the caller's requested
+            # speed/acceleration ceilings, and apply a C2 soft-landing ramp per joint.
+            floor_speed = min(speed, SCURVE_GLIDE_SMOOTH_SPEED_FLOOR_RAD_S)
+            floor_accel = min(acceleration, SCURVE_GLIDE_SMOOTH_ACCEL_FLOOR_RAD_S2)
+            joint_profiles: dict[str, tuple[float, float, float, float]] = {}
+            profile_duration = 0.0
+            for name in ARM_JOINTS:
+                joint_delta = deltas[name]
+                if max_delta < 1e-12 or joint_delta < 1e-12:
+                    joint_profiles[name] = (0.0, speed, acceleration, 0.0)
+                    continue
+                ratio = joint_delta / max_delta
+                joint_speed = min(speed, max(speed * ratio, floor_speed))
+                joint_accel = min(acceleration, max(acceleration * ratio, floor_accel))
+                joint_duration = self._soft_landing_scurve_duration(
+                    joint_delta,
+                    joint_speed,
+                    joint_accel,
+                    accel_scale=0.85,
+                    decel_scale=0.38,
+                )
+                joint_profiles[name] = (
+                    joint_delta,
+                    joint_speed,
+                    joint_accel,
+                    joint_duration,
+                )
+                profile_duration = max(profile_duration, joint_duration)
+            initial = profile_duration
+
+            def builder(duration: float) -> tuple[dict[str, float], ...]:
+                steps = max(
+                    2,
+                    int(math.ceil(duration * self.config.command_frequency_hz)) + 1,
+                )
+                samples: list[dict[str, float]] = []
+                for index in range(steps):
+                    elapsed = (index / (steps - 1)) * profile_duration
+                    row: dict[str, float] = {}
+                    for name in ARM_JOINTS:
+                        (
+                            joint_delta,
+                            joint_speed,
+                            joint_accel,
+                            joint_duration,
+                        ) = joint_profiles[name]
+                        if (
+                            joint_delta < 1e-12
+                            or joint_duration <= 1e-12
+                            or elapsed >= joint_duration
+                        ):
+                            row[name] = float(target[name])
+                        else:
+                            row[name] = start[name] + (
+                                target[name] - start[name]
+                            ) * self._soft_landing_scurve_progress(
+                                joint_delta,
+                                joint_speed,
+                                joint_accel,
+                                elapsed,
+                                accel_scale=0.85,
+                                decel_scale=0.38,
+                            )
+                    samples.append(row)
                 samples[0] = {name: float(start[name]) for name in ARM_JOINTS}
                 samples[-1] = {name: float(target[name]) for name in ARM_JOINTS}
                 return tuple(samples)
@@ -715,7 +933,7 @@ class MotionController:
             acceleration_limit=acceleration,
             limits=limits,
         )
-        if resolved_profile == "cosine_cruise":
+        if resolved_profile in {"cosine_cruise", "scurve_paced", "scurve_glide"}:
             trimmed = self._trim_redundant_terminal_encoder_samples(
                 samples,
                 speed_limit=speed,
@@ -1236,6 +1454,36 @@ class MotionController:
             )
         return speeds
 
+    def _calibrated_arm_motors(self) -> dict[str, object] | None:
+        calibration = getattr(self.backend, "calibration", None)
+        motors = getattr(calibration, "motors", None)
+        if motors is None:
+            return None
+        resolved: dict[str, object] = {}
+        for name in ARM_JOINTS:
+            motor = motors.get(name)
+            converter = getattr(motor, "radians_to_raw", None)
+            if motor is None or not callable(converter):
+                return None
+            resolved[name] = motor
+        return resolved
+
+    @staticmethod
+    def _continuous_motor_raw(motor: object, radians: float) -> float:
+        """Return unrounded continuous encoder ticks matching ``motor.radians_to_raw``."""
+        if isinstance(motor, MotorCalibration):
+            return float(radians) * ENCODER_MAX / (2.0 * math.pi) + motor.center_raw
+        converter = getattr(motor, "radians_to_raw")
+        try:
+            raw0 = float(converter(0.0))
+            raw1 = float(converter(0.1))
+            slope = (raw1 - raw0) / 0.1
+            if abs(slope) > 1e-6:
+                return raw0 + float(radians) * slope
+        except Exception:
+            pass
+        return float(converter(float(radians)))
+
     def _encoder_target_key(
         self,
         positions: Mapping[str, float],
@@ -1249,19 +1497,13 @@ class MotionController:
         backends on the existing write-per-sample behavior.
         """
 
-        calibration = getattr(self.backend, "calibration", None)
-        motors = getattr(calibration, "motors", None)
+        motors = self._calibrated_arm_motors()
         if motors is None:
             return None
-
-        raw: list[int] = []
-        for name in ARM_JOINTS:
-            motor = motors.get(name)
-            converter = getattr(motor, "radians_to_raw", None)
-            if not callable(converter):
-                return None
-            raw.append(int(converter(float(positions[name]))))
-        return tuple(raw)
+        return tuple(
+            int(getattr(motors[name], "radians_to_raw")(float(positions[name])))
+            for name in ARM_JOINTS
+        )
 
     def _workspace_kwargs(self) -> dict[str, float]:
         return {
@@ -1670,8 +1912,11 @@ class MotionController:
         *,
         cancellation_message: str,
         servo_speed_raw: int | Mapping[str, int] | None = None,
-        servo_acceleration_raw: int | None = None,
+        servo_acceleration_raw: int | Mapping[str, int] | None = None,
         synchronize_servo_arrival: bool = False,
+        servo_pacing_mode: ServoPacingMode = "none",
+        monitor_workspace: bool = False,
+        tcp: Pose | None = None,
     ) -> MotionResult:
         samples = plan.command_samples
         try:
@@ -1689,6 +1934,46 @@ class MotionController:
             self._publish_feedback(previous_actual)
             last_command_sent = samples[0]
             last_encoder_target = self._encoder_target_key(samples[0])
+            calibrated_motors = (
+                self._calibrated_arm_motors()
+                if servo_pacing_mode in {"paced", "glide"}
+                else None
+            )
+            ticks_per_rad: dict[str, float] = {}
+            paced_accels: dict[str, int] = {}
+            last_paced_packet_key: tuple[tuple[int, int, int], ...] | None = None
+            if calibrated_motors is not None:
+                for name, motor in calibrated_motors.items():
+                    slope = abs(
+                        self._continuous_motor_raw(motor, 0.1)
+                        - self._continuous_motor_raw(motor, 0.0)
+                    ) / 0.1
+                    tpr = slope if slope > 1e-6 else ENCODER_MAX / (2.0 * math.pi)
+                    ticks_per_rad[name] = tpr
+                    peak_accel = max(
+                        (abs(float(samples[i + 1][name]) - 2.0 * float(samples[i][name])
+                             + float(samples[i - 1][name])) / interval_s**2 * tpr
+                         for i in range(1, len(samples) - 1)),
+                        default=0.0,
+                    )
+                    paced_accels[name] = int(np.clip(
+                        math.ceil(1.5 * peak_accel / STS3215_ACCELERATION_STEP_TICKS_S2),
+                        2, STS3215_MAX_PACED_ACCELERATION_RAW,
+                    ))
+            if monitor_workspace and any(
+                abs(float(previous_actual[name]) - float(samples[0][name]))
+                > self.config.joint_position_tolerance_rad for name in ARM_JOINTS
+            ):
+                raise SafetyViolationError("measured start changed after workspace preflight")
+            workspace_monitor = None
+            if monitor_workspace:
+                workspace_monitor = MeasuredWorkspaceMonitor(
+                    self.model, tcp=tcp, **self._workspace_kwargs()
+                )
+                workspace_monitor.check(previous_actual)
+            # Preparation is outside the deadline clock; no motor command has been sent.
+            started = time.perf_counter()
+
             for index, command in enumerate(samples[1:], start=1):
                 self._check_cancelled(cancel_event, cancellation_message)
                 lateness = self._sleep_until(started + index / frequency)
@@ -1698,33 +1983,61 @@ class MotionController:
                     )
                 self._check_cancelled(cancel_event, cancellation_message)
 
-                command_encoder_target = self._encoder_target_key(command)
                 is_final_sample = index == len(samples) - 1
-                duplicate_encoder_target = (
-                    not is_final_sample
-                    and command_encoder_target is not None
-                    and command_encoder_target == last_encoder_target
-                )
-                if not duplicate_encoder_target:
-                    command_speed_raw = servo_speed_raw
-                    if synchronize_servo_arrival:
-                        command_speed_raw = self._synchronized_servo_speed_raw(
-                            samples[index - 1],
-                            command,
-                            interval_s=interval_s,
-                            continuous=True,
-                            minimum_speed_raw=60,
-                        )
-                    if command_speed_raw is None and servo_acceleration_raw is None:
-                        self.backend.write_joint_positions(command)
-                    else:
+                if calibrated_motors is not None:
+                    # Pace against the samples actually sent, never an imagined future target.
+                    paced_speeds = {
+                        name: int(np.clip(
+                            math.ceil(1.25 * abs(float(command[name])
+                                               - float(samples[index - 1][name]))
+                                      / interval_s * ticks_per_rad[name]),
+                            STS3215_MIN_INTERNAL_SPEED_RAW,
+                            STS3215_MAX_POSITION_SPEED_RAW,
+                        ))
+                        for name in ARM_JOINTS
+                    }
+                    raw_key = self._encoder_target_key(command)
+                    assert raw_key is not None
+                    packet_key = tuple(
+                        (raw_key[i], paced_speeds[name], paced_accels[name])
+                        for i, name in enumerate(ARM_JOINTS)
+                    )
+                    if is_final_sample or packet_key != last_paced_packet_key:
                         self.backend.write_joint_positions(
-                            command,
-                            speed_raw=command_speed_raw,
-                            acceleration_raw=servo_acceleration_raw,
+                            command, speed_raw=paced_speeds, acceleration_raw=paced_accels
                         )
+                        last_paced_packet_key = packet_key
                     last_command_sent = command
-                    last_encoder_target = command_encoder_target
+                else:
+                    command_encoder_target = self._encoder_target_key(command)
+                    duplicate_encoder_target = (
+                        not is_final_sample
+                        and command_encoder_target is not None
+                        and command_encoder_target == last_encoder_target
+                    )
+                    if not duplicate_encoder_target:
+                        command_speed_raw = servo_speed_raw
+                        if synchronize_servo_arrival:
+                            command_speed_raw = self._synchronized_servo_speed_raw(
+                                samples[index - 1],
+                                command,
+                                interval_s=interval_s,
+                                continuous=True,
+                                minimum_speed_raw=60,
+                            )
+                        if (
+                            command_speed_raw is None
+                            and servo_acceleration_raw is None
+                        ):
+                            self.backend.write_joint_positions(command)
+                        else:
+                            self.backend.write_joint_positions(
+                                command,
+                                speed_raw=command_speed_raw,
+                                acceleration_raw=servo_acceleration_raw,
+                            )
+                        last_command_sent = command
+                        last_encoder_target = command_encoder_target
 
                 if index % monitor_every == 0 or is_final_sample:
                     previous_actual = self._monitor_motion(
@@ -1732,6 +2045,8 @@ class MotionController:
                         previous_command,
                         previous_actual,
                     )
+                    if workspace_monitor is not None:
+                        workspace_monitor.check(previous_actual)
                     previous_command = last_command_sent
             return self._wait_for_settle(samples[-1], cancel_event)
         except BaseException:
@@ -1912,6 +2227,20 @@ class MotionController:
                 limits=limits,
                 profile_mode=resolved_profile,
             )
+            if monitor_workspace and resolved_profile == "scurve_glide":
+                # Validate the same plan that will be passed to the executor.
+                dense = [dict(plan.command_samples[0])]
+                for previous, nxt in zip(plan.command_samples, plan.command_samples[1:]):
+                    delta = max(abs(float(nxt[n]) - float(previous[n])) for n in ARM_JOINTS)
+                    count = max(1, math.ceil(delta / self.config.workspace_check_step_rad))
+                    dense.extend(
+                        {n: float(previous[n]) + (float(nxt[n]) - float(previous[n])) * j / count
+                         for n in ARM_JOINTS}
+                        for j in range(1, count + 1)
+                    )
+                validate_workspace_path_from_measured_start(
+                    self.model, dense, tcp=tcp, **self._workspace_kwargs()
+                )
             if execution_mode == "final_target":
                 handle = self._start_locked(
                     lambda event: self._execute_final_target_plan(
@@ -1931,6 +2260,16 @@ class MotionController:
                 # trajectory: it can make a perfectly valid fast host plan outrun
                 # the servos and create artificial following-error trips. Match the
                 # responsive profile already used by live teleoperation.
+                pacing_mode: ServoPacingMode = "none"
+                if (
+                    servo_speed_raw is None
+                    and servo_acceleration_raw is None
+                    and not synchronize_servo_arrival
+                ):
+                    if resolved_profile == "scurve_paced":
+                        pacing_mode = "paced"
+                    elif resolved_profile == "scurve_glide":
+                        pacing_mode = "glide"
                 streamed_speed_raw = servo_speed_raw
                 if streamed_speed_raw is None and not synchronize_servo_arrival:
                     streamed_speed_raw = TELEOP_SERVO_SPEED_RAW
@@ -1947,6 +2286,9 @@ class MotionController:
                         servo_speed_raw=streamed_speed_raw,
                         servo_acceleration_raw=streamed_acceleration_raw,
                         synchronize_servo_arrival=synchronize_servo_arrival,
+                        servo_pacing_mode=pacing_mode,
+                        monitor_workspace=monitor_workspace and resolved_profile == "scurve_glide",
+                        tcp=tcp,
                     )
                 )
         return handle.wait() if wait else handle

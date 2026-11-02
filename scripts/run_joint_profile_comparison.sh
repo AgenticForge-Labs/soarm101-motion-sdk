@@ -2,17 +2,17 @@
 set -euo pipefail
 
 MODE="${1:-both}"
-SPEED_DEG_S="${2:-8}"
-ACCEL_DEG_S2="${3:-25}"
-if [[ "$MODE" != "both" && "$MODE" != "minimum_jerk" && "$MODE" != "cosine_cruise" ]]; then
-  echo "usage: $0 [both|minimum_jerk|cosine_cruise] [speed_deg_s] [accel_deg_s2]" >&2
+SPEED_DEG_S="${2:-24}"
+ACCEL_DEG_S2="${3:-75}"
+if [[ "$MODE" != "both" && "$MODE" != "minimum_jerk" && "$MODE" != "cosine_cruise" && "$MODE" != "experimental" && "$MODE" != "scurve_paced" && "$MODE" != "scurve_glide" ]]; then
+  echo "usage: $0 [both|experimental|minimum_jerk|cosine_cruise|scurve_paced|scurve_glide] [speed_deg_s] [accel_deg_s2]" >&2
   exit 2
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "SO-ARM101 side-by-side joint trajectory profile comparison (minimum_jerk vs cosine_cruise)"
+echo "SO-ARM101 joint trajectory profile comparison"
 echo "Repository: $ROOT"
 echo "Branch: $(git rev-parse --abbrev-ref HEAD)"
 echo "Commit: $(git rev-parse HEAD)"
@@ -53,14 +53,18 @@ mkdir -p "$OUT_DIR"
 echo
 echo "Both runs use:"
 echo "  route: Sleep -> Overhead -> Left -> Right -> Sleep"
-echo "  execution_mode: streamed (0/254 inner-loop servo tracking)"
+echo "  execution_mode: streamed (experimental profiles use per-joint servo pacing)"
 echo "  requested joint speed: $SPEED_DEG_S deg/s"
 echo "  requested joint acceleration: $ACCEL_DEG_S2 deg/s^2"
 echo "  planning cadence: 50 Hz"
 echo
-echo "Run A = minimum_jerk: legacy synchronized quintic baseline (1.875x peak/mean speed ratio)."
-echo "Run B = cosine_cruise: half-cosine accel/decel ramps + constant-speed cruise + calibrated"
+echo "Baseline minimum_jerk: legacy synchronized quintic baseline (1.875x peak/mean speed ratio)."
+echo "Baseline cosine_cruise: half-cosine accel/decel ramps + constant-speed cruise + calibrated"
 echo "        terminal duplicate-encoder tail coalescing."
+echo "Experimental: scurve_paced and scurve_glide use soft landing and per-joint servo pacing."
+if [[ "${SOARM_SIMULATION:-0}" == "1" ]]; then
+  echo "Uncalibrated simulation uses 0/254; it does not model physical servo pacing."
+fi
 echo
 if [[ "${SOARM_SIMULATION:-0}" != "1" ]]; then
   echo "Keep physical power accessible and the workspace clear."
@@ -77,6 +81,7 @@ if [[ "$MODE" == "both" || "$MODE" == "minimum_jerk" ]]; then
   mj_status=0
   python examples/motion_quality_trace.py \
     "${SIM_FLAG[@]}" \
+    --joint-only \
     --execution-mode streamed \
     --profile-mode minimum_jerk \
     --speed-deg-s "$SPEED_DEG_S" \
@@ -104,6 +109,7 @@ elif [[ "$MODE" == "both" || "$MODE" == "cosine_cruise" ]]; then
   cc_status=0
   python examples/motion_quality_trace.py \
     "${SIM_FLAG[@]}" \
+    --joint-only \
     --execution-mode streamed \
     --profile-mode cosine_cruise \
     --speed-deg-s "$SPEED_DEG_S" \
@@ -122,9 +128,36 @@ elif [[ "$MODE" == "both" || "$MODE" == "cosine_cruise" ]]; then
   fi
 fi
 
+for profile in scurve_paced scurve_glide; do
+  if [[ "$MODE" != "experimental" && "$MODE" != "$profile" ]]; then
+    continue
+  fi
+  if (( OVERALL_STATUS != 0 )); then
+    echo "Skipping $profile because a preceding run failed."
+    break
+  fi
+  if [[ "${SOARM_SIMULATION:-0}" != "1" ]]; then
+    read -r -p "Press ENTER to start $profile motion, or Ctrl-C to stop: "
+  fi
+  profile_status=0
+  python examples/motion_quality_trace.py \
+    "${SIM_FLAG[@]}" --joint-only --execution-mode streamed --profile-mode "$profile" \
+    --speed-deg-s "$SPEED_DEG_S" --acceleration-deg-s2 "$ACCEL_DEG_S2" \
+    --command-frequency-hz 50 --pause-s "$PAUSE_S" \
+    --output "$OUT_DIR/$profile.jsonl" || profile_status=$?
+  echo "$profile exit status: $profile_status" >> "$OUT_DIR/experimental-status.txt"
+  if (( profile_status != 0 )); then
+    OVERALL_STATUS="$profile_status"
+    echo "$profile stopped with status $profile_status; preserving evidence."
+  fi
+done
+
 TRACE_ARGS=()
 [[ -f "$OUT_DIR/minimum-jerk.jsonl" ]] && TRACE_ARGS+=(--trace "minimum_jerk=$OUT_DIR/minimum-jerk.jsonl")
 [[ -f "$OUT_DIR/cosine-cruise.jsonl" ]] && TRACE_ARGS+=(--trace "cosine_cruise=$OUT_DIR/cosine-cruise.jsonl")
+for profile in scurve_paced scurve_glide; do
+  [[ -f "$OUT_DIR/$profile.jsonl" ]] && TRACE_ARGS+=(--trace "$profile=$OUT_DIR/$profile.jsonl")
+done
 
 if (( ${#TRACE_ARGS[@]} > 0 )); then
   GRIPPER_ARGS=()

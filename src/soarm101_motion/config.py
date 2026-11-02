@@ -130,7 +130,7 @@ class SOARM101Config:
     workspace_check_step_rad: float = 0.05
     minimum_workspace_z_m: float = 0.0
     maximum_tcp_reach_m: float = 0.50
-    minimum_self_clearance_m: float = 0.025
+    minimum_self_clearance_m: float = 0.020
     base_keepout_radius_m: float = 0.055
     base_keepout_height_m: float = 0.11
 

@@ -106,9 +106,27 @@ DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2 = (
 )
 
 DEFAULT_COMMAND_FREQUENCY_HZ = 50.0
-JointProfileMode = Literal["minimum_jerk", "cosine_cruise"]
-JOINT_PROFILE_MODES: tuple[JointProfileMode, ...] = ("minimum_jerk", "cosine_cruise")
+JointProfileMode = Literal[
+    "minimum_jerk",
+    "cosine_cruise",
+    "scurve_paced",
+    "scurve_glide",
+]
+JOINT_PROFILE_MODES: tuple[JointProfileMode, ...] = (
+    "minimum_jerk",
+    "cosine_cruise",
+    "scurve_paced",
+    "scurve_glide",
+)
 DEFAULT_JOINT_PROFILE_MODE: JointProfileMode = "minimum_jerk"
+# Stock STS3215 firmware (model 777 / 3.10) internal 1 kHz profile constants:
+# Goal_Velocity < 50 is clamped up to 50 ticks/s (~4.40 deg/s) internally, and
+# Acceleration A steps internal velocity by 100*A ticks/s^2 (~8.789*A deg/s^2).
+STS3215_MIN_INTERNAL_SPEED_RAW = 50
+STS3215_ACCELERATION_STEP_TICKS_S2 = 100.0
+STS3215_MAX_PACED_ACCELERATION_RAW = 80
+SCURVE_GLIDE_SMOOTH_SPEED_FLOOR_RAD_S = 5.2 * pi / 180.0
+SCURVE_GLIDE_SMOOTH_ACCEL_FLOOR_RAD_S2 = 18.0 * pi / 180.0
 # Live leader→follower teleoperation uses a separate clock because each sample
 # performs synchronous hardware safety/feedback reads on the serial bus. Twenty
 # hertz is the practical default for smooth hand following; 5/10 Hz remain

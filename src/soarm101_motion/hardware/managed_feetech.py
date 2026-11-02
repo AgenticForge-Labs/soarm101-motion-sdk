@@ -300,7 +300,7 @@ class FeetechBackend(_ProtocolFeetechBackend):
         positions: Mapping[str, float],
         *,
         speed_raw: int | Mapping[str, int] | None = None,
-        acceleration_raw: int | None = None,
+        acceleration_raw: int | Mapping[str, int] | None = None,
     ) -> None:
         """Reject direct joint writes while an effort safety trip is latched."""
 

@@ -91,7 +91,11 @@ class PyBulletSimulationBackend(SimulationBackend):
             )
         self._p.stepSimulation(physicsClientId=self._client)
 
-    def write_joint_positions(self, positions: Mapping[str, float], **kwargs: int | None) -> None:
+    def write_joint_positions(
+        self,
+        positions: Mapping[str, float],
+        **kwargs: int | Mapping[str, int] | None,
+    ) -> None:
         super().write_joint_positions(positions, **kwargs)
         self._update_visual_state()
 

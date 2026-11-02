@@ -439,6 +439,23 @@ def test_joint_sync_write_accepts_per_motor_speed_limits(
     backend.disconnect()
 
 
+def test_joint_sync_write_accepts_per_motor_acceleration(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_fake_sdk(monkeypatch)
+    backend = FeetechBackend(SOARM101Config(port="FAKE", use_stored_calibration=False))
+    backend.connect()
+    backend.enable_torque()
+    try:
+        backend.write_joint_positions(
+            {"shoulder_pan": 0.10, "shoulder_lift": 0.05},
+            speed_raw={"shoulder_pan": 80, "shoulder_lift": 90},
+            acceleration_raw={"shoulder_pan": 3, "shoulder_lift": 7},
+        )
+        assert backend._packet_handler.sync_accelerations[MOTOR_IDS["shoulder_pan"]] == 3
+        assert backend._packet_handler.sync_accelerations[MOTOR_IDS["shoulder_lift"]] == 7
+    finally:
+        backend.disconnect()
+
+
 def test_stop_uses_the_existing_servo_tracking_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     install_fake_sdk(monkeypatch)
     backend = FeetechBackend(SOARM101Config(port="FAKE", use_stored_calibration=False))

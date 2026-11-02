@@ -56,8 +56,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--port")
     parser.add_argument("--robot-id")
-    parser.add_argument("--speed-deg-s", type=float, default=8.0)
-    parser.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    parser.add_argument("--speed-deg-s", type=float, default=24.0)
+    parser.add_argument("--acceleration-deg-s2", type=float, default=75.0)
     parser.add_argument(
         "--command-frequency-hz",
         type=float,
@@ -74,7 +74,7 @@ def _parser() -> argparse.ArgumentParser:
         "--profile-mode",
         choices=JOINT_PROFILE_MODES,
         default="minimum_jerk",
-        help="joint trajectory profile mode: minimum_jerk baseline or cosine_cruise",
+        help="joint trajectory profile mode (S-curve modes are experimental)",
     )
     parser.add_argument(
         "--pause-s",

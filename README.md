@@ -169,7 +169,14 @@ soarm101 sleep --port /dev/ttyACM0 --robot-id so101
 soarm101 relax --port /dev/ttyACM0 --robot-id so101
 ```
 
-Motion commands can enable torque or move the arm. `sleep` also closes the stock gripper by default; remove objects from its grasp and confirm the whole swept path is clear. Joint-space commands (`move-joints`, `jog-joint`, `pose go`, `sleep`, `sleep-up`, `sequence run`, `smoke-test`, and `agent` joint/pose/sleep commands) also accept `--profile-mode {minimum_jerk,cosine_cruise}` to compare the default quintic profile against half-cosine cruise timing side by side under identical safety guards (see `scripts/run_joint_profile_comparison.sh`). Use `soarm101 --help` and `soarm101 <command> --help` for syntax and options.
+Motion commands can enable torque or move the arm. `sleep` also closes the stock gripper by default; remove objects from its grasp and confirm the whole swept path is clear. Joint-space commands (`move-joints`, `jog-joint`, `pose go`, `sleep`, `sleep-up`, `sequence run`, `smoke-test`, and `agent` joint/pose/sleep commands) also accept `--profile-mode {minimum_jerk,cosine_cruise,scurve_paced,scurve_glide}` to compare the default quintic profile against half-cosine cruise timing side by side under identical safety guards (see `scripts/run_joint_profile_comparison.sh`). Use `soarm101 --help` and `soarm101 <command> --help` for syntax and options.
+
+Two additional profiles, `scurve_paced` and `scurve_glide`, are experimental software prototypes for investigating slow motion and settling. They change servo pacing; `scurve_glide` also changes the joint-space path. They have not been physically qualified. Simulation does not model servo friction, internal firmware, or prove smoothness and clearance. The joint-profile comparison tools default to 24°/s and 75°/s²; pass explicit lower values when needed. See [TESTING.md](TESTING.md) before considering an operator-led trial.
+
+Saved poses and programs remain independent of the selected joint profile. Recorded
+motions retain their recorded trajectory; the selected joint profile can affect a
+separate move to the recording's start. Switching profiles can change timing and
+the path between poses, so existing calibration and workspace checks still apply.
 
 ### Python API
 
@@ -240,7 +247,7 @@ This does not operate the physical arm. See [Agent CLI](docs/agent-arm101-cli.md
 
 ## Motion limits and safety
 
-The configured absolute host motion envelope is **100°/s and 1000°/s²** for joints/tool rotation, and **100 mm/s and 1000 mm/s²** for TCP translation. These are *engineering ceilings*, **not normal defaults, safe recommendations, or proof of loaded-arm performance**. Actual requested motions can be slower and remain subject to calibration, joint/workspace limits, following-error, effort, fault, timing, STOP/HOLD, and settling checks.
+The configured absolute host motion envelope is **100°/s and 1000°/s²** for joints/tool rotation, and **100 mm/s and 1000 mm/s²** for TCP translation. These are *engineering ceilings*, **not normal defaults, safe recommendations, or proof of loaded-arm performance**. Actual requested motions can be slower and remain subject to calibration, joint/workspace limits, following-error, effort, fault, timing, STOP/HOLD, and settling checks. The default coarse modeled self-clearance is 20 mm; it is a heuristic, not a measurement or guarantee of physical clearance.
 
 The stock arm has five pose joints plus a separate gripper. Its kinematic model estimates tool position from encoder readings; that estimate cannot replace measurements of actual workspace clearance. Motion recorded against one calibration is not silently replayable against a different calibration.
 

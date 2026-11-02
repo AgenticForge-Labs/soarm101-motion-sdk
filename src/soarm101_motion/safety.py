@@ -173,7 +173,7 @@ def validate_workspace_configuration(
     tcp: "Pose | None" = None,
     minimum_z_m: float = 0.0,
     maximum_tcp_reach_m: float = 0.50,
-    minimum_self_clearance_m: float = 0.025,
+    minimum_self_clearance_m: float = 0.020,
     base_keepout_radius_m: float = 0.055,
     base_keepout_height_m: float = 0.11,
 ) -> None:
@@ -226,6 +226,60 @@ def validate_workspace_configuration(
                 )
 
 
+class MeasuredWorkspaceMonitor:
+    """Incrementally enforce the measured-start workspace path policy."""
+
+    def __init__(
+        self,
+        model: "SO101KinematicModel",
+        *,
+        tcp: "Pose | None" = None,
+        minimum_z_m: float = 0.0,
+        maximum_tcp_reach_m: float = 0.50,
+        minimum_self_clearance_m: float = 0.020,
+        base_keepout_radius_m: float = 0.055,
+        base_keepout_height_m: float = 0.11,
+        self_clearance_monotonic_tolerance_m: float = 0.0005,
+    ) -> None:
+        if (not math.isfinite(self_clearance_monotonic_tolerance_m)
+                or self_clearance_monotonic_tolerance_m < 0.0):
+            raise ValueError("self_clearance_monotonic_tolerance_m must be non-negative and finite")
+        self.model = model
+        self.tcp = tcp
+        self.clearance = float(minimum_self_clearance_m)
+        self.tolerance = self_clearance_monotonic_tolerance_m
+        self.kwargs = {
+            "minimum_z_m": minimum_z_m,
+            "maximum_tcp_reach_m": maximum_tcp_reach_m,
+            "base_keepout_radius_m": base_keepout_radius_m,
+            "base_keepout_height_m": base_keepout_height_m,
+        }
+        self.best: float | None = None
+        self.strict = False
+        self.index = 0
+
+    def check(self, joints: Mapping[str, float]) -> None:
+        try:
+            validate_workspace_configuration(
+                self.model, joints, tcp=self.tcp,
+                minimum_self_clearance_m=self.clearance if self.strict else 0.0,
+                **self.kwargs,
+            )
+            if not self.strict:
+                clearance = minimum_workspace_self_clearance(self.model, joints, tcp=self.tcp)
+                if clearance >= self.clearance:
+                    self.strict = True
+                elif self.best is not None and clearance + self.tolerance < self.best:
+                    raise SafetyViolationError(
+                        "workspace path starts inside coarse self-clearance but moves "
+                        f"deeper at sample {self.index}: {clearance:.3f} m after {self.best:.3f} m"
+                    )
+                self.best = clearance if self.best is None else max(self.best, clearance)
+        except SafetyViolationError as exc:
+            raise SafetyViolationError(f"workspace path sample {self.index}: {exc}") from exc
+        self.index += 1
+
+
 def validate_workspace_path_from_measured_start(
     model: "SO101KinematicModel",
     samples: Sequence[Mapping[str, float]],
@@ -233,7 +287,7 @@ def validate_workspace_path_from_measured_start(
     tcp: "Pose | None" = None,
     minimum_z_m: float = 0.0,
     maximum_tcp_reach_m: float = 0.50,
-    minimum_self_clearance_m: float = 0.025,
+    minimum_self_clearance_m: float = 0.020,
     base_keepout_radius_m: float = 0.055,
     base_keepout_height_m: float = 0.11,
     self_clearance_monotonic_tolerance_m: float = 0.0005,
@@ -328,7 +382,7 @@ def validate_sleep_family_workspace_path(
     tcp: "Pose | None" = None,
     minimum_z_m: float = 0.0,
     maximum_tcp_reach_m: float = 0.50,
-    minimum_self_clearance_m: float = 0.025,
+    minimum_self_clearance_m: float = 0.020,
     base_keepout_radius_m: float = 0.055,
     base_keepout_height_m: float = 0.11,
 ) -> None:
@@ -358,7 +412,7 @@ def validate_workspace_path(
     tcp: "Pose | None" = None,
     minimum_z_m: float = 0.0,
     maximum_tcp_reach_m: float = 0.50,
-    minimum_self_clearance_m: float = 0.025,
+    minimum_self_clearance_m: float = 0.020,
     base_keepout_radius_m: float = 0.055,
     base_keepout_height_m: float = 0.11,
 ) -> None:

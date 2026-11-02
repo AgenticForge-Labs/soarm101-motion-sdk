@@ -2692,3 +2692,8 @@ M2 simulated CLI Sleep timing follow-up (2026-10-30):
   diagnostic at the changed simulation selection. Scoped typing remains
   non-clean due to those repository baseline issues.
 - No hardware, physical arming, commits or pushes occurred.
+# Experimental S-curve profiles
+
+`scurve_paced` and `scurve_glide` are unqualified prototypes. They command the planned samples with per-joint servo speed and acceleration settings; glide also uses independently timed joints. The standard uncalibrated simulator falls back to 0/254 rather than servo pacing. Simulator tests do not reproduce stock-servo dynamics or demonstrate safe physical tracking or smoothness. The firmware assumptions and pacing require review and separate attended qualification before physical use. Default remains `minimum_jerk`.
+
+For software-only comparison, run `SOARM_SIMULATION=1 ./scripts/run_joint_profile_comparison.sh experimental 8 25`. The experimental route leaves the gripper alone and stops after a failed run. Glide Sleep requires full workspace validation instead of the historical Sleep exception; it can still be rejected by workspace checks. The default coarse modeled self-clearance is 20 mm for all workspace-checked motion, reduced from 25 mm; it is not measured physical clearance. Do not bypass a rejection. Compare against the existing modes separately; equal speed limits do not imply equal-duration trials. No physical trial is authorized by running the simulation.

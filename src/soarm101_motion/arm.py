@@ -241,23 +241,94 @@ class SOARM101:
         validate_joint_targets(target, limits=limits)
         return current, target
 
-    def _validate_saved_pose_exit_workspace_path(
+    def _joint_workspace_samples(
         self,
         current: Mapping[str, float],
         target: Mapping[str, float],
-    ) -> None:
-        """Validate a saved-pose path from the physically measured start."""
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        profile_mode: JointProfileMode | None = None,
+    ) -> tuple[dict[str, float], ...]:
+        resolved_profile = self.motion._resolve_joint_profile_mode(profile_mode)
+        if resolved_profile == "scurve_glide":
+            joint_speed = self.motion._bounded(
+                speed,
+                self.config.default_joint_speed,
+                self.config.max_joint_speed,
+                "joint speed",
+            )
+            joint_acceleration = self.motion._bounded(
+                acceleration,
+                self.config.default_joint_acceleration,
+                self.config.max_joint_acceleration,
+                "joint acceleration",
+            )
+            limits = self.get_joint_limits()
+            for name in ARM_JOINTS:
+                lower, upper = limits[name]
+                limits[name] = (
+                    min(lower, float(current[name]), float(target[name])),
+                    max(upper, float(current[name]), float(target[name])),
+                )
+            planned = self.motion._plan_joint_motion(
+                current,
+                target,
+                speed=joint_speed,
+                acceleration=joint_acceleration,
+                limits=limits,
+                profile_mode=resolved_profile,
+            ).command_samples
+            densified: list[dict[str, float]] = [dict(planned[0])]
+            for previous, nxt in zip(planned, planned[1:]):
+                seg_delta = max(
+                    abs(float(nxt[name]) - float(previous[name]))
+                    for name in ARM_JOINTS
+                )
+                sub_steps = max(
+                    1,
+                    int(math.ceil(seg_delta / self.config.workspace_check_step_rad)),
+                )
+                for sub_idx in range(1, sub_steps + 1):
+                    frac = sub_idx / sub_steps
+                    densified.append(
+                        {
+                            name: float(previous[name])
+                            + (float(nxt[name]) - float(previous[name])) * frac
+                            for name in ARM_JOINTS
+                        }
+                    )
+            return tuple(densified)
+
         max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
         steps = max(
             2,
             int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1,
         )
-        samples = tuple(
+        return tuple(
             {
                 name: current[name] + (target[name] - current[name]) * fraction
                 for name in ARM_JOINTS
             }
             for fraction in np.linspace(0.0, 1.0, steps)
+        )
+
+    def _validate_saved_pose_exit_workspace_path(
+        self,
+        current: Mapping[str, float],
+        target: Mapping[str, float],
+        *,
+        speed: float | None = None,
+        acceleration: float | None = None,
+        profile_mode: JointProfileMode | None = None,
+    ) -> None:
+        """Validate a saved-pose path from the physically measured start."""
+        samples = self._joint_workspace_samples(
+            current,
+            target,
+            speed=speed,
+            acceleration=acceleration,
+            profile_mode=profile_mode,
         )
         validate_workspace_path_from_measured_start(
             self.model,
@@ -272,6 +343,9 @@ class SOARM101:
         *,
         relative: bool,
         workspace_check: Literal["full", "target_only", "off"] = "full",
+        speed: float | None = None,
+        acceleration: float | None = None,
+        profile_mode: JointProfileMode | None = None,
     ) -> None:
         if workspace_check not in {"full", "target_only", "off"}:
             raise InvalidCommandError(
@@ -288,14 +362,12 @@ class SOARM101:
                 **self._workspace_kwargs(),
             )
             return
-        max_delta = max(abs(target[name] - current[name]) for name in ARM_JOINTS)
-        steps = max(2, int(math.ceil(max_delta / self.config.workspace_check_step_rad)) + 1)
-        samples = tuple(
-            {
-                name: current[name] + (target[name] - current[name]) * fraction
-                for name in ARM_JOINTS
-            }
-            for fraction in np.linspace(0.0, 1.0, steps)
+        samples = self._joint_workspace_samples(
+            current,
+            target,
+            speed=speed,
+            acceleration=acceleration,
+            profile_mode=profile_mode,
         )
         validate_workspace_path_from_measured_start(
             self.model,
@@ -539,7 +611,13 @@ class SOARM101:
         """Move a measured saved pose through the active executable calibration."""
         current, target, canonical = self._canonicalize_saved_pose_target(positions)
         if self.config.enable_workspace_checks:
-            self._validate_saved_pose_exit_workspace_path(current, target)
+            self._validate_saved_pose_exit_workspace_path(
+                current,
+                target,
+                speed=speed,
+                acceleration=acceleration,
+                profile_mode=profile_mode,
+            )
         return self.motion.move_joints(
             canonical,
             speed=speed,
@@ -571,6 +649,9 @@ class SOARM101:
             positions,
             relative=relative,
             workspace_check=workspace_check,
+            speed=speed,
+            acceleration=acceleration,
+            profile_mode=profile_mode,
         )
         return self.motion.move_joints(
             positions,
@@ -664,7 +745,13 @@ class SOARM101:
             wait=False,
             execution_mode=execution_mode,
             profile_mode=profile_mode,
-            workspace_check="off",
+            # The historical Sleep exception covers its original synchronized
+            # fold, not the independently timed experimental glide path.
+            workspace_check=(
+                "full"
+                if self.motion._resolve_joint_profile_mode(profile_mode) == "scurve_glide"
+                else "off"
+            ),
         )
         assert isinstance(arm_handle, MotionHandle)
         arm_result = self._wait_sleep_child(arm_handle, cancel_event)
@@ -768,7 +855,7 @@ class SOARM101:
 
         Sleep intentionally bypasses only the generic coarse arm workspace geometry
         check because the folded shoulder/elbow configuration is closer than the
-        generic 25 mm centerline self-clearance heuristic. Calibrated joint/tool
+        generic centerline self-clearance heuristic. Calibrated joint/tool
         limits, planned dynamics, active progress guards, effort, fault,
         communication, and completion checks remain active.
         """

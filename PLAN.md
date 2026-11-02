@@ -1,5 +1,9 @@
 # Development plan
 
+## Experimental S-curve profiles
+
+`scurve_paced` and `scurve_glide` explore softer deceleration and servo pacing at slow speeds. Glide independently times joints, so its path differs from the synchronized baseline. Software simulation cannot establish physical tracking, servo firmware behavior, or improved smoothness. Complete code/safety review and a separate attended hardware qualification before adopting either mode or changing the default.
+
 ## Selectable joint trajectory profile modes (`minimum_jerk` vs `cosine_cruise`)
 
 Merged the offline wobble trace analyzer (`scripts/analyze_wobble_traces.py`) and joint execution diagnostics onto `main`, and prototyped two selectable streamed joint-space trajectory profile modes (`SOARM101Config.joint_profile_mode` / `--profile-mode {minimum_jerk,cosine_cruise}`) for side-by-side comparison:

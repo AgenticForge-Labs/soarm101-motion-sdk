@@ -8,6 +8,7 @@ import os
 import runpy
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,12 +26,19 @@ from soarm101_motion.constants import (
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
 )
-from soarm101_motion.exceptions import ConfigurationError, InvalidCommandError
+from soarm101_motion.exceptions import (
+    CommunicationError,
+    ConfigurationError,
+    InvalidCommandError,
+    MotionCancelledError,
+    SafetyViolationError,
+)
 from soarm101_motion.hardware import SimulationBackend
 from soarm101_motion.kinematics import SO101KinematicModel
 from soarm101_motion.motion import PassiveBackendTrace
 from soarm101_motion.motion.controller import MotionController as BaseMotionController
 from soarm101_motion.poses import sleep_joint_positions
+from soarm101_motion.safety import validate_workspace_configuration
 from soarm101_motion.sdk_capabilities import SDK_CAPABILITIES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -74,7 +82,7 @@ def _attach_synthetic_calibration(arm: SOARM101) -> None:
 
 
 def test_config_validates_joint_profile_mode() -> None:
-    assert JOINT_PROFILE_MODES == ("minimum_jerk", "cosine_cruise")
+    assert JOINT_PROFILE_MODES == ("minimum_jerk", "cosine_cruise", "scurve_paced", "scurve_glide")
     default_cfg = SOARM101Config()
     assert default_cfg.joint_profile_mode == "minimum_jerk"
 
@@ -83,6 +91,231 @@ def test_config_validates_joint_profile_mode() -> None:
 
     with pytest.raises(ConfigurationError, match="joint_profile_mode"):
         SOARM101Config(joint_profile_mode="trapezoid")  # type: ignore[arg-type]
+
+
+def test_default_sleep_endpoint_uses_20mm_clearance() -> None:
+    with SOARM101.simulated() as arm:
+        target = arm.get_sleep_joint_positions()
+        assert arm.config.minimum_self_clearance_m == pytest.approx(0.020)
+        validate_workspace_configuration(arm.model, target, tcp=arm.active_tcp)
+        with pytest.raises(SafetyViolationError, match="self-clearance"):
+            validate_workspace_configuration(
+                arm.model, target, tcp=arm.active_tcp, minimum_self_clearance_m=0.025
+            )
+
+
+@pytest.mark.parametrize("mode", ["scurve_paced", "scurve_glide"])
+@pytest.mark.parametrize("speed_deg", [4.0, 24.0])
+def test_experimental_profiles_send_validated_samples(mode: str, speed_deg: float) -> None:
+    cfg = SOARM101Config(auto_enable_torque=False, enable_workspace_checks=False)
+    with SOARM101.simulated(realtime=False, config=cfg) as arm:
+        _attach_synthetic_calibration(arm)
+        arm.enable()
+        start = dict(arm.get_joint_positions().positions)
+        target = dict(start)
+        target["shoulder_pan"] += 0.15
+        target["elbow_flex"] += 0.07
+        speed = math.radians(speed_deg)
+        acceleration = math.radians(75.0)
+        plan = arm.motion._plan_joint_motion(
+            start, target, speed=speed, acceleration=acceleration, profile_mode=mode
+        )
+        max_speed, max_accel, max_step = arm.motion._trajectory_metrics(plan.command_samples)
+        assert max_speed <= speed + 1e-6
+        assert max_accel <= acceleration + 1e-6
+        assert max_step <= cfg.max_command_step_radians + 1e-6
+        writes = []
+        original = arm.backend.write_joint_positions
+
+        def capture(positions, *, speed_raw=None, acceleration_raw=None):
+            writes.append((dict(positions), speed_raw, acceleration_raw))
+            return original(positions, speed_raw=speed_raw, acceleration_raw=acceleration_raw)
+
+        arm.backend.write_joint_positions = capture
+        assert arm.move_joints(target, speed=speed, acceleration=acceleration, profile_mode=mode).completed
+        assert writes
+        assert writes[-1][0] == pytest.approx(target)
+        assert all(any(command == sample for sample in plan.command_samples) for command, _, _ in writes)
+        assert all(isinstance(velocity, dict) and isinstance(accel, dict) for _, velocity, accel in writes)
+
+
+@pytest.mark.parametrize("mode", ["scurve_paced", "scurve_glide"])
+@pytest.mark.parametrize("failure", ["cancel", "communication"])
+def test_experimental_pacing_stops_on_failure(mode: str, failure: str) -> None:
+    cfg = SOARM101Config(auto_enable_torque=False, enable_workspace_checks=False)
+    with SOARM101.simulated(realtime=False, config=cfg) as arm:
+        _attach_synthetic_calibration(arm)
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.2
+        entered = threading.Event()
+        release = threading.Event()
+        stops = []
+        writes = []
+        original_stop = arm.backend.stop
+
+        def fail_write(positions, *, speed_raw=None, acceleration_raw=None):
+            writes.append(dict(positions))
+            entered.set()
+            assert release.wait(2)
+            if failure == "communication":
+                raise CommunicationError("injected write failure")
+
+        def record_stop():
+            stops.append(True)
+            original_stop()
+
+        arm.backend.write_joint_positions = fail_write
+        arm.backend.stop = record_stop
+        handle = arm.move_joints(target, profile_mode=mode, wait=False)
+        assert entered.wait(2)
+        if failure == "cancel":
+            handle.cancel()
+        release.set()
+        with pytest.raises(MotionCancelledError if failure == "cancel" else CommunicationError):
+            handle.wait(timeout=2)
+        assert len(writes) == 1
+        assert stops
+
+
+@pytest.mark.parametrize("mode", ["scurve_paced", "scurve_glide"])
+def test_experimental_stop_fences_next_command(mode: str) -> None:
+    cfg = SOARM101Config(auto_enable_torque=False, enable_workspace_checks=False)
+    with SOARM101.simulated(realtime=False, config=cfg) as arm:
+        _attach_synthetic_calibration(arm)
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.2
+        entered = threading.Event()
+        release = threading.Event()
+        writes = []
+
+        def pause_before_write(deadline):
+            entered.set()
+            assert release.wait(2)
+            return 0.0
+
+        arm.motion._sleep_until = pause_before_write
+        arm.backend.write_joint_positions = lambda *a, **k: writes.append(a)
+        handle = arm.move_joints(target, profile_mode=mode, wait=False)
+        assert entered.wait(2)
+        arm.motion.stop(wait=False)
+        release.set()
+        with pytest.raises(MotionCancelledError):
+            handle.wait(timeout=2)
+        assert not writes
+        assert arm.backend.stop_count >= 1
+
+
+def test_glide_checks_execution_plan_and_observed_workspace(monkeypatch) -> None:
+    import soarm101_motion.arm as arm_module
+    import soarm101_motion.motion.controller as controller_module
+
+    cfg = SOARM101Config(auto_enable_torque=False, enable_workspace_checks=True)
+    with SOARM101.simulated(realtime=False, config=cfg) as arm:
+        _attach_synthetic_calibration(arm)
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.15
+        checked = []
+        writes = []
+        monkeypatch.setattr(arm_module, "validate_workspace_path_from_measured_start", lambda *a, **k: None)
+
+        def record_path(model, samples, **kwargs):
+            checked.append([dict(sample) for sample in samples])
+
+        monkeypatch.setattr(controller_module, "validate_workspace_path_from_measured_start", record_path)
+        observed = []
+
+        class RecordMonitor:
+            def __init__(self, model, **kwargs):
+                pass
+
+            def check(self, sample):
+                observed.append(dict(sample))
+
+        monkeypatch.setattr(controller_module, "MeasuredWorkspaceMonitor", RecordMonitor)
+        original = arm.backend.write_joint_positions
+
+        def capture(positions, *, speed_raw=None, acceleration_raw=None):
+            writes.append(dict(positions))
+            return original(positions, speed_raw=speed_raw, acceleration_raw=acceleration_raw)
+
+        arm.backend.write_joint_positions = capture
+        assert arm.move_joints(target, profile_mode="scurve_glide").completed
+        assert len(checked) == 1
+        assert all(any(command == sample for sample in checked[0]) for command in writes)
+        assert observed[-1] == pytest.approx(target)
+
+
+def test_glide_rejects_changed_start_before_first_write(monkeypatch) -> None:
+    import soarm101_motion.arm as arm_module
+    import soarm101_motion.motion.controller as controller_module
+
+    cfg = SOARM101Config(auto_enable_torque=False, enable_workspace_checks=True)
+    with SOARM101.simulated(realtime=False, config=cfg) as arm:
+        _attach_synthetic_calibration(arm)
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.15
+        monkeypatch.setattr(arm_module, "validate_workspace_path_from_measured_start", lambda *a, **k: None)
+        original_validate = controller_module.validate_workspace_path_from_measured_start
+
+        def change_after_preflight(model, samples, **kwargs):
+            arm.backend._positions["shoulder_pan"] += cfg.joint_position_tolerance_rad * 2
+
+        monkeypatch.setattr(controller_module, "validate_workspace_path_from_measured_start", change_after_preflight)
+        writes = []
+        arm.backend.write_joint_positions = lambda *a, **k: writes.append(a)
+        with pytest.raises(SafetyViolationError, match="start changed"):
+            arm.move_joints(target, profile_mode="scurve_glide")
+        assert not writes
+        monkeypatch.setattr(controller_module, "validate_workspace_path_from_measured_start", original_validate)
+
+
+def test_glide_stops_on_observed_workspace_violation(monkeypatch) -> None:
+    import soarm101_motion.arm as arm_module
+    import soarm101_motion.motion.controller as controller_module
+
+    cfg = SOARM101Config(auto_enable_torque=False, enable_workspace_checks=True)
+    with SOARM101.simulated(realtime=False, config=cfg) as arm:
+        _attach_synthetic_calibration(arm)
+        arm.enable()
+        target = dict(arm.get_joint_positions().positions)
+        target["shoulder_pan"] += 0.15
+        monkeypatch.setattr(arm_module, "validate_workspace_path_from_measured_start", lambda *a, **k: None)
+        monkeypatch.setattr(controller_module, "validate_workspace_path_from_measured_start", lambda *a, **k: None)
+        calls = []
+
+        class RejectMonitor:
+            def __init__(self, model, **kwargs):
+                pass
+
+            def check(self, sample):
+                calls.append(sample)
+                if len(calls) > 1:
+                    raise SafetyViolationError("injected observed workspace violation")
+
+        monkeypatch.setattr(controller_module, "MeasuredWorkspaceMonitor", RejectMonitor)
+        with pytest.raises(SafetyViolationError, match="observed workspace"):
+            arm.move_joints(target, profile_mode="scurve_glide")
+        assert len(calls) == 2
+        assert arm.backend.stop_count >= 1
+
+
+def test_glide_sleep_requires_full_workspace_check(monkeypatch) -> None:
+    with SOARM101.simulated(realtime=False) as arm:
+        arm.enable()
+        modes = []
+
+        def reject(positions, *, relative, workspace_check, **kwargs):
+            modes.append(workspace_check)
+            raise SafetyViolationError("workspace preflight rejected")
+
+        monkeypatch.setattr(arm, "_validate_joint_workspace_path", reject)
+        with pytest.raises(SafetyViolationError, match="workspace preflight"):
+            arm.move_sleep(profile_mode="scurve_glide", close_gripper=False)
+        assert modes == ["full"]
 
 
 def test_move_primitives_validate_profile_mode_eagerly() -> None:
@@ -115,7 +348,7 @@ def test_cosine_cruise_vs_minimum_jerk_side_by_side_on_calibrated_sleep_fold(
     }
 
     plans: dict[str, tuple[list[dict[str, float]], dict]] = {}
-    for mode in JOINT_PROFILE_MODES:
+    for mode in ("minimum_jerk", "cosine_cruise"):
         cfg = SOARM101Config(
             auto_enable_torque=False,
             command_frequency_hz=50.0,

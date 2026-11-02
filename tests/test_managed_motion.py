@@ -573,6 +573,7 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
 
     import numpy as np
 
+    from soarm101_motion import SOARM101Config
     from soarm101_motion.constants import ARM_JOINTS, STOCK_GRIPPER
 
     measured_deg = {
@@ -583,7 +584,8 @@ def test_builtin_sleep_pose_is_calibration_relative_and_guarded() -> None:
         "wrist_roll": (-168.79120879120882, 168.79120879120882),
     }
 
-    with SOARM101.simulated() as arm:
+    # Exercise the Sleep exception with an explicitly stricter threshold.
+    with SOARM101.simulated(config=SOARM101Config(minimum_self_clearance_m=0.025)) as arm:
         motors = {
             name: SimpleNamespace(
                 radians_limits=tuple(np.deg2rad(measured_deg[name]))
