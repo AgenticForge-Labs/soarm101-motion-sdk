@@ -248,7 +248,10 @@ def analyze_joint(rows: list[dict], joint: str, frequency: float,
             intervals = []
             for a,b in zip(raw_commands, raw_commands[1:]):
                 cycles = max(1, (b[0]-a[0])/dt)
-                ticks_per_cycle = abs(float(b[1])-float(a[1]))/cycles
+                desired_float_delta = (abs(float(b[2])-float(a[2])) * TICKS_PER_RAD
+                                       if joint != "so101_gripper" and a[2] is not None and b[2] is not None
+                                       else abs(float(b[1])-float(a[1])))
+                ticks_per_cycle = desired_float_delta/cycles
                 intervals.append((b[0]-a[0], ticks_per_cycle))
             tail_s = 0.0
             for seconds, ticks_per_cycle in reversed(intervals):
@@ -274,7 +277,7 @@ def analyze_joint(rows: list[dict], joint: str, frequency: float,
         goal_deltas = [b[1]-a[1] for a,b in zip(raw_commands, raw_commands[1:])]
         monotonic = all(v >= 0 for v in goal_deltas) or all(v <= 0 for v in goal_deltas)
         measured_raw = [e[1] for e in feedback if e[1] is not None and
-                        raw_commands[0][0] <= e[0] <= raw_commands[-1][0]]
+                        raw_commands[0][0] <= e[0] <= (feedback[-1][0] if mode == "final_target" else raw_commands[-1][0])]
         velocities = [b-a for a,b in zip(measured_raw, measured_raw[1:]) if b != a]
         if monotonic:
             result["hunting_reversals"] = sum(a*b < 0 for a,b in zip(velocities, velocities[1:]))
@@ -292,6 +295,8 @@ def analyze(path: Path, label: str, frequency_override: float | None,
     meta = rows[0]
     frequency = frequency_override or float(
         meta.get("command_frequency_hz") or meta.get("frequency_hz") or
+        next((float(row["frequency_hz"]) for row in rows
+              if row.get("event") == "teleop_frame" and row.get("frequency_hz")), None) or
         (20 if meta.get("kind") in ("exact_teleop_command_replay",
                                    "poststudy_exact_teleop_command_replay") else 50)
     )
@@ -351,19 +356,24 @@ def main() -> int:
     flattened = []
     for result in all_results:
         print(f"\n{result['trace']} / {result['segment']} ({result['mode']}, {result['frequency_hz']:g} Hz)")
-        print("joint                  max0   impulses25   hunt   err_rms     lag_ms   subtick_tail_ms")
+        print("joint                  zero_max zero_frac impuls25 rate/s hunt peak_err rms_err  lag_ms subtick_ms")
         for joint in result["joints"]:
             row = {key: value for key, value in result.items() if key != "joints"}
             row.update(joint)
             flattened.append(row)
             def display(value: object) -> str:
                 return "NA" if value is None else str(value)
-            print(f"{joint['joint']:<22} {display(joint['max_zero_cycles']):>4} "
-                  f"{display(joint['tick_impulses_final25']):>12} "
-                  f"{display(joint['hunting_reversals']):>6} "
-                  f"{display(joint['following_rms']):>10} "
-                  f"{display(joint['lag_ms']):>9} "
-                  f"{display(joint['subtick_tail_ms_estimate']):>17}")
+            print(f"{joint['joint']:<22} {display(joint['max_zero_cycles']):>8} "
+                  f"{display(joint['zero_cycles_fraction']):>9} "
+                  f"{display(joint['tick_impulses_final25']):>8} "
+                  f"{display(joint['tick_impulses_per_s_final25']):>6} "
+                  f"{display(joint['hunting_reversals']):>4} "
+                  f"{display(joint['following_peak']):>8} "
+                  f"{display(joint['following_rms']):>7} "
+                  f"{display(joint['lag_ms']):>7} "
+                  f"{display(joint['subtick_tail_ms_estimate']):>10}")
+            if joint["zero_runs"]:
+                print(f"    zero-run lengths (cycles: occurrences): {joint['zero_runs']}")
     if args.out_json:
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
         args.out_json.write_text(json.dumps(all_results, indent=2)+"\n", encoding="utf-8")
