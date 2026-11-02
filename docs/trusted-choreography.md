@@ -45,7 +45,7 @@ For software CI, only the existing `SimulationBackend` is used; simulation can e
 
 An authored 20 Hz sinusoid, nod, shake, or transition can have movement exceeding the ±2° untrusted jog envelope **only when it has been preapproved in its entirety**, pinned to a calibration, and passed the SDK's existing whole-path, rate and workspace checks. It is never implemented by chaining agent-policy jog requests or skipping SDK planning. Segment repetition and expressive meaning remain in Puppeteer, **not** in the SDK.
 
-The trajectory includes a constant gripper channel set to the current measured gripper position, never an authored gripper target. The SDK's trajectory machinery and tool safety checks remain authoritative. This does not authorize gripper actuation or payload manipulation.
+The SDK's ordinary recorded playback historically writes gripper goals at every sample. PR 3 adds a **default-preserving** `joint_only=True` option at the canonical `SOARM101.play_trajectory` and `MotionController.play_trajectory` boundary, and expressive execution always selects it. The authored trajectory's constant gripper channel records the measured start but the joint-only executor **never writes any gripper goal**. Ordinary recording replay keeps the existing default gripper semantics.
 
 `preflight` and SDK completion are **not** proof of physical vertical direction, self-clearance in the real workspace, servo response, or a safety-rated emergency stop. The SDK's known history includes ~18.4° post-STOP elbow travel in an earlier physical trial. Keep hardware attended with readily accessible power isolation.
 
