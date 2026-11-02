@@ -332,7 +332,7 @@ def execute_trusted_choreography(
             # the canonical motion controller; no raw USB/servo writes.
             result = arm.play_trajectory(
                 start.trajectory, speed_scale=speed_scale, move_to_start=False,
-                wait=True,
+                wait=True, joint_only=True,
             )
             with finalize_lock:
                 if deadline_tripped.is_set():
