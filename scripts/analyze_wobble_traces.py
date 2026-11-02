@@ -207,6 +207,9 @@ def analyze_joint(rows: list[dict], joint: str, frequency: float,
         "joint": joint, "commands": len(commands), "feedback": len(feedback),
         "zero_runs": None, "max_zero_cycles": None, "zero_cycles_fraction": None,
         "tick_impulses_final25": None, "tick_impulses_per_s_final25": None,
+        "tail30_mean_abs_ticks_per_cycle": None,
+        "tail30_max_abs_ticks_per_cycle": None,
+        "tail30_zero_cycles_fraction": None,
         "hunting_reversals": None, "following_peak": None, "following_rms": None,
         "following_unit": "normalized" if joint == "so101_gripper" else "rad",
         "lag_ms": None, "subtick_tail_ms_estimate": None,
@@ -256,6 +259,15 @@ def analyze_joint(rows: list[dict], joint: str, frequency: float,
             result["max_zero_cycles"] = max(runs, default=0)
             result["zero_cycles_fraction"] = round(sum(runs)/(n-1), 5)
             delta = [b-a for a,b in zip(ticks, ticks[1:])]
+            tail30 = delta[int(math.floor(len(delta) * 0.70)):]
+            if tail30:
+                result["tail30_mean_abs_ticks_per_cycle"] = round(
+                    sum(abs(value) for value in tail30) / len(tail30), 5
+                )
+                result["tail30_max_abs_ticks_per_cycle"] = max(abs(value) for value in tail30)
+                result["tail30_zero_cycles_fraction"] = round(
+                    sum(value == 0 for value in tail30) / len(tail30), 5
+                )
             tail_start = max(1, math.ceil((n-1)*0.75))
             impulse = sum(delta[i] != 0 and delta[i-1] == 0
                           for i in range(tail_start, len(delta)))
@@ -412,6 +424,12 @@ def main() -> int:
                   f"{display(joint['subtick_tail_ms_estimate']):>10}")
             if joint["zero_runs"]:
                 print(f"    zero-run lengths (cycles: occurrences): {joint['zero_runs']}")
+            if joint["tail30_mean_abs_ticks_per_cycle"] is not None:
+                print(
+                    f"    last 30%: mean |delta|={joint['tail30_mean_abs_ticks_per_cycle']} "
+                    f"ticks/cycle; max={joint['tail30_max_abs_ticks_per_cycle']} "
+                    f"ticks/cycle; zero={joint['tail30_zero_cycles_fraction']}"
+                )
             if joint["servo_speed_raw_min"] is not None:
                 print(
                     f"    speed_raw={joint['servo_speed_raw_min']}..{joint['servo_speed_raw_max']} "
