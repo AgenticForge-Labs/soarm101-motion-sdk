@@ -87,3 +87,25 @@ See `docs/agent-sandbox.md`, `docs/agent-broker.md`, `docs/agent-mcp.md` and `do
 ## Repository boundary
 
 The SDK owns SO-ARM101 calibration, kinematics, motion, tools/TCP, guards, diagnostics, saved-position/recording/program semantics, local USB cameras and the constrained robot-specific agent execution boundary. Higher-level perception, stage systems, ROS middleware, performance orchestration, and cross-robot coordination belong to other systems.
+
+
+## Operator-pinned deterministic choreography (PR 3 of 5)
+
+- `soarm101_motion.choreography` is an SDK-owned trusted-host capability,
+  not an LLM/persona engine or a robot-facing MCP/agent route. Keep all
+  personalities, gestures and loop animation definitions in Puppeteer.
+- A `JointChoreography` is a finite, SHA-256-pinned, calibration-bound
+  absolute five-joint segment; no gripper commands or raw servo writes.
+  `ChoreographyPolicy` comes only from the trusted operator and cannot
+  increase the SDK/broker motion envelope.
+- Read-only preflight validates the *complete* resampled path using the
+  existing controller speed/acceleration and workspace validators, with
+  a measured start. The public `SOARM101.play_trajectory` must recheck
+  its own preflight at execution. Never chain untrusted agent-policy jogs
+  to synthesize trusted motion.
+- Execution requires the same persistent SDK executor and active independent
+  BrokerWatchdog, with an explicit human lease and existing torque HOLD on
+  any physical trial. Do not automatically arm or open another servo port.
+- No new broker action, robotctl, CLI, agent MCP tool, profile grant or
+  production physical qualification is part of this PR. Hardware acceptance
+  follows completion of all five Conversationalist/robot PRs.
