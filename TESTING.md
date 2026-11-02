@@ -9,6 +9,7 @@ Streamed joint-space planning supports `--profile-mode minimum_jerk` (default qu
 ```bash
 ruff check .
 python -m pytest --no-cov -q tests/test_joint_profile_modes.py tests/test_analyze_wobble_traces.py
+python -m pytest --no-cov -q tests/test_motion_profile_artifact_compatibility.py
 SOARM_SIMULATION=1 bash scripts/run_joint_profile_comparison.sh both 40 200
 ```
 
