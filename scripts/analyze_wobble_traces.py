@@ -122,6 +122,14 @@ def channel_events(rows: list[dict], joint: str, raw_range: tuple[int, int] | No
     return sorted(commands, key=lambda row: row[0]), sorted(feedback, key=lambda row: row[0])
 
 
+def servo_speed_raw(row: dict, joint: str) -> int | None:
+    """Read effective speed from the passive trace without guessing hardware EEPROM."""
+    value = row.get("speed_raw")
+    if isinstance(value, dict):
+        value = value.get(joint)
+    return int(value) if isinstance(value, (int, float)) else None
+
+
 def run_lengths(values: list[int]) -> list[int]:
     """Length in zero-increment *intervals*, not number of equal positions."""
     result, count = [], 0
@@ -203,11 +211,29 @@ def analyze_joint(rows: list[dict], joint: str, frequency: float,
         "following_unit": "normalized" if joint == "so101_gripper" else "rad",
         "lag_ms": None, "subtick_tail_ms_estimate": None,
         "quantized_flat_tail_ms": None, "longest_write_gap_ms": None,
-        "write_interval_p95_ms": None, "notes": [],
+        "write_interval_p95_ms": None, "servo_speed_raw_min": None,
+        "servo_speed_raw_max": None, "servo_speed_raw_changes": None,
+        "post_gap_speed_raw_max": None, "post_gap_speed_raw_samples": None,
+        "notes": [],
     }
     if not commands:
         result["notes"].append("no commands for joint")
         return result
+    speeds = [(cmd[0], servo_speed_raw(cmd[3], joint)) for cmd in commands]
+    known_speeds = [value for _, value in speeds if value is not None]
+    if known_speeds:
+        result["servo_speed_raw_min"] = min(known_speeds)
+        result["servo_speed_raw_max"] = max(known_speeds)
+        result["servo_speed_raw_changes"] = sum(
+            a is not None and b is not None and a != b
+            for a, b in zip((x[1] for x in speeds), (x[1] for x in speeds[1:]))
+        )
+        post_gap = [
+            value for (previous_time, _), (current_time, value) in zip(speeds, speeds[1:])
+            if value is not None and current_time - previous_time >= 3.0 / frequency - 1e-6
+        ]
+        result["post_gap_speed_raw_max"] = max(post_gap, default=None)
+        result["post_gap_speed_raw_samples"] = len(post_gap)
     if len(commands) > 1:
         gaps = [1000*(b[0]-a[0]) for a,b in zip(commands, commands[1:])]
         result["longest_write_gap_ms"] = round(max(gaps), 2)
@@ -332,6 +358,7 @@ def analyze(path: Path, label: str, frequency_override: float | None,
                 "Lag uses resampled encoder feedback and cannot resolve latency below feedback cadence.",
                 "Gripper raw ticks require its real calibrated range and drive mode.",
                 "Guard/write call durations include Python wrappers and are not per-packet bus turnaround timings.",
+                "Raw servo speed settings are command register values; do not interpret them as verified degrees/second.",
             ],
         })
     return result
@@ -385,6 +412,13 @@ def main() -> int:
                   f"{display(joint['subtick_tail_ms_estimate']):>10}")
             if joint["zero_runs"]:
                 print(f"    zero-run lengths (cycles: occurrences): {joint['zero_runs']}")
+            if joint["servo_speed_raw_min"] is not None:
+                print(
+                    f"    speed_raw={joint['servo_speed_raw_min']}..{joint['servo_speed_raw_max']} "
+                    f"changes={joint['servo_speed_raw_changes']}; "
+                    f"post-gap (>=3 cycles) max={display(joint['post_gap_speed_raw_max'])} "
+                    f"n={joint['post_gap_speed_raw_samples']}"
+                )
     if args.out_json:
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
         args.out_json.write_text(json.dumps(all_results, indent=2)+"\n", encoding="utf-8")
