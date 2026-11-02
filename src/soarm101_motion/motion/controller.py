@@ -2064,17 +2064,19 @@ class MotionController:
         *,
         gripper_speed_raw: int | None = None,
         gripper_acceleration_raw: int | None = None,
+        joint_only: bool = False,
     ) -> MotionResult:
         samples = plan.command_samples
         gripper_samples = plan.gripper_samples
         try:
             self._check_cancelled(cancel_event, "recorded trajectory cancelled")
-            self.backend.write_tool_position(
-                STOCK_GRIPPER,
-                gripper_samples[0],
-                speed_raw=gripper_speed_raw,
-                acceleration_raw=gripper_acceleration_raw,
-            )
+            if not joint_only:
+                self.backend.write_tool_position(
+                    STOCK_GRIPPER,
+                    gripper_samples[0],
+                    speed_raw=gripper_speed_raw,
+                    acceleration_raw=gripper_acceleration_raw,
+                )
             if plan.pre_roll is not None:
                 self._execute_plan(
                     plan.pre_roll,
@@ -2106,12 +2108,13 @@ class MotionController:
                     speed_raw=TELEOP_SERVO_SPEED_RAW,
                     acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
                 )
-                self.backend.write_tool_position(
-                    STOCK_GRIPPER,
-                    gripper_samples[index],
-                    speed_raw=gripper_speed_raw,
-                    acceleration_raw=gripper_acceleration_raw,
-                )
+                if not joint_only:
+                    self.backend.write_tool_position(
+                        STOCK_GRIPPER,
+                        gripper_samples[index],
+                        speed_raw=gripper_speed_raw,
+                        acceleration_raw=gripper_acceleration_raw,
+                    )
                 if index % monitor_every == 0 or index == len(samples) - 1:
                     previous_actual = self._monitor_motion(
                         command,
@@ -2551,6 +2554,7 @@ class MotionController:
         gripper_speed_raw: int | None = None,
         gripper_acceleration_raw: int | None = None,
         wait: bool = True,
+        joint_only: bool = False,
     ) -> MotionResult | MotionHandle[MotionResult]:
         with self._state_lock:
             self._ensure_idle_locked()
@@ -2566,6 +2570,7 @@ class MotionController:
                     event,
                     gripper_speed_raw=gripper_speed_raw,
                     gripper_acceleration_raw=gripper_acceleration_raw,
+                    joint_only=joint_only,
                 )
             )
         return handle.wait() if wait else handle
