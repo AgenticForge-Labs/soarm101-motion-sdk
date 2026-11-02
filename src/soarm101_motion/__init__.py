@@ -6,6 +6,7 @@ from soarm101_motion.calibration import MotorCalibration, SO101Calibration
 from soarm101_motion.camera import CameraCapture, CameraSettings, CameraSettingsStore, discover_camera_devices
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.choreography import (
+    ChoreographyExecutionError,
     ChoreographyPolicy,
     ChoreographyPreflight,
     JointChoreography,
@@ -40,6 +41,7 @@ from soarm101_motion.workspace import (
 __version__ = "0.1.0.dev8"
 
 __all__ = [
+    "ChoreographyExecutionError",
     "ChoreographyPolicy",
     "ChoreographyPreflight",
     "JointChoreography",
