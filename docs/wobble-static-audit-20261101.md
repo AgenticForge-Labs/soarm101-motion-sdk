@@ -77,6 +77,15 @@ No production motion, limits, effort/fault, following-error, calibration, or STO
   speed_raw varies PER JOINT PER SENT WAYPOINT via
   ceil(abs(raw_next-raw_previous)/(0.8*dt)), bounded 1..3400,
   acceleration_raw=254. Note raw_delta=0 -> speed 1.
+  The preceding raw target is the LAST TRANSMITTED sample. If duplicate
+  complete five-axis targets are suppressed for multiple cycles, the next
+  raw_delta may span the whole silent interval, but the speed formula still
+  divides by a single 0.8*dt interval. For dt=20 ms, a one-tick resumed
+  change produces ceil(1/0.016)=63 raw speed; two ticks produce 125,
+  regardless of whether the preceding gap was 20 ms or 150 ms.
+  This is a concrete diagnostic hypothesis, not proof of servo hunting.
+  Compare post-gap raw speed versus write interval and encoder reversals
+  before considering any servo/profile or controller modification.
 - Joint final_target:
   controller.py:1371-1465 and 1694-1815; one endpoint SyncWrite,
   separately computed per-joint speed over plan duration,
@@ -144,6 +153,11 @@ Use --segment Sleep to select marked Sleep segments in a single file.
 Use --gripper-raw-range MIN MAX (and --gripper-reversed if drive_mode=1)
 ONLY when copied from the matching real calibration. Otherwise the
 sixth actuator's raw-tick metrics remain NA, not invented.
+
+The output also reports observed per-joint raw servo speed min/max,
+changes between issued writes and the maximum speed setting immediately
+following a multi-cycle (>=3 nominal periods) write gap. These are raw
+position-mode servo settings, not physically measured degrees/second.
 
 The output includes per-joint zero-increment run-length histogram, maximum
 hold cycles, held-cycle fraction, final-25%-of-move step-impulse count/rate,
