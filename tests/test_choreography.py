@@ -11,6 +11,7 @@ from soarm101_motion.broker import AgentMotionRates
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.broker_watchdog import BrokerWatchdog
 from soarm101_motion.choreography import (
+    ChoreographyExecutionError,
     ChoreographyPolicy,
     JointChoreography,
     JointFrame,
@@ -184,3 +185,22 @@ def test_preflight_rejects_wrong_calibration_or_excess_duration(supervised):
         preflight_choreography(arm, segment, policy(
             arm, segment, max_duration_s=0.2,
         ))
+
+
+def test_unconfirmed_native_execution_attempt_uses_existing_stop_fence(
+    supervised, monkeypatch,
+):
+    executor, watchdog = supervised
+    arm = executor._session
+    segment = author(arm, duration=0.6)
+    cfg = policy(arm, segment)
+    def fail_on_play(*_args, **_kwargs):
+        raise RuntimeError("injected native executor failure")
+    monkeypatch.setattr(arm, "play_trajectory", fail_on_play)
+    with pytest.raises(ChoreographyExecutionError, match="injected native"):
+        execute_trusted_choreography(executor, watchdog, cfg, segment)
+    assert arm.backend.stop_count >= 1
+    assert watchdog.status["state"] == "stopped"
+    # STOP is terminal for the supervised session; no automatic retries.
+    with pytest.raises(PermissionError, match="terminal"):
+        execute_trusted_choreography(executor, watchdog, cfg, segment)
