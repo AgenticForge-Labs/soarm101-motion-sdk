@@ -51,7 +51,7 @@ The SDK's ordinary recorded playback historically writes gripper goals at every 
 
 ## Interruption and failure
 
-The existing broker watchdog runs independently of ordinary motion dispatch. During execution, it fences command admission on heartbeat/lease loss, invokes the SDK-owned STOP/HOLD attempt and retains its terminal state. Each segment also has a bounded deadline; failure or uncertain completion invokes the existing `_stop_after_failure` path and raises `ReplayExecutionError` with separate STOP evidence. There are no retries, automatic reconnects or automatic recovery after unconfirmed outcomes.
+The existing broker watchdog runs independently of ordinary motion dispatch. During execution, it fences command admission on heartbeat/lease loss, invokes the SDK-owned STOP/HOLD attempt and retains its terminal state. Each segment also has a bounded deadline; failure or uncertain completion invokes the existing `_stop_after_failure` path and raises `ChoreographyExecutionError` with separate STOP evidence. There are no retries, automatic reconnects or automatic recovery after unconfirmed outcomes.
 
 The returned success message is intentionally limited to `sdk_execution_completed_physical_settling_not_certified`. Follow-up robot telemetry and independently measured hardware positions remain a separate local qualification.
 
