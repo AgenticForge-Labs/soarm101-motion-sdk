@@ -1180,8 +1180,9 @@ class SOARM101:
         gripper_speed_raw: int | None = None,
         gripper_acceleration_raw: int | None = None,
         wait: bool = True,
+        joint_only: bool = False,
     ) -> MotionResult | MotionHandle[MotionResult]:
-        """Replay an immutable recorded trajectory through the guarded motion stack."""
+        """Replay a guarded trajectory; joint_only never writes gripper goals."""
         self.require_artifact_calibration(
             trajectory.metadata,
             artifact_label="recorded trajectory",
@@ -1196,6 +1197,7 @@ class SOARM101:
             gripper_speed_raw=gripper_speed_raw,
             gripper_acceleration_raw=gripper_acceleration_raw,
             wait=wait,
+            joint_only=joint_only,
         )
 
     def diagnostics(self):

@@ -27,6 +27,21 @@ motor controller or weaken the host broker profile; Intel MCP
 scaffolding, Docker and NVIDIA OpenShell are optional MCP packaging
 or agent isolation choices rather than SDK dependencies.
 
+## Separate operator-trusted deterministic choreography (PR 3)
+
+The `soarm101_motion.choreography` module introduces a finite,
+content-addressed segment and explicit trusted-host policy for already
+reviewed complete paths. This is **not** the untrusted agent-as-policy
+jog route and is not added to the SDK broker's agent action registry,
+robotctl or Puppet MCP discovery. Exact calibration, starting state, rate
+ceilings, full-path validation, a persistent SDK owner and independent
+watchdog are required. The SDK retains physical actuation and STOP; the
+external Puppeteer library owns named emotional movements and loops.
+The API does not connect or enable hardware by itself. Physical deployment
+and STOP/vertical-clearance acceptance are still deferred.
+
+See [Trusted choreography](trusted-choreography.md).
+
 ## NVIDIA OpenShell agentic robotics integration
 
 ```text
