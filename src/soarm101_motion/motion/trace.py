@@ -245,9 +245,9 @@ class PassiveBackendTrace:
                     joints_rad=joints,
                     joints_raw=raw,
                     requested_speed_raw=self._json_speed(speed_raw),
-                    requested_acceleration_raw=acceleration_raw,
+                    requested_acceleration_raw=self._json_speed(acceleration_raw),
                     speed_raw=self._json_speed(effective_speed_raw),
-                    acceleration_raw=effective_acceleration_raw,
+                    acceleration_raw=self._json_speed(effective_acceleration_raw),
                     duplicate_raw=duplicate_raw,
                     call_ms=(time.perf_counter() - started) * 1000.0,
                     error=repr(exc),
@@ -261,9 +261,9 @@ class PassiveBackendTrace:
                 joints_rad=joints,
                 joints_raw=raw,
                 requested_speed_raw=self._json_speed(speed_raw),
-                requested_acceleration_raw=acceleration_raw,
+                requested_acceleration_raw=self._json_speed(acceleration_raw),
                 speed_raw=self._json_speed(effective_speed_raw),
-                acceleration_raw=effective_acceleration_raw,
+                acceleration_raw=self._json_speed(effective_acceleration_raw),
                 duplicate_raw=duplicate_raw,
                 call_ms=(time.perf_counter() - started) * 1000.0,
             )
@@ -295,7 +295,7 @@ class PassiveBackendTrace:
             positions: Mapping[str, int],
             *,
             speed_raw: int | Mapping[str, int],
-            acceleration_raw: int,
+            acceleration_raw: int | Mapping[str, int],
         ) -> Any:
             raw = {str(name): int(value) for name, value in positions.items()}
             started = time.perf_counter()
@@ -310,7 +310,7 @@ class PassiveBackendTrace:
                     "raw_command_error",
                     joints_raw=raw,
                     speed_raw=self._json_speed(speed_raw),
-                    acceleration_raw=acceleration_raw,
+                    acceleration_raw=self._json_speed(acceleration_raw),
                     call_ms=(time.perf_counter() - started) * 1000.0,
                     error=repr(exc),
                 )
@@ -319,7 +319,7 @@ class PassiveBackendTrace:
                 "raw_command",
                 joints_raw=raw,
                 speed_raw=self._json_speed(speed_raw),
-                acceleration_raw=acceleration_raw,
+                acceleration_raw=self._json_speed(acceleration_raw),
                 call_ms=(time.perf_counter() - started) * 1000.0,
             )
             return result

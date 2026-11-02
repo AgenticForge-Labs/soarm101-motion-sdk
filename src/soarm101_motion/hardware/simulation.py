@@ -59,7 +59,7 @@ class SimulationBackend(SO101HardwareBackend):
         positions: Mapping[str, float],
         *,
         speed_raw: int | Mapping[str, int] | None = None,
-        acceleration_raw: int | None = None,
+        acceleration_raw: int | Mapping[str, int] | None = None,
     ) -> None:
         del speed_raw, acceleration_raw
         self._require_connected()

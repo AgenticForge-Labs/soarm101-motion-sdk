@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — experimental S-curve motion profiles
+
+- Document and regression-test that saved poses and programs remain reusable across joint profiles, while recording replay preserves its recorded joint and gripper samples and timing semantics.
+- Set the joint-profile comparison tools' default speed and acceleration to 24°/s and 75°/s². General SDK, human CLI, and broker rate defaults are unchanged.
+- Change the default modeled coarse self-clearance threshold from 25 mm to 20 mm across SDK configuration and standalone workspace validators. This changes the default for all workspace-checked motion, not only Sleep; it is not physical collision evidence.
+- Prototype `scurve_paced` and `scurve_glide`, per-joint servo pacing, and comparison tooling. The glide planner uses separately timed joints and workspace preflight samples its resulting path. Experimental profiles have software coverage only; physical smoothness and hardware behavior remain unverified.
+
 ## Unreleased — selectable joint trajectory profile modes (`minimum_jerk` vs `cosine_cruise`)
 
 - Add `JointProfileMode` (`"minimum_jerk"` default baseline and `"cosine_cruise"` half-cosine cruise + calibrated terminal duplicate-encoder sample coalescing) across `SOARM101Config.joint_profile_mode`, `SOARM101` joint/pose/Sleep primitives, `SDK_CAPABILITIES`, `soarm101` CLI (`--profile-mode`), and `examples/motion_quality_trace.py`.

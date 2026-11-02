@@ -332,8 +332,23 @@ before and during execution.
 
 ### Selectable joint-space trajectory parameterization
 
+Saved poses, sequences, and primitives describe targets and behavior independently
+of the configured joint profile. At execution time, the active profile plans
+point-to-point joint moves; changing it does not rewrite stored artifacts, bypass
+calibration provenance, or guarantee identical intermediate paths or timing.
+Recordings retain their time-indexed joint and gripper samples: replay retimes and
+resamples them under existing guards rather than replacing their path with the
+selected point-to-point profile. An optional move to the recording's start is a
+separate planned joint move and can use the active profile. Cartesian linear moves
+retain their own Cartesian path contract. Future profile implementations must
+preserve these distinctions and the broker replay, authority and STOP contracts.
+Profile names and implementations are currently a fixed SDK-defined set, not a
+runtime plugin interface; adding or replacing one requires SDK changes and review.
+
+Experimental `scurve_paced` and `scurve_glide` profiles use soft-landing time scaling and per-joint servo pacing. Glide independently times joints; where full workspace checking is enabled, the exact execution plan is preflighted and observed positions are monitored. Glide Sleep requests full workspace validation rather than using the historical coarse-workspace exception, so it can be rejected. The hardware commands use planned samples, while per-joint servo pacing can cause tracking to differ from the planned path. These modes have not been physically qualified, and the assumed stock-servo behavior is a hypothesis rather than a guarantee. The default remains `minimum_jerk`.
+
 Streamed joint-space planning (`SOARM101Config.joint_profile_mode` and per-call
-`profile_mode` / `--profile-mode`) supports two selectable time-scaling profiles over the
+`profile_mode` / `--profile-mode`) includes two baseline time-scaling profiles over the
 same synchronized straight-line joint path `q(t) = start + (target - start) * s(t)`:
 
 - `minimum_jerk` (default baseline): quintic progress `10u^3 - 15u^4 + 6u^5` with peak-to-mean
@@ -348,7 +363,7 @@ When optional `synchronize_servo_arrival=True` is explicitly requested on stream
 trajectories, per-joint `speed_raw` is computed from continuous float joint displacement
 between consecutive planned samples (with a smooth minimum register floor) rather than
 post-quantization tick differences, preventing 0-tick rounding cycles from dropping
-`speed_raw` to `1`. Both profile modes execute under identical calibration provenance,
+`speed_raw` to `1`. The modes remain subject to calibration provenance,
 joint/workspace limits, following-error, unexpected-direction, effort, fault, STOP/HOLD,
 and settle guards.
 
