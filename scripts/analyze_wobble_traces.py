@@ -119,7 +119,7 @@ def channel_events(rows: list[dict], joint: str, raw_range: tuple[int, int] | No
                         (time_s, int(raw) if raw is not None else None,
                          float(rad) if rad is not None else None, row)
                     )
-    return sorted(commands), sorted(feedback)
+    return sorted(commands, key=lambda row: row[0]), sorted(feedback, key=lambda row: row[0])
 
 
 def run_lengths(values: list[int]) -> list[int]:
@@ -311,16 +311,27 @@ def analyze(path: Path, label: str, frequency_override: float | None,
             mode = "final_target" if "final_target" in label.lower() else "streamed"
         values = [analyze_joint(data, j, frequency, raw_range, reversed_gripper,
                                 max_lag_s, mode) for j in JOINTS]
+        guard_times = [float(row["call_ms"]) for row in data
+                       if row.get("event") == "hardware_state"
+                       and row.get("call_ms") is not None]
+        write_times = [float(row["call_ms"]) for row in data
+                       if row.get("event") == "command"
+                       and row.get("call_ms") is not None]
         result.append({
             "trace": label, "path": str(path), "segment": segment_name, "mode": mode,
             "frequency_hz": frequency, "source_kind": meta.get("kind"),
             "calibration_id": meta.get("calibration_id"), "joints": values,
+            "guard_poll_count": len(guard_times),
+            "guard_poll_p95_ms": round(quantile(guard_times, 0.95), 2) if guard_times else None,
+            "goal_write_count": len(write_times),
+            "goal_write_p95_ms": round(quantile(write_times, 0.95), 2) if write_times else None,
             "limitations": [
                 "No suppressed continuous planner waypoints are present in passive traces.",
                 "Nominal-cycle holds and sub-tick tails are reconstructions/estimates, not per-cycle bus captures.",
                 "Following error is matched to latest sent command, not an unsent planner setpoint.",
                 "Lag uses resampled encoder feedback and cannot resolve latency below feedback cadence.",
                 "Gripper raw ticks require its real calibrated range and drive mode.",
+                "Guard/write call durations include Python wrappers and are not per-packet bus turnaround timings.",
             ],
         })
     return result
