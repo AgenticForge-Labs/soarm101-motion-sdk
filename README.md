@@ -29,6 +29,28 @@ broker remain independently usable; do not deploy this cleanup
 until the cross-repository canaries pass. See
 [the migration record](docs/puppeteer-mcp-migration.md).
 
+## Trusted deterministic joint choreography (PR 3/5)
+
+The native SDK adds `JointChoreography`, a content-hashed, finite
+five-joint trajectory contract; `ChoreographyPolicy` for operator-pinned
+segments, robot/calibration identity and rate ceilings; and read-only
+`preflight_choreography` plus a separately supervised
+`execute_trusted_choreography` entry point. These reuse the current
+planner, workspace checks, SDK motion controller and trusted-host
+broker watchdog, **not** a new agent-as-policy endpoint.
+
+A higher-level performer library such as Forge Puppeteer owns expressive
+behaviors (idle/listen/speak/nod/shake) and when to repeat them. **4G** is a
+Conversationalist LLM personality, never a hard-coded robot motion profile.
+The SDK stays usable alone with Python, CLI and GUI; it does not depend on
+Puppeteer, Conversationalist or Platform. The existing untrusted small
+agent jog limits remain unchanged. Physical choreography needs explicit
+operator qualification, human lease, existing torque HOLD and an independent
+watchdog; software simulation does **not** establish physical safety.
+
+See [Trusted choreography](docs/trusted-choreography.md) for the exact
+contract, restrictions and future local hardware acceptance plan.
+
 ## NVIDIA OpenShell and agentic robotics
 
 The Motion SDK integrates with [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell), an open-source runtime that isolates AI agents and governs their filesystem and network access. This lets developers explore **agent-driven robot workflows** without handing a language model raw servo access or unrestricted control of the host workstation. OpenShell handles sandbox isolation; the Motion SDK provides the trusted, robot-specific execution boundary.
