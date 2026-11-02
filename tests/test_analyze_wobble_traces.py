@@ -51,6 +51,9 @@ def test_silent_stretch_and_tail_impulse_are_recovered_from_sparse_writes(tmp_pa
     pan = output[0]["joints"][0]
     assert pan["max_zero_cycles"] >= 8
     assert pan["tick_impulses_final25"] == 1
+    assert pan["tail30_mean_abs_ticks_per_cycle"] == 0.33333
+    assert pan["tail30_max_abs_ticks_per_cycle"] == 1
+    assert pan["tail30_zero_cycles_fraction"] == 0.66667
     assert pan["hunting_reversals"] == 2
     assert pan["following_rms"] is not None
     assert pan["subtick_tail_ms_estimate"] == 200.0
