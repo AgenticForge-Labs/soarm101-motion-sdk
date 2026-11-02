@@ -8,7 +8,7 @@
   independent watchdog and existing SDK execution/STOP.
 - Preserve the physical agent-broker CLI, legacy ±2° untrusted jog policy,
   SDK motion limits, gripper policy and existing broker route registry.
-  No automatic torque enable for real hardware and no physical qualification.
+  Add a default-preserving native `joint_only=True` trajectory replay mode, ensuring expressive choreography never writes even constant gripper targets. No automatic torque enable for real hardware and no physical qualification.
 - Add software simulation and denial tests. See
   [trusted choreography](docs/trusted-choreography.md) before any
   operator-attended physical testing.
