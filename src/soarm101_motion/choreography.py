@@ -27,7 +27,6 @@ from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.hardware import SimulationBackend
 from soarm101_motion.safety import validate_workspace_path
 from soarm101_motion.simulated_replay import (
-    ReplayExecutionError,
     _require_replay_authority,
     _stop_after_failure,
 )
@@ -41,6 +40,19 @@ if TYPE_CHECKING:
 
 _REV = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+
+
+class ChoreographyExecutionError(RuntimeError):
+    """A guarded choreography failed; STOP/HOLD evidence is kept separately."""
+
+    def __init__(self, original: BaseException, stop: dict[str, object]) -> None:
+        self.original = original
+        self.stop = stop
+        outcome = str(stop.get("outcome", "unconfirmed"))
+        super().__init__(
+            f"choreography execution failed ({type(original).__name__}): "
+            f"{str(original)[:512]}; STOP/HOLD outcome: {outcome}"
+        )
 
 
 @dataclass(frozen=True)
@@ -357,7 +369,7 @@ def execute_trusted_choreography(
             # Preserve unconfirmed outcomes. The existing STOP path also
             # invalidates further motion and revokes physical authority.
             stop = _stop_after_failure(executor, watchdog)
-            raise ReplayExecutionError(exc, stop) from exc
+            raise ChoreographyExecutionError(exc, stop) from exc
         finally:
             with finalize_lock:
                 finished = True
