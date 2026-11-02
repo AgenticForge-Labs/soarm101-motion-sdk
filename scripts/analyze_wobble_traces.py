@@ -355,8 +355,10 @@ def analyze(path: Path, label: str, frequency_override: float | None,
         write_times = [float(row["call_ms"]) for row in data
                        if row.get("event") == "command"
                        and row.get("call_ms") is not None]
+        profile_mode = str(meta["profile_mode"]) if meta.get("profile_mode") else None
         result.append({
             "trace": label, "path": str(path), "segment": segment_name, "mode": mode,
+            "profile_mode": profile_mode,
             "frequency_hz": frequency, "source_kind": meta.get("kind"),
             "calibration_id": meta.get("calibration_id"), "joints": values,
             "guard_poll_count": len(guard_times),
@@ -405,7 +407,12 @@ def main() -> int:
                                    args.max_lag_ms/1000.0))
     flattened = []
     for result in all_results:
-        print(f"\n{result['trace']} / {result['segment']} ({result['mode']}, {result['frequency_hz']:g} Hz)")
+        mode_label = (
+            f"{result['mode']}/{result['profile_mode']}"
+            if result.get("profile_mode")
+            else str(result["mode"])
+        )
+        print(f"\n{result['trace']} / {result['segment']} ({mode_label}, {result['frequency_hz']:g} Hz)")
         print("joint                  zero_max zero_frac impuls25 rate/s hunt peak_err rms_err  lag_ms subtick_ms")
         for joint in result["joints"]:
             row = {key: value for key, value in result.items() if key != "joints"}

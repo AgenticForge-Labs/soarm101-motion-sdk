@@ -12,10 +12,14 @@ from typing import Generic, Literal, TypeVar
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
+from soarm101_motion.calibration import MotorCalibration
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import (
     ARM_JOINTS,
     DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
+    ENCODER_MAX,
+    JOINT_PROFILE_MODES,
+    JointProfileMode,
     STOCK_GRIPPER,
     STS3215_MAX_POSITION_SPEED_RAW,
     TELEOP_SERVO_ACCELERATION_RAW,
@@ -588,6 +592,56 @@ class MotionController:
             duration *= scale * 1.05
         raise SafetyViolationError("could not time-parameterize trajectory within configured limits")
 
+    def _resolve_joint_profile_mode(
+        self,
+        profile_mode: JointProfileMode | None,
+    ) -> JointProfileMode:
+        resolved = (
+            self.config.joint_profile_mode if profile_mode is None else profile_mode
+        )
+        if resolved not in JOINT_PROFILE_MODES:
+            raise InvalidCommandError(
+                "profile_mode must be one of "
+                + ", ".join(repr(mode) for mode in JOINT_PROFILE_MODES)
+            )
+        return resolved
+
+    def _trim_redundant_terminal_encoder_samples(
+        self,
+        samples: tuple[dict[str, float], ...],
+        *,
+        speed_limit: float,
+        acceleration_limit: float,
+    ) -> tuple[dict[str, float], ...]:
+        """Coalesce trailing duplicate-encoder samples without exceeding dynamic limits.
+
+        Near the end of a smooth deceleration ramp on calibrated hardware, several
+        consecutive float samples can already round to the exact final integer tick
+        tuple. Trimming only the trailing suffix whose coalesced terminal step still
+        obeys configured step, speed, and acceleration bounds eliminates redundant
+        flat tail cycles without relaxing trajectory validation.
+        """
+        if len(samples) < 3:
+            return samples
+        target = samples[-1]
+        target_key = self._encoder_target_key(target)
+        if target_key is None:
+            return samples
+
+        trimmed = samples
+        while len(trimmed) >= 3 and self._encoder_target_key(trimmed[-2]) == target_key:
+            candidate = (*trimmed[:-2], dict(target))
+            tail_speed, tail_accel, tail_step = self._trajectory_metrics(candidate[-3:])
+            if (
+                tail_step <= self.config.max_command_step_radians
+                and tail_speed <= speed_limit
+                and tail_accel <= acceleration_limit
+            ):
+                trimmed = candidate
+            else:
+                break
+        return trimmed
+
     def _plan_joint_motion(
         self,
         start: Mapping[str, float],
@@ -596,27 +650,63 @@ class MotionController:
         speed: float,
         acceleration: float,
         limits: Mapping[str, tuple[float, float]] | None = None,
+        profile_mode: JointProfileMode | None = None,
     ) -> PlannedPath:
+        resolved_profile = self._resolve_joint_profile_mode(profile_mode)
         max_delta = max(abs(target[name] - start[name]) for name in ARM_JOINTS)
-        initial = self._minimum_duration(max_delta, speed, acceleration)
+        if resolved_profile == "cosine_cruise":
+            profile_duration = self._cosine_cruise_duration(
+                max_delta,
+                speed,
+                acceleration,
+            )
+            initial = profile_duration
 
-        def builder(duration: float) -> tuple[dict[str, float], ...]:
-            steps = max(2, int(math.ceil(duration * self.config.command_frequency_hz)) + 1)
-            samples = [
-                {
-                    name: start[name]
-                    + (target[name] - start[name])
-                    * self._minimum_jerk(index / (steps - 1))
-                    for name in ARM_JOINTS
-                }
-                for index in range(steps)
-            ]
-            # Preserve the already-validated endpoints exactly. Reconstructing the
-            # final sample as start + (target - start) can round one ULP beyond a
-            # target that intentionally sits on an executable joint-limit boundary.
-            samples[0] = {name: float(start[name]) for name in ARM_JOINTS}
-            samples[-1] = {name: float(target[name]) for name in ARM_JOINTS}
-            return tuple(samples)
+            def builder(duration: float) -> tuple[dict[str, float], ...]:
+                steps = max(
+                    2,
+                    int(math.ceil(duration * self.config.command_frequency_hz)) + 1,
+                )
+                samples = [
+                    {
+                        name: start[name]
+                        + (target[name] - start[name])
+                        * self._cosine_cruise_progress(
+                            max_delta,
+                            speed,
+                            acceleration,
+                            (index / (steps - 1)) * profile_duration,
+                        )
+                        for name in ARM_JOINTS
+                    }
+                    for index in range(steps)
+                ]
+                samples[0] = {name: float(start[name]) for name in ARM_JOINTS}
+                samples[-1] = {name: float(target[name]) for name in ARM_JOINTS}
+                return tuple(samples)
+        else:
+            initial = self._minimum_duration(max_delta, speed, acceleration)
+
+            def builder(duration: float) -> tuple[dict[str, float], ...]:
+                steps = max(
+                    2,
+                    int(math.ceil(duration * self.config.command_frequency_hz)) + 1,
+                )
+                samples = [
+                    {
+                        name: start[name]
+                        + (target[name] - start[name])
+                        * self._minimum_jerk(index / (steps - 1))
+                        for name in ARM_JOINTS
+                    }
+                    for index in range(steps)
+                ]
+                # Preserve the already-validated endpoints exactly. Reconstructing the
+                # final sample as start + (target - start) can round one ULP beyond a
+                # target that intentionally sits on an executable joint-limit boundary.
+                samples[0] = {name: float(start[name]) for name in ARM_JOINTS}
+                samples[-1] = {name: float(target[name]) for name in ARM_JOINTS}
+                return tuple(samples)
 
         samples, duration = self._retime(
             builder,
@@ -625,6 +715,21 @@ class MotionController:
             acceleration_limit=acceleration,
             limits=limits,
         )
+        if resolved_profile == "cosine_cruise":
+            trimmed = self._trim_redundant_terminal_encoder_samples(
+                samples,
+                speed_limit=speed,
+                acceleration_limit=acceleration,
+            )
+            if len(trimmed) != len(samples):
+                self._validate_samples(
+                    trimmed,
+                    speed_limit=speed,
+                    acceleration_limit=acceleration,
+                    limits=limits,
+                )
+                samples = trimmed
+                duration = (len(samples) - 1) / self.config.command_frequency_hz
         return PlannedPath((dict(start), dict(target)), (), samples, duration)
 
     def _solve_cartesian_command_samples(
@@ -1067,13 +1172,16 @@ class MotionController:
         target: Mapping[str, float],
         *,
         interval_s: float,
+        continuous: bool = False,
+        minimum_speed_raw: int = 1,
     ) -> int | dict[str, int]:
         """Choose per-joint STS3215 speed limits for synchronized sample arrival.
 
         On calibrated hardware, convert each planned joint increment to encoder ticks
         and choose a speed that reaches the next sample in about 80% of the command
-        interval. This leaves headroom for the servo acceleration ramp while preventing
-        lightly loaded joints from racing ahead of gravity-loaded joints. Simulation
+        interval. When ``continuous`` is enabled for streamed host samples, compute
+        velocity from unquantized float joint deltas with a smooth minimum floor so
+        zero-tick rounding cycles never slam ``speed_raw`` down to 1. Simulation
         and backends without motor calibration retain the ordinary unrestricted profile.
         """
 
@@ -1082,21 +1190,49 @@ class MotionController:
             return TELEOP_SERVO_SPEED_RAW
 
         arrival_time = max(float(interval_s) * 0.80, 1e-4)
+        floor_raw = max(1, min(STS3215_MAX_POSITION_SPEED_RAW, int(minimum_speed_raw)))
+        default_ticks_per_rad = ENCODER_MAX / (2.0 * math.pi)
         speeds: dict[str, int] = {}
         for name in ARM_JOINTS:
             motor = calibration.motors.get(name)
             if motor is None:
                 return TELEOP_SERVO_SPEED_RAW
+            if continuous:
+                rad_delta = abs(float(target[name]) - float(previous[name]))
+                if isinstance(motor, MotorCalibration):
+                    ticks_per_rad = default_ticks_per_rad
+                else:
+                    try:
+                        probe = abs(
+                            int(motor.radians_to_raw(0.1))
+                            - int(motor.radians_to_raw(0.0))
+                        )
+                        ticks_per_rad = (
+                            probe * 10.0 if probe > 0 else default_ticks_per_rad
+                        )
+                    except Exception:
+                        ticks_per_rad = default_ticks_per_rad
+                tick_delta = rad_delta * ticks_per_rad
+                if tick_delta <= 1e-9:
+                    speeds[name] = floor_raw
+                    continue
+                required = int(math.ceil(tick_delta / arrival_time))
+                speeds[name] = min(
+                    STS3215_MAX_POSITION_SPEED_RAW,
+                    max(floor_raw, required),
+                )
+                continue
+
             previous_raw = int(motor.radians_to_raw(float(previous[name])))
             target_raw = int(motor.radians_to_raw(float(target[name])))
             raw_delta = abs(target_raw - previous_raw)
             if raw_delta == 0:
-                speeds[name] = 1
+                speeds[name] = floor_raw
                 continue
             required = int(math.ceil(raw_delta / arrival_time))
             speeds[name] = min(
                 STS3215_MAX_POSITION_SPEED_RAW,
-                max(1, required),
+                max(floor_raw, required),
             )
         return speeds
 
@@ -1573,9 +1709,11 @@ class MotionController:
                     command_speed_raw = servo_speed_raw
                     if synchronize_servo_arrival:
                         command_speed_raw = self._synchronized_servo_speed_raw(
-                            last_command_sent,
+                            samples[index - 1],
                             command,
                             interval_s=interval_s,
+                            continuous=True,
+                            minimum_speed_raw=60,
                         )
                     if command_speed_raw is None and servo_acceleration_raw is None:
                         self.backend.write_joint_positions(command)
@@ -1713,6 +1851,7 @@ class MotionController:
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
         execution_mode: JointExecutionMode = "streamed",
+        profile_mode: JointProfileMode | None = None,
         monitor_workspace: bool = False,
         tcp: Pose | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
@@ -1720,6 +1859,7 @@ class MotionController:
             raise InvalidCommandError(
                 "execution_mode must be 'streamed' or 'final_target'"
             )
+        resolved_profile = self._resolve_joint_profile_mode(profile_mode)
         if synchronize_servo_arrival and servo_speed_raw is not None:
             raise InvalidCommandError(
                 "servo_speed_raw cannot be combined with synchronize_servo_arrival"
@@ -1770,6 +1910,7 @@ class MotionController:
                 speed=joint_speed,
                 acceleration=joint_acceleration,
                 limits=limits,
+                profile_mode=resolved_profile,
             )
             if execution_mode == "final_target":
                 handle = self._start_locked(
@@ -1838,12 +1979,8 @@ class MotionController:
                     plan,
                     event,
                     cancellation_message="linear motion cancelled",
-                    # The host trajectory owns Cartesian/joint speed and
-                    # acceleration. Give each calibrated servo a proportional position-
-                    # mode speed for the next command interval so lightly loaded joints
-                    # do not race ahead of gravity-loaded joints.
+                    servo_speed_raw=TELEOP_SERVO_SPEED_RAW,
                     servo_acceleration_raw=TELEOP_SERVO_ACCELERATION_RAW,
-                    synchronize_servo_arrival=True,
                 )
             )
         return handle.wait() if wait else handle

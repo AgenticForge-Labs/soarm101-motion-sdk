@@ -13,7 +13,7 @@ from math import pi
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 
-from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.constants import ARM_JOINTS, JOINT_PROFILE_MODES
 
 if TYPE_CHECKING:
     from soarm101_motion.arm import SOARM101
@@ -145,6 +145,10 @@ _FRAME = ArgumentSpec(
     "frame", "choice", "Reference frame for a Cartesian jog", required=False,
     choices=("world", "tool"), default="world",
 )
+_PROFILE_MODE = ArgumentSpec(
+    "profile_mode", "choice", "Joint trajectory profile mode", required=False,
+    choices=JOINT_PROFILE_MODES, default=None,
+)
 _SPECS = (
     ActionSpec("read_pose", "Read the calibrated joint positions and model TCP pose", "read",
                agent_eligible=True),
@@ -160,6 +164,7 @@ _SPECS = (
                      required=False),
         ArgumentSpec("acceleration_rad_s2", "number", "Optional joint acceleration",
                      "rad/s^2", required=False),
+        _PROFILE_MODE,
     )),
     ActionSpec("jog_joint", "Relative movement of one calibrated pose joint", "motion", (
         ArgumentSpec("joint", "choice", "Name of pose joint",
@@ -169,6 +174,7 @@ _SPECS = (
                      required=False),
         ArgumentSpec("acceleration_rad_s2", "number", "Optional joint acceleration",
                      "rad/s^2", required=False),
+        _PROFILE_MODE,
     )),
     ActionSpec("move_linear", "Move to a validated absolute model TCP pose", "motion", (
         _triplet("target_xyz_mm", "mm", "Model TCP position"),
@@ -216,6 +222,7 @@ _SPECS = (
         _number("gripper_acceleration_raw", "raw", "Saved gripper acceleration", 20.0),
         ArgumentSpec("include_gripper", "bool", "Replay saved gripper target",
                      required=False, default=True),
+        _PROFILE_MODE,
     )),
     ActionSpec("camera_profiles", "Read persisted named camera profiles", "read", (
         ArgumentSpec("name", "text", "Specific saved camera name", required=False),
@@ -237,6 +244,7 @@ _SPECS = (
         _number("gripper_acceleration_raw", "raw", "Sleep gripper acceleration", 20.0),
         ArgumentSpec("close_gripper", "bool", "Also close gripper during Sleep",
                      required=False, default=True),
+        _PROFILE_MODE,
     )),
     ActionSpec("sleep_up", "Move to guarded folded Sleep-up posture", "motion", (
         _number("speed_rad_s", "rad/s", "Sleep-up joint speed", 8.0 * pi / 180.0),
@@ -244,6 +252,7 @@ _SPECS = (
                 25.0 * pi / 180.0),
         _number("gripper_speed_raw", "raw", "Sleep-up gripper speed", 250.0),
         _number("gripper_acceleration_raw", "raw", "Sleep-up gripper acceleration", 20.0),
+        _PROFILE_MODE,
     )),
     ActionSpec("stop", "Request the SDK's guarded STOP/HOLD operation", "stop",
                agent_eligible=True),
@@ -328,10 +337,14 @@ class CapabilityRegistry:
             if name == "validate_saved_pose":
                 return saved
             if args["mode"] == "joint":
+                pose_kwargs: dict[str, object] = {}
+                if args["profile_mode"] is not None:
+                    pose_kwargs["profile_mode"] = args["profile_mode"]
                 result = arm.move_joints_from_saved_pose(
                     saved.joints,
                     speed=float(args["speed_deg_s"]) * pi / 180.0,
                     acceleration=float(args["acceleration_deg_s2"]) * pi / 180.0,
+                    **pose_kwargs,
                 )
             else:
                 from soarm101_motion.types import Pose
@@ -386,17 +399,25 @@ class CapabilityRegistry:
                 acceleration=float(args["acceleration_mm_s2"]) / 1000.0,
             )
         if name == "move_joints":
+            joint_kwargs: dict[str, object] = {}
+            if args["profile_mode"] is not None:
+                joint_kwargs["profile_mode"] = args["profile_mode"]
             return arm.move_joints(
                 args["positions_rad"],
                 speed=args["speed_rad_s"],
                 acceleration=args["acceleration_rad_s2"],
+                **joint_kwargs,
             )
         if name == "jog_joint":
+            jog_kwargs: dict[str, object] = {}
+            if args["profile_mode"] is not None:
+                jog_kwargs["profile_mode"] = args["profile_mode"]
             return arm.move_joints(
                 {str(args["joint"]): float(args["delta_rad"])},
                 relative=True,
                 speed=args["speed_rad_s"],
                 acceleration=args["acceleration_rad_s2"],
+                **jog_kwargs,
             )
         if name == "jog_cartesian":
             from soarm101_motion.control import jog_linear_cli_units
@@ -423,6 +444,8 @@ class CapabilityRegistry:
             options: dict[str, object] = {}
             if name == "sleep":
                 options["close_gripper"] = bool(args["close_gripper"])
+            if args["profile_mode"] is not None:
+                options["profile_mode"] = args["profile_mode"]
             return motion(
                 speed=float(args["speed_rad_s"]),
                 acceleration=float(args["acceleration_rad_s2"]),

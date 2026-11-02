@@ -5,6 +5,7 @@ from soarm101_motion.arm import SOARM101
 from soarm101_motion.calibration import MotorCalibration, SO101Calibration
 from soarm101_motion.camera import CameraCapture, CameraSettings, CameraSettingsStore, discover_camera_devices
 from soarm101_motion.config import SOARM101Config
+from soarm101_motion.constants import JOINT_PROFILE_MODES, JointProfileMode
 from soarm101_motion.hardware import FeetechMotorSetup, MotorSetupResult
 from soarm101_motion.integration import (
     DEFAULT_BASE_FRAME,
@@ -46,6 +47,8 @@ __all__ = [
     "IKResult",
     "IKSolver",
     "IntegrationMetadata",
+    "JOINT_PROFILE_MODES",
+    "JointProfileMode",
     "JointState",
     "MotionPrimitive",
     "MotionPrimitiveLibrary",

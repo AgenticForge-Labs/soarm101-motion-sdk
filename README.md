@@ -169,7 +169,7 @@ soarm101 sleep --port /dev/ttyACM0 --robot-id so101
 soarm101 relax --port /dev/ttyACM0 --robot-id so101
 ```
 
-Motion commands can enable torque or move the arm. `sleep` also closes the stock gripper by default; remove objects from its grasp and confirm the whole swept path is clear. Use `soarm101 --help` and `soarm101 <command> --help` for syntax and options.
+Motion commands can enable torque or move the arm. `sleep` also closes the stock gripper by default; remove objects from its grasp and confirm the whole swept path is clear. Joint-space commands (`move-joints`, `jog-joint`, `pose go`, `sleep`, `sleep-up`, `sequence run`, `smoke-test`, and `agent` joint/pose/sleep commands) also accept `--profile-mode {minimum_jerk,cosine_cruise}` to compare the default quintic profile against half-cosine cruise timing side by side under identical safety guards (see `scripts/run_joint_profile_comparison.sh`). Use `soarm101 --help` and `soarm101 <command> --help` for syntax and options.
 
 ### Python API
 

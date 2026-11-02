@@ -25,9 +25,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from soarm101_motion import SOARM101, SOARM101Config
+from soarm101_motion import JOINT_PROFILE_MODES, SOARM101, SOARM101Config
 from soarm101_motion.motion import PassiveBackendTrace
-from soarm101_motion.poses import PoseLibrary
+from soarm101_motion.poses import PoseLibrary, SavedPose
 from soarm101_motion.workstation import WorkstationProfileStore
 
 
@@ -71,6 +71,12 @@ def _parser() -> argparse.ArgumentParser:
         help="joint execution strategy: host-streamed trajectory or one synchronized final target",
     )
     parser.add_argument(
+        "--profile-mode",
+        choices=JOINT_PROFILE_MODES,
+        default="minimum_jerk",
+        help="joint trajectory profile mode: minimum_jerk baseline or cosine_cruise",
+    )
+    parser.add_argument(
         "--pause-s",
         type=float,
         default=0.5,
@@ -81,8 +87,48 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not request gripper closure on Sleep legs",
     )
+    parser.add_argument(
+        "--simulation",
+        action="store_true",
+        help="run against deterministic software simulation without opening serial hardware",
+    )
     parser.add_argument("--output", type=Path)
     return parser
+
+
+def _simulation_fallback_poses() -> dict[str, SavedPose]:
+    specs = {
+        "OVERHEAD": {
+            "shoulder_pan": 0.0,
+            "shoulder_lift": -0.35,
+            "elbow_flex": 0.35,
+            "wrist_flex": 0.65,
+            "wrist_roll": 0.0,
+        },
+        "LEFT": {
+            "shoulder_pan": 0.45,
+            "shoulder_lift": -0.35,
+            "elbow_flex": 0.35,
+            "wrist_flex": 0.65,
+            "wrist_roll": 0.0,
+        },
+        "RIGHT": {
+            "shoulder_pan": -0.45,
+            "shoulder_lift": -0.35,
+            "elbow_flex": 0.35,
+            "wrist_flex": 0.65,
+            "wrist_roll": 0.0,
+        },
+    }
+    return {
+        label: SavedPose(
+            joints=joints,
+            gripper=0.5,
+            tcp_xyz_rpy=(0.2, 0.0, 0.2, 0.0, 0.0, 0.0),
+            source="simulation",
+        )
+        for label, joints in specs.items()
+    }
 
 
 def main() -> int:
@@ -97,9 +143,9 @@ def main() -> int:
         raise ValueError("--pause-s must be finite and non-negative")
 
     profile = WorkstationProfileStore().load()
-    port = args.port or profile.follower.port
+    port = None if args.simulation else (args.port or profile.follower.port)
     robot_id = args.robot_id or profile.follower.robot_id or "so101"
-    if not port:
+    if not args.simulation and not port:
         raise RuntimeError("no follower port is configured")
 
     output = (args.output or _default_output()).expanduser()
@@ -115,6 +161,7 @@ def main() -> int:
         configure_motors_on_connect=False,
         disable_torque_on_disconnect=False,
         command_frequency_hz=args.command_frequency_hz,
+        joint_profile_mode=args.profile_mode,
     )
     library = PoseLibrary(robot_id)
     pose_names = {
@@ -122,18 +169,29 @@ def main() -> int:
         "LEFT": "agent_start_overhead_left",
         "RIGHT": "agent_start_overhead_right",
     }
-    poses = {label: library.require(name) for label, name in pose_names.items()}
+    try:
+        poses = {label: library.require(name) for label, name in pose_names.items()}
+    except KeyError:
+        if not args.simulation:
+            raise
+        poses = _simulation_fallback_poses()
 
-    print(f"Follower: {port}")
+    print(f"Follower: {'simulation' if args.simulation else port}")
     print(f"Robot ID: {robot_id}")
     print(
         f"Program: Sleep -> Overhead -> Left -> Right -> Sleep "
         f"at {args.speed_deg_s:g} deg/s, {args.acceleration_deg_s2:g} deg/s^2, "
-        f"{args.command_frequency_hz:g} Hz, mode={args.execution_mode}"
+        f"{args.command_frequency_hz:g} Hz, mode={args.execution_mode}, "
+        f"profile={args.profile_mode}"
     )
     print(f"Trace: {output}")
 
-    with SOARM101(cfg) as arm:
+    arm_ctx = (
+        SOARM101.simulated(realtime=False, config=cfg)
+        if args.simulation
+        else SOARM101(cfg)
+    )
+    with arm_ctx as arm:
         arm.enable()
         arm.hold()
 
@@ -154,10 +212,12 @@ def main() -> int:
             metadata={
                 "kind": "program_motion_quality",
                 "git_sha": _git_sha(),
+                "simulation": bool(args.simulation),
                 "speed_deg_s": args.speed_deg_s,
                 "acceleration_deg_s2": args.acceleration_deg_s2,
                 "command_frequency_hz": cfg.command_frequency_hz,
                 "execution_mode": args.execution_mode,
+                "profile_mode": args.profile_mode,
                 "joint_only": bool(args.joint_only),
                 "hardware_speed_raw": cfg.hardware_speed_raw,
                 "hardware_acceleration_raw": cfg.hardware_acceleration_raw,
@@ -171,6 +231,7 @@ def main() -> int:
                     speed=speed,
                     acceleration=acceleration,
                     execution_mode=args.execution_mode,
+                    profile_mode=args.profile_mode,
                     close_gripper=not args.joint_only,
                 )
                 arm.hold()
@@ -189,6 +250,7 @@ def main() -> int:
                     speed=speed,
                     acceleration=acceleration,
                     execution_mode=args.execution_mode,
+                    profile_mode=args.profile_mode,
                 )
                 arm.hold()
                 trace.mark(
@@ -221,10 +283,12 @@ def main() -> int:
             "trace": str(output),
             "git_sha": _git_sha(),
             "robot_id": robot_id,
+            "simulation": bool(args.simulation),
             "speed_deg_s": args.speed_deg_s,
             "acceleration_deg_s2": args.acceleration_deg_s2,
             "command_frequency_hz": cfg.command_frequency_hz,
             "execution_mode": args.execution_mode,
+            "profile_mode": args.profile_mode,
             "joint_only": bool(args.joint_only),
             "hardware_speed_raw": cfg.hardware_speed_raw,
             "hardware_acceleration_raw": cfg.hardware_acceleration_raw,

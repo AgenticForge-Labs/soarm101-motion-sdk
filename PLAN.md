@@ -1,5 +1,14 @@
 # Development plan
 
+## Selectable joint trajectory profile modes (`minimum_jerk` vs `cosine_cruise`)
+
+Merged the offline wobble trace analyzer (`scripts/analyze_wobble_traces.py`) and joint execution diagnostics onto `main`, and prototyped two selectable streamed joint-space trajectory profile modes (`SOARM101Config.joint_profile_mode` / `--profile-mode {minimum_jerk,cosine_cruise}`) for side-by-side comparison:
+
+- `minimum_jerk` (default): retains the existing synchronized quintic profile (`10u^3 - 15u^4 + 6u^5`) as the control baseline.
+- `cosine_cruise`: applies symmetric half-cosine acceleration/deceleration ramps with a constant-speed cruise section (matching `move_linear()`'s time-scaling semantics) and coalesces trailing duplicate-encoder samples on calibrated hardware when the terminal step remains within configured step, velocity, and acceleration bounds.
+- Aligned base `MotionController.move_linear()` with `ManagedMotionController.move_linear()` (`servo_speed_raw=0, servo_acceleration_raw=254`, `synchronize_servo_arrival=False`) and updated explicit streamed `synchronize_servo_arrival=True` to derive `speed_raw` from continuous float joint velocity rather than post-quantization tick deltas.
+- Software simulation and unit tests pass; physical side-by-side comparison on the calibrated follower (`./scripts/run_joint_profile_comparison.sh both 8 25`) remains an operator-attended hardware step before changing the default profile mode.
+
 ## Puppeteer-owned robot MCP transition (post PR #97)
 
 PR #97 has **merged** its simulation asset catalog, pinned replay and

@@ -36,6 +36,7 @@ from soarm101_motion.constants import (
     ALL_MOTORS,
     ARM_JOINTS,
     JOINT_LIMITS,
+    JOINT_PROFILE_MODES,
     MOTOR_IDS,
     STOCK_GRIPPER,
     TELEOP_SERVO_ACCELERATION_RAW,
@@ -111,6 +112,9 @@ def _hardware_config(args: argparse.Namespace, **overrides: object) -> SOARM101C
     calibration = getattr(args, "calibration", None)
     if calibration:
         values["calibration_path"] = Path(calibration)
+    profile_mode = getattr(args, "profile_mode", None)
+    if profile_mode is not None:
+        values["joint_profile_mode"] = profile_mode
     values.update(_motion_limit_overrides(args))
     values.update(overrides)
     return SOARM101Config(**values)
@@ -604,6 +608,8 @@ def _cmd_move_joints(args: argparse.Namespace) -> int:
         request["speed_rad_s"] = speed
     if acceleration is not None:
         request["acceleration_rad_s2"] = acceleration
+    if getattr(args, "profile_mode", None) is not None:
+        request["profile_mode"] = args.profile_mode
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
         result = SDK_CAPABILITIES.dispatch("move_joints", arm, request)
@@ -616,11 +622,15 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
+    profile_kwargs: dict[str, object] = {}
+    if getattr(args, "profile_mode", None) is not None:
+        profile_kwargs["profile_mode"] = args.profile_mode
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
         result = arm.move_sleep(
             speed=args.speed_deg_s * pi / 180.0,
             acceleration=args.acceleration_deg_s2 * pi / 180.0,
+            **profile_kwargs,
         )
         _print_motion_result(result, as_json=args.json)
         print(
@@ -636,11 +646,15 @@ def _cmd_sleep_up(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
+    profile_kwargs: dict[str, object] = {}
+    if getattr(args, "profile_mode", None) is not None:
+        profile_kwargs["profile_mode"] = args.profile_mode
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
         result = arm.move_sleep_up(
             speed=args.speed_deg_s * pi / 180.0,
             acceleration=args.acceleration_deg_s2 * pi / 180.0,
+            **profile_kwargs,
         )
         _print_motion_result(result, as_json=args.json)
         print(
@@ -657,16 +671,17 @@ def _cmd_jog_joint(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
         return 2
+    request: dict[str, object] = {
+        "joint": args.joint,
+        "delta_rad": args.delta_deg * pi / 180.0,
+        "speed_rad_s": args.speed_deg_s * pi / 180.0,
+        "acceleration_rad_s2": args.acceleration_deg_s2 * pi / 180.0,
+    }
+    if getattr(args, "profile_mode", None) is not None:
+        request["profile_mode"] = args.profile_mode
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         arm.enable()
-        result = SDK_CAPABILITIES.dispatch(
-            "jog_joint", arm, {
-                "joint": args.joint,
-                "delta_rad": args.delta_deg * pi / 180.0,
-                "speed_rad_s": args.speed_deg_s * pi / 180.0,
-                "acceleration_rad_s2": args.acceleration_deg_s2 * pi / 180.0,
-            },
-        )
+        result = SDK_CAPABILITIES.dispatch("jog_joint", arm, request)
         arm.hold()
         _print_motion_result(result, as_json=args.json)
         print("Joint jog complete; follower remains torque-held.", file=sys.stderr)
@@ -783,7 +798,7 @@ def _cmd_pose_go(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to move hardware without --yes.", file=sys.stderr)
         return 2
-    request = {
+    request: dict[str, object] = {
         "robot_id": args.robot_id,
         "name": args.name,
         "mode": args.mode,
@@ -793,6 +808,8 @@ def _cmd_pose_go(args: argparse.Namespace) -> int:
         "speed_mm_s": args.speed_mm_s,
         "acceleration_mm_s2": args.acceleration_mm_s2,
     }
+    if getattr(args, "profile_mode", None) is not None:
+        request["profile_mode"] = args.profile_mode
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         # Preserve existing gate: verify saved-pose calibration *before*
         # enabling torque; replay rechecks it immediately before the move.
@@ -899,6 +916,9 @@ def _cmd_smoke_test(args: argparse.Namespace) -> int:
             raise RuntimeError("diagnostics are not clean; refusing powered smoke test")
         print("Starting joints:", dict(arm.get_joint_positions().positions))
         arm.enable()
+        profile_kwargs: dict[str, object] = {}
+        if getattr(args, "profile_mode", None) is not None:
+            profile_kwargs["profile_mode"] = args.profile_mode
         try:
             time.sleep(args.latch_seconds)
             arm.move_joints(
@@ -906,12 +926,14 @@ def _cmd_smoke_test(args: argparse.Namespace) -> int:
                 relative=True,
                 speed=args.speed,
                 acceleration=args.acceleration,
+                **profile_kwargs,
             )
             arm.move_joints(
                 {args.joint: -delta},
                 relative=True,
                 speed=args.speed,
                 acceleration=args.acceleration,
+                **profile_kwargs,
             )
             print("Smoke test completed and returned to the starting position.")
         finally:
@@ -1407,10 +1429,14 @@ def _cmd_agent_go_pose(args: argparse.Namespace) -> int:
             artifact_label=f"agent saved pose {name!r}",
         )
         arm.enable()
+        pose_kwargs: dict[str, object] = {}
+        if getattr(args, "profile_mode", None) is not None:
+            pose_kwargs["profile_mode"] = args.profile_mode
         arm_result = arm.move_joints_from_saved_pose(
             pose.joints,
             speed=rates[0] * pi / 180.0,
             acceleration=rates[1] * pi / 180.0,
+            **pose_kwargs,
         )
         gripper_result = arm.tool.move(
             pose.gripper, speed_raw=rates[2], acceleration_raw=rates[3],
@@ -1492,11 +1518,15 @@ def _cmd_agent_joint(args: argparse.Namespace) -> int:
         authority = _agent_require_authority(args, arm)
         before = dict(arm.get_joint_positions().positions)
         arm.enable()
+        joint_kwargs: dict[str, object] = {}
+        if getattr(args, "profile_mode", None) is not None:
+            joint_kwargs["profile_mode"] = args.profile_mode
         result = arm.move_joints(
             {args.joint: delta_rad},
             relative=True,
             speed=requested_speed * pi / 180.0,
             acceleration=requested_acceleration * pi / 180.0,
+            **joint_kwargs,
         )
         arm.hold()
         after = dict(arm.get_joint_positions().positions)
@@ -1676,6 +1706,9 @@ def _cmd_agent_gripper(args: argparse.Namespace) -> int:
 
 def _cmd_agent_sleep(args: argparse.Namespace) -> int:
     speed, acceleration, gripper_speed, gripper_accel = _agent_validated_pose_rates(args)
+    profile_kwargs: dict[str, object] = {}
+    if getattr(args, "profile_mode", None) is not None:
+        profile_kwargs["profile_mode"] = args.profile_mode
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         arm.enable()
@@ -1684,6 +1717,7 @@ def _cmd_agent_sleep(args: argparse.Namespace) -> int:
             acceleration=acceleration * pi / 180.0,
             gripper_speed_raw=gripper_speed,
             gripper_acceleration_raw=gripper_accel,
+            **profile_kwargs,
         )
         arm.hold()
     payload = asdict(result)
@@ -1700,6 +1734,9 @@ def _cmd_agent_sleep(args: argparse.Namespace) -> int:
 
 def _cmd_agent_sleep_up(args: argparse.Namespace) -> int:
     speed, acceleration, gripper_speed, gripper_accel = _agent_validated_pose_rates(args)
+    profile_kwargs: dict[str, object] = {}
+    if getattr(args, "profile_mode", None) is not None:
+        profile_kwargs["profile_mode"] = args.profile_mode
     with _arm_from_args(args, disable_torque_on_disconnect=False) as arm:
         authority = _agent_require_authority(args, arm)
         arm.enable()
@@ -1708,6 +1745,7 @@ def _cmd_agent_sleep_up(args: argparse.Namespace) -> int:
             acceleration=acceleration * pi / 180.0,
             gripper_speed_raw=gripper_speed,
             gripper_acceleration_raw=gripper_accel,
+            **profile_kwargs,
         )
         arm.hold()
     payload = asdict(result)
@@ -2047,6 +2085,13 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--speed-mm-s", type=float, default=10.0)
         command.add_argument("--acceleration-mm-s2", type=float, default=40.0)
 
+    def add_joint_profile_option(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--profile-mode",
+            choices=JOINT_PROFILE_MODES,
+            help="joint trajectory profile mode (default: minimum_jerk)",
+        )
+
     setup = sub.add_parser("setup-motors", help="assign IDs and baud rate one isolated motor at a time")
     setup.add_argument("--port", required=True)
     setup.add_argument("--motor", choices=ALL_MOTORS)
@@ -2133,6 +2178,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="joint acceleration in deg/s^2",
     )
+    add_joint_profile_option(move)
     move.add_argument("--yes", action="store_true")
     move.add_argument("--json", action="store_true")
     move.set_defaults(func=_cmd_move_joints)
@@ -2144,6 +2190,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_options(sleep)
     sleep.add_argument("--speed-deg-s", type=float, default=8.0)
     sleep.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    add_joint_profile_option(sleep)
     sleep.add_argument("--yes", action="store_true")
     sleep.add_argument("--json", action="store_true")
     sleep.set_defaults(func=_cmd_sleep)
@@ -2156,6 +2203,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_options(sleep_up)
     sleep_up.add_argument("--speed-deg-s", type=float, default=8.0)
     sleep_up.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    add_joint_profile_option(sleep_up)
     sleep_up.add_argument("--yes", action="store_true")
     sleep_up.add_argument("--json", action="store_true")
     sleep_up.set_defaults(func=_cmd_sleep_up)
@@ -2168,6 +2216,7 @@ def build_parser() -> argparse.ArgumentParser:
     joint_jog.add_argument("--delta-deg", type=float, required=True)
     joint_jog.add_argument("--speed-deg-s", type=float, default=8.0)
     joint_jog.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    add_joint_profile_option(joint_jog)
     joint_jog.add_argument("--yes", action="store_true")
     joint_jog.add_argument("--json", action="store_true")
     joint_jog.set_defaults(func=_cmd_jog_joint)
@@ -2247,6 +2296,7 @@ def build_parser() -> argparse.ArgumentParser:
     pose_go.add_argument("--mode", choices=("joint", "linear"), default="joint")
     pose_go.add_argument("--speed-deg-s", type=float, default=8.0)
     pose_go.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    add_joint_profile_option(pose_go)
     add_linear_options(pose_go)
     pose_go.add_argument("--yes", action="store_true")
     pose_go.set_defaults(func=_cmd_pose_go)
@@ -2276,6 +2326,7 @@ def build_parser() -> argparse.ArgumentParser:
     sequence_run.add_argument("--speed-scale", type=float, default=1.0)
     sequence_run.add_argument("--start-index", type=int, default=0)
     sequence_run.add_argument("--stop-index", type=int)
+    add_joint_profile_option(sequence_run)
     sequence_run.add_argument("--yes", action="store_true")
     sequence_run.set_defaults(func=_cmd_sequence_run)
 
@@ -2344,6 +2395,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent_pose.add_argument("--acceleration-deg-s2", type=float, default=25.0)
     agent_pose.add_argument("--gripper-speed-raw", type=int, default=250)
     agent_pose.add_argument("--gripper-acceleration-raw", type=int, default=20)
+    add_joint_profile_option(agent_pose)
     agent_pose.set_defaults(func=_cmd_agent_go_pose)
 
     agent_joint = agent_sub.add_parser(
@@ -2355,6 +2407,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent_joint.add_argument("--delta-deg", type=float, required=True)
     agent_joint.add_argument("--speed-deg-s", type=float, default=8.0)
     agent_joint.add_argument("--acceleration-deg-s2", type=float, default=25.0)
+    add_joint_profile_option(agent_joint)
     agent_joint.set_defaults(func=_cmd_agent_joint)
 
     agent_jog = agent_sub.add_parser(
@@ -2401,6 +2454,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent_sleep.add_argument("--acceleration-deg-s2", type=float, default=25.0)
     agent_sleep.add_argument("--gripper-speed-raw", type=int, default=250)
     agent_sleep.add_argument("--gripper-acceleration-raw", type=int, default=20)
+    add_joint_profile_option(agent_sleep)
     agent_sleep.set_defaults(func=_cmd_agent_sleep)
 
     agent_sleep_up = agent_sub.add_parser(
@@ -2413,6 +2467,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent_sleep_up.add_argument("--acceleration-deg-s2", type=float, default=25.0)
     agent_sleep_up.add_argument("--gripper-speed-raw", type=int, default=250)
     agent_sleep_up.add_argument("--gripper-acceleration-raw", type=int, default=20)
+    add_joint_profile_option(agent_sleep_up)
     agent_sleep_up.set_defaults(func=_cmd_agent_sleep_up)
 
     agent_stop = agent_sub.add_parser(
@@ -2679,6 +2734,7 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--speed", type=float, default=0.05)
     smoke.add_argument("--acceleration", type=float, default=0.20)
     smoke.add_argument("--latch-seconds", type=float, default=1.0)
+    add_joint_profile_option(smoke)
     smoke.add_argument("--yes", action="store_true")
     smoke.set_defaults(func=_cmd_smoke_test)
 

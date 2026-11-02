@@ -1,5 +1,25 @@
 # Testing
 
+## Selectable joint trajectory profile comparison (`minimum_jerk` vs `cosine_cruise`)
+
+Streamed joint-space planning supports `--profile-mode minimum_jerk` (default quintic baseline) and `--profile-mode cosine_cruise` (half-cosine accel/decel ramps + constant-speed cruise + calibrated terminal duplicate-encoder sample coalescing), alongside offline trace analysis in `scripts/analyze_wobble_traces.py`.
+
+**Software-only validation (no hardware required):**
+
+```bash
+ruff check .
+python -m pytest --no-cov -q tests/test_joint_profile_modes.py tests/test_analyze_wobble_traces.py
+SOARM_SIMULATION=1 bash scripts/run_joint_profile_comparison.sh both 40 200
+```
+
+**Operator-attended physical side-by-side comparison (requires calibrated follower, clear workspace, and reachable physical power cutoff):**
+
+```bash
+./scripts/run_joint_profile_comparison.sh both 8 25
+```
+
+This records passive backend traces (`minimum-jerk.jsonl` and `cosine-cruise.jsonl`) across the identical `Sleep -> Overhead -> Left -> Right -> Sleep` route at 50 Hz without adding serial polling during motion, then runs `scripts/analyze_wobble_traces.py` to emit `wobble-comparison.txt`, `wobble-comparison.json`, and `wobble-comparison.csv`. Software simulation verifies trajectory math and guard invariants only; physical smoothness and structural resonance behavior require operator-attended hardware evidence.
+
 ## SDK-owned MCP removal: Puppet-only integration validation (post #97–#98)
 
 The SDK capability registry now has an MCP-independent canonical name,

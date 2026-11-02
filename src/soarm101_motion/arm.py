@@ -34,7 +34,12 @@ from soarm101_motion.exceptions import (
 )
 from soarm101_motion.hardware import FeetechBackend, SO101HardwareBackend, SimulationBackend
 from soarm101_motion.kinematics import IKOptions, IKSolver, OrientationMode, SO101KinematicModel
-from soarm101_motion.motion import JointExecutionMode, MotionController, MotionHandle
+from soarm101_motion.motion import (
+    JointExecutionMode,
+    JointProfileMode,
+    MotionController,
+    MotionHandle,
+)
 from soarm101_motion.poses import sleep_joint_positions, sleep_up_joint_positions
 from soarm101_motion.provenance import require_calibration_compatibility
 from soarm101_motion.safety import (
@@ -529,6 +534,7 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
+        profile_mode: JointProfileMode | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         """Move a measured saved pose through the active executable calibration."""
         current, target, canonical = self._canonicalize_saved_pose_target(positions)
@@ -541,6 +547,7 @@ class SOARM101:
             relative=False,
             wait=wait,
             execution_mode=execution_mode,
+            profile_mode=profile_mode,
             monitor_workspace=self.config.enable_workspace_checks,
             tcp=self.active_tcp,
         )
@@ -557,6 +564,7 @@ class SOARM101:
         servo_acceleration_raw: int | None = None,
         synchronize_servo_arrival: bool = False,
         execution_mode: JointExecutionMode = "streamed",
+        profile_mode: JointProfileMode | None = None,
         workspace_check: Literal["full", "target_only", "off"] = "full",
     ) -> MotionResult | MotionHandle[MotionResult]:
         self._validate_joint_workspace_path(
@@ -574,6 +582,7 @@ class SOARM101:
             servo_acceleration_raw=servo_acceleration_raw,
             synchronize_servo_arrival=synchronize_servo_arrival,
             execution_mode=execution_mode,
+            profile_mode=profile_mode,
             monitor_workspace=(
                 self.config.enable_workspace_checks and workspace_check == "full"
             ),
@@ -587,6 +596,7 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
+        profile_mode: JointProfileMode | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         return self.move_joints(
             HOME_JOINTS,
@@ -594,6 +604,7 @@ class SOARM101:
             acceleration=acceleration,
             wait=wait,
             execution_mode=execution_mode,
+            profile_mode=profile_mode,
         )
 
     move_gohome = move_home
@@ -640,6 +651,7 @@ class SOARM101:
         speed: float | None,
         acceleration: float | None,
         execution_mode: JointExecutionMode,
+        profile_mode: JointProfileMode | None,
         label: str,
         close_gripper: bool,
         gripper_speed_raw: int | None,
@@ -651,6 +663,7 @@ class SOARM101:
             acceleration=acceleration,
             wait=False,
             execution_mode=execution_mode,
+            profile_mode=profile_mode,
             workspace_check="off",
         )
         assert isinstance(arm_handle, MotionHandle)
@@ -688,6 +701,7 @@ class SOARM101:
         speed: float | None,
         acceleration: float | None,
         execution_mode: JointExecutionMode,
+        profile_mode: JointProfileMode | None,
         close_gripper: bool,
         gripper_speed_raw: int | None,
         gripper_acceleration_raw: int | None,
@@ -698,6 +712,7 @@ class SOARM101:
             speed=speed,
             acceleration=acceleration,
             execution_mode=execution_mode,
+            profile_mode=profile_mode,
             label="Sleep",
             close_gripper=close_gripper,
             gripper_speed_raw=gripper_speed_raw,
@@ -711,6 +726,7 @@ class SOARM101:
         speed: float | None,
         acceleration: float | None,
         execution_mode: JointExecutionMode,
+        profile_mode: JointProfileMode | None,
         gripper_speed_raw: int | None,
         gripper_acceleration_raw: int | None,
     ) -> MotionResult:
@@ -720,6 +736,7 @@ class SOARM101:
             speed=speed,
             acceleration=acceleration,
             execution_mode=execution_mode,
+            profile_mode=profile_mode,
             label="sleep_up",
             close_gripper=True,
             gripper_speed_raw=gripper_speed_raw,
@@ -733,6 +750,7 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
+        profile_mode: JointProfileMode | None = None,
         close_gripper: bool = True,
         gripper_speed_raw: int | None = None,
         gripper_acceleration_raw: int | None = None,
@@ -754,12 +772,14 @@ class SOARM101:
         limits, planned dynamics, active progress guards, effort, fault,
         communication, and completion checks remain active.
         """
+        self.motion._resolve_joint_profile_mode(profile_mode)
         handle = MotionHandle(
             lambda event: self._execute_sleep(
                 event,
                 speed=speed,
                 acceleration=acceleration,
                 execution_mode=execution_mode,
+                profile_mode=profile_mode,
                 close_gripper=close_gripper,
                 gripper_speed_raw=gripper_speed_raw,
                 gripper_acceleration_raw=gripper_acceleration_raw,
@@ -775,6 +795,7 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
+        profile_mode: JointProfileMode | None = None,
         gripper_speed_raw: int | None = None,
         gripper_acceleration_raw: int | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
@@ -785,12 +806,14 @@ class SOARM101:
         The same narrow folded-posture workspace exception and all other runtime
         safety guards apply.
         """
+        self.motion._resolve_joint_profile_mode(profile_mode)
         handle = MotionHandle(
             lambda event: self._execute_sleep_up(
                 event,
                 speed=speed,
                 acceleration=acceleration,
                 execution_mode=execution_mode,
+                profile_mode=profile_mode,
                 gripper_speed_raw=gripper_speed_raw,
                 gripper_acceleration_raw=gripper_acceleration_raw,
             )
@@ -847,6 +870,7 @@ class SOARM101:
         acceleration: float | None = None,
         wait: bool = True,
         execution_mode: JointExecutionMode = "streamed",
+        profile_mode: JointProfileMode | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         solution = self.solve_ik(
             target,
@@ -863,6 +887,7 @@ class SOARM101:
             acceleration=acceleration,
             wait=wait,
             execution_mode=execution_mode,
+            profile_mode=profile_mode,
         )
 
     def move_linear(
@@ -944,6 +969,7 @@ class SOARM101:
         wait: bool = True,
         relative: bool = False,
         is_radian: bool = True,
+        profile_mode: JointProfileMode | None = None,
     ) -> MotionResult | MotionHandle[MotionResult]:
         scale = 1.0 if is_radian else pi / 180.0
         if isinstance(angle, Mapping):
@@ -958,6 +984,7 @@ class SOARM101:
             acceleration=acceleration_value,
             wait=wait,
             relative=relative,
+            profile_mode=profile_mode,
         )
 
     def set_position(

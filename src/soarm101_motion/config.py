@@ -11,6 +11,7 @@ from soarm101_motion.constants import (
     ALL_MOTORS,
     DEFAULT_COMMAND_FREQUENCY_HZ,
     DEFAULT_JOINT_ACCEL_RAD_S2,
+    DEFAULT_JOINT_PROFILE_MODE,
     DEFAULT_JOINT_SPEED_RAD_S,
     DEFAULT_LINEAR_ACCEL_M_S2,
     DEFAULT_LINEAR_SPEED_M_S,
@@ -27,6 +28,8 @@ from soarm101_motion.constants import (
     DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2,
     DEFAULT_MAX_TOOL_ANGULAR_SPEED_DEG_S,
     DEFAULT_MAX_TOOL_ANGULAR_SPEED_RAD_S,
+    JOINT_PROFILE_MODES,
+    JointProfileMode,
     STS3215_MAX_POSITION_SPEED_RAW,
     TELEOP_SERVO_ACCELERATION_RAW,
     TELEOP_SERVO_SPEED_RAW,
@@ -59,6 +62,7 @@ class SOARM101Config:
     use_stored_calibration: bool = True
     verify_calibration_on_connect: bool = True
     command_frequency_hz: float = DEFAULT_COMMAND_FREQUENCY_HZ
+    joint_profile_mode: JointProfileMode = DEFAULT_JOINT_PROFILE_MODE
     default_joint_speed: float = DEFAULT_JOINT_SPEED_RAD_S
     default_joint_acceleration: float = DEFAULT_JOINT_ACCEL_RAD_S2
     default_linear_speed: float = DEFAULT_LINEAR_SPEED_M_S
@@ -246,6 +250,11 @@ class SOARM101Config:
             value = getattr(self, name)
             if value is not None and (not math.isfinite(value) or value <= 0):
                 raise ConfigurationError(f"{name} must be a positive finite value")
+        if self.joint_profile_mode not in JOINT_PROFILE_MODES:
+            raise ConfigurationError(
+                "joint_profile_mode must be one of "
+                + ", ".join(repr(mode) for mode in JOINT_PROFILE_MODES)
+            )
         if not math.isfinite(self.minimum_workspace_z_m):
             raise ConfigurationError("minimum_workspace_z_m must be finite")
         ceilings = {

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — selectable joint trajectory profile modes (`minimum_jerk` vs `cosine_cruise`)
+
+- Add `JointProfileMode` (`"minimum_jerk"` default baseline and `"cosine_cruise"` half-cosine cruise + calibrated terminal duplicate-encoder sample coalescing) across `SOARM101Config.joint_profile_mode`, `SOARM101` joint/pose/Sleep primitives, `SDK_CAPABILITIES`, `soarm101` CLI (`--profile-mode`), and `examples/motion_quality_trace.py`.
+- Add `scripts/run_joint_profile_comparison.sh` and `profile_mode` reporting in `scripts/analyze_wobble_traces.py` for side-by-side comparison of streamed joint trajectory profiles without extra serial bus polling.
+- Align base `MotionController.move_linear()` with `ManagedMotionController.move_linear()` (`speed_raw=0, acceleration_raw=254`, `synchronize_servo_arrival=False`), and compute explicit streamed `synchronize_servo_arrival=True` per-joint `speed_raw` from continuous float joint velocity with a smooth minimum floor so 0-tick rounding cycles never drop `speed_raw` to `1`.
+- Software simulation and offline trace analyzer tests are included; physical side-by-side evaluation remains operator-attended.
+
 ## Unreleased — SDK-owned MCP removed; Puppeteer is the agent-facing interface
 
 - Native SDK Python, CLI, GUI, simulation, trusted broker, authority,

@@ -321,13 +321,36 @@ piecewise-linear joint-space interpolation layer between sparse IK knots.
 On calibrated Feetech hardware, planned Cartesian motion uses the same servo-side
 tracking contract as live teleoperation: `speed_raw=0` gives the position loop full
 tracking authority and `acceleration_raw=254` uses the validated responsive acceleration
-profile. The host trajectory remains the single source of speed/acceleration shaping.
+profile. Both `MotionController.move_linear()` and `ManagedMotionController.move_linear()`
+enforce this `0/254` tracking contract (`synchronize_servo_arrival=False`). The host trajectory remains the single source of speed/acceleration shaping.
 This is an execution requirement, not just a planning/documentation convention: Cartesian
 `move_linear()` must not enable the per-sample synchronized servo-speed caps used by
 optional joint-space moves. This avoids layering a second, quantized servo-speed trajectory
 on top of 20/50 Hz host setpoints. The resulting joint samples remain subject to deterministic joint, step,
 velocity, acceleration, workspace, following-error, effort, fault, and timing validation
 before and during execution.
+
+### Selectable joint-space trajectory parameterization
+
+Streamed joint-space planning (`SOARM101Config.joint_profile_mode` and per-call
+`profile_mode` / `--profile-mode`) supports two selectable time-scaling profiles over the
+same synchronized straight-line joint path `q(t) = start + (target - start) * s(t)`:
+
+- `minimum_jerk` (default baseline): quintic progress `10u^3 - 15u^4 + 6u^5` with peak-to-mean
+  velocity ratio `1.875`. Preserves historical joint timing for side-by-side comparison.
+- `cosine_cruise`: symmetric half-cosine acceleration and deceleration ramps with an optional
+  constant-speed cruise section (matching `move_linear()`'s time-scaling semantics so requested
+  joint speed and acceleration act as true ceilings rather than `~0.53x` mean speed), plus
+  calibrated terminal duplicate-encoder sample coalescing when the resulting terminal step
+  remains strictly within configured step, velocity, and acceleration limits.
+
+When optional `synchronize_servo_arrival=True` is explicitly requested on streamed joint
+trajectories, per-joint `speed_raw` is computed from continuous float joint displacement
+between consecutive planned samples (with a smooth minimum register floor) rather than
+post-quantization tick differences, preventing 0-tick rounding cycles from dropping
+`speed_raw` to `1`. Both profile modes execute under identical calibration provenance,
+joint/workspace limits, following-error, unexpected-direction, effort, fault, STOP/HOLD,
+and settle guards.
 
 ### Calibration-relative Sleep semantics
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from math import pi
+from typing import Literal
 
 ARM_JOINTS: tuple[str, ...] = (
     "shoulder_pan",
@@ -105,6 +106,9 @@ DEFAULT_MAX_TOOL_ANGULAR_ACCEL_RAD_S2 = (
 )
 
 DEFAULT_COMMAND_FREQUENCY_HZ = 50.0
+JointProfileMode = Literal["minimum_jerk", "cosine_cruise"]
+JOINT_PROFILE_MODES: tuple[JointProfileMode, ...] = ("minimum_jerk", "cosine_cruise")
+DEFAULT_JOINT_PROFILE_MODE: JointProfileMode = "minimum_jerk"
 # Live leader→follower teleoperation uses a separate clock because each sample
 # performs synchronous hardware safety/feedback reads on the serial bus. Twenty
 # hertz is the practical default for smooth hand following; 5/10 Hz remain
