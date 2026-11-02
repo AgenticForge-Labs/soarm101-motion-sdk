@@ -107,13 +107,21 @@ def test_preflight_does_not_move_or_enable_torque(supervised):
     assert all(v == report.gripper_position for v in report.trajectory.gripper)
 
 
-def test_simulated_execution_reuses_sdk_motion_and_retains_human_policy(supervised):
+def test_simulated_execution_reuses_sdk_motion_and_retains_human_policy(supervised, monkeypatch):
     executor, watchdog = supervised
     arm = executor._session
     segment = author(arm, delta=0.02, duration=1.0)
     cfg = policy(arm, segment)
     prior = len(arm.backend.command_history)
+    # Expressive motion must NEVER write even a constant target to the gripper.
+    # Fail at the authoritative backend to catch any indirect SDK motor write.
+    tool_writes = []
+    def forbidden_gripper_write(*args, **kwargs):
+        tool_writes.append((args, kwargs))
+        raise AssertionError("choreography must not command the gripper")
+    monkeypatch.setattr(arm.backend, "write_tool_position", forbidden_gripper_write)
     result = execute_trusted_choreography(executor, watchdog, cfg, segment)
+    assert tool_writes == []
     assert result["mode"] == "simulation"
     assert result["revision"] == segment.revision
     assert result["status"] == "sdk_execution_completed_physical_settling_not_certified"
