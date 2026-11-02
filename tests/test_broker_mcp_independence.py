@@ -65,3 +65,17 @@ def test_profile_enforcement_does_not_depend_on_an_mcp_server() -> None:
         })
     with pytest.raises(PermissionError, match="not enabled"):
         profile.check("POST", "/v1/joint", {"joint": "shoulder_pan", "delta_deg": 1})
+
+
+def test_native_sdk_package_does_not_own_mcp_server() -> None:
+    """Native Python/CLI/GUI/broker stay installable without Puppet or MCP."""
+    root = Path(__file__).resolve().parents[1]
+    project = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'soarm101-mcp =' not in project
+    assert 'mcp = ["mcp' not in project
+    assert not (root / "src/soarm101_motion/mcp_server.py").exists()
+    assert not (root / "src/soarm101_motion/mcp_guidance.py").exists()
+    assert not (root / "src/soarm101_motion/agent_mcp_runtime.py").exists()
+    native = (root / "src/soarm101_motion/agent_sandbox.py").read_text()
+    assert "_puppeteer_mcp()" in native
+    assert "from .agent_mcp_runtime" not in native

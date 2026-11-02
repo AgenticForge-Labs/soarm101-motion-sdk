@@ -1,5 +1,17 @@
 # NVIDIA OpenShell agent sandbox for SO-ARM101
 
+> **Puppeteer MCP client migration (SDK cleanup PR):** `--interface mcp`
+> now requires the separately installed `forge-puppeteer[mcp]` on
+> the trusted host. Puppet owns the MCP server, tool schemas, resources,
+> prompts and staged sandbox client. The SDK still owns sandbox creation,
+> host broker, profile grants, independent STOP and hardware safety.
+> The old SDK `soarm101-mcp` script is removed on this branch;
+> its OpenShell runtime dependencies remain isolated at
+> `/opt/soarm101-mcp`. No motor SDK enters the sandbox.
+> Installed-wheel and real Hermes/Codex qualification remain pending.
+> See [Puppeteer MCP guide](agent-mcp.md).
+
+
 The Motion SDK integrates [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) to host a planning/reasoning agent in a **separate, policy-restricted environment**. OpenShell provides process/filesystem/network isolation; the SDK owns robot capability policy, the authenticated host broker, calibration/authority checks, and deterministic hardware execution. Sandboxing an agent does **not** make robot motion intrinsically safe.
 
 ## Agentic control flow and supported modes
@@ -84,9 +96,9 @@ generated `openshell-effective-policy.yaml` and broker profile, never bypass
 the policy. This permission grants no writes, device access, or physical motion.
 
 
-The built-in Hermes and Codex agents now support an **opt-in** MCP interface.
+The built-in Hermes and Codex agents support an **opt-in** MCP interface through Forge Puppeteer (which must be installed separately on the trusted host).
 The default `robotctl` mode remains the original comparison baseline.
-The MCP subprocess runs inside the *same* OpenShell sandbox and calls the
+The Puppeteer MCP subprocess runs inside the *same* OpenShell sandbox and calls the
 same authenticated trusted-host broker; there is no extra motion authority,
 unrestricted SDK mount, or external MCP network listener.
 
@@ -145,7 +157,7 @@ requested actions, results, rejections, and camera SHA evidence. Physical
 success is **never** inferred from MCP tool availability or model intention.
 
 **Local validation gate:** run
-`pytest tests/test_agent_sandbox.py tests/test_mcp_server.py
+`pytest tests/test_agent_sandbox.py tests/test_broker_mcp_independence.py
 tests/test_capability_profile.py`, then rebuild images and run read-only
 Hermes/Codex trials; inspect discovered tools, image content, event hashes,
 and profile denial before any human-armed supervised motion trial.

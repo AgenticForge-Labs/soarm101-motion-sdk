@@ -1,10 +1,10 @@
-import asyncio
+"""Broker asset catalog permissions; MCP discovery is tested in Forge Puppeteer."""
+
 
 import pytest
 
 from soarm101_motion.broker import AgentCommandExecutor, BrokerRelayService, RobotBrokerService
 from soarm101_motion.capability_profile import CapabilityProfile
-from soarm101_motion.mcp_server import create_server
 from test_asset_catalog import libraries
 
 
@@ -47,19 +47,3 @@ def test_catalog_filter_pagination_and_relay_enforcement(tmp_path):
     assert relay.dispatch("POST", "/v1/assets", {}).status == 403
 
 
-def test_catalog_tool_only_appears_when_granted():
-    pytest.importorskip("mcp")
-    from mcp import Client
-
-    calls = []
-    def request(*, method, path, payload):
-        calls.append((method, path, payload))
-        return {"ok": True, "result": {"items": [], "next_offset": None}}
-
-    async def run():
-        async with Client(create_server(request, allowed_tools={"list_assets"})) as client:
-            assert {tool.name for tool in (await client.list_tools()).tools} == {"list_assets"}
-            result = await client.call_tool("list_assets", {"limit": 2, "kind": "pose"})
-            assert not result.is_error
-    asyncio.run(run())
-    assert calls == [("POST", "/v1/assets", {"offset": 0, "limit": 2, "kind": "pose"})]

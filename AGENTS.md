@@ -4,17 +4,20 @@ These instructions apply to people and coding agents developing the SO-ARM101 Mo
 
 ## Cross-repository MCP ownership reconciliation
 
-The intended architecture makes this SDK independent of Puppeteer
-and MCP. Puppeteer will eventually own MCP tool registration, schemas,
-resources, prompts and isolated MCP client packaging, while this SDK
-continues to own all native Python/CLI/GUI/simulation behavior and
-trusted broker/STOP authority. The broker's canonical route registry
-is `BROKER_CAPABILITY_ROUTES`; old `TOOL_ROUTES` is a temporary
-alias to the very same registry, not an independent definition.
-**Do not delete or disable** the present SDK-owned `soarm101-mcp`
-launcher or OpenShell `--interface mcp` before the Puppeteer
-replacement is implemented, installed-wheel-tested, and accepted.
-See [the migration checklist](docs/puppeteer-mcp-migration.md).
+**Forge Puppeteer owns MCP presentation, resources, prompts,
+tool schemas and optional OpenShell client packaging**. This SDK
+remains independently installable for native Python, CLI, GUI,
+simulation, broker, motion and hardware/safety. The canonical
+broker registry is `BROKER_CAPABILITY_ROUTES` (`TOOL_ROUTES`
+is a temporary name alias to exactly that registry).
+
+This cleanup branch removes the old SDK `soarm101-mcp` executable,
+`[mcp]` extra and duplicate implementation after Puppeteer PRs #4–#6.
+Do not claim the change is accepted for OpenShell or hardware before
+installed-wheel, simulated broker and Hermes/Codex validation. If it
+fails, repair this branch/PR or revert it; **do not** bypass SDK
+permissions, watchdog, STOP/HOLD or operator authorization.
+See [the migration record](docs/puppeteer-mcp-migration.md).
 
 The SDK's already merged PR #97 added simulation-only recording
 replay and asset catalog. Preserve its broker policy, revision

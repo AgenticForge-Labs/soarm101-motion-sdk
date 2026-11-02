@@ -1,174 +1,154 @@
-# SO-ARM101 SDK → Forge Puppeteer MCP ownership reconciliation
+# SO-ARM101 MCP consolidation — SDK source migration and acceptance
 
-**Status:** Migration preparation only. The SDK's existing `soarm101-mcp`
-entry point, OpenShell `--interface mcp` client bundle and their tests
-remain functional during migration. **Do not delete them** until the exact
-replacement from Forge Puppeteer passes the compatibility tests below.
-This document records the post-PR-97 state on SDK main and the agreed
-cross-repository ownership boundary; it is not a production cutover.
+**Status:** The historical SDK-owned MCP code is deleted in the
+`agent/remove-sdk-owned-mcp` branch; **this is not yet merged or
+locally accepted**. In Puppeteer, direct-broker MCP implementation
+PR #4 and isolated OpenShell client packaging/fix PRs #5–#6
+are already merged. Real OpenShell Hermes/Codex, clean installed-wheel,
+simulated broker and actual image-response acceptance remain
+outstanding. Keep existing installed SDK environments operating
+until this cleanup is tested and merged.
 
-## Architectural contract
+## Ownership
 
 ```text
-User / Python / CLI / GUI ────────────────────────────────┐
-                                                          v
-Any MCP-capable agent -> Forge Puppeteer MCP-only -> trusted SDK broker
-                                      |                   |
-                           optional full Puppeteer       |
-                           performance/coordination       |
-                                                          v
-                                     SO-ARM101 Motion SDK / native simulation
-                                                          |
-                                             validated hardware/controller
+Any compatible agent                      Human Python / CLI / GUI
+      |                                            |
+Forge Puppeteer MCP (optional)                     |
+      |                                            |
+      +---- SDK authenticated broker <-------------+
+                     |
+  SDK profile, robot state, calibration, session/lease,
+  replay policy, supervisor watchdog, STOP/HOLD
+                     |
+               Motion SDK / robot
 ```
 
-The SDK is independently usable with **no Puppeteer or MCP installation**:
-Python motion APIs, GUI, CLI, saved poses/recordings/sequences, calibration,
-basic camera access, simulation and trusted broker. It owns exactly one
-motion/safety authority and one operator profile/grant policy. The
-`BROKER_CAPABILITY_ROUTES` registry is owned by this SDK and currently
-uses the tool identifiers already understood by `CapabilityProfile`.
-The prior `TOOL_ROUTES` spelling is a **temporary alias to the same
-registry**, never an independent table. The broker still independently
-checks every requested route and pinned limit, regardless of whether an
-MCP server advertises the tool.
+This SDK is fully usable without Puppeteer, MCP, Platform, Studio,
+Docker or OpenShell. An operator who wants MCP additionally installs
+`forge-puppeteer[mcp]`; an operator who wants isolated
+`soarm101 agent sandbox --interface mcp` installs the same
+optional Puppet package in the **trusted host** environment.
+OpenShell is strictly an optional agent isolation mode, not a motion
+controller or precondition for using the SDK.
 
-**Forge Puppeteer** will own robot-facing MCP server construction, typed
-tool adapters, resources/prompts and optional OpenShell **MCP packaging**.
-It can operate standalone with the SDK/broker and without Platform or
-Studios. In `mcp-only` mode, it must not require performance timelines,
-production assets, a company identity or Platform gateway. Native robot
-SDK transport and Puppeteer MCP transport must not each create hardware
-owners. Puppeteer must talk to the existing authenticated broker (or
-an equivalent SDK-owned trusted client), **not launch another SDK MCP
-inside its own MCP and call it as a second safety controller**.
+## What remains in the SDK
 
-## Existing merged SDK functions that must survive
+- Python motion planning, calibrated robotics, GUI/CLI and USB camera.
+- `robotctl`, trusted broker, `CapabilityProfile` and canonical
+  `BROKER_CAPABILITY_ROUTES` as the only broker route registry.
+- Full asset catalog, immutable recording/sequence revisions,
+  simulation replay and deterministic preflight (merged PR #97).
+- Watchdog, human authority, token/lease isolation, STOP/HOLD,
+  fault quarantine and independent host supervisor.
+- Host-side `agent_sandbox.py`: starts/supervises the SDK broker,
+  provisions OpenShell, controls capability profiles, retains
+  evidence and requests host-owned STOP during teardown.
+- Native `soarm101`, `soarm101-gui`, `soarm101-broker`,
+  `robotctl` and normal simulation modes. No new dependencies.
 
-PR #97 has been merged into SDK `main`. These are **native SDK/broker**
-features and must NOT move to Puppeteer:
+## Moved to Puppeteer
 
-- `asset_catalog.py`: library discovery, revision identities and
-  provenance (discovery is not execution authority).
-- `replay_policy.py`, `replay_preflight.py` and
-  `replay_snapshot.py`: pinned content, calibration, start-state and
-  replay policy checks.
-- `simulated_replay.py`, `simulated_sequence.py`:
-  supervised simulation-only replay and shared SDK execution.
-- `broker.py`, `broker_sdk.py`, `broker_watchdog.py`:
-  host-side session authority, separate supervisor STOP, correlation,
-  watchdog, idempotency/quarantine and simulated/physical mode gates.
-- `capability_profile.py`: pinned broker capabilities, per-camera
-  grants, rates and displacements, including rejection of extra
-  unsupported profile fields.
-- `robotctl.py`: minimal standard-library operator/broker client.
-  The native CLI remains independently usable for people or restricted
-  agent experiments. It is **not** the MCP server.
-- `agent_sandbox.py`: currently SDK-owned host-side OpenShell runner
-  and trusted supervisor lifecycle. Do not move its hardware/STOP
-  authority or host environment into an untrusted Puppeteer MCP client.
-  Only the client-only MCP package/config generator should move.
+| Historical SDK component | Replacement |
+| --- | --- |
+| `mcp_server.py` | `forge_puppeteer.mcp.server`, `soarm101`, `launcher` |
+| `mcp_guidance.py` | `forge_puppeteer.mcp.soarm_guidance` |
+| `agent_mcp_runtime.py` | `forge_puppeteer.mcp.openshell_bundle` |
+| SDK `[mcp]` extra and `soarm101-mcp` command | `forge-puppeteer[mcp]` and `forge-puppeteer-mcp` |
+| SDK MCP server/guidance tests | Puppeteer MCP/broker/installed-wheel tests |
+| SDK OpenShell client-only source copy | Puppet bundle stages Puppet source + SDK's pure capability registry |
 
-The SDK has separate conservative physical requirements: the
-experimental persistent physical joint/camera broker, independent STOP,
-heartbeat, torque HOLD, calibration, speed and workspace validation,
-and actual hardware qualification. A working simulation does not prove
-physical braking or permit physical replay. Puppet cannot widen these
-conditions.
+The host-side sandbox remains SDK-owned because it alone knows the
+current hardware/session authorization and the independent STOP
+controller. It imports Puppet packaging **only when the user explicitly
+selects MCP**; ordinary native SDK and `robotctl` usage need not
+import Puppet.
 
-## MCP pieces to migrate (current source → target)
+## Runtime and safety contract
 
-| SDK location | Future owner | Notes |
-|---|---|---|
-| `src/soarm101_motion/mcp_server.py` | `forge-puppeteer/src/forge_puppeteer/mcp/` | Retain current tool names/schemas and signed camera image evidence; use existing common MCP server, no new server factory |
-| `src/soarm101_motion/mcp_guidance.py` | Puppeteer MCP resources and prompts | Retain semantics of `soarm101://guidance/*` and `operate_robot_task`; guidance is not policy |
-| `src/soarm101_motion/agent_mcp_runtime.py` | Puppeteer agent/client packaging | Preserve isolated client-only bundle and Hermes/Codex config without shipping Motion SDK tree, broker token in prompt, USB or supervisor STOP credentials |
-| `soarm101-mcp` script and `[mcp]` dependency | Puppeteer `[mcp]` extra | Remove only when Puppeteer replacement starts and validates correctly |
-| SDK MCP guidance and tests | Puppeteer MCP test suite | Port all camera, profile, prompt, guidance, replay and transport tests; keep SDK broker tests in SDK |
-| `agent_sandbox.py` client bundling | SDK host runner may **call** reviewed Puppeteer packaging | Preserve SDK host broker setup, STOP on agent teardown, OpenShell policy and worker confinement; no duplicate supervisor |
+- One MCP server and one SDK trusted broker; no double MCP proxy,
+  duplicate controller, or raw motor SDK import in the sandbox.
+- MCP only exposes an operator-pinned subset of the live broker
+  capability profile. The broker rechecks every command.
+- Puppet tool inputs differ from old SDK MCP motion signatures:
+  agent calls need explicit `action_id`, `caller_id`,
+  `session_id`, typed parameters, and the shared action lifecycle.
+  Update existing agent prompts/configs; do not pretend wire
+  compatibility exists.
+- MCP `capture_camera` verifies actual JPEG SHA-256; returned
+  metadata excludes host paths. SDK retains independent capture
+  evidence on the host.
+- Replay needs `request_id`, `session_id`, immutable revision
+  and SDK simulation admission; physical replay remains prohibited.
+  No automatic retries after ambiguous motion outcomes.
+- Software STOP acknowledgement alone is not a safety-rated
+  emergency stop. Preserve host-supervisor token separation and
+  robot torque/authority safeguards.
+- Docker images' isolated MCP venv installs only MCP, Pydantic,
+  AnyIO, PyYAML and JSON Schema dependencies. The staged
+  Puppeteer source package uses the pure SDK broker registry, not
+  its hardware API, private data or Python SDK installation.
+- OpenShell's fixed host endpoint is `host.openshell.internal`,
+  selected by trusted operator config and explicitly permitted
+  only in this sandbox mode. OpenShell route/port policy applies;
+  the MCP transport refuses redirects or environment HTTP proxies.
 
-The existing Puppeteer `mcp/soarm101.py`, `mcp/server.py`,
-`devices/soarm101.py` and `mcp/launcher.py` already implement a
-common action runtime and typed SO-ARM MCP tools. **Reconcile those
-with the SDK MCP surface** instead of copying the old server wholesale
-and creating another competing endpoint.
+## Mandatory qualification before merging this SDK cleanup
 
-## Tool-level regression matrix
+**Source PR dependencies:** SDK main after #97/#98; Puppeteer main
+after #4/#5/#6. Confirm actual SHAs again before running.
 
-Do not claim parity merely because `tools/list` is nonempty:
-
-- Read: `robot_health`, `robot_capabilities`, `robot_state`,
-  `list_assets` only when the trusted broker profile grants them.
-- Observation: `capture_camera` must retain validated SHA-256 over
-  real pixels, metadata separation, no host path disclosure, and
-  image content only when source pixels are observable.
-- Motion: `go_pose`, `jog_joint`, `jog_cartesian`,
-  `move_gripper`, `sleep`, `sleep_up`, `stop`.
-  Rates may become slower only; do not auto-arm or expose servo registers.
-- Replay: `replay_recording`, `replay_sequence`, both with
-  current session ID, immutable revision and request identity.
-  Physical replay stays disabled and ambiguous outcomes remain
-  quarantined until a broker-confirmed STOP.
-- Resource and guidance compatibility:
-  `soarm101://guidance/core`, `/coordinates`, `/joints`,
-  `/vision`, `/recovery`, and `operate_robot_task` prompt.
-- Brokering: read-only and partial profiles must remove denied
-  actions from advertised tools **and** broker must independently
-  reject denied direct requests.
-- Controls: two callers may not own the same arm; cancellation/STOP
-  must preserve independent host safety and no implicit reconnect.
-- Protocol: SDK native Python, CLI, GUI and `robotctl` still pass
-  without the MCP dependency. Puppeteer MCP-only mode runs without
-  Studios/Platform or a model provider.
-- Packaging: Docker and OpenShell are **optional**. Running an agent
-  sandbox must never mount raw serial, host camera device, Docker
-  socket, SDK/controller tree, supervisor credentials or private paths.
-
-## Dependency order: do not strand working features
-
-1. **Already merged:** SDK PR #97. Preserve its entire asset/replay
-   and broker safety work. Recheck its final state on `main`.
-2. **This SDK preparation PR:** neutralize the source-of-truth
-   terminology (`BROKER_CAPABILITY_ROUTES`, old `TOOL_ROUTES`
-   alias), protect it with tests, document migration inventory.
-   This deliberately **does not remove** any MCP executable yet.
-3. **Puppeteer PR 6, first:** implement one MCP-only launch path
-   over the SDK broker, transplant unique SDK MCP resources, prompts,
-   camera and broker tools, and test compatibility on the merged
-   SDK main. Avoid creating another standalone robot MCP project.
-4. **SDK cleanup, only after step 3 is merged or accepted at an exact
-   pinned SHA:** switch OpenShell client-only MCP packaging to the
-   reviewed Puppeteer package, remove obsolete SDK `mcp_server.py`,
-   `mcp_guidance.py`, `agent_mcp_runtime.py`, the entrypoint and
-   SDK `mcp` extra. Update all tests/skills/docs, including those
-   that use private sdk sandbox paths. The native SDK, broker, safety
-   and `robotctl` do not move.
-5. **Local Codex:** test SDK and Puppeteer wheels in *clean installed*
-   environments with no editable sibling imports, fake broker, isolated
-   native simulation and separate agent/supervisor tokens. Only
-   separately approved operator-attended hardware validation follows.
-6. **Platform PR 6:** connect the resulting Puppeteer MCP into
-   ContextForge, initially with fake providers. No physical motion
-   by automated tests.
-
-Until step 4 succeeds, **the SDK still owns its historical MCP
-implementation operationally**. Documentation must not advertise
-Puppeteer as the new active server before the handoff is complete.
-
-## Local validation for this SDK preparation branch
-
-From a clean checkout at the exact SHA, with a dev environment installed:
+First, in a clean checkout of the SDK cleanup PR with the separately
+installed sibling Puppet package:
 
 ```bash
-python -m pytest tests/test_broker_mcp_independence.py -q
-python -m pytest tests/test_mcp_server.py tests/test_broker_asset_catalog.py \
+python -m pytest tests/test_broker_mcp_independence.py \
+  tests/test_capability_profile.py tests/test_agent_sandbox.py \
   tests/test_broker_replay.py tests/test_broker_watchdog.py -q
 python -m pytest -m 'not hardware' -q
-ruff check src/soarm101_motion/capability_profile.py \
-  tests/test_broker_mcp_independence.py
-git diff --check
+ruff check src/soarm101_motion tests/test_agent_sandbox.py
+python -m build --wheel
 ```
 
-These are source and simulation/fixture tests, not hardware qualification.
-There are no live services, production tokens, OpenShell launches,
-robot motions, firmware flash steps or extra paid licenses in this PR.
+And in Puppeteer main:
+
+```bash
+uv run --extra mcp --extra dev pytest \
+  tests/robots/test_soarm101_broker_http.py \
+  tests/robots/test_soarm101_openshell_bundle.py \
+  tests/robots/test_soarm101_mcp.py \
+  tests/robots/test_packaged_launcher_soarm.py -q
+uv run --extra mcp --extra dev pytest -q
+bash scripts/soarm101-wheel-smoke.sh
+```
+
+Then **locally** qualify isolated OpenShell Hermes and Codex in
+read-only and SDK simulation modes with temporary tokens:
+
+1. Build updated Hermes and Codex images from this SDK's Dockerfile
+   assets; verify the installed venv has no native motor SDK.
+2. Verify Puppet's client-only modules/config are the uploaded bundle
+   and the old `soarm101_motion.mcp_server` is absent.
+3. Check SDK broker/profile discovery, named-camera pixels and
+   SHA-256, denied capabilities, denied unauthorized methods,
+   session/request identity and no duplicate hardware owner.
+4. Validate failed broker connection and removed/expired grant
+   fail *before* agent execution, without credential leakage.
+5. Validate bounded simulation action/replay, stale revision failure,
+   unknown-result fence, watchdog timeout and host independent STOP.
+6. Ensure an unarmed read-only agent **does not** request a motion
+   authorization and cannot issue motion or STOP tools.
+7. Ensure actual supervisor token, serial devices, local calibration,
+   host private paths and controller modules are never mounted.
+8. Check direct SDK Python/CLI/GUI/broker still work *without*
+   Puppet/MCP installed. No automatic physical hardware operation.
+
+Tests have **not** been run in this GitHub-only work session. Codex
+must report exact checkout SHAs, test/skip counts, docker build
+outcomes, tool discovery and rejection samples, unresolved questions
+and any safe fixes made to the **same cleanup PR**.
+
+Only after this qualification should the SDK cleanup be merged.
+Do not start the dependent StackChan adapter while this cleanup
+remains open. Do not activate Platform PR 6 gateway to physical robots
+based on source merge alone.

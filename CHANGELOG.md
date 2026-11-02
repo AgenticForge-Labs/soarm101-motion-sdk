@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — SDK-owned MCP removed; Puppeteer is the agent-facing interface
+
+- Native SDK Python, CLI, GUI, simulation, trusted broker, authority,
+  watchdog, replay, stop and operator hardware safety remain SDK-owned.
+- Historical `soarm101-mcp` CLI, SDK `[mcp]` extra, and old
+  `mcp_server.py`, `mcp_guidance.py`, `agent_mcp_runtime.py`
+  implementation/tests are removed **on the cleanup branch**.
+- Optional `soarm101 agent sandbox --interface mcp` now requests
+  the independently installed `forge-puppeteer[mcp]` host package and
+  stages only Puppeteer Python client modules plus the pure broker
+  capability registry into the isolated OpenShell client environment.
+- The host supervisor and independent STOP channel remain unchanged.
+- Actual Hermes/Codex OpenShell, installed-wheel and simulator
+  validation are not yet complete. **Do not merge/deploy until passed.**
+
+
 ## Unreleased — reconcile SO-ARM101 broker with Puppeteer-owned MCP
 
 - Establish `BROKER_CAPABILITY_ROUTES` as the canonical, MCP-independent

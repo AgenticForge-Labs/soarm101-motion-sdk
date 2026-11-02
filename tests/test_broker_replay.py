@@ -1,5 +1,4 @@
 """Broker-scoped bounded replay: simulated SDK and fakes, never hardware."""
-import asyncio
 import threading
 from dataclasses import replace
 
@@ -15,7 +14,6 @@ from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
-from soarm101_motion.mcp_server import create_server
 from soarm101_motion.replay_policy import ReplayPolicy
 from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 from soarm101_motion.types import MotionResult
@@ -425,25 +423,6 @@ def test_replay_rejects_late_success_and_reports_cleanup(replay, monkeypatch, ca
     assert not auth.status()["armed"]
     assert submit(service, {**request, "request_id": "take-2"}).status == 409
 
-
-def test_mcp_replay_tool_is_explicit_and_forwards_identity():
-    pytest.importorskip("mcp")
-    from mcp import Client
-    calls = []
-    def call(**kwargs):
-        calls.append(kwargs)
-        return {"ok": True, "result": {}}
-    async def run():
-        async with Client(create_server(call)) as client:
-            assert "replay_recording" not in {t.name for t in (await client.list_tools()).tools}
-        async with Client(create_server(call, allowed_tools={"replay_recording"})) as client:
-            result = await client.call_tool("replay_recording", {"request_id": "a", "session_id": "b",
-                "asset_id": "soarm101/recording/raw/still", "revision": "r", "speed_scale": .5})
-            assert not result.is_error
-    asyncio.run(run())
-    assert calls == [{"method": "POST", "path": "/v1/replay-recording", "payload": {
-        "request_id": "a", "session_id": "b", "asset_id": "soarm101/recording/raw/still",
-        "revision": "r", "speed_scale": .5}}]
 
 
 def test_robotctl_replay_over_authenticated_simulated_http(replay, monkeypatch, capsys):
