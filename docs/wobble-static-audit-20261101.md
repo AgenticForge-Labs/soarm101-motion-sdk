@@ -159,6 +159,11 @@ changes between issued writes and the maximum speed setting immediately
 following a multi-cycle (>=3 nominal periods) write gap. These are raw
 position-mode servo settings, not physically measured degrees/second.
 
+The output also reconstructs the final 30% of the commanded movement on
+a nominal-cadence held-goal grid: mean absolute raw tick increment per
+cycle, maximum increment and fraction of zero-increment cycles. These
+describe transmitted goal changes, not hidden continuous planner samples.
+
 The output includes per-joint zero-increment run-length histogram, maximum
 hold cycles, held-cycle fraction, final-25%-of-move step-impulse count/rate,
 measured encoder sign reversals during monotonic commands, peak/RMS
