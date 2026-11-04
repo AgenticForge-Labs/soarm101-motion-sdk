@@ -1,5 +1,18 @@
 ## Puppeteer three-robot program — PR 3 of 5 (2026-11-02)
 
+## 2026-11-04 portfolio qualification note
+
+The current company activation (Platform ContextForge, six Business Engine
+roles, Shopify, approved social publication) is **not dependent** on
+additional SO-ARM physical features. Preserve the existing native Motion
+SDK/hardware safety program; qualify the trusted broker and trajectory/STOP
+experiments with **attended hardware evidence** before any new physical grant.
+Puppeteer owns upstream semantic actions/MCP packaging, RoboConduit future
+remote sessions, and this SDK remains deterministic motion/safety authority.
+
+See [company activation roadmap](https://github.com/AgenticForge-Labs/agenticforge-platform/blob/main/docs/company-activation-roadmap-2026-11.md).
+This plan note makes no old PR or physical test newly accepted.
+
 PR #11 and PR #12 are merged into `forge-puppeteer/main`; they provide
 the personality-independent behavior scheduler and native Reachy/StackChan
 expression packs. This SDK PR adds **trusted deterministic choreography**
