@@ -1,5 +1,27 @@
 # SO-ARM101 Motion SDK
 
+## Company integration and physical validation priorities (2026-11-04)
+
+This **standalone deterministic Motion SDK** remains authoritative for
+SO-ARM101 calibration, joint motion, limits, safety, trusted broker, STOP/HOLD
+and execution provenance. Puppeteer owns optional semantic-performance and
+agent-facing MCP packaging; it may use approved SDK capabilities but cannot
+replace the SDK's physical authority. RoboConduit is a future robot-neutral
+remote-session layer, **not** a shortcut around SDK leases/watchdogs.
+
+The near-term company objective (Platform MCP, six business roles, Shopify,
+reviewed promotion) is a different workstream. Company notifications and
+Conversationalist speech are **not** reasons to move the arm automatically.
+Current physical STOP, trajectory/wobble, choreography and OpenShell
+qualification remain separate **attended** safety gates: passing software
+simulation, CI, or merging a Puppeteer adapter does not make unattended
+operation safe. Keep default STOP/HOLD controls intact until explicit
+operator acceptance with actual hardware and calibration.
+
+See [company activation sequence](https://github.com/AgenticForge-Labs/agenticforge-platform/blob/main/docs/company-activation-roadmap-2026-11.md)
+and [Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer).
+This note activates no hardware or new permissions.
+
 **Learn, teach, program, and automate a SO-ARM101 robot arm with Python.**
 
 The SO-ARM101 Motion SDK is a Python-first toolkit for low-cost desktop robotics. It combines a shared motion-control library, command-line tools, a PySide6 desktop GUI, local USB-camera support, simulation, and constrained interfaces for higher-level agents.
