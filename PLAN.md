@@ -1,3 +1,11 @@
+# Development plan
+
+Current priorities include attended qualification of STOP/HOLD and watchdog behavior, experimental motion profiles and choreography, and installed-wheel/OpenShell compatibility for the Puppeteer MCP transition. Each physical operation requires the established calibration, authority, clearance and safety procedures. Simulation and CI do not qualify physical motion.
+
+[STATUS.md](STATUS.md) preserves the previous README's dated history. The entries below retain their original context; older references to PR states and future work may be superseded.
+
+---
+
 ## Puppeteer three-robot program — PR 3 of 5 (2026-11-02)
 
 ## 2026-11-04 portfolio qualification note
