@@ -1,3 +1,5 @@
+![Ink illustration of an SO-ARM101 robot arm with motion paths, kinematics sketches, and a connected computer](docs/images/soarm101-header.webp)
+
 # SO-ARM101 Motion SDK
 
 **Control SO-ARM101 from AI agents through a standard MCP interface with [Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer), or use this SDK directly to learn, teach, program, and automate the arm.**
