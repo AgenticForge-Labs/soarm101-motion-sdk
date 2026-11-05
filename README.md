@@ -1,6 +1,8 @@
 # SO-ARM101 Motion SDK
 
-**Learn, teach, program, and automate an SO-ARM101 robot arm with Python.**
+**Control SO-ARM101 from AI agents through a standard MCP interface with [Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer), or use this SDK directly to learn, teach, program, and automate the arm.**
+
+Puppeteer offers MCP tool calls for supported native robot capabilities and shared behaviors, actions, and emotions across open-source robots. Inspired by [Reachy Mini](https://github.com/pollen-robotics/reachy_mini) and the [Reachy Mini Conversation App](https://github.com/pollen-robotics/reachy_mini_conversation_app), it generalizes conversational robot performance across devices. Tool availability depends on the selected server, configuration and operator grants; the SO-ARM101's physical controls remain subject to this SDK's own validation and authority.
 
 The SO-ARM101 Motion SDK is a Python-first toolkit for desktop robotics. It brings together deterministic motion control, calibration, teaching and replay, a command-line interface, a PySide6 desktop GUI, local USB cameras, simulation, and constrained interfaces for higher-level applications.
 
@@ -212,6 +214,10 @@ See [Safety](docs/safety.md), [Physical run](docs/physical-run.md), and [Validat
 The SDK owns deterministic robot motion, basic USB camera sessions, hardware diagnostics, calibration and saved-motion provenance. It does not own ROS orchestration, perception/tracking, external stage-camera calibration, or autonomous task reasoning. LeRobot inspired portions of the hardware workflow but is optional and not imported at runtime; the SDK is independently implemented.
 
 For design details, see [Architecture](docs/architecture.md), [Kinematics](docs/kinematics.md), and [Development plan](PLAN.md).
+
+## Acknowledgments
+
+Thanks to [The Robot Studio](https://github.com/TheRobotStudio/SO-ARM100) and [Hugging Face LeRobot](https://github.com/huggingface/lerobot) for the open SO-101 arm and robotics ecosystem. This SDK is independently implemented; LeRobot is optional. [Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer) provides the shared agent-facing MCP layer, inspired by [Reachy Mini](https://github.com/pollen-robotics/reachy_mini) and its [Conversation App](https://github.com/pollen-robotics/reachy_mini_conversation_app).
 
 ## Development and contributions
 
