@@ -2,7 +2,11 @@
 
 ## Purpose and ownership
 
-The SO-ARM101 Motion SDK is the **deterministic device control boundary** for calibration, joint and Cartesian motion, local USB cameras, validated saved programs, and restricted agent execution. Human GUI, CLI, Python clients and trusted agent pipelines reuse the same SDK capabilities rather than implementing separate motor-control stacks.
+The SO-ARM Motion SDK is the **deterministic device control boundary** for calibration, joint and Cartesian motion, local USB cameras, validated saved programs, and restricted agent execution. Human GUI, CLI, Python clients and trusted agent pipelines reuse the same SDK capabilities rather than implementing separate motor-control stacks.
+
+## Robot-family scope (2026-11-09)
+
+The model-neutral **SO-ARM Motion SDK** name is a product direction, not an assertion of multi-model hardware compatibility. The current SDK, Python module `soarm101_motion`, distribution `soarm101-motion-sdk`, CLI `soarm101`, kinematic/calibration assumptions and motion/safety qualification remain **SO-ARM101-specific**. SO-ARM102 is a future candidate, **not implemented or validated**; SO-ARM100 is explicitly not a support target. Any SO-102 implementation requires an explicit model identifier and independent robot configuration/calibration, actuator/communication review, kinematics, gripper and workspace limits, STOP/HOLD/lease review, recorded-artifact provenance isolation, regression tests and attended hardware qualification before motion is enabled. Shared abstractions must not bypass SDK/broker authority. Do not rename compatibility-sensitive interfaces merely to align branding.
 
 This repository intentionally does not own higher-level scene perception, lab scheduling, ROS middleware, performer coordination, or reasoning-model decisions. Those remain above the motion/camera layer.
 
