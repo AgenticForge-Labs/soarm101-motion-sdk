@@ -293,6 +293,8 @@ def preflight_choreography(
     state = arm.get_state()
     if not state.connected or state.faulted or state.moving:
         raise PermissionError("healthy, connected and stationary SDK state required")
+    if arm.motion.is_streaming:
+        raise PermissionError("a live joint stream is open; close it before running a program")
     if not simulation and not state.torque_enabled:
         raise PermissionError("physical choreography requires existing human torque HOLD")
     if arm.tool.is_moving:

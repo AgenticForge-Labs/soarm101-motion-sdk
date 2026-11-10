@@ -57,7 +57,7 @@ def load_trusted_choreography_catalog(path: Path):
     from soarm101_motion.choreography import ChoreographyPolicy, JointChoreography, JointFrame
     catalog_doc = json.loads(path.read_text(encoding="utf-8"))
     if (not isinstance(catalog_doc, dict) or not {"policy", "programs"} <= set(catalog_doc)
-            or set(catalog_doc) - {"policy", "programs", "startup_target", "targets"}):
+            or set(catalog_doc) - {"policy", "programs", "startup_target", "targets", "envelopes"}):
         raise ValueError("trusted choreography catalog requires policy and programs only")
     policy_doc = catalog_doc["policy"]
     if not isinstance(policy_doc, dict) or set(policy_doc) - {
@@ -106,6 +106,21 @@ def load_trusted_choreography_catalog(path: Path):
                 or target.calibration_id != policy.calibration_id):
             raise ValueError("trusted target duplicate or identity mismatch")
         programs[target.name] = target
+    envelopes = catalog_doc.get("envelopes", [])
+    if not isinstance(envelopes, list):
+        raise ValueError("trusted envelopes must be a list")
+    for item in envelopes:
+        from soarm101_motion.live_stream import JointEnvelope
+        if not isinstance(item, dict) or set(item) != {
+                "name", "robot_id", "calibration_id", "revision", "center_rad", "max_offset_rad"}:
+            raise ValueError("invalid trusted envelope fields")
+        envelope = JointEnvelope(item["name"], item["robot_id"], item["calibration_id"],
+                                 tuple(item["center_rad"]), tuple(item["max_offset_rad"]),
+                                 item["revision"])
+        if (envelope.name in programs or envelope.robot_id != policy.robot_id
+                or envelope.calibration_id != policy.calibration_id):
+            raise ValueError("trusted envelope duplicate or identity mismatch")
+        programs[envelope.name] = envelope
     if set(policy.allowed_revisions) != {program.revision for program in programs.values()}:
         raise ValueError("trusted choreography catalog revisions must exactly match policy pins")
     return policy, programs
@@ -487,6 +502,7 @@ class RobotBrokerService:
         self._replay_lock = threading.Lock()
         self._profile_provenance = self.profile.public()
         self._operation_lock = threading.Lock()
+        self._live_stream = None
         # Native-session queued actions admitted before STOP must never run
         # after it, even if an action was waiting for this dispatch lock.
         self._sdk_stop_epoch = 0
@@ -533,7 +549,8 @@ class RobotBrokerService:
                     choreography_policy.require(program)
                 else:
                     from soarm101_motion.choreography import JointTarget
-                    if (not isinstance(program, JointTarget)
+                    from soarm101_motion.live_stream import JointEnvelope
+                    if (not isinstance(program, (JointTarget, JointEnvelope))
                             or program.name != name or program.robot_id != choreography_policy.robot_id
                             or program.calibration_id != choreography_policy.calibration_id
                             or program.revision not in choreography_policy.allowed_revisions):
@@ -604,8 +621,15 @@ class RobotBrokerService:
                 **({"startup_target": {"name": "wake_to_neutral", "revision": self._choreography_catalog["wake_to_neutral"].revision}}
                    if "wake_to_neutral" in self._choreography_catalog and not hasattr(self._choreography_catalog["wake_to_neutral"], "frames") else {})
                 , "targets": [{"name": name, "revision": target.revision}
-                    for name, target in sorted(self._choreography_catalog.items()) if not hasattr(target, "frames")]
+                    for name, target in sorted(self._choreography_catalog.items())
+                    if not hasattr(target, "frames") and not hasattr(target, "max_offset_rad")],
+                "envelopes": [{"name": name, "revision": item.revision,
+                               "max_offset_rad": list(item.max_offset_rad)}
+                    for name, item in sorted(self._choreography_catalog.items())
+                    if hasattr(item, "max_offset_rad")],
             }})
+        if path.startswith("/v1/trusted/stream"):
+            return self._dispatch_live_stream(method, path, payload)
         if method.upper() != "POST" or path not in {
             "/v1/trusted/choreography", "/v1/trusted/target", "/v1/trusted/stop",
         }:
@@ -668,6 +692,82 @@ class RobotBrokerService:
                 result=response.body.get("result"), error=response.body.get("error"))
         with self._replay_lock:
             self._replay_requests[request_id] = (identity, response)
+        return response
+
+    def _dispatch_live_stream(self, method: str, path: str,
+                              payload: Mapping[str, object]) -> BrokerResponse:
+        """Bounded live joint stream (``/v1/trusted/stream/...``); trusted host only.
+
+        ``open``/``close`` are audited and serialised with choreographies;
+        ``offsets`` is the high-rate setpoint call and is clamped to the pinned
+        envelope. A stream and a pinned program never run at the same time.
+        """
+        from soarm101_motion.live_stream import JointEnvelope, LiveJointStream
+
+        def reply(status: HTTPStatus, body: dict[str, object]) -> BrokerResponse:
+            return BrokerResponse(status, body)
+
+        def conflict(exc: BaseException) -> BrokerResponse:
+            return reply(HTTPStatus.CONFLICT, {"ok": False, "error": str(exc)})
+
+        stream = self._live_stream
+        if method.upper() == "GET" and path == "/v1/trusted/stream":
+            return reply(HTTPStatus.OK, {"ok": True, "result": stream.status() if stream else {"active": False}})
+        if method.upper() != "POST" or path not in {
+            "/v1/trusted/stream/open", "/v1/trusted/stream/offsets", "/v1/trusted/stream/close",
+        }:
+            return reply(HTTPStatus.NOT_FOUND, {"ok": False, "error": "unknown trusted endpoint"})
+        if path.endswith("offsets"):
+            if set(payload) != {"offsets_rad"}:
+                return reply(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "unexpected trusted request fields"})
+            if stream is None:
+                return reply(HTTPStatus.CONFLICT, {"ok": False, "error": "live stream is not active"})
+            try:
+                return reply(HTTPStatus.OK, {"ok": True, "result": stream.set_offsets(payload["offsets_rad"])})
+            except ValueError as exc:
+                return reply(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            except (PermissionError, RuntimeError) as exc:
+                return conflict(exc)
+        expected = {"request_id", "name", "revision"} if path.endswith("open") else {"request_id"}
+        if set(payload) != expected:
+            return reply(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "unexpected trusted request fields"})
+        request_id = payload.get("request_id")
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request_id):
+            return reply(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "bounded request_id required"})
+        started = time.monotonic()
+        action = "trusted_stream_open" if path.endswith("open") else "trusted_stream_close"
+        try:
+            if not isinstance(self.executor, SDKAgentExecutor) or self.watchdog is None:
+                raise PermissionError("persistent SDK executor/watchdog unavailable")
+            with self._sdk_epoch_lock:
+                epoch = self._sdk_stop_epoch
+            with self._operation_lock:
+                with self._sdk_epoch_lock:
+                    if epoch != self._sdk_stop_epoch:
+                        raise PermissionError("request cancelled by a newer STOP")
+                if path.endswith("open"):
+                    envelope = self._choreography_catalog.get(payload.get("name"))
+                    if (not isinstance(envelope, JointEnvelope)
+                            or envelope.revision != payload.get("revision")):
+                        raise PermissionError("unknown or stale operator-pinned envelope")
+                    if self._live_stream is not None and self._live_stream.active:
+                        raise PermissionError("a live stream is already open")
+                    candidate = LiveJointStream(self.executor, self.watchdog,
+                                                self._choreography_policy, envelope)
+                    result = candidate.open()
+                    self._live_stream = candidate
+                else:
+                    if self._live_stream is None:
+                        result = {"active": False}
+                    else:
+                        result = self._live_stream.close()
+                        self._live_stream = None
+            response = BrokerResponse(HTTPStatus.OK, {"ok": True, "request_id": request_id, "result": result})
+        except (PermissionError, RuntimeError, ValueError, OSError, SOARM101Error) as exc:
+            response = BrokerResponse(HTTPStatus.CONFLICT, {"ok": False, "request_id": request_id, "error": str(exc)})
+        self._record(request_id=request_id, action=action, request=dict(payload),
+                     ok=response.body.get("ok") is True, duration_s=time.monotonic() - started,
+                     result=response.body.get("result"), error=response.body.get("error"))
         return response
 
     @staticmethod
