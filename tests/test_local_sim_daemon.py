@@ -75,8 +75,10 @@ def test_concurrent_starts_share_one_daemon(tmp_path) -> None:
             errors.append(exc)
 
     workers = [threading.Thread(target=run) for _ in range(2)]
-    for worker in workers: worker.start()
-    for worker in workers: worker.join()
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
     try:
         assert errors == []
         assert results == [0, 0]
