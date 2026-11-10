@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add a trusted-host bounded live joint stream (`/v1/trusted/stream/open`,
+  `offsets`, `close`, `GET /v1/trusted/stream`). The operator pins a
+  `JointEnvelope` (centre pose plus at most 15 degrees per joint, listed under
+  `envelopes` in the trusted catalog). The host sends offsets; the SDK clamps
+  them, slews under the pinned speed/acceleration ceilings, and writes every
+  sample through the guarded joint stream with the watchdog checked each tick.
+  It returns to the centre pose when setpoints stop, STOP ends it, and pinned
+  programs are refused (not escalated to STOP) while it is open.
 - Add an explicit operator-only `establish_hold_on_startup` daemon option.
   It uses the existing calibrated measured-position torque latch under the
   broker watchdog and verifies stability before readiness. Default startup
