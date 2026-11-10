@@ -9,10 +9,12 @@ or certified collision model.
 from __future__ import annotations
 
 from math import cos, radians, sin
+from functools import lru_cache
+from itertools import product
 from typing import Mapping, Sequence
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, QTimer, Qt
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -21,6 +23,8 @@ from PySide6.QtGui import (
     QPainter,
     QPalette,
     QPen,
+    QPainterPath,
+    QImage,
     QPolygonF,
     QWheelEvent,
 )
@@ -28,10 +32,40 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QPushButton, QV
 
 from soarm101_motion.constants import HOME_JOINTS
 from soarm101_motion.kinematics import SO101KinematicModel
+from soarm101_motion.gui.mesh_renderer import world_bounds_points, world_triangles
 from soarm101_motion.types import Pose
 
 
 _OFFLINE_GRIPPER_POSITION = 0.45
+
+
+@lru_cache(maxsize=1)
+def _sampled_range_fit_corners() -> tuple[np.ndarray, ...]:
+    """Bound actual mesh/TCP extents over a deterministic SDK joint-range grid."""
+    model = SO101KinematicModel()
+    samples = [
+        tuple(float(value) for value in (lower, (lower + upper) * 0.5, upper))
+        for lower, upper in zip(model.lower_bounds, model.upper_bounds, strict=True)
+    ]
+    minimum = np.full(3, np.inf)
+    maximum = np.full(3, -np.inf)
+    for values in product(*samples):
+        joints = model.vector(values)
+        frames = model.link_frames(joints)
+        for opening in (0.0, 1.0):
+            bounds = world_bounds_points(frames, opening)
+            minimum = np.minimum(minimum, bounds.min(axis=0))
+            maximum = np.maximum(maximum, bounds.max(axis=0))
+        tcp = model.forward(joints).position
+        minimum = np.minimum(minimum, tcp)
+        maximum = np.maximum(maximum, tcp)
+    corners = tuple(
+        np.array([x, y, z], dtype=float)
+        for x in (minimum[0], maximum[0])
+        for y in (minimum[1], maximum[1])
+        for z in (minimum[2], maximum[2])
+    )
+    return corners
 
 
 def _presentation_body_width(thickness_m: float, scale: float, *, ghost: bool) -> float:
@@ -90,6 +124,21 @@ def _mix(first: QColor, second: QColor, amount: float) -> QColor:
     )
 
 
+def _mesh_bounds_corners(
+    model: SO101KinematicModel,
+    joints: Mapping[str, float],
+    gripper_position: float,
+) -> tuple[np.ndarray, ...]:
+    vertices = world_bounds_points(model.link_frames(joints), gripper_position)
+    minimum, maximum = vertices.min(axis=0), vertices.max(axis=0)
+    return tuple(
+        np.array([x, y, z], dtype=float)
+        for x in (minimum[0], maximum[0])
+        for y in (minimum[1], maximum[1])
+        for z in (minimum[2], maximum[2])
+    )
+
+
 class CartesianArmView(QWidget):
     """Interactive orthographic projection of the SDK kinematic model."""
 
@@ -108,9 +157,19 @@ class CartesianArmView(QWidget):
         self._pitch = 0.0
         self._zoom = 1.0
         self._projection_center = (0.0, 0.0)
+        self._orbit_center_world = np.zeros(3, dtype=float)
         self._projection_scale = 1.0
         self._projection_ready = False
         self._projection_size = (0, 0)
+        self._fit_pose_once = False
+        self._mesh_image_key: tuple[object, ...] | None = None
+        self._mesh_image: QImage | None = None
+        self._dragging = False
+        self._interactive_detail = False
+        self._detail_timer = QTimer(self)
+        self._detail_timer.setSingleShot(True)
+        self._detail_timer.setInterval(140)
+        self._detail_timer.timeout.connect(self._restore_full_detail)
         self._last_mouse: QPointF | None = None
         self.setMinimumSize(220, 220)
         self.setToolTip(
@@ -126,10 +185,14 @@ class CartesianArmView(QWidget):
         self.view_combo.setToolTip("Standard orthographic model views")
         self.view_combo.currentTextChanged.connect(self.set_standard_view)
         toolbar.addWidget(self.view_combo)
-        self.fit_button = QPushButton("Fit")
-        self.fit_button.setToolTip("Fit the current arm, preview, and target once")
+        self.fit_button = QPushButton("Fit range")
+        self.fit_button.setToolTip("Fit the conservative configured range envelope")
         self.fit_button.clicked.connect(self.fit_view)
         toolbar.addWidget(self.fit_button)
+        self.fit_pose_button = QPushButton("Fit pose")
+        self.fit_pose_button.setToolTip("Fit the current measured pose and overlays once")
+        self.fit_pose_button.clicked.connect(self.fit_current_pose)
+        toolbar.addWidget(self.fit_pose_button)
         self.auto_fit = QCheckBox("Auto fit")
         self.auto_fit.setToolTip("Continuously rescale; leave off to compare movement at a fixed scale")
         self.auto_fit.toggled.connect(lambda _checked: self.update())
@@ -147,10 +210,22 @@ class CartesianArmView(QWidget):
         }
         if name not in angles:
             return
+        effective_scale = self._projection_scale * self._zoom
         self._yaw, self._pitch = angles[name]
-        self.fit_view()
+        if self._projection_ready and self.width() > 0 and self.height() > 0:
+            x, _depth, z = self._view_coordinates(self._orbit_center_world)
+            self._projection_center = (x, z)
+            self._projection_scale = effective_scale / self._zoom
+        self.update()
 
     def fit_view(self) -> None:
+        self._fit_pose_once = False
+        self._projection_ready = False
+        self._zoom = 1.0
+        self.update()
+
+    def fit_current_pose(self) -> None:
+        self._fit_pose_once = True
         self._projection_ready = False
         self._zoom = 1.0
         self.update()
@@ -164,14 +239,30 @@ class CartesianArmView(QWidget):
         return QSize(360, 340)
 
     def set_joint_degrees(self, joints_deg: Mapping[str, float]) -> None:
-        self._joints = {
+        joints = {
             name: radians(float(joints_deg[name]))
             for name in self._model.joint_names
         }
+        if joints == self._joints:
+            return
+        self._joints = joints
+        self._use_interactive_detail()
         self.update()
 
     def set_gripper_position(self, position: float) -> None:
-        self._gripper_position = min(1.0, max(0.0, float(position)))
+        position = min(1.0, max(0.0, float(position)))
+        if position == self._gripper_position:
+            return
+        self._gripper_position = position
+        self._use_interactive_detail()
+        self.update()
+
+    def _use_interactive_detail(self) -> None:
+        self._interactive_detail = True
+        self._detail_timer.start()
+
+    def _restore_full_detail(self) -> None:
+        self._interactive_detail = False
         self.update()
 
     def set_secondary_joint_degrees(
@@ -253,12 +344,53 @@ class CartesianArmView(QWidget):
         min_z = min(point[2] for point in projected)
         max_z = max(point[2] for point in projected)
         self._projection_center = ((min_x + max_x) / 2.0, (min_z + max_z) / 2.0)
+        # Retain a world-space pivot so changing orientation does not move the
+        # center of the view. The pivot is the center of the fitted bounds.
+        center_x, center_z = self._projection_center
+        cy, sy = cos(self._yaw), sin(self._yaw)
+        cp, sp = cos(self._pitch), sin(self._pitch)
+        y1 = center_z * sp
+        x = cy * center_x + sy * y1
+        y = -sy * center_x + cy * y1
+        z = center_z * cp
+        self._orbit_center_world = np.array([x, y, z], dtype=float)
         self._projection_scale = min(
-            max(1, self.width() - 54) / max(0.05, max_x - min_x),
-            max(1, self.height() - 130) / max(0.05, max_z - min_z),
+            max(1, self.width() - 36) / max(0.05, max_x - min_x),
+            max(1, self.height() - 36) / max(0.05, max_z - min_z),
         ) * 0.84
         self._projection_ready = True
         self._projection_size = (self.width(), self.height())
+
+    def _project_vertices(self, vertices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Vectorized equivalent of _project for triangle batches."""
+        cy, sy = cos(self._yaw), sin(self._yaw)
+        cp, sp = cos(self._pitch), sin(self._pitch)
+        x = cy * vertices[..., 0] - sy * vertices[..., 1]
+        y = sy * vertices[..., 0] + cy * vertices[..., 1]
+        z = sp * y + cp * vertices[..., 2]
+        center_x, center_z = self._projection_center
+        scale = self._projection_scale * self._zoom
+        return (self.width() * 0.5 + (x - center_x) * scale,
+                self.height() * 0.5 + 10.0 - (z - center_z) * scale)
+
+    def _mesh_cache_signature(
+        self, joints: Mapping[str, float], gripper_position: float,
+        base_color: QColor, *, device_pixel_ratio: float | None = None,
+    ) -> tuple[object, ...]:
+        dpr = (
+            float(self.devicePixelRatioF())
+            if device_pixel_ratio is None else float(device_pixel_ratio)
+        )
+        tcp = self._model.tcp
+        return (
+            tuple(float(joints[name]) for name in self._model.joint_names),
+            float(gripper_position), self._yaw, self._pitch,
+            self._projection_center, self._projection_scale, self._zoom,
+            self.width(), self.height(), base_color.rgba(),
+            tuple(float(value) for value in tcp.position),
+            tuple(float(value) for value in tcp.rotation.flat),
+            self._dragging or self._interactive_detail, dpr,
+        )
 
     def _draw_axis(
         self,
@@ -317,22 +449,27 @@ class CartesianArmView(QWidget):
 
         style = Qt.PenStyle.DashLine if ghost else Qt.PenStyle.SolidLine
         scale = self._projection_scale * self._zoom
-        for name, (first, second) in segments.items():
-            body_width = _presentation_body_width(
-                thicknesses[name], scale, ghost=ghost
-            )
-            painter.setPen(
-                QPen(
-                    link_color,
-                    body_width,
-                    style,
-                    Qt.PenCapStyle.FlatCap,
+        if not ghost:
+            self._draw_meshes(painter, joints, link_color, gripper_position)
+        else:
+            for name, (first, second) in segments.items():
+                body_width = _presentation_body_width(
+                    thicknesses[name], scale, ghost=ghost
                 )
-            )
-            painter.drawLine(self._project(first), self._project(second))
+                painter.setPen(
+                    QPen(
+                        link_color,
+                        body_width,
+                        style,
+                        Qt.PenCapStyle.FlatCap,
+                    )
+                )
+                painter.drawLine(self._project(first), self._project(second))
 
         motor_fill = QColor(link_color)
         if not ghost:
+            motor_boxes = {}
+        else:
             motor_fill = _mix(link_color, QColor("#000000"), 0.08)
         motor_outline = _mix(motor_fill, joint_color, 0.30)
         for corners in motor_boxes.values():
@@ -379,6 +516,85 @@ class CartesianArmView(QWidget):
             painter.setPen(QPen(link_color, 1.0))
             painter.drawText(tip + QPointF(8.0, -8.0), label)
 
+    def _draw_meshes(
+        self, painter: QPainter, joints: Mapping[str, float], base_color: QColor,
+        gripper_position: float,
+    ) -> None:
+        dpr = float(self.devicePixelRatioF())
+        cache_key = self._mesh_cache_signature(joints, gripper_position, base_color)
+        if self._mesh_image_key == cache_key and self._mesh_image is not None:
+            painter.drawImage(0, 0, self._mesh_image)
+            return
+        image = QImage(
+            round(self.width() * dpr), round(self.height() * dpr),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        image.setDevicePixelRatio(dpr)
+        image.fill(Qt.GlobalColor.transparent)
+        mesh_painter = QPainter(image)
+        mesh_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        frames = self._model.link_frames(joints)
+        material_colors = {
+            "3d_printed": QColor("#e7e9ed"),
+            "sts3215": QColor("#4b5563"),
+        }
+        faces: list[tuple[np.ndarray, np.ndarray, np.ndarray, str]] = []
+        cy, sy = cos(self._yaw), sin(self._yaw)
+        cp, sp = cos(self._pitch), sin(self._pitch)
+        for batches, material in world_triangles(
+            frames, gripper_position,
+            low_detail=self._dragging or self._interactive_detail,
+        ):
+            normals = np.cross(batches[:, 1] - batches[:, 0], batches[:, 2] - batches[:, 0])
+            norms = np.linalg.norm(normals, axis=1)
+            normals = normals / np.maximum(norms[:, None], 1e-12)
+            light = np.clip(0.55 + 0.37 * np.abs(normals[:, 2]), 0.24, 0.92)
+            depths = (batches.mean(axis=1)[:, 0] * sy + batches.mean(axis=1)[:, 1] * cy) * cp - batches.mean(axis=1)[:, 2] * sp
+            faces.append((batches, depths, light, material))
+        if not faces:
+            mesh_painter.end()
+            return
+        depth_min = min(float(depths.min()) for _triangles, depths, _light, _material in faces)
+        depth_max = max(float(depths.max()) for _triangles, depths, _light, _material in faces)
+        span = max(1e-9, depth_max - depth_min)
+        grouped: dict[tuple[int, str, int], QPainterPath] = {}
+        color_palette = {
+            (material, shade): _mix(
+                QColor("#20242b"), color,
+                (shade + 0.5) / 10 * 0.68 + 0.24,
+            )
+            for material, color in material_colors.items()
+            for shade in range(10)
+        }
+        for triangles, depths, lights, material in faces:
+            screen_x, screen_y = self._project_vertices(triangles)
+            depth_bins = np.minimum(31, ((depths - depth_min) / span * 32).astype(int))
+            light_bins = np.minimum(9, ((lights - 0.24) / 0.68 * 10).astype(int))
+            for index, triangle in enumerate(triangles):
+                shade = int(light_bins[index])
+                color = color_palette[(material, shade)]
+                key = (int(depth_bins[index]), material, shade)
+                path = grouped.get(key)
+                if path is None:
+                    path = QPainterPath()
+                    path.setFillRule(Qt.FillRule.WindingFill)
+                    grouped[key] = path
+                xs, ys = screen_x[index], screen_y[index]
+                cross = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (ys[1] - ys[0]) * (xs[2] - xs[0])
+                order = (0, 1, 2) if cross >= 0 else (0, 2, 1)
+                polygon = QPolygonF([QPointF(float(xs[j]), float(ys[j])) for j in order])
+                path.addPolygon(polygon)
+                path.closeSubpath()
+        for key in sorted(grouped, reverse=True):
+            color = color_palette[(key[1], key[2])]
+            mesh_painter.setPen(QPen(_mix(color, QColor("#20242b"), 0.25), 0.25))
+            mesh_painter.setBrush(QBrush(color))
+            mesh_painter.drawPath(grouped[key])
+        mesh_painter.end()
+        self._mesh_image_key = cache_key
+        self._mesh_image = image
+        painter.drawImage(0, 0, image)
+
     def paintEvent(self, _event: object) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -413,6 +629,17 @@ class CartesianArmView(QWidget):
             np.array([0.0, 0.12, 0.0]),
             np.array([0.0, 0.0, 0.12]),
         ]
+        if self._fit_pose_once or self.auto_fit.isChecked():
+            fit_points.extend(
+                _mesh_bounds_corners(self._model, self._joints, self._gripper_position)
+            )
+        # Link-chain lengths plus the SDK stock TCP fit inside this conservative
+        # visual envelope across joint-range samples. This is not safety geometry.
+        if not self._fit_pose_once:
+            # 3-point per-joint deterministic grid (243 poses) includes every
+            # actual pinned mesh vertex and SDK TCP in the fit bounds. This is
+            # presentation framing, not a proof of safety or collision clearance.
+            fit_points.extend(_sampled_range_fit_corners())
 
         if self._secondary_joints is not None:
             secondary_points = self._model.link_points(self._secondary_joints)
@@ -438,6 +665,10 @@ class CartesianArmView(QWidget):
                 for point in corners
             )
             fit_points.extend(secondary_gripper.values())
+            if self._fit_pose_once or self.auto_fit.isChecked():
+                fit_points.extend(_mesh_bounds_corners(
+                    self._model, self._secondary_joints, self._secondary_gripper
+                ))
         if self._target_position_m is not None:
             fit_points.append(self._target_position_m)
         if (
@@ -446,6 +677,7 @@ class CartesianArmView(QWidget):
             or self._projection_size != (self.width(), self.height())
         ):
             self._fit_projection(fit_points)
+            self._fit_pose_once = False
 
         self._draw_ground_grid(painter, muted)
         origin = np.zeros(3, dtype=float)
@@ -546,6 +778,7 @@ class CartesianArmView(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._last_mouse = event.position()
+            self._dragging = True
             event.accept()
             return
         super().mousePressEvent(event)
@@ -559,6 +792,9 @@ class CartesianArmView(QWidget):
                 radians(-80.0),
                 min(radians(80.0), self._pitch + float(delta.y()) * 0.008),
             )
+            if self._projection_ready:
+                x, _depth, z = self._view_coordinates(self._orbit_center_world)
+                self._projection_center = (x, z)
             self.view_combo.setCurrentText("Free")
             self.update()
             event.accept()
@@ -568,10 +804,14 @@ class CartesianArmView(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._last_mouse = None
+            self._dragging = False
+            self._use_interactive_detail()
+            self.update()
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         factor = 1.12 if event.angleDelta().y() > 0 else 1.0 / 1.12
         self._zoom = max(0.55, min(2.5, self._zoom * factor))
+        self._use_interactive_detail()
         self.update()
         event.accept()

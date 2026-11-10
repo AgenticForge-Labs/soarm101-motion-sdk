@@ -11,7 +11,10 @@ from soarm101_motion.choreography import (
     ChoreographyPreflight,
     JointChoreography,
     JointFrame,
+    JointTarget,
+    execute_trusted_joint_target,
     execute_trusted_choreography,
+    preflight_joint_target,
     preflight_choreography,
 )
 from soarm101_motion.constants import JOINT_PROFILE_MODES, JointProfileMode
@@ -46,7 +49,10 @@ __all__ = [
     "ChoreographyPreflight",
     "JointChoreography",
     "JointFrame",
+    "JointTarget",
+    "execute_trusted_joint_target",
     "execute_trusted_choreography",
+    "preflight_joint_target",
     "preflight_choreography",
     "CameraCapture",
     "CameraSettings",

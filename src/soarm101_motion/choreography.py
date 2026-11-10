@@ -32,10 +32,29 @@ from soarm101_motion.simulated_replay import (
 )
 from soarm101_motion.trajectories import Trajectory
 
+# Joint targets have no operator-authored timestamps, so reserve explicit time
+# for SDK completion reporting and host scheduling before the hard policy timer.
+_JOINT_TARGET_DEADLINE_MARGIN_S = 1.0
+
 if TYPE_CHECKING:
     from soarm101_motion.arm import SOARM101
     from soarm101_motion.broker_sdk import SDKAgentExecutor
     from soarm101_motion.broker_watchdog import BrokerWatchdog
+
+
+def _require_choreography_authority(executor: SDKAgentExecutor, arm) -> None:
+    """Exact trusted-host programs use the selected SDK supervision mode.
+
+    The operator-only mode has no agent lease. This exception belongs only to
+    pinned choreography/targets, never the broader recording/agent interfaces.
+    """
+    if getattr(executor, "operator_choreography_only", False):
+        if not executor.physical_actions or executor.simulation:
+            raise PermissionError("operator choreography requires its physical SDK session")
+        executor.validate_supervision()
+        executor._assert_session_identity(arm)
+    else:
+        _require_replay_authority(executor, arm)
 
 
 _REV = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -130,6 +149,53 @@ class JointChoreography:
 
 
 @dataclass(frozen=True)
+class JointTarget:
+    """Immutable operator-reviewed absolute five-joint target asset."""
+
+    name: str
+    robot_id: str
+    calibration_id: str
+    joints_rad: tuple[float, ...]
+    revision: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _ID.fullmatch(self.name):
+            raise ValueError("invalid joint target name")
+        if any(not isinstance(x, str) or not x or len(x) > 256
+               for x in (self.robot_id, self.calibration_id)):
+            raise ValueError("robot and calibration identity required")
+        if (not isinstance(self.joints_rad, tuple) or len(self.joints_rad) != len(ARM_JOINTS)
+                or any(isinstance(x, bool) or not isinstance(x, (int, float))
+                       or not math.isfinite(x) for x in self.joints_rad)):
+            raise ValueError("target requires all five finite arm joints in canonical order")
+        if not isinstance(self.revision, str) or not _REV.fullmatch(self.revision):
+            raise ValueError("joint target requires exact SHA-256 revision")
+        if self.revision != self.content_revision():
+            raise ValueError("joint target content differs from pinned SHA-256 revision")
+
+    def content_revision(self) -> str:
+        payload = {
+            "schema": "soarm101.joint_target.v1", "name": self.name,
+            "robot_id": self.robot_id, "calibration_id": self.calibration_id,
+            "joints_rad": [float(x) for x in self.joints_rad],
+        }
+        return "sha256:" + hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+
+    @classmethod
+    def author(cls, name: str, robot_id: str, calibration_id: str,
+               joints_rad: tuple[float, ...]) -> JointTarget:
+        payload = {"schema": "soarm101.joint_target.v1", "name": name,
+                   "robot_id": robot_id, "calibration_id": calibration_id,
+                   "joints_rad": [float(x) for x in joints_rad]}
+        revision = "sha256:" + hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+        return cls(name, robot_id, calibration_id, joints_rad, revision)
+
+
+@dataclass(frozen=True)
 class ChoreographyPolicy:
     """Trusted host's reviewed exact segment allowlist and rate ceilings."""
 
@@ -142,8 +208,11 @@ class ChoreographyPolicy:
     max_speed_deg_s: float = 8.0
     max_acceleration_deg_s2: float = 25.0
     allow_physical_trial: bool = False
+    target_timing: str = "deadline"
 
     def __post_init__(self) -> None:
+        if self.target_timing not in {"deadline", "native"}:
+            raise ValueError("target timing must be deadline or native")
         if (not self.robot_id or not self.calibration_id
                 or not isinstance(self.allowed_revisions, tuple)
                 or not 1 <= len(self.allowed_revisions) <= 256
@@ -273,6 +342,176 @@ def preflight_choreography(
     )
 
 
+def preflight_joint_target(
+    arm: SOARM101, target: JointTarget, policy: ChoreographyPolicy,
+) -> ChoreographyPreflight:
+    """Validate a pinned endpoint from measured joints through the native planner."""
+    fresh = JointTarget(target.name, target.robot_id, target.calibration_id,
+                        tuple(target.joints_rad), target.revision)
+    if (fresh.robot_id != policy.robot_id or fresh.calibration_id != policy.calibration_id
+            or fresh.revision not in policy.allowed_revisions):
+        raise PermissionError("joint target is not pinned for this robot and calibration")
+    if policy.max_duration_s > 30:
+        raise PermissionError("joint target duration exceeds SDK ceiling")
+    motion_duration = policy.max_duration_s - _JOINT_TARGET_DEADLINE_MARGIN_S
+    if motion_duration <= 0:
+        raise PermissionError(
+            "joint target deadline must leave at least 1s for completion margin"
+        )
+    actual = arm.get_joint_positions().positions
+    start = tuple(float(actual[name]) for name in ARM_JOINTS)
+    if policy.target_timing == "native":
+        # Reuse the SDK's actual joint planner. The deadline is a ceiling,
+        # rather than the requested duration of every endpoint transition.
+        baseline = JointChoreography.author("measured_target_start", fresh.robot_id,
+            fresh.calibration_id, (JointFrame(0.0, start), JointFrame(.2, start)))
+        baseline_policy = ChoreographyPolicy(policy.robot_id, policy.calibration_id,
+            (baseline.revision,), max_duration_s=policy.max_duration_s,
+            max_samples=policy.max_samples, max_start_error_rad=policy.max_start_error_rad,
+            max_speed_deg_s=policy.max_speed_deg_s,
+            max_acceleration_deg_s2=policy.max_acceleration_deg_s2,
+            allow_physical_trial=policy.allow_physical_trial)
+        checked = preflight_choreography(arm, baseline, baseline_policy)
+        plan = arm.motion._plan_joint_motion(actual, dict(zip(ARM_JOINTS, fresh.joints_rad, strict=True)),
+            speed=radians(policy.max_speed_deg_s), acceleration=radians(policy.max_acceleration_deg_s2))
+        duration = max(plan.duration_s, 1.0 / arm.config.command_frequency_hz)
+        if duration + arm.config.motion_completion_timeout_s > policy.max_duration_s:
+            raise PermissionError("native target plan and completion margin exceed reviewed deadline")
+        trajectory = Trajectory(
+            timestamps_s=np.linspace(0., duration, len(plan.command_samples)),
+            joints_rad=np.array([[row[n] for n in ARM_JOINTS] for row in plan.command_samples]),
+            gripper=np.full(len(plan.command_samples), checked.gripper_position),
+            metadata={"source_robot_id": fresh.robot_id, "source_calibration_id": fresh.calibration_id,
+                      "joint_target_revision": fresh.revision})
+        samples = trajectory.resample(arm.config.command_frequency_hz).joint_mappings()
+        arm.motion._validate_samples(samples, speed_limit=radians(policy.max_speed_deg_s),
+                                     acceleration_limit=radians(policy.max_acceleration_deg_s2))
+        if arm.config.enable_workspace_checks:
+            validate_workspace_path(arm.model, samples, tcp=arm.active_tcp, **arm._workspace_kwargs())
+        return ChoreographyPreflight(fresh.name, fresh.revision, fresh.robot_id, fresh.calibration_id,
+            duration, len(samples), checked.start_error_rad, checked.gripper_position, trajectory)
+    path = JointChoreography.author(
+        "measured_target_path", fresh.robot_id, fresh.calibration_id,
+        (JointFrame(0.0, start), JointFrame(motion_duration, fresh.joints_rad)),
+    )
+    # The transient path is created only inside the SDK from measured state;
+    # the operator pin remains the immutable endpoint asset revision.
+    internal_policy = ChoreographyPolicy(
+        policy.robot_id, policy.calibration_id, (path.revision,),
+        max_duration_s=policy.max_duration_s, max_samples=policy.max_samples,
+        max_start_error_rad=policy.max_start_error_rad,
+        max_speed_deg_s=policy.max_speed_deg_s,
+        max_acceleration_deg_s2=policy.max_acceleration_deg_s2,
+        allow_physical_trial=policy.allow_physical_trial,
+    )
+    result = preflight_choreography(arm, path, internal_policy)
+    trajectory = result.trajectory
+    trajectory.metadata["joint_target_revision"] = fresh.revision
+    return ChoreographyPreflight(
+        fresh.name, fresh.revision, result.robot_id, result.calibration_id,
+        result.duration_s, result.sample_count, result.start_error_rad,
+        result.gripper_position, trajectory,
+    )
+
+
+def execute_trusted_joint_target(
+    executor: SDKAgentExecutor, watchdog: BrokerWatchdog,
+    policy: ChoreographyPolicy, target: JointTarget,
+) -> dict[str, object]:
+    """Execute one exact pinned endpoint using the existing trusted SDK authority.
+
+    The measured start and complete planned path are resolved while holding the
+    existing dispatch lock. Physical torque is never enabled here.
+    """
+    if (getattr(executor.motion_guard, "__self__", None) is not watchdog
+            or watchdog._worker is None or not watchdog._worker.is_alive()):
+        raise PermissionError("active bound host watchdog required")
+    if not (executor.simulation and executor.simulation_actions):
+        if not (executor.physical_actions and policy.allow_physical_trial):
+            raise PermissionError("physical joint target is not operator-qualified")
+    if policy.robot_id != executor.robot_id:
+        raise PermissionError("policy differs from active SDK identity")
+    if (policy.max_speed_deg_s > executor.rates.joint_speed_deg_s
+            or policy.max_acceleration_deg_s2 > executor.rates.joint_acceleration_deg_s2):
+        raise PermissionError("joint target cannot widen trusted host motion rates")
+    with executor._dispatch_lock:
+        executor._require_active()
+        arm = executor._session
+        if arm is None:
+            raise PermissionError("preexisting connected SDK session required")
+        executor._assert_session_identity(arm)
+        watchdog.check()
+        _require_choreography_authority(executor, arm)
+        start = preflight_joint_target(arm, target, policy)
+        watchdog.check()
+        _require_choreography_authority(executor, arm)
+        sim = isinstance(arm.backend, SimulationBackend)
+        if not sim and not arm.get_state().torque_enabled:
+            raise PermissionError("operator must already enable physical torque HOLD")
+        attempted = False
+        deadline_tripped = threading.Event()
+        finalize_lock = threading.Lock()
+        finished = False
+
+        def deadline() -> None:
+            nonlocal finished
+            with finalize_lock:
+                if finished:
+                    return
+                deadline_tripped.set()
+            _stop_after_failure(executor, watchdog)
+
+        timer = threading.Timer(policy.max_duration_s, deadline)
+        timer.daemon = True
+        try:
+            with watchdog._lock:
+                watchdog.check()
+                _require_choreography_authority(executor, arm)
+                attempted = True
+                if sim:
+                    arm.enable()
+                else:
+                    executor._motion_action_attempted = True
+                    executor._verified_physical_stop = False
+            timer.start()
+            result = arm.play_trajectory(
+                start.trajectory, move_to_start=False, wait=True, joint_only=True,
+            )
+            with finalize_lock:
+                if deadline_tripped.is_set():
+                    raise RuntimeError("joint target deadline expired; completion unknown")
+                watchdog.check()
+                _require_choreography_authority(executor, arm)
+                if not result.accepted or not result.completed:
+                    raise RuntimeError("SDK joint target execution was not completed")
+                final = result.final_positions
+                if (not set(ARM_JOINTS) <= set(final)
+                        or any(not math.isfinite(final[joint]) for joint in ARM_JOINTS)
+                        or max(abs(final[joint] - target.joints_rad[index])
+                               for index, joint in enumerate(ARM_JOINTS)) > policy.max_start_error_rad):
+                    raise RuntimeError("SDK target completion is outside the reviewed choreography entry tolerance")
+                finished = True
+            return {
+                "mode": "simulation" if sim else "operator_attended_physical_trial",
+                "revision": start.revision, "name": start.name,
+                "robot_id": start.robot_id, "calibration_id": start.calibration_id,
+                "session_id": executor.session_id,
+                "status": "sdk_execution_completed_physical_settling_not_certified",
+                "preflight": start.report(),
+                "final_joint_positions_rad": dict(result.final_positions),
+            }
+        except BaseException as exc:
+            if not attempted:
+                raise
+            raise ChoreographyExecutionError(
+                exc, _stop_after_failure(executor, watchdog),
+            ) from exc
+        finally:
+            with finalize_lock:
+                finished = True
+            timer.cancel()
+
+
 def execute_trusted_choreography(
     executor: SDKAgentExecutor, watchdog: BrokerWatchdog,
     policy: ChoreographyPolicy, pattern: JointChoreography,
@@ -304,10 +543,10 @@ def execute_trusted_choreography(
             raise PermissionError("preexisting connected SDK session required")
         executor._assert_session_identity(arm)
         watchdog.check()
-        _require_replay_authority(executor, arm)
+        _require_choreography_authority(executor, arm)
         start = preflight_choreography(arm, pattern, policy, speed_scale=speed_scale)
         watchdog.check()
-        _require_replay_authority(executor, arm)
+        _require_choreography_authority(executor, arm)
         # Only simulator setup may enable torque; physical operator owns HOLD.
         sim = isinstance(arm.backend, SimulationBackend)
         arm_state = arm.get_state()
@@ -331,7 +570,7 @@ def execute_trusted_choreography(
         try:
             with watchdog._lock:
                 watchdog.check()
-                _require_replay_authority(executor, arm)
+                _require_choreography_authority(executor, arm)
                 # A partially failed torque change is still our cleanup duty.
                 attempted = True
                 if sim:
@@ -350,7 +589,7 @@ def execute_trusted_choreography(
                 if deadline_tripped.is_set():
                     raise RuntimeError("choreography deadline expired; completion unknown")
                 watchdog.check()
-                _require_replay_authority(executor, arm)
+                _require_choreography_authority(executor, arm)
                 if not result.accepted or not result.completed:
                     raise RuntimeError("SDK choreography execution was not completed")
                 finished = True

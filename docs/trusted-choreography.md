@@ -1,6 +1,6 @@
 # Trusted deterministic choreography capability (PR 3 of 5)
 
-**Status:** New SDK capability proposed on `agent/deterministic-choreography-execution`. It is not part of `main` until GitHub reports the PR merged. Hardware execution, independent STOP qualification, calibrated clearance and final three-robot demonstration are outstanding. See [Safety](safety.md), [Architecture](architecture.md) and [Motion Programs](programs.md).
+**Status:** Trusted choreography is available through the SDK's private host interface for supervised simulation and explicitly configured attended physical trials. Physical execution remains experimental: independent STOP qualification, calibrated clearance and final three-robot demonstration are outstanding. See [Safety](safety.md), [Architecture](architecture.md) and [Motion Programs](programs.md).
 
 ## Authority boundary
 
@@ -37,7 +37,9 @@ The separately authorized choreography path is reusable by a trusted *human-owne
 - `preflight_choreography(arm, pattern, policy, speed_scale=1)`: **read-only** complete-path preflight. It checks the current measured start, exact revision/robot/calibration, SDK health/stationarity, retimes/resamples via `Trajectory`, and runs the canonical controller's per-sample joint-speed/acceleration validation and SDK workspace validator. It cannot silently move into the pattern's first pose or auto-enable physical torque.
 - `execute_trusted_choreography(executor, watchdog, policy, pattern, speed_scale=1)`: requires an already-connected persistent `SDKAgentExecutor` and its **same** actively running `BrokerWatchdog`; no implicit device creation. Checks all identity, authority, lease, full path, and watchdog boundaries before motion. Calls the existing public `SOARM101.play_trajectory`, which performs a second fresh guarded preflight at execution, uses the SDK controller, and reports its outcome. It never opens another serial connection.
 
-For physical trials, additional requirements are: `physical_actions=True` established by the *trusted operator* at SDK executor construction, explicit policy `allow_physical_trial=True`, active human lease bound to the real calibration, existing operator-enabled torque HOLD, an active watchdog, current SDK workspace checks, and available physical STOP/power isolation. No automatic torque enable on real hardware. These are **necessary but not evidence of physical qualification**.
+For physical trials, additional requirements are: the existing broker started in `--sdk-physical-actions` mode by the *trusted operator*, explicit catalog policy `allow_physical_trial=true`, a separate trusted-host token, active human lease bound to the real calibration, existing operator-enabled torque HOLD, an active watchdog, current SDK workspace checks, and available physical STOP/power isolation. The ordinary agent capability table remains unchanged; `/v1/trusted/choreography` is dispatched only after trusted-host authentication and cannot be invoked through agent routes or the relay. No automatic torque enable, auto-connect/reconnect, or rearm is added by this feature. These are **necessary but not evidence of physical qualification**.
+
+To configure the broker, use its existing `--sdk-physical-actions`, explicit restricted `--profile`, and `--watchdog-timeout-s` options, then add `--trusted-choreography /absolute/path/to/catalog.json`. Set the environment variable named by `--trusted-host-token-env` to a token distinct from the general broker token. The selected robot file, calibration, live human lease, and torque HOLD remain operator-owned inputs. `--trusted-choreography` alone never selects physical mode, and a catalog without `allow_physical_trial: true` is rejected when physical mode is selected. Do not treat daemon startup or software preflight as a hardware qualification result.
 
 For software CI, only the existing `SimulationBackend` is used; simulation can enable virtual torque after successful preflight. The physical path remains a supervised experimental one, not the default agent broker.
 
@@ -48,6 +50,29 @@ An authored 20 Hz sinusoid, nod, shake, or transition can have movement exceedin
 The SDK's ordinary recorded playback historically writes gripper goals at every sample. PR 3 adds a **default-preserving** `joint_only=True` option at the canonical `SOARM101.play_trajectory` and `MotionController.play_trajectory` boundary, and expressive execution always selects it. The authored trajectory's constant gripper channel records the measured start but the joint-only executor **never writes any gripper goal**. Ordinary recording replay keeps the existing default gripper semantics.
 
 `preflight` and SDK completion are **not** proof of physical vertical direction, self-clearance in the real workspace, servo response, or a safety-rated emergency stop. The SDK's known history includes ~18.4° post-STOP elbow travel in an earlier physical trial. Keep hardware attended with readily accessible power isolation.
+
+## Measured-start pinned target
+
+`JointTarget` is a distinct immutable endpoint asset, hashed over its name,
+robot ID, calibration ID and exactly five arm-joint values. The trusted-host
+`preflight_joint_target` and `execute_trusted_joint_target` APIs use the same
+operator `ChoreographyPolicy` revision allowlist. Under the existing executor
+dispatch lock, the SDK measures the current arm state, validates the complete
+measured-start-to-target path with the normal planner and workspace checks,
+then executes through `SOARM101.play_trajectory(joint_only=True)`. It does not
+write the gripper or enable physical torque. Existing session, lease, active
+watchdog, STOP/HOLD, and physical-trial policy requirements remain in force.
+For this timestamp-free endpoint API, the reviewed `max_duration_s` remains the
+hard execution deadline and the SDK authors the measured path at one second
+less than that deadline. The unchanged linear interpolation is checked by the
+normal SDK speed, acceleration and workspace preflight; infeasible targets are
+rejected without retiming. A policy deadline of one second or less is therefore
+infeasible for joint targets.
+
+This API is not in the untrusted action fields, broker route table, robotctl,
+CLI or MCP. A higher-level host may expose only a fixed operator-selected
+target through its existing performer/runtime ownership. Simulation tests do
+not establish sensed neutral, physical settling, clearance or STOP quality.
 
 ## Interruption and failure
 
@@ -95,3 +120,17 @@ GitHub CI must run Python 3.10 and 3.12, full `uv run pytest`, Ruff, compilation
 - failure and STOP evidence with no autonomous retry.
 
 After all five software PRs, local Codex will validate the *actual* Overhead taught pose, verify modeled versus real +Z, supervise 0.1 Hz breathing and bounded wrist behaviors, capture encoder traces, verify STOP drift and any effects of the wobble/trajectory profile work, and certify only what the attended measurements support. Use exact merged SDK and Puppeteer SHAs in that handoff. Never issue an unattended hardware command as part of CI.
+
+## Private broker transport
+
+The broker accepts `--trusted-choreography catalog.json` with supervised
+`--sdk-simulation-actions` or explicitly selected `--sdk-physical-actions`.
+Physical mode additionally requires a restricted explicit broker profile and a
+catalog with `allow_physical_trial: true`. Set the environment variable named
+by `--trusted-host-token-env` to a token distinct from the regular broker
+token. The broker validates and pins the catalog and policy at startup. Its
+loopback `/v1/trusted/choreography` route accepts only `request_id`, exact
+`name`, and exact `revision`; `/v1/trusted/stop` accepts only `request_id`.
+Both routes require the separate host token and stay out of the general
+capability registry and agent relay. STOP ends the broker session's motion
+authority and requires operator reconciliation through a fresh session.

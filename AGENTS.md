@@ -46,6 +46,12 @@ OpenShell governs sandbox files/network/process access; it does **not** decide w
 
 ## Hardware and motion invariants
 
+- An operator may explicitly authorize the operator-only physical daemon's
+  `establish_hold_on_startup` option. After identity and health checks, the
+  existing SDK measured-position latch establishes torque HOLD under the
+  existing watchdog before readiness. This host startup option does not grant
+  agent arming, extend a lease, or permit automatic retry/rearm after failure.
+
 - Human arming is interactive, explicit, time-limited and calibration-bound. Sandboxes and agents cannot arm themselves, extend leases, reconfigure motors, load an unrestricted physical motion profile, or bypass authority.
 - The robot owns its servo connection. Do not open the same serial port from GUI, CLI and broker at once. Linux cooperative advisory locks cannot exclude legacy software that ignores them.
 - Saved poses, sequences and recordings use calibration provenance. Validate identity and full paths before motion; never replay stale or mismatched calibration data.

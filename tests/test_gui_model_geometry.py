@@ -67,6 +67,22 @@ def test_standard_views_hide_only_the_expected_depth_axis(view, preset, depth_ax
         )
 
 
+def test_standard_presets_keep_zoom_scale_and_world_orbit_center(view):
+    view._zoom = 1.6
+    view.grab()
+    scale = view._projection_scale * view._zoom
+    center = view._orbit_center_world.copy()
+    for preset in ("Front", "Top", "Isometric", "Side"):
+        view.set_standard_view(preset)
+        view.grab()
+        assert view._projection_scale * view._zoom == pytest.approx(scale)
+        assert view._project(center).x() == pytest.approx(view.width() * 0.5)
+        assert view._project(center).y() == pytest.approx(view.height() * 0.5 + 10.0)
+    view.fit_button.click()
+    view.grab()
+    assert view._zoom == pytest.approx(1.0)
+
+
 def test_sidebar_uses_active_session_tcp(view):
     from soarm101_motion.gui.arm_status import RobotStatusPanel
     from soarm101_motion.types import Pose
@@ -115,3 +131,52 @@ def test_worker_pose_and_drawing_share_one_joint_snapshot(view, monkeypatch):
         )
         assert payload["tcp_xyz_rpy"] == pytest.approx(arm.active_tcp.xyz_rpy())
         worker.arm = None
+
+
+@pytest.mark.parametrize('yaw,pitch', [(0., 0.), (0.7, 0.4), (-1.2, 1.57)])
+def test_mesh_projection_matches_joint_and_tcp_markers(view, yaw, pitch):
+    view._yaw, view._pitch = yaw, pitch
+    vertices = np.array([[[0., 0., 0.], [0.2, -0.1, 0.3], [-0.1, 0.2, 0.05]]])
+    xs, ys = view._project_vertices(vertices)
+    for index, vertex in enumerate(vertices[0]):
+        point = view._project(vertex)
+        assert xs[0, index] == pytest.approx(point.x())
+        assert ys[0, index] == pytest.approx(point.y())
+
+
+def test_overlapping_mesh_triangles_remain_opaque(view, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QImage, QPainter
+    import soarm101_motion.gui.cartesian_view as module
+
+    tri = np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.0, 0.0, 0.1]])
+    monkeypatch.setattr(module, 'world_triangles', lambda *a, **kw: [
+        (np.array([tri, tri[::-1]]), '3d_printed')
+    ])
+    view._yaw = view._pitch = 0.0
+    view._projection_center = (0.0, 0.0)
+    view._projection_scale = 1000.0
+    view._zoom = 1.0
+    view._mesh_image_key = None
+    image = QImage(view.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    view._draw_meshes(painter, view._joints, QColor('gray'), view._gripper_position)
+    painter.end()
+    point = view._project(np.array([0.025, 0.0, 0.025])).toPoint()
+    assert image.pixelColor(point).alpha() > 0
+
+
+def test_identical_feedback_does_not_restart_detail_timer(view):
+    from math import degrees
+
+    values = {name: degrees(value) for name, value in view._joints.items()}
+    view._restore_full_detail()
+    view.set_joint_degrees(values)
+    view.set_gripper_position(view._gripper_position)
+    assert not view._interactive_detail
+    assert not view._detail_timer.isActive()
+    values['shoulder_pan'] += 1.0
+    view.set_joint_degrees(values)
+    assert view._interactive_detail
+    assert view._detail_timer.isActive()

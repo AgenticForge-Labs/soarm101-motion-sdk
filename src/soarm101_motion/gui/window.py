@@ -21,14 +21,18 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QLayout,
     QListWidget,
     QMainWindow,
+    QMenu,
+    QWidgetAction,
     QMessageBox,
     QPushButton,
     QProgressBar,
     QToolButton,
     QScrollArea,
     QSlider,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -84,6 +88,9 @@ class MainWindow(QMainWindow):
     relax_requested = Signal()
     stop_requested = Signal()
     move_joints_requested = Signal(object)
+    live_manual_start_requested = Signal(object)
+    live_manual_stop_requested = Signal(object)
+    live_manual_heartbeat_requested = Signal()
     sleep_requested = Signal(object)
     jog_requested = Signal(object)
     absolute_pose_requested = Signal(object)
@@ -148,11 +155,16 @@ class MainWindow(QMainWindow):
             robot_id = self._workstation_profile.follower.robot_id
 
         self._connected = False
+        self._live_manual_active = False
+        self._live_manual_ready_state = False
+        self._live_manual_idle_targets: dict[str, float] | None = None
+        self._live_manual_session_id = 0
         self._follower_setup_session = False
         self._torque_enabled = False
         self._busy = False
         self._latest_state: dict[str, Any] | None = None
         self._joint_targets_initialized = False
+        self._joint_targets_refresh_pending = False
         self._last_joint_limits: dict[str, tuple[float, float]] | None = None
         self._leader_connected = False
         self._leader_torque_enabled = False
@@ -212,6 +224,17 @@ class MainWindow(QMainWindow):
         self.relax_requested.connect(self._worker.relax)
         self.stop_requested.connect(self._worker.stop)
         self.move_joints_requested.connect(self._worker.move_joints)
+        self.live_manual_start_requested.connect(self._worker.start_live_manual)
+        self.live_manual_stop_requested.connect(self._worker.stop_live_manual)
+        self.live_manual_heartbeat_requested.connect(self._worker.live_manual_heartbeat)
+        self._live_manual_heartbeat_timer = QTimer(self)
+        self._live_manual_heartbeat_timer.setInterval(500)
+        self._live_manual_heartbeat_timer.timeout.connect(
+            lambda: self._worker.live_manual_heartbeat({
+                "session_id": self._live_manual_session_id,
+                "timestamp": time.monotonic(),
+            })
+        )
         self.sleep_requested.connect(self._worker.move_sleep)
         self.jog_requested.connect(self._worker.jog_cartesian)
         self.absolute_pose_requested.connect(self._worker.move_absolute_pose)
@@ -238,6 +261,8 @@ class MainWindow(QMainWindow):
         self._worker.state_changed.connect(self._on_state)
         self._worker.joint_measurements.connect(self._on_follower_joint_measurements)
         self._worker.live_measurements.connect(self._on_follower_live_measurements)
+        self._worker.live_manual_ready.connect(self._on_live_manual_ready)
+        self._worker.live_manual_ended.connect(self._on_live_manual_ended)
         self._worker.connected_changed.connect(self._on_connected)
         self._worker.busy_changed.connect(self._on_busy)
         self._worker.log_message.connect(self._log)
@@ -365,7 +390,9 @@ class MainWindow(QMainWindow):
 
         self.setStyleSheet(
             f"""
-            QMainWindow, QWidget {{
+            QMainWindow,
+    QMenu,
+    QWidgetAction, QWidget {{
                 font-size: 14px;
             }}
             QGroupBox {{
@@ -929,6 +956,8 @@ class MainWindow(QMainWindow):
         self.walkthrough_label.setText(guides.get(self.tabs.tabText(self.tabs.currentIndex()), guides["Log"]))
 
     def _on_tab_changed(self, index: int) -> None:
+        if self.tabs.widget(index) is self.manual_page:
+            self._resize_manual_mode()
         self._refresh_walkthrough()
         if self.tabs.widget(index) is self.log_page:
             self.tabs.setTabText(index, "Log")
@@ -945,6 +974,8 @@ class MainWindow(QMainWindow):
         )
         panel.clear_secondary()
         page = self.tabs.currentWidget()
+        panel.context_label.setVisible(page is not self.manual_page)
+        panel.subtitle_label.setVisible(page is not self.manual_page)
 
         if page is self.calibration_page:
             self.sidebar_mode_label.setText("SETUP")
@@ -1089,7 +1120,7 @@ class MainWindow(QMainWindow):
         self.stop_button = QPushButton("STOP / HOLD")
         self.stop_button.setStyleSheet("font-weight: 800;")
         self.stop_button.setToolTip("Software stop only. Keep physical power accessible.")
-        self.stop_button.clicked.connect(lambda _checked=False: self.stop_requested.emit())
+        self.stop_button.clicked.connect(lambda _checked=False: self._request_stop())
 
         self.relax_button = QPushButton("Relax follower")
         self.relax_button.setToolTip("Disable servo torque.")
@@ -1379,22 +1410,41 @@ class MainWindow(QMainWindow):
     def _build_control_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(9)
-        layout.addWidget(self._build_coordination_panel())
         layout.addWidget(self._build_named_pose_controls())
 
         self.manual_mode_tabs = QTabWidget()
         self.manual_mode_tabs.addTab(self._build_joint_tab(), "Joint / angular")
         self.manual_mode_tabs.addTab(self._build_cartesian_tab(), "Cartesian")
-        layout.addWidget(self.manual_mode_tabs, 1)
+        self.manual_mode_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.manual_mode_tabs.currentChanged.connect(self._resize_manual_mode)
+        self._resize_manual_mode()
+        layout.addWidget(self.manual_mode_tabs)
 
-        # The gripper is a tool, not a sixth pose joint. Keep its controls visible
-        # below both angular and Cartesian modes so switching arm representations
-        # never hides the tool state or speed.
-        layout.addWidget(self._build_gripper_panel())
+        tools = QHBoxLayout()
+        tools.addWidget(self.joint_motion_panel, 1)
+        tools.addWidget(self._build_gripper_panel(), 2)
+        layout.addLayout(tools)
+        layout.addStretch(1)
+        self.manual_mode_tabs.currentChanged.connect(
+            lambda index: self.joint_motion_panel.setVisible(index == 0)
+        )
         self.manual_arm_panel = self.robot_sidebar
-        return page
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        return scroll
+
+    def _resize_manual_mode(self, _index: int = 0) -> None:
+        page = self.manual_mode_tabs.currentWidget()
+        for widget in (page, *page.findChildren(QWidget)):
+            widget.ensurePolished()
+        page.layout().invalidate()
+        self.manual_mode_tabs.setFixedHeight(
+            page.sizeHint().height() + self.manual_mode_tabs.tabBar().sizeHint().height() + 8
+        )
 
     def _build_coordination_panel(self) -> QGroupBox:
         box = QGroupBox("Leader / follower coordination")
@@ -1457,8 +1507,8 @@ class MainWindow(QMainWindow):
         grid.addWidget(hint, 3, 1)
         return box
 
-    def _build_named_pose_controls(self) -> QGroupBox:
-        box = QGroupBox("Standard poses")
+    def _build_named_pose_controls(self) -> QWidget:
+        box = QWidget()
         grid = QGridLayout(box)
         self.home_status = QLabel("Home: not saved")
         self.rest_status = QLabel("Rest: not saved")
@@ -1493,14 +1543,29 @@ class MainWindow(QMainWindow):
         self.go_sleep_button.clicked.connect(
             lambda _checked=False: self._go_sleep()
         )
-        grid.addWidget(self.home_status, 0, 0)
-        grid.addWidget(self.save_home_button, 0, 1)
-        grid.addWidget(self.go_home_button, 0, 2)
-        grid.addWidget(self.rest_status, 1, 0)
-        grid.addWidget(self.save_rest_button, 1, 1)
-        grid.addWidget(self.go_rest_button, 1, 2)
-        grid.addWidget(self.sleep_status, 2, 0, 1, 2)
-        grid.addWidget(self.go_sleep_button, 2, 2)
+        # Keep the guarded buttons themselves in the menu so enabled-state
+        # updates and calibration checks still use the existing controls.
+        menu = QMenu(box)
+        for button in (self.save_home_button, self.save_rest_button):
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(button)
+            menu.addAction(action)
+            button.clicked.connect(menu.close)
+        save = QToolButton()
+        save.setText("Save current as…")
+        save.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        save.setMenu(menu)
+        for column, control in enumerate((self.go_home_button, self.go_rest_button,
+                                          self.go_sleep_button, save)):
+            grid.addWidget(control, 0, column)
+        grid.setColumnStretch(4, 1)
+        for status in (self.home_status, self.rest_status, self.sleep_status):
+            status.setParent(box)
+            status.hide()
+        self.go_sleep_button.setToolTip(self.sleep_status.text())
+        grid.setContentsMargins(0, 0, 0, 0)
+        for button in (self.go_home_button, self.go_rest_button, self.go_sleep_button):
+            button.setStyleSheet("QPushButton { min-height: 20px; padding: 3px 10px; }")
         return box
 
     def _build_leader_connection(self) -> QWidget:
@@ -2997,7 +3062,7 @@ class MainWindow(QMainWindow):
         run_grid.addWidget(self.pause_sequence_button, 1, 4)
         self.stop_sequence_button = QPushButton("STOP / HOLD")
         self.stop_sequence_button.clicked.connect(
-            lambda _checked=False: self.stop_requested.emit()
+            lambda _checked=False: self._request_stop()
         )
         run_grid.addWidget(self.stop_sequence_button, 1, 5)
         self.sequence_status = QLabel("No program running")
@@ -3020,7 +3085,6 @@ class MainWindow(QMainWindow):
         self.edit_joint_targets_check.toggled.connect(self._on_edit_joint_targets)
         layout.addWidget(self.edit_joint_targets_check)
         box = QGroupBox("Absolute joint targets")
-        box.setMaximumWidth(700)
         grid = QGridLayout(box)
         grid.addWidget(QLabel("Joint"), 0, 0)
         grid.addWidget(QLabel("Target"), 0, 1)
@@ -3041,7 +3105,8 @@ class MainWindow(QMainWindow):
             slider.setRange(round(lower_deg * 10), round(upper_deg * 10))
             slider.setSingleStep(1)
             slider.setPageStep(10)
-            slider.setMaximumWidth(270)
+            slider.setMinimumWidth(180)
+            spin_width = 110
             spin = self._spin(
                 lower_deg,
                 upper_deg,
@@ -3052,7 +3117,7 @@ class MainWindow(QMainWindow):
             )
             actual = QLabel("—")
             actual.setMinimumWidth(75)
-            spin.setMinimumWidth(95)
+            spin.setFixedWidth(spin_width)
 
             slider.valueChanged.connect(
                 lambda value, control=spin: self._sync_slider_to_spin(value, control)
@@ -3060,6 +3125,8 @@ class MainWindow(QMainWindow):
             spin.valueChanged.connect(
                 lambda value, control=slider: self._sync_spin_to_slider(value, control)
             )
+            slider.valueChanged.connect(lambda _value, joint=name: self._submit_live_manual_target(joint))
+            spin.valueChanged.connect(lambda _value, joint=name: self._submit_live_manual_target(joint))
 
             self.joint_sliders[name] = slider
             self.joint_spins[name] = spin
@@ -3068,24 +3135,185 @@ class MainWindow(QMainWindow):
             grid.addWidget(slider, row, 2)
             grid.addWidget(actual, row, 3)
 
-        layout.addWidget(box, alignment=Qt.AlignmentFlag.AlignLeft)
+        grid.setColumnStretch(2, 1)
+        layout.addWidget(box)
 
         motion = QGroupBox("Joint motion")
         form = QFormLayout(motion)
-        self.joint_speed = self._spin(0.5, 57.0, 8.0, decimals=1, step=1.0, suffix=" °/s")
+        self.joint_speed_preset = QComboBox()
+        for label, key in (("Slow · 10°/s · 100°/s²", "slow"),
+                           ("Medium · 50°/s · 500°/s²", "medium"),
+                           ("Fast · 100°/s · 1000°/s²", "fast"),
+                           ("Custom", "custom")):
+            self.joint_speed_preset.addItem(label, key)
+        self.joint_speed_preset.setCurrentIndex(0)
+        self.joint_speed = self._spin(0.5, 100.0, 10.0, decimals=1, step=1.0, suffix=" °/s")
         self.joint_acceleration = self._spin(
-            1.0, 286.0, 25.0, decimals=1, step=5.0, suffix=" °/s²"
+            1.0, 1000.0, 100.0, decimals=1, step=5.0, suffix=" °/s²"
         )
+        self.joint_speed_preset.currentIndexChanged.connect(self._on_joint_speed_preset)
+        self.joint_speed.valueChanged.connect(self._mark_joint_rate_custom)
+        self.joint_acceleration.valueChanged.connect(self._mark_joint_rate_custom)
+        form.addRow("Rate preset", self.joint_speed_preset)
         form.addRow("Speed", self.joint_speed)
         form.addRow("Acceleration", self.joint_acceleration)
+        self.live_manual_check = QCheckBox("Live Manual · stream targets while editing")
+        self.live_manual_check.setToolTip(
+            "Off by default. Requires a connected, ready follower already holding torque. "
+            "Slider and numeric edits replace the single pending target. Disable or STOP to HOLD."
+        )
+        self.live_manual_check.toggled.connect(self._toggle_live_manual)
+        form.addRow(self.live_manual_check)
         self.move_joints_button = QPushButton("Move to joint targets")
         self.move_joints_button.clicked.connect(self._move_joints)
         form.addRow(self.move_joints_button)
-        layout.addWidget(motion)
+        self.joint_speed.setMaximumWidth(150)
+        self.joint_acceleration.setMaximumWidth(150)
+        self.joint_motion_panel = motion
         layout.addStretch(1)
         return page
 
+    def _on_joint_speed_preset(self, _index: int) -> None:
+        preset = self.joint_speed_preset.currentData()
+        values = {"slow": (10.0, 100.0), "medium": (50.0, 500.0),
+                  "fast": (100.0, 1000.0)}
+        if preset not in values:
+            return
+        speed, acceleration = values[preset]
+        if speed > self.joint_speed.maximum() or acceleration > self.joint_acceleration.maximum():
+            self.joint_speed_preset.blockSignals(True)
+            self.joint_speed_preset.setCurrentIndex(self.joint_speed_preset.findData("custom"))
+            self.joint_speed_preset.blockSignals(False)
+            self._log("Selected rate preset exceeds this session's configured limits.")
+            return
+        self.joint_speed.blockSignals(True)
+        self.joint_acceleration.blockSignals(True)
+        self.joint_speed.setValue(speed)
+        self.joint_acceleration.setValue(acceleration)
+        self.joint_speed.blockSignals(False)
+        self.joint_acceleration.blockSignals(False)
+
+    def _mark_joint_rate_custom(self, _value: float) -> None:
+        if self.joint_speed_preset.currentData() != "custom":
+            self.joint_speed_preset.blockSignals(True)
+            self.joint_speed_preset.setCurrentIndex(
+                self.joint_speed_preset.findData("custom")
+            )
+            self.joint_speed_preset.blockSignals(False)
+
+    def _toggle_live_manual(self, enabled: bool) -> None:
+        if enabled:
+            if not self._connected or not self._torque_enabled or self._busy:
+                self.live_manual_check.blockSignals(True)
+                self.live_manual_check.setChecked(False)
+                self.live_manual_check.blockSignals(False)
+                self._log("Live Manual requires a connected, ready follower holding torque with no active motion.")
+                return
+            self._live_manual_active = True
+            self._live_manual_session_id += 1
+            self._live_manual_idle_targets = {
+                name: self.joint_spins[name].value() for name in ARM_JOINTS
+            }
+            self._joint_targets_refresh_pending = False
+            self._live_manual_heartbeat_timer.start()
+            self.edit_joint_targets_check.setChecked(True)
+            self.live_manual_start_requested.emit({
+                "session_id": self._live_manual_session_id,
+                "speed_deg_s": self.joint_speed.value(),
+                "acceleration_deg_s2": self.joint_acceleration.value(),
+                "gripper_speed_multiplier": self._gripper_speed_multiplier,
+            })
+            self.move_joints_button.setEnabled(False)
+        else:
+            if self._live_manual_active:
+                self._live_manual_active = False
+                self._live_manual_ready_state = False
+                self._live_manual_heartbeat_timer.stop()
+                self.live_manual_stop_requested.emit(self._live_manual_session_id)
+                self._joint_targets_refresh_pending = True
+            self._update_enabled_state()
+
+    @Slot(object)
+    def _on_live_manual_ready(self, joints: object) -> None:
+        if not self._live_manual_active:
+            return
+        payload = dict(joints)  # type: ignore[arg-type]
+        if int(payload.get("session_id", self._live_manual_session_id)) != self._live_manual_session_id:
+            return
+        values = dict(payload.get("joints_deg", payload))
+        for name in ARM_JOINTS:
+            spin, slider = self.joint_spins[name], self.joint_sliders[name]
+            spin.blockSignals(True)
+            slider.blockSignals(True)
+            spin.setValue(float(values[name]))
+            slider.setValue(round(float(values[name]) * 10.0))
+            spin.blockSignals(False)
+            slider.blockSignals(False)
+        if "gripper" in payload:
+            self._set_gripper_spin(float(payload["gripper"]))
+            self._set_gripper_slider(float(payload["gripper"]))
+        self._live_manual_ready_state = True
+        self._update_enabled_state()
+
+    @Slot(object)
+    def _on_live_manual_ended(self, joints: object) -> None:
+        payload = dict(joints) if joints else {}
+        if int(payload.get("session_id", self._live_manual_session_id)) != self._live_manual_session_id:
+            return
+        self._live_manual_active = False
+        self._live_manual_ready_state = False
+        self._live_manual_heartbeat_timer.stop()
+        self.live_manual_check.blockSignals(True)
+        self.live_manual_check.setChecked(False)
+        self.live_manual_check.blockSignals(False)
+        if "joints_deg" in payload:
+            measured = dict(payload.get("joints_deg") or {})
+            moved = bool(payload.get("moved", True))
+        else:  # compatibility for direct signal calls in UI clients/tests
+            measured = payload
+            moved = True
+        if measured:
+            self._joint_targets_refresh_pending = False
+            for name in ARM_JOINTS:
+                value = float(measured[name])
+                if not moved and self._live_manual_idle_targets is not None:
+                    value = float(self._live_manual_idle_targets[name])
+                self.joint_spins[name].blockSignals(True)
+                self.joint_sliders[name].blockSignals(True)
+                self.joint_spins[name].setValue(value)
+                self.joint_sliders[name].setValue(round(value * 10.0))
+                self.joint_spins[name].blockSignals(False)
+                self.joint_sliders[name].blockSignals(False)
+        if "gripper" in payload:
+            self._set_gripper_spin(float(payload["gripper"]))
+            self._set_gripper_slider(float(payload["gripper"]))
+        else:
+            self._joint_targets_refresh_pending = True
+        self._live_manual_idle_targets = None
+        self._update_enabled_state()
+
+    def _request_stop(self) -> None:
+        if self._live_manual_active:
+            self.live_manual_check.setChecked(False)
+        self.stop_requested.emit()
+
+    def _submit_live_manual_target(self, field: str | None = None) -> None:
+        if self._live_manual_active and self._live_manual_ready_state:
+            payload: dict[str, float] = {"session_id": float(self._live_manual_session_id)}
+            if field in ARM_JOINTS:
+                payload[field] = self.joint_spins[field].value()
+            elif field == "gripper":
+                payload["gripper"] = self.gripper_spin.value()
+            else:
+                return
+            self._worker.publish_live_manual_target(payload)
+
     def _on_edit_joint_targets(self, editing: bool) -> None:
+        if self._live_manual_active and not editing:
+            self.edit_joint_targets_check.blockSignals(True)
+            self.edit_joint_targets_check.setChecked(True)
+            self.edit_joint_targets_check.blockSignals(False)
+            return
         if not editing:
             self._load_current_targets()
         self._update_enabled_state()
@@ -3226,9 +3454,15 @@ class MainWindow(QMainWindow):
         self.gripper_spin.valueChanged.connect(
             lambda value: self._set_gripper_slider(value)
         )
-        grid.addWidget(QLabel("Target · 0 closed · 1 open"), 0, 0)
+        self.gripper_slider.valueChanged.connect(lambda _value: self._submit_live_manual_target("gripper"))
+        self.gripper_spin.valueChanged.connect(lambda _value: self._submit_live_manual_target("gripper"))
+        target_label = QLabel("Target")
+        target_label.setToolTip("0 closed · 1 open")
+        grid.addWidget(target_label, 0, 0)
         grid.addWidget(self.gripper_spin, 0, 1)
-        grid.addWidget(self.gripper_slider, 0, 2, 1, 3)
+        grid.addWidget(self.gripper_slider, 0, 2)
+        self.gripper_spin.setMaximumWidth(110)
+        grid.setColumnStretch(2, 1)
 
         grid.addWidget(QLabel("Speed"), 1, 0)
         self.manual_gripper_speed_combo = self._new_gripper_speed_combo()
@@ -3244,9 +3478,12 @@ class MainWindow(QMainWindow):
         )
         self.open_gripper_button = QPushButton("Open")
         self.open_gripper_button.clicked.connect(lambda: self._request_gripper(1.0))
-        grid.addWidget(self.close_gripper_button, 1, 3)
-        grid.addWidget(self.move_gripper_button, 1, 4)
-        grid.addWidget(self.open_gripper_button, 1, 5)
+        grid.addWidget(self.close_gripper_button, 2, 0)
+        grid.addWidget(self.move_gripper_button, 2, 1)
+        grid.addWidget(self.open_gripper_button, 2, 2)
+        self._manual_gripper_buttons = (
+            self.close_gripper_button, self.move_gripper_button, self.open_gripper_button
+        )
         return box
 
     def _new_gripper_speed_combo(self) -> QComboBox:
@@ -5605,11 +5842,18 @@ class MainWindow(QMainWindow):
         self._follower_connecting = False
         self._connected = connected
         if not connected:
+            self._live_manual_heartbeat_timer.stop()
+            self._live_manual_active = False
+            if hasattr(self, "live_manual_check"):
+                self.live_manual_check.blockSignals(True)
+                self.live_manual_check.setChecked(False)
+                self.live_manual_check.blockSignals(False)
             self._latest_state = None
             self._follower_setup_session = False
             self._torque_enabled = False
             self._busy = False
             self._joint_targets_initialized = False
+            self._joint_targets_refresh_pending = False
             self.edit_joint_targets_check.setChecked(False)
             self._latest_effort_status = {"supported": False}
             self._effort_controls_initialized = False
@@ -5629,6 +5873,10 @@ class MainWindow(QMainWindow):
         self._update_enabled_state()
 
     def _on_busy(self, busy: bool) -> None:
+        if busy and not self._live_manual_active:
+            # Wait for the post-motion measured state, not a cached or commanded
+            # pose. This also covers recalled poses, Cartesian moves and STOP.
+            self._joint_targets_refresh_pending = True
         self._busy = busy
         if self._latest_state is not None and hasattr(self, "robot_sidebar"):
             live = dict(self._latest_state)
@@ -5718,6 +5966,28 @@ class MainWindow(QMainWindow):
         self._latest_state = values
         self._connected = bool(values["connected"])
         self._torque_enabled = bool(values["torque_enabled"])
+        if hasattr(self, "joint_speed"):
+            speed_max = max(0.01, float(values.get("stream_joint_speed_limit_deg_s", 57.0)))
+            accel_max = max(0.01, float(values.get("stream_joint_acceleration_limit_deg_s2", 286.0)))
+            self.joint_speed.setMinimum(min(0.5, speed_max))
+            self.joint_speed.setMaximum(speed_max)
+            self.joint_acceleration.setMinimum(min(1.0, accel_max))
+            self.joint_acceleration.setMaximum(accel_max)
+            for index, (speed, accel) in enumerate(((10.0, 100.0), (50.0, 500.0), (100.0, 1000.0))):
+                model_item = self.joint_speed_preset.model().item(index)
+                if model_item is not None:
+                    model_item.setEnabled(speed <= speed_max and accel <= accel_max)
+                    model_item.setToolTip(
+                        "" if speed <= speed_max and accel <= accel_max
+                        else "Exceeds this session's configured stream limits"
+                    )
+            selected_item = self.joint_speed_preset.model().item(
+                self.joint_speed_preset.currentIndex()
+            )
+            if selected_item is not None and not selected_item.isEnabled():
+                self.joint_speed_preset.setCurrentIndex(
+                    self.joint_speed_preset.findData("custom")
+                )
         if values.get("joint_limits_deg"):
             self._apply_joint_limits(dict(values["joint_limits_deg"]))
         moving = bool(values["moving"]) or self._busy
@@ -5739,8 +6009,11 @@ class MainWindow(QMainWindow):
         gripper = float(values["gripper"])
         self.gripper_measured.setText(f"Measured: {gripper:.3f}")
 
-        if not self.edit_joint_targets_check.isChecked():
+        refresh_targets = self._joint_targets_refresh_pending and not moving
+        if refresh_targets or not self.edit_joint_targets_check.isChecked():
             self._load_current_targets()
+        if refresh_targets:
+            self._joint_targets_refresh_pending = False
 
         if faulted:
             status = f"FAULT: {values.get('fault_message') or 'unknown motor fault'}"
@@ -5944,10 +6217,22 @@ class MainWindow(QMainWindow):
         self.relax_button.setEnabled(can_relax)
         self.sidebar_relax_button.setEnabled(can_relax)
         self.stop_button.setEnabled(self._connected)
-        self.edit_joint_targets_check.setEnabled(self._connected and not self._busy)
+        self.edit_joint_targets_check.setEnabled(
+            self._connected and not self._busy and not self._live_manual_active
+        )
+        self.joint_speed_preset.setEnabled(not self._live_manual_active)
+        self.joint_speed.setEnabled(not self._live_manual_active)
+        self.joint_acceleration.setEnabled(not self._live_manual_active)
+        gripper_live_edit = self._live_manual_active and self._live_manual_ready_state
+        self.gripper_slider.setEnabled(gripper_live_edit or (self._connected and not self._busy))
+        self.gripper_spin.setEnabled(gripper_live_edit or (self._connected and not self._busy))
+        self.manual_gripper_speed_combo.setEnabled(not self._live_manual_active)
+        for button in self._manual_gripper_buttons:
+            button.setEnabled(self._connected and not self._busy and not self._live_manual_active)
         for control in (*self.joint_sliders.values(), *self.joint_spins.values()):
             control.setEnabled(self._connected and self.edit_joint_targets_check.isChecked()
-                               and not self._busy)
+                               and (not self._busy or self._live_manual_active)
+                               and not self._joint_targets_refresh_pending)
 
         motion_ready = (
             self._connected
@@ -5956,7 +6241,14 @@ class MainWindow(QMainWindow):
         )
         can_move = motion_ready and not self._busy
         can_jog = motion_ready and (not self._busy or self._cartesian_jog_active)
-        self.move_joints_button.setEnabled(can_move and self.edit_joint_targets_check.isChecked())
+        self.move_joints_button.setEnabled(
+            can_move and self.edit_joint_targets_check.isChecked()
+            and not self._joint_targets_refresh_pending and not self._live_manual_active
+        )
+        self.live_manual_check.setEnabled(
+            self._connected and (not self._busy or self._live_manual_active)
+            and (self._torque_enabled or self._live_manual_active)
+        )
         self.absolute_move_button.setEnabled(can_move)
         self.use_current_pose_button.setEnabled(self._connected and not self._busy)
         for button in self.jog_buttons:
@@ -6204,6 +6496,7 @@ class MainWindow(QMainWindow):
                     + self._teleop_error
                 )
                 self._set_status_banner_notice(prominent, level="error")
+            self._update_enabled_state()
             self._update_enabled_state()
         self.statusBar().showMessage(self.alert_label.text(), 8000)
         if "calibration:" in message.lower():

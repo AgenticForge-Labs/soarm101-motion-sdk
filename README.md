@@ -51,6 +51,13 @@ watchdog; software simulation does **not** establish physical safety.
 See [Trusted choreography](docs/trusted-choreography.md) for the exact
 contract, restrictions and future local hardware acceptance plan.
 
+The same trusted-host boundary also exposes a fixed `JointTarget` operation
+for an operator-pinned five-joint endpoint when the measured starting pose is
+not authored in advance. It plans from measured start under the existing
+dispatch lock and is not an agent/broker route. Physical execution retains the
+existing authority, lease, watchdog and operator torque HOLD requirements;
+the SDK never enables physical torque for this operation.
+
 ## NVIDIA OpenShell and agentic robotics
 
 The Motion SDK integrates with [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell), an open-source runtime that isolates AI agents and governs their filesystem and network access. This lets developers explore **agent-driven robot workflows** without handing a language model raw servo access or unrestricted control of the host workstation. OpenShell handles sandbox isolation; the Motion SDK provides the trusted, robot-specific execution boundary.
@@ -82,6 +89,11 @@ An agent can inspect live state and allowed camera observations, decide which *a
 
 The SDK packages **Hermes and Codex sandbox adapters** and `robotctl` (MCP is supplied by optional Forge Puppeteer), human-pinned capability profiles, and a self-contained `soarm101 agent sandbox` workflow. Agent tool discovery does not create authority: physical motion requires a separate operator-issued lease and all motion requests remain subject to SDK validation. Host-supervisor STOP is executed outside the agent at teardown; it is not a safety-rated emergency stop.
 
+For local client development, `soarm101-sim-daemon start/status/stop` manages
+one long-running, loopback-only SDK simulation session with a host-managed
+watchdog heartbeat. It creates no physical lease or hardware access. See the
+[local simulation daemon guide](docs/local-simulation-daemon.md).
+
 **Current boundary:** OpenShell supports persistent native-SDK simulation and an explicit **experimental, attended physical joint mode** (`--sdk-physical`). The physical mode uses the workstation follower, a pinned profile, existing human authority and torque HOLD, separate agent/supervisor tokens, and a broker-owned heartbeat watchdog. Joint steps are capped at 2° (the example profile uses 1°), speed at 8°/s and acceleration at 25°/s². Saved poses, gripper and Cartesian actions remain outside this experimental mode. The default physical broker remains CLI-backed. Hardware watchdog qualification and production cutover remain outstanding.
 
 See [Agent sandbox](docs/agent-sandbox.md), [MCP](docs/agent-mcp.md), and [Agent broker](docs/agent-broker.md) for supported modes, setup and safety restrictions.
@@ -92,6 +104,8 @@ See [Agent sandbox](docs/agent-sandbox.md), [MCP](docs/agent-mcp.md), and [Agent
 - **Control joints and tool position.** Read measured joint state, use forward/inverse kinematics, plan joint-space and Cartesian movements, and operate the stock gripper through guarded SDK operations.
 - **Teach and repeat tasks.** Save named positions, record and edit trajectories, and build deterministic programs with Move, gripper, and Wait steps. You do not need an AI agent to automate a repeatable task.
 - **Use a desktop GUI.** Work with Setup, Manual control, Teleoperation, Teach/Record, recorded-motion editing, and Programs. A persistent follower sidebar displays measured state and STOP/HOLD controls.
+
+- The Manual workspace includes a large, interactive 3D SO-101 mesh viewer fitted to a deterministic sample of the full SDK joint range. Manual joint rates offer 10°/s · 100°/s², 50°/s · 500°/s², 100°/s · 1000°/s², and Custom (presets outside the configured envelope are unavailable). Optional Live Manual streams bounded slider/numeric targets through the guarded joint-stream API; it is off by default and requires the operator to enable torque first. See [GUI mesh viewer and Live Manual](docs/gui-live-manual.md) for source attribution, limits, and shutdown behavior.
 - **Observe with USB cameras.** Configure named cameras such as `overhead` and `wrist`, preview them in the GUI, and capture still frames from the CLI and constrained agent interfaces.
 - **Develop in Python or from the terminal.** The GUI, CLI, and Python SDK share motion, calibration, and saved-artifact foundations rather than implementing separate controllers.
 - **Experiment with constrained agents.** An authenticated broker, bounded CLI, optional MCP adapter, and OpenShell sandbox integrations support agent workflows without granting unrestricted serial/motor access.
@@ -165,6 +179,8 @@ soarm101 smoke-test --port /dev/ttyACM0 --robot-id so101 --joint shoulder_pan
 ## Everyday workflows
 
 ### Desktop GUI
+
+The Manual workspace keeps joint targets above side-by-side motion and gripper controls. After motion ends, joint targets refresh from measured feedback even when editing is enabled; idle updates preserve unsubmitted edits. Home, Rest and Sleep use a compact toolbar; its “Save current as…” menu stores named poses. Leader/follower coordination is in Teleoperation. Expand “Joint and tool telemetry” in the robot sidebar for detailed measurements.
 
 Run `soarm101-gui` and use the tabs to progress from guided setup and manual joint/Cartesian motion to leader–follower teleoperation, taught poses, trajectories, and reusable programs.
 
