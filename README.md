@@ -1,8 +1,12 @@
+![Ink illustration of an SO-ARM101 robot arm with motion paths, kinematics sketches, and a connected computer](docs/images/soarm101-header.webp)
+
 # SO-ARM101 Motion SDK
 
-**Learn, teach, program, and automate a SO-ARM101 robot arm with Python.**
+**Control SO-ARM101 from AI agents through a standard MCP interface with [Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer), or use this SDK directly to learn, teach, program, and automate the arm.**
 
-The SO-ARM101 Motion SDK is a Python-first toolkit for low-cost desktop robotics. It combines a shared motion-control library, command-line tools, a PySide6 desktop GUI, local USB-camera support, simulation, and constrained interfaces for higher-level agents.
+Puppeteer offers MCP tool calls for supported native robot capabilities and shared behaviors, actions, and emotions across open-source robots. Inspired by [Reachy Mini](https://github.com/pollen-robotics/reachy_mini) and the [Reachy Mini Conversation App](https://github.com/pollen-robotics/reachy_mini_conversation_app), it generalizes conversational robot performance across devices. Tool availability depends on the selected server, configuration and operator grants; the SO-ARM101's physical controls remain subject to this SDK's own validation and authority.
+
+The SO-ARM101 Motion SDK is a Python-first toolkit for desktop robotics. It brings together deterministic motion control, calibration, teaching and replay, a command-line interface, a PySide6 desktop GUI, local USB cameras, simulation, and constrained interfaces for higher-level applications.
 
 **Connect → calibrate → move → teach → program → automate.**
 
@@ -10,93 +14,11 @@ The SO-ARM101 Motion SDK is a Python-first toolkit for low-cost desktop robotics
 
 > **Hardware safety:** This is experimental software for an educational/hobby arm, not a safety-rated industrial controller. Never rely on software STOP/HOLD as an emergency stop. Keep a physical power cutoff within reach, start without a payload, and supervise initial motion. Read [Safety](docs/safety.md) and the [physical-run procedure](docs/physical-run.md) before moving hardware.
 
-## SDK independence and Puppeteer MCP migration
+## Working with Forge Puppeteer
 
-The SO-ARM101 Motion SDK is independently useful through Python, CLI,
-GUI, simulation and its authenticated trusted broker; **Puppeteer is not
-required**. We are consolidating robot-to-MCP registration and agent-facing
-MCP guidance into the standalone
-[Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer)
-project, where users can choose a lightweight MCP-only mode without
-Platform or Studio.
+The SDK works independently through Python, the CLI, GUI, simulation and its trusted broker. [Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer) is an optional performance and MCP layer that can coordinate the arm with other robots. The SDK and its trusted broker retain control over calibration, physical motion, device limits, leases, STOP/HOLD and execution records. Connecting an agent or discovering a tool does not grant permission to move.
 
-**Source cleanup in progress:** Puppet-owned MCP implementation is merged
-in Forge Puppeteer PRs #4–#6. This SDK cleanup branch removes the old
-`soarm101-mcp` entrypoint and delegates optional OpenShell MCP
-client packaging to Puppeteer. **Local installed-wheel/OpenShell
-acceptance is not yet complete.** The native SDK and its trusted
-broker remain independently usable; do not deploy this cleanup
-until the cross-repository canaries pass. See
-[the migration record](docs/puppeteer-mcp-migration.md).
-
-## Trusted deterministic joint choreography (PR 3/5)
-
-The native SDK adds `JointChoreography`, a content-hashed, finite
-five-joint trajectory contract; `ChoreographyPolicy` for operator-pinned
-segments, robot/calibration identity and rate ceilings; and read-only
-`preflight_choreography` plus a separately supervised
-`execute_trusted_choreography` entry point. These reuse the current
-planner, workspace checks, SDK motion controller and trusted-host
-broker watchdog, **not** a new agent-as-policy endpoint.
-
-A higher-level performer library such as Forge Puppeteer owns expressive
-behaviors (idle/listen/speak/nod/shake) and when to repeat them. **4G** is a
-Conversationalist LLM personality, never a hard-coded robot motion profile.
-The SDK stays usable alone with Python, CLI and GUI; it does not depend on
-Puppeteer, Conversationalist or Platform. The existing untrusted small
-agent jog limits remain unchanged. Physical choreography needs explicit
-operator qualification, human lease, existing torque HOLD and an independent
-watchdog; software simulation does **not** establish physical safety.
-
-See [Trusted choreography](docs/trusted-choreography.md) for the exact
-contract, restrictions and future local hardware acceptance plan.
-
-The same trusted-host boundary also exposes a fixed `JointTarget` operation
-for an operator-pinned five-joint endpoint when the measured starting pose is
-not authored in advance. It plans from measured start under the existing
-dispatch lock and is not an agent/broker route. Physical execution retains the
-existing authority, lease, watchdog and operator torque HOLD requirements;
-the SDK never enables physical torque for this operation.
-
-## NVIDIA OpenShell and agentic robotics
-
-The Motion SDK integrates with [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell), an open-source runtime that isolates AI agents and governs their filesystem and network access. This lets developers explore **agent-driven robot workflows** without handing a language model raw servo access or unrestricted control of the host workstation. OpenShell handles sandbox isolation; the Motion SDK provides the trusted, robot-specific execution boundary.
-
-```text
-Human operator: configures policy, approves capabilities, arms when appropriate
-                 |
-                 v
-Hermes / Codex / other supported agent (reasoning, planning, camera interpretation)
-                 |
-                 v
-NVIDIA OpenShell sandbox (isolated agent, scoped files and network)
-                 |
-        robotctl or Puppeteer MCP client (optional)
-                 |
-                 v
-Authenticated host broker (pinned capabilities, lease, audit, lifecycle)
-                 |
-         bounded agent CLI on the physical path
-                 |
-                 v
-SO-ARM101 Motion SDK (calibration, trajectories, rate and fault checks)
-                 |
-                 v
-SO-ARM101 robot + named USB cameras
-```
-
-An agent can inspect live state and allowed camera observations, decide which *approved* saved pose or bounded motion to request, observe the result, and iterate. Manual and agent-driven tasks ultimately use the same deterministic SDK operations. The broker does not expose arbitrary motor register writes, raw serial devices, or an unrestricted Python interpreter on the robot host.
-
-The SDK packages **Hermes and Codex sandbox adapters** and `robotctl` (MCP is supplied by optional Forge Puppeteer), human-pinned capability profiles, and a self-contained `soarm101 agent sandbox` workflow. Agent tool discovery does not create authority: physical motion requires a separate operator-issued lease and all motion requests remain subject to SDK validation. Host-supervisor STOP is executed outside the agent at teardown; it is not a safety-rated emergency stop.
-
-For local client development, `soarm101-sim-daemon start/status/stop` manages
-one long-running, loopback-only SDK simulation session with a host-managed
-watchdog heartbeat. It creates no physical lease or hardware access. See the
-[local simulation daemon guide](docs/local-simulation-daemon.md).
-
-**Current boundary:** OpenShell supports persistent native-SDK simulation and an explicit **experimental, attended physical joint mode** (`--sdk-physical`). The physical mode uses the workstation follower, a pinned profile, existing human authority and torque HOLD, separate agent/supervisor tokens, and a broker-owned heartbeat watchdog. Joint steps are capped at 2° (the example profile uses 1°), speed at 8°/s and acceleration at 25°/s². Saved poses, gripper and Cartesian actions remain outside this experimental mode. The default physical broker remains CLI-backed. Hardware watchdog qualification and production cutover remain outstanding.
-
-See [Agent sandbox](docs/agent-sandbox.md), [MCP](docs/agent-mcp.md), and [Agent broker](docs/agent-broker.md) for supported modes, setup and safety restrictions.
+For implementation history and current qualification priorities, see [STATUS.md](STATUS.md) and [PLAN.md](PLAN.md).
 
 ## What you can do
 
@@ -104,8 +26,6 @@ See [Agent sandbox](docs/agent-sandbox.md), [MCP](docs/agent-mcp.md), and [Agent
 - **Control joints and tool position.** Read measured joint state, use forward/inverse kinematics, plan joint-space and Cartesian movements, and operate the stock gripper through guarded SDK operations.
 - **Teach and repeat tasks.** Save named positions, record and edit trajectories, and build deterministic programs with Move, gripper, and Wait steps. You do not need an AI agent to automate a repeatable task.
 - **Use a desktop GUI.** Work with Setup, Manual control, Teleoperation, Teach/Record, recorded-motion editing, and Programs. A persistent follower sidebar displays measured state and STOP/HOLD controls.
-
-- The Manual workspace includes a large, interactive 3D SO-101 mesh viewer fitted to a deterministic sample of the full SDK joint range. Manual joint rates offer 10°/s · 100°/s², 50°/s · 500°/s², 100°/s · 1000°/s², and Custom (presets outside the configured envelope are unavailable). Optional Live Manual streams bounded slider/numeric targets through the guarded joint-stream API; it is off by default and requires the operator to enable torque first. See [GUI mesh viewer and Live Manual](docs/gui-live-manual.md) for source attribution, limits, and shutdown behavior.
 - **Observe with USB cameras.** Configure named cameras such as `overhead` and `wrist`, preview them in the GUI, and capture still frames from the CLI and constrained agent interfaces.
 - **Develop in Python or from the terminal.** The GUI, CLI, and Python SDK share motion, calibration, and saved-artifact foundations rather than implementing separate controllers.
 - **Experiment with constrained agents.** An authenticated broker, bounded CLI, optional MCP adapter, and OpenShell sandbox integrations support agent workflows without granting unrestricted serial/motor access.
@@ -179,8 +99,6 @@ soarm101 smoke-test --port /dev/ttyACM0 --robot-id so101 --joint shoulder_pan
 ## Everyday workflows
 
 ### Desktop GUI
-
-The Manual workspace keeps joint targets above side-by-side motion and gripper controls. After motion ends, joint targets refresh from measured feedback even when editing is enabled; idle updates preserve unsubmitted edits. Home, Rest and Sleep use a compact toolbar; its “Save current as…” menu stores named poses. Leader/follower coordination is in Teleoperation. Expand “Joint and tool telemetry” in the robot sidebar for detailed measurements.
 
 Run `soarm101-gui` and use the tabs to progress from guided setup and manual joint/Cartesian motion to leader–follower teleoperation, taught poses, trajectories, and reusable programs.
 
@@ -267,7 +185,7 @@ Available interfaces include:
 
 - The human/developer `soarm101` CLI and restricted `soarm101 agent ...` CLI.
 - A broker with operator-pinned profiles, authentication, and audit events.
-- An optional **Forge Puppeteer** stdio MCP interface that exposes reviewed broker capabilities without adding a second SDK MCP server.
+- An optional **[Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer)** stdio MCP interface that exposes reviewed broker capabilities without adding a second SDK MCP server.
 - An OpenShell sandbox runner with Hermes, Codex, and operator-defined adapters.
 
 **Important deployment distinction:** The standard physical agent broker remains CLI-backed. Native SDK simulation uses `--sdk-simulation`; the separate `--sdk-physical` option enables only experimental attended joint actions under the [restricted profile and watchdog contract](docs/agent-sandbox.md#attended-native-physical-joint-agents-experimental). General physical cutover still requires supervised in-motion STOP/watchdog qualification. Acknowledged software HOLD is not certified braking.
@@ -298,6 +216,10 @@ See [Safety](docs/safety.md), [Physical run](docs/physical-run.md), and [Validat
 The SDK owns deterministic robot motion, basic USB camera sessions, hardware diagnostics, calibration and saved-motion provenance. It does not own ROS orchestration, perception/tracking, external stage-camera calibration, or autonomous task reasoning. LeRobot inspired portions of the hardware workflow but is optional and not imported at runtime; the SDK is independently implemented.
 
 For design details, see [Architecture](docs/architecture.md), [Kinematics](docs/kinematics.md), and [Development plan](PLAN.md).
+
+## Acknowledgments
+
+Thanks to [The Robot Studio](https://github.com/TheRobotStudio/SO-ARM100) and [Hugging Face LeRobot](https://github.com/huggingface/lerobot) for the open SO-101 arm and robotics ecosystem. This SDK is independently implemented; LeRobot is optional. [Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer) provides the shared agent-facing MCP layer, inspired by [Reachy Mini](https://github.com/pollen-robotics/reachy_mini) and its [Conversation App](https://github.com/pollen-robotics/reachy_mini_conversation_app).
 
 ## Development and contributions
 
