@@ -353,3 +353,43 @@ def test_unconfirmed_native_execution_attempt_uses_existing_stop_fence(
     # STOP is terminal for the supervised session; no automatic retries.
     with pytest.raises(PermissionError):
         execute_trusted_choreography(executor, watchdog, cfg, segment)
+
+
+def rest_at_stop(arm, elbow):
+    """The folded sleep pose, with the elbow resting on its stop."""
+    for name, value in zip(ARM_JOINTS, (0.0015, -1.70, elbow, 0.8562, 0.0046), strict=True):
+        arm.backend._positions[name] = value
+
+
+def test_an_arm_resting_just_past_a_joint_limit_can_still_move_back_inside(supervised):
+    """A limp arm settles on its stop a hair beyond the software limit; that is a valid start."""
+    executor, watchdog = supervised
+    arm = executor._session
+    lower, upper = arm.motion._effective_limits()["elbow_flex"]
+    rest_at_stop(arm, upper + 0.004)
+    # The target is the pose a hair inside the limit.
+    inside = dict(arm.get_joint_positions().positions)
+    inside["elbow_flex"] = upper - 0.01
+    origin = JointTarget.author("rest_inside", arm.config.robot_id, "simulation",
+                                tuple(inside[name] for name in ARM_JOINTS))
+    cfg = replace(target_and_policy(arm)[1], allowed_revisions=(origin.revision,))
+    report = preflight_joint_target(arm, origin, cfg)
+    elbow = [row[ARM_JOINTS.index("elbow_flex")] for row in report.trajectory.joints_rad]
+    assert elbow[0] == pytest.approx(upper + 0.004)
+    assert max(elbow) <= upper + 0.004 + 1e-9  # never further out than the start
+    result = execute_trusted_joint_target(executor, watchdog, cfg, origin)
+    assert result["mode"] == "simulation"
+
+
+def test_a_target_beyond_the_limit_is_still_refused(supervised):
+    executor, _ = supervised
+    arm = executor._session
+    lower, upper = arm.motion._effective_limits()["elbow_flex"]
+    rest_at_stop(arm, upper + 0.004)
+    beyond = dict(arm.get_joint_positions().positions)
+    beyond["elbow_flex"] = upper + 0.05
+    target = JointTarget.author("too_far", arm.config.robot_id, "simulation",
+                                tuple(beyond[name] for name in ARM_JOINTS))
+    cfg = replace(target_and_policy(arm)[1], allowed_revisions=(target.revision,))
+    with pytest.raises((SafetyViolationError, PermissionError)):
+        preflight_joint_target(arm, target, cfg)

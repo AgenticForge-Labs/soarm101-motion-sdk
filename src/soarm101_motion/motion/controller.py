@@ -1531,20 +1531,23 @@ class MotionController:
         if any(value < 0.0 or value > 1.0 for value in gripper):
             raise InvalidCommandError("recorded gripper values must stay within [0, 1]")
 
+        # The arm is wherever it is: a start resting just past a software limit
+        # (a limp arm on its stop) is valid, and so is a coarse fold it must leave.
+        present = self.backend.read_joint_positions()
         self._validate_samples(
             samples,
             speed_limit=self.config.max_joint_speed,
             acceleration_limit=self.config.max_joint_acceleration,
+            limits=self._limits_for_present(present),
         )
         if self.config.enable_workspace_checks:
-            validate_workspace_path(
+            validate_workspace_path_from_measured_start(
                 self.model,
                 samples,
                 tcp=tcp,
                 **self._workspace_kwargs(),
             )
 
-        present = self.backend.read_joint_positions()
         pre_roll: PlannedPath | None = None
         if move_to_start:
             pre_roll = self._plan_joint_motion(
@@ -1554,7 +1557,7 @@ class MotionController:
                 acceleration=self.config.default_joint_acceleration,
             )
             if self.config.enable_workspace_checks:
-                validate_workspace_path(
+                validate_workspace_path_from_measured_start(
                     self.model,
                     pre_roll.command_samples,
                     tcp=tcp,
