@@ -361,7 +361,8 @@ def rest_at_stop(arm, elbow):
         arm.backend._positions[name] = value
 
 
-def test_an_arm_resting_just_past_a_joint_limit_can_still_move_back_inside(supervised):
+@pytest.mark.parametrize("timing", ["deadline", "native"])
+def test_an_arm_resting_just_past_a_joint_limit_can_still_move_back_inside(supervised, timing):
     """A limp arm settles on its stop a hair beyond the software limit; that is a valid start."""
     executor, watchdog = supervised
     arm = executor._session
@@ -372,7 +373,8 @@ def test_an_arm_resting_just_past_a_joint_limit_can_still_move_back_inside(super
     inside["elbow_flex"] = upper - 0.01
     origin = JointTarget.author("rest_inside", arm.config.robot_id, "simulation",
                                 tuple(inside[name] for name in ARM_JOINTS))
-    cfg = replace(target_and_policy(arm)[1], allowed_revisions=(origin.revision,))
+    cfg = replace(target_and_policy(arm)[1], allowed_revisions=(origin.revision,),
+                  target_timing=timing, max_duration_s=30.0)
     report = preflight_joint_target(arm, origin, cfg)
     elbow = [row[ARM_JOINTS.index("elbow_flex")] for row in report.trajectory.joints_rad]
     assert elbow[0] == pytest.approx(upper + 0.004)

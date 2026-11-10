@@ -377,7 +377,8 @@ def preflight_joint_target(
             allow_physical_trial=policy.allow_physical_trial)
         checked = preflight_choreography(arm, baseline, baseline_policy)
         plan = arm.motion._plan_joint_motion(actual, dict(zip(ARM_JOINTS, fresh.joints_rad, strict=True)),
-            speed=radians(policy.max_speed_deg_s), acceleration=radians(policy.max_acceleration_deg_s2))
+            speed=radians(policy.max_speed_deg_s), acceleration=radians(policy.max_acceleration_deg_s2),
+            limits=arm.motion._limits_for_present(actual))
         duration = max(plan.duration_s, 1.0 / arm.config.command_frequency_hz)
         if duration + arm.config.motion_completion_timeout_s > policy.max_duration_s:
             raise PermissionError("native target plan and completion margin exceed reviewed deadline")
