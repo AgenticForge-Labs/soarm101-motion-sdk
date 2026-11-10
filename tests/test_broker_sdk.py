@@ -19,6 +19,7 @@ from soarm101_motion.broker import (
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile
 from soarm101_motion.config import SOARM101Config
+from soarm101_motion.choreography import ChoreographyPolicy, JointChoreography, JointFrame
 
 
 @pytest.fixture
@@ -40,6 +41,274 @@ def test_hardware_direct_sdk_execution_is_not_available_by_default() -> None:
             config=SOARM101Config(robot_id="so101"),
             rates=AgentMotionRates(),
         )
+
+
+def test_operator_choreography_mode_denies_state_changes_at_executor_even_with_broad_profile(tmp_path):
+    from dataclasses import replace
+
+    executor = SDKAgentExecutor(
+        config=replace(SOARM101Config(robot_id="so101", port="/dev/fake"),
+                       configure_motors_on_connect=False,
+                       disable_torque_on_disconnect=False),
+        rates=AgentMotionRates(), physical_actions=True,
+        operator_choreography_only=True,
+    )
+    # Deliberately broad/misconfigured profile: executor enforcement remains authoritative.
+    broad = CapabilityProfile.from_document({"schema_version": 1, "name": "bad-profile",
+        "tools": ["robot_state", "robot_capabilities", "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 2}})
+    assert "jog_joint" in broad.allowed_tools
+    try:
+        for action, request in (("joint", {"joint": "shoulder", "delta_deg": 0.1}),
+                                ("jog", {"frame": "world", "x_mm": 1.0}),
+                                ("go_pose", {"name": "agent_home"}),
+                                ("sleep", {}), ("gripper", {"target": 10})):
+            with pytest.raises(PermissionError, match="denies agent state-changing"):
+                executor.execute(action, request)
+        assert executor._session is None
+    finally:
+        executor.close()
+
+
+def test_operator_supervision_checks_bound_identity_without_agent_lease():
+    from dataclasses import replace
+
+    executor = SDKAgentExecutor(
+        config=replace(SOARM101Config(robot_id="so101", port="/dev/fake"),
+                       configure_motors_on_connect=False,
+                       disable_torque_on_disconnect=False),
+        rates=AgentMotionRates(), physical_actions=True,
+        operator_choreography_only=True,
+    )
+    arm = SimpleNamespace(config=SimpleNamespace(robot_id="so101"),
+                          calibration_id="cal-1", is_connected=True)
+    executor._session = arm
+    executor._bound_calibration_id = "cal-1"
+    # No lease file exists: active bound SDK identity is sufficient for watchdog validation.
+    executor.validate_supervision()
+    arm.config.robot_id = "other"
+    with pytest.raises(Exception, match="identity changed"):
+        executor.validate_supervision()
+    executor._session = None
+
+
+def test_operator_stop_failure_fences_executor_without_revoking_shared_lease(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from soarm101_motion.agent_control import AgentAuthorityStore
+    import soarm101_motion.broker_sdk as broker_sdk
+
+    authority = AgentAuthorityStore(tmp_path / "shared-lease.json")
+    authority.issue(robot_id="other-robot", calibration_id="other-cal", minutes=5)
+    executor = SDKAgentExecutor(
+        config=replace(SOARM101Config(robot_id="so101", port="/dev/fake"),
+                       configure_motors_on_connect=False,
+                       disable_torque_on_disconnect=False),
+        rates=AgentMotionRates(), physical_actions=True,
+        operator_choreography_only=True, authority_store=authority,
+    )
+    arm = SimpleNamespace(is_connected=True)
+    executor._session = arm
+
+    def failed_stop(*_args, **_kwargs):
+        raise RuntimeError("injected HOLD failure")
+
+    monkeypatch.setattr(broker_sdk.SDK_CAPABILITIES, "dispatch", failed_stop)
+    try:
+        with pytest.raises(RuntimeError, match="injected HOLD failure"):
+            executor.execute("stop", {})
+        assert executor.session_evidence["lifecycle"] == "faulted"
+        assert authority.status()["armed"] is True
+        with pytest.raises(RuntimeError, match="session faulted"):
+            executor.execute("state", {})
+    finally:
+        executor._session = None
+        executor.close()
+
+
+def test_private_trusted_choreography_route_is_pinned_and_not_agent_accessible(tmp_path):
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(robot_id="so101"), rates=AgentMotionRates(),
+        simulation=True, simulation_actions=True,
+    )
+    executor.execute("state", {})
+    positions = executor._session.get_joint_positions().positions
+    from soarm101_motion.constants import ARM_JOINTS
+    origin = tuple(positions[name] for name in ARM_JOINTS)
+    endpoint = list(origin)
+    endpoint[ARM_JOINTS.index("wrist_roll")] += 0.01
+    program = JointChoreography.author(
+        "idle", "so101", "simulation",
+        (JointFrame(0, origin), JointFrame(0.5, tuple(endpoint))),
+    )
+    policy = ChoreographyPolicy(
+        "so101", "simulation", (program.revision,), max_duration_s=3,
+        max_speed_deg_s=8, max_acceleration_deg_s2=25,
+    )
+    service = RobotBrokerService(
+        executor=executor, token="agent-secret", trusted_host_token="host-secret",
+        profile=CapabilityProfile.from_document({"schema_version": 1, "name": "sim",
+            "tools": ["robot_state", "robot_capabilities", "jog_joint", "stop"],
+            "cameras": [], "limits": {"max_joint_delta_deg": 2}}),
+        allow_simulated_sdk_posts=True, watchdog_timeout_s=8,
+        choreography_policy=policy, choreography_catalog={"idle": program},
+        event_path=tmp_path / "events.jsonl",
+    )
+    service.watchdog.start()
+    service.watchdog.heartbeat()
+    server = RobotBrokerHTTPServer(("127.0.0.1", 0), service)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/v1/trusted/choreography"
+        payload = json.dumps({"request_id": "take-1", "name": "idle", "revision": program.revision}).encode()
+        def post(token, body):
+            request = urllib.request.Request(url, data=body, method="POST", headers={
+                "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read())
+        assert post("agent-secret", payload)[0] == 401
+        status, result = post("host-secret", payload)
+        assert status == 200 and result["result"]["revision"] == program.revision
+        assert post("host-secret", payload)[1] == result
+        stale = json.dumps({"request_id": "take-2", "name": "idle", "revision": "sha256:" + "0" * 64}).encode()
+        assert post("host-secret", stale)[0] == 409
+        assert post("host-secret", json.dumps({"request_id": "take-3", "name": "idle",
+            "revision": program.revision, "joints_rad": list(endpoint)}).encode())[0] == 400
+        # The general broker auth cannot route this operation through dispatch.
+        assert service.dispatch("POST", "/v1/trusted/choreography",
+            {"request_id": "take-4", "name": "idle", "revision": program.revision}).status == 404
+        stopped = service.dispatch_trusted_host("POST", "/v1/trusted/stop",
+            {"request_id": "take-5"})
+        assert stopped.status == 200
+        assert stopped.body["result"]["completed"] is True
+        denied = service.dispatch_trusted_host("POST", "/v1/trusted/choreography",
+            {"request_id": "take-6", "name": "idle", "revision": program.revision})
+        assert denied.status == 409
+    finally:
+        server.shutdown()
+        server.server_close()
+        service.watchdog.close()
+        executor.close()
+
+
+def test_physical_trusted_catalog_is_host_only_and_requires_explicit_policy(tmp_path):
+    from dataclasses import replace
+
+    config = replace(
+        SOARM101Config(robot_id="so101", port="/dev/fake"),
+        configure_motors_on_connect=False,
+        disable_torque_on_disconnect=False,
+    )
+    executor = SDKAgentExecutor(
+        config=config, rates=AgentMotionRates(), physical_actions=True,
+        arm_factory=lambda: pytest.fail("construction must not connect hardware"),
+    )
+    profile = CapabilityProfile.from_document({
+        "schema_version": 1, "name": "physical-small-joint",
+        "tools": ["robot_capabilities", "robot_state", "jog_joint", "stop"],
+        "cameras": [], "limits": {"max_joint_delta_deg": 2},
+    })
+    program = JointChoreography.author(
+        "idle", "so101", "calibration-a",
+        (JointFrame(0, (0, 0, 0, 0, 0)),
+         JointFrame(0.5, (0, 0, 0, 0.01, 0))),
+    )
+    base_policy = ChoreographyPolicy(
+        "so101", "calibration-a", (program.revision,), max_duration_s=3,
+        max_speed_deg_s=8, max_acceleration_deg_s2=25,
+    )
+    try:
+        with pytest.raises(ValueError, match="allow_physical_trial"):
+            RobotBrokerService(
+                executor=executor, token="agent", trusted_host_token="host",
+                profile=profile, allow_physical_sdk_actions=True,
+                watchdog_timeout_s=5, choreography_policy=base_policy,
+                choreography_catalog={"idle": program},
+            )
+        service = RobotBrokerService(
+            executor=executor, token="agent", trusted_host_token="host",
+            profile=profile, allow_physical_sdk_actions=True,
+            watchdog_timeout_s=5,
+            choreography_policy=replace(base_policy, allow_physical_trial=True),
+            choreography_catalog={"idle": program},
+            event_path=tmp_path / "physical-events.jsonl",
+        )
+        # The trusted operation has no general broker capability route and
+        # construction has not opened the selected robot port.
+        assert service.dispatch("POST", "/v1/trusted/choreography", {
+            "request_id": "agent-attempt", "name": "idle",
+            "revision": program.revision,
+        }).status == 404
+        assert executor.connection_count == 0
+        service.watchdog.close()
+    finally:
+        executor.close()
+
+
+def test_trusted_choreography_late_completion_is_fenced_by_stop(tmp_path, monkeypatch):
+    executor = SDKAgentExecutor(
+        config=SOARM101Config(robot_id="so101"), rates=AgentMotionRates(),
+        simulation=True, simulation_actions=True,
+    )
+    executor.execute("state", {})
+    positions = executor._session.get_joint_positions().positions
+    from soarm101_motion.constants import ARM_JOINTS
+    start = tuple(positions[name] for name in ARM_JOINTS)
+    end = list(start)
+    end[ARM_JOINTS.index("wrist_roll")] += 0.01
+    program = JointChoreography.author(
+        "idle", "so101", "simulation",
+        (JointFrame(0, start), JointFrame(0.5, tuple(end))),
+    )
+    policy = ChoreographyPolicy(
+        "so101", "simulation", (program.revision,), max_duration_s=3,
+        max_speed_deg_s=8, max_acceleration_deg_s2=25,
+    )
+    service = RobotBrokerService(
+        executor=executor, token="agent", trusted_host_token="host",
+        profile=CapabilityProfile.from_document({
+            "schema_version": 1, "name": "sim",
+            "tools": ["robot_state", "robot_capabilities", "jog_joint", "stop"],
+            "cameras": [], "limits": {"max_joint_delta_deg": 2},
+        }),
+        allow_simulated_sdk_posts=True, watchdog_timeout_s=8,
+        choreography_policy=policy, choreography_catalog={"idle": program},
+        event_path=tmp_path / "late-stop-events.jsonl",
+    )
+    service.watchdog.start()
+    service.watchdog.heartbeat()
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(3)
+        return {"revision": program.revision}
+
+    monkeypatch.setattr("soarm101_motion.choreography.execute_trusted_choreography", delayed)
+    responses = {}
+    worker = threading.Thread(target=lambda: responses.setdefault("motion", service.dispatch_trusted_host(
+        "POST", "/v1/trusted/choreography", {
+            "request_id": "motion-1", "name": "idle", "revision": program.revision,
+        })), daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(2)
+        stopped = service.dispatch_trusted_host(
+            "POST", "/v1/trusted/stop", {"request_id": "stop-1"},
+        )
+        assert stopped.status == 200
+        release.set()
+        worker.join(3)
+        assert not worker.is_alive()
+        assert responses["motion"].status == 409
+        assert "outcome unknown" in responses["motion"].body["error"]
+    finally:
+        release.set()
+        service.watchdog.close()
+        executor.close()
 
 
 def test_simulation_session_is_lazy_persistent_and_read_only_by_default(native) -> None:
@@ -1302,5 +1571,42 @@ def test_joint_only_physical_sleep_rejects_torque_off_without_enabling(
         with pytest.raises(HardwareFaultError, match="stationary torque HOLD"):
             executor.execute("sleep", {"joint_only": True})
         assert authority.status()["armed"] is False
+    finally:
+        executor.close()
+
+
+def test_trusted_startup_target_catalog_and_route_are_pinned(tmp_path, monkeypatch):
+    from soarm101_motion.choreography import JointTarget
+    from soarm101_motion.broker import load_trusted_choreography_catalog
+    from soarm101_motion.constants import ARM_JOINTS
+    import soarm101_motion.choreography as choreography
+    executor = SDKAgentExecutor(config=SOARM101Config(robot_id="so101"), rates=AgentMotionRates(),
+                                simulation=True, simulation_actions=True)
+    executor.execute("state", {})
+    origin = tuple(executor._session.get_joint_positions().positions[n] for n in ARM_JOINTS)
+    program = JointChoreography.author("idle", "so101", "simulation", (JointFrame(0, origin), JointFrame(1, origin)))
+    target = JointTarget.author("wake_to_neutral", "so101", "simulation", origin)
+    doc = {"policy": {"robot_id": "so101", "calibration_id": "simulation", "allowed_revisions": [program.revision, target.revision]},
+           "programs": [{"name": program.name, "robot_id": program.robot_id, "calibration_id": program.calibration_id,
+                         "revision": program.revision, "frames": [{"at_s": f.at_s, "joints_rad": list(f.joints_rad)} for f in program.frames]}],
+           "startup_target": {"name": target.name, "robot_id": target.robot_id, "calibration_id": target.calibration_id,
+                              "revision": target.revision, "joints_rad": list(target.joints_rad)}}
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(doc))
+    policy, catalog = load_trusted_choreography_catalog(path)
+    service = RobotBrokerService(executor=executor, token="agent", trusted_host_token="host",
+        allow_simulated_sdk_posts=True, watchdog_timeout_s=8, choreography_policy=policy,
+        choreography_catalog=catalog, event_path=tmp_path / "events")
+    calls = []
+    monkeypatch.setattr(choreography, "execute_trusted_joint_target", lambda *args: calls.append(args[-1]) or {"revision": target.revision})
+    try:
+        advertised = service.dispatch_trusted_host("GET", "/v1/trusted/catalog", {}).body["result"]
+        assert advertised["startup_target"] == {"name": target.name, "revision": target.revision}
+        payload = {"request_id": "wake", "name": target.name, "revision": target.revision}
+        assert service.dispatch_trusted_host("POST", "/v1/trusted/target", payload).status == 200
+        assert service.dispatch_trusted_host("POST", "/v1/trusted/target", payload).status == 200
+        assert len(calls) == 1
+        assert service.dispatch_trusted_host("POST", "/v1/trusted/choreography", {**payload, "request_id": "wrong"}).status == 409
+        assert service.dispatch("POST", "/v1/trusted/target", payload).status == 404
     finally:
         executor.close()

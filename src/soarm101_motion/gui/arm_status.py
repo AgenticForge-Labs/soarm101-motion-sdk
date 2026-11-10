@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -119,9 +121,9 @@ class RobotStatusPanel(QWidget):
         layout.addWidget(self.measurement_label)
         self._has_measurement = False
         self.view = CartesianArmView()
-        self.view.setMinimumSize(310 if not compact else 270, 310 if not compact else 270)
-        self.view.setMaximumHeight(430 if not compact else 300)
-        layout.addWidget(self.view, 1)
+        self.view.setMinimumSize(310 if not compact else 270, 220)
+        self.view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(self.view)
 
         pose_title = QLabel("ESTIMATED TOOL POSE · MODEL FRAME")
         pose_title.setObjectName("robotSectionTitle")
@@ -153,9 +155,26 @@ class RobotStatusPanel(QWidget):
             pose_grid.addWidget(value_label, display_row, column + 1)
         layout.addLayout(pose_grid)
 
+        self.details_toggle = QToolButton()
+        self.details_toggle.setText("Joint and tool telemetry")
+        self.details_toggle.setCheckable(True)
+        self.details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.details_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        layout.addWidget(self.details_toggle)
+        self.details_widget = QWidget()
+        details_layout = QVBoxLayout(self.details_widget)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.details_widget)
+        self.details_widget.hide()
+        self.details_toggle.toggled.connect(self.details_widget.setVisible)
+        self.details_toggle.toggled.connect(
+            lambda expanded: self.details_toggle.setArrowType(
+                Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+            )
+        )
         joints_title = QLabel("JOINTS")
         joints_title.setObjectName("robotSectionTitle")
-        layout.addWidget(joints_title)
+        details_layout.addWidget(joints_title)
 
         joint_grid = QGridLayout()
         joint_grid.setHorizontalSpacing(8)
@@ -170,11 +189,11 @@ class RobotStatusPanel(QWidget):
             self.joint_value_labels[name] = value
             joint_grid.addWidget(label, row, 0)
             joint_grid.addWidget(value, row, 1)
-        layout.addLayout(joint_grid)
+        details_layout.addLayout(joint_grid)
 
         tool_title = QLabel("TOOL")
         tool_title.setObjectName("robotSectionTitle")
-        layout.addWidget(tool_title)
+        details_layout.addWidget(tool_title)
         gripper_row = QHBoxLayout()
         self.gripper_label = QLabel("Gripper")
         self.gripper_label.setObjectName("robotMetricName")
@@ -185,13 +204,14 @@ class RobotStatusPanel(QWidget):
         self.gripper_bar.setFormat("—")
         self.gripper_bar.setTextVisible(True)
         gripper_row.addWidget(self.gripper_bar, 1)
-        layout.addLayout(gripper_row)
+        details_layout.addLayout(gripper_row)
 
         self.preview_label = QLabel()
         self.preview_label.setObjectName("robotStatusSubtitle")
         self.preview_label.setWordWrap(True)
         self.preview_label.hide()
         layout.addWidget(self.preview_label)
+        layout.addStretch(1)
 
     def set_title(self, title: str, subtitle: str | None = None) -> None:
         self._title_text = str(title)

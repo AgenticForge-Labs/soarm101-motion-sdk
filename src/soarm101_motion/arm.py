@@ -1144,11 +1144,17 @@ class SOARM101:
         frequency_hz: float = DEFAULT_TELEOP_STREAM_FREQUENCY_HZ,
         max_speed: float | Mapping[str, float] | None = None,
         max_acceleration: float | Mapping[str, float] | None = None,
-    ) -> None:
-        """Start guarded continuous joint streaming for teleoperation."""
+    ) -> dict[str, float]:
+        """Start guarded joint streaming and return its measured start baseline.
+
+        The returned mapping is a copy of the exact baseline captured and
+        validated atomically by the MotionController. Existing callers may
+        ignore it; follower callers should use it instead of taking another
+        measurement after stream startup.
+        """
         if self.tool.is_moving:
             self._stop_tool(wait=True)
-        self.motion.start_joint_stream(
+        return self.motion.start_joint_stream(
             frequency_hz=frequency_hz,
             max_speed=max_speed,
             max_acceleration=max_acceleration,

@@ -207,8 +207,38 @@ def test_manual_workspace_keeps_gripper_visible_across_arm_modes(window):
     assert labels == ["Joint / angular", "Cartesian"]
     assert window.manual_page.isAncestorOf(window.gripper_slider)
     assert not window.manual_mode_tabs.isAncestorOf(window.gripper_slider)
-    assert len(window._coordination_park_buttons) == 2
-    assert len(window._coordination_relink_buttons) == 2
+    assert len(window._coordination_park_buttons) == 1
+    assert len(window._coordination_relink_buttons) == 1
+
+
+def test_manual_workspace_fits_controls_and_scrolls_in_short_windows(window):
+    from PySide6.QtWidgets import QApplication
+
+    window.resize(1400, 800)
+    window.show()
+    window.tabs.setCurrentWidget(window.manual_page)
+    QApplication.processEvents()
+
+    scroll = window.manual_page
+    # Font metrics differ between machines (CI uses default fonts and measured 17 px
+    # of overflow), so allow a few lines of slack; the real check is that it does
+    # not need substantial scrolling at this size.
+    assert scroll.verticalScrollBar().maximum() <= 24
+    mode_page = window.manual_mode_tabs.currentWidget()
+    assert mode_page.height() <= mode_page.sizeHint().height() + 10
+    assert window.robot_sidebar.measurement_label.y() < 100
+    assert window.open_gripper_button.isVisible()
+    assert not window.robot_sidebar.details_widget.isVisible()
+    window.robot_sidebar.details_toggle.setChecked(True)
+    assert window.robot_sidebar.details_widget.isVisible()
+    for control in (*window.joint_spins.values(), window.move_joints_button):
+        assert control.height() >= control.sizeHint().height()
+    window.setMinimumHeight(0)
+    window.resize(1400, 500)
+    QApplication.processEvents()
+    scroll.ensureWidgetVisible(window.move_joints_button)
+    QApplication.processEvents()
+    assert scroll.verticalScrollBar().value() > 0
 
 
 def test_teleop_tracking_response_defaults_to_medium(window):
@@ -772,3 +802,36 @@ def test_builtin_sleep_control_requests_calibrated_sleep_move(window):
     assert command["speed_deg_s"] == pytest.approx(8.0)
     assert command["acceleration_deg_s2"] == pytest.approx(25.0)
     assert window.go_sleep_button.text() == "Go Sleep"
+
+
+def test_joint_targets_refresh_from_measured_pose_after_motion(window):
+    from soarm101_motion.constants import ARM_JOINTS
+
+    state = {
+        'connected': True, 'torque_enabled': True, 'moving': False,
+        'faulted': False, 'simulation': True,
+        'joints_deg': dict.fromkeys(ARM_JOINTS, 0.0),
+        'pose_mm_deg': (100., 0., 100., 0., 0., 0.), 'gripper': 0.4,
+    }
+    window._on_state(state)
+    window.edit_joint_targets_check.setChecked(True)
+    window.joint_spins['wrist_flex'].setValue(60.)
+    window._on_busy(True)
+    # Completion arrives before the worker's fresh state. Do not use the old
+    # snapshot or allow a stale joint command during that gap.
+    window._on_busy(False)
+    assert not window.move_joints_button.isEnabled()
+    assert window.joint_spins['wrist_flex'].value() == 60.
+    measured = {**state['joints_deg'], 'wrist_flex': 70.}
+    window._on_state({**state, 'joints_deg': measured})
+    assert window.edit_joint_targets_check.isChecked()
+    assert window.joint_spins['wrist_flex'].value() == 70.
+    assert window.move_joints_button.isEnabled()
+    commands = []
+    window.move_joints_requested.connect(commands.append)
+    window.joint_spins['shoulder_pan'].setValue(-10.)
+    # Ordinary idle polling must preserve edits that have not been submitted.
+    window._on_state({**state, 'joints_deg': measured})
+    window._move_joints()
+    assert commands[-1]['joints_deg']['shoulder_pan'] == -10.
+    assert commands[-1]['joints_deg']['wrist_flex'] == 70.

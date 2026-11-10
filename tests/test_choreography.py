@@ -15,11 +15,15 @@ from soarm101_motion.choreography import (
     ChoreographyPolicy,
     JointChoreography,
     JointFrame,
+    JointTarget,
+    execute_trusted_joint_target,
     execute_trusted_choreography,
+    preflight_joint_target,
     preflight_choreography,
 )
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
+from soarm101_motion.exceptions import SafetyViolationError
 
 
 @pytest.fixture
@@ -65,6 +69,19 @@ def policy(arm, segment, **overrides):
     return ChoreographyPolicy(**(base | overrides))
 
 
+def target_and_policy(arm, *, delta=0.02):
+    current = arm.get_joint_positions().positions
+    target = [current[name] for name in ARM_JOINTS]
+    target[ARM_JOINTS.index("wrist_roll")] += delta
+    asset = JointTarget.author("neutral", arm.config.robot_id, "simulation", tuple(target))
+    cfg = ChoreographyPolicy(
+        robot_id=arm.config.robot_id, calibration_id="simulation",
+        allowed_revisions=(asset.revision,), max_duration_s=2.0,
+        max_speed_deg_s=8.0, max_acceleration_deg_s2=25.0,
+    )
+    return asset, cfg
+
+
 def test_native_choreography_integrity_and_constraints(supervised):
     executor, _ = supervised
     arm = executor._session
@@ -108,6 +125,22 @@ def test_preflight_does_not_move_or_enable_torque(supervised):
     assert all(v == report.gripper_position for v in report.trajectory.gripper)
 
 
+def test_pinned_target_preflight_uses_measured_start_without_motion(supervised):
+    executor, _ = supervised
+    arm = executor._session
+    target, cfg = target_and_policy(arm)
+    arm.backend._positions["shoulder_pan"] += 0.025
+    before = len(arm.backend.command_history)
+    report = preflight_joint_target(arm, target, cfg)
+    assert report.revision == target.revision
+    assert report.duration_s == pytest.approx(cfg.max_duration_s - 1.0)
+    assert report.duration_s < cfg.max_duration_s
+    assert report.trajectory.metadata["joint_target_revision"] == target.revision
+    assert report.start_error_rad == pytest.approx(0.0)
+    assert len(arm.backend.command_history) == before
+    assert not arm.get_state().torque_enabled
+
+
 def test_simulated_execution_reuses_sdk_motion_and_retains_human_policy(supervised, monkeypatch):
     executor, watchdog = supervised
     arm = executor._session
@@ -135,6 +168,106 @@ def test_simulated_execution_reuses_sdk_motion_and_retains_human_policy(supervis
     # lets it submit a trusted choreography.
     with pytest.raises(ValueError, match="unknown"):
         executor.execute("choreography", {"revision": segment.revision})
+
+
+def test_simulated_target_execution_is_pinned_and_never_writes_gripper(supervised, monkeypatch):
+    executor, watchdog = supervised
+    arm = executor._session
+    target, cfg = target_and_policy(arm)
+    arm.backend._positions["shoulder_pan"] += 0.025
+    writes = []
+    monkeypatch.setattr(arm.backend, "write_tool_position",
+                        lambda *args, **kwargs: writes.append((args, kwargs)))
+    result = execute_trusted_joint_target(executor, watchdog, cfg, target)
+    assert result["revision"] == target.revision
+    assert result["preflight"]["duration_s"] == pytest.approx(cfg.max_duration_s - 1.0)
+    assert result["preflight"]["duration_s"] < cfg.max_duration_s
+    assert result["mode"] == "simulation"
+    assert writes == []
+    assert arm.get_joint_positions().positions["wrist_roll"] == pytest.approx(
+        target.joints_rad[ARM_JOINTS.index("wrist_roll")], abs=0.01,
+    )
+
+
+def test_joint_target_fails_closed_when_deadline_cannot_reserve_margin(supervised):
+    executor, _ = supervised
+    target, cfg = target_and_policy(executor._session)
+    with pytest.raises(PermissionError, match="completion margin"):
+        preflight_joint_target(
+            executor._session, target, replace(cfg, max_duration_s=1.0),
+        )
+
+
+def test_target_completion_must_satisfy_next_choreography_entry_contract(supervised, monkeypatch):
+    executor, watchdog = supervised
+    arm = executor._session
+    target, cfg = target_and_policy(arm)
+    play = arm.play_trajectory
+    def loose_completion(*args, **kwargs):
+        result = play(*args, **kwargs)
+        final = dict(result.final_positions)
+        final[ARM_JOINTS[0]] = target.joints_rad[0] + cfg.max_start_error_rad + .001
+        return replace(result, final_positions=final)
+    monkeypatch.setattr(arm, "play_trajectory", loose_completion)
+    with pytest.raises(RuntimeError, match="reviewed choreography entry tolerance"):
+        execute_trusted_joint_target(executor, watchdog, cfg, target)
+    assert watchdog.status["state"] == "stopped"
+    with pytest.raises(PermissionError, match="terminal"):
+        execute_trusted_joint_target(executor, watchdog, cfg, target)
+
+
+def test_joint_target_does_not_retime_infeasible_velocity(supervised):
+    executor, _ = supervised
+    arm = executor._session
+    target, cfg = target_and_policy(arm, delta=0.5)
+    # The one-second authored segment is intentionally too fast for the
+    # reviewed 8 deg/s ceiling; preflight must reject instead of stretching it.
+    with pytest.raises(SafetyViolationError, match="speed"):
+        preflight_joint_target(arm, target, cfg)
+
+
+def test_native_target_timing_uses_selected_rates_instead_of_deadline(supervised):
+    executor, _ = supervised
+    arm = executor._session
+    target, cfg = target_and_policy(arm, delta=.5)
+    slow = preflight_joint_target(arm, target, replace(cfg, max_duration_s=30, target_timing="native"))
+    medium = preflight_joint_target(arm, target, replace(cfg, max_duration_s=30,
+        target_timing="native", max_speed_deg_s=50, max_acceleration_deg_s2=500))
+    assert 0 < medium.duration_s < slow.duration_s < 29
+    assert medium.duration_s + arm.config.motion_completion_timeout_s <= 30
+    assert not arm.get_state().torque_enabled
+
+
+def test_target_requires_exact_revision_and_existing_supervision(supervised):
+    executor, watchdog = supervised
+    arm = executor._session
+    target, cfg = target_and_policy(arm)
+    wrong = JointTarget.author("neutral", target.robot_id, target.calibration_id,
+                              tuple(x + 0.01 for x in target.joints_rad))
+    with pytest.raises(PermissionError, match="pinned"):
+        preflight_joint_target(arm, wrong, cfg)
+    original = executor.motion_guard
+    executor.motion_guard = None
+    with pytest.raises(PermissionError, match="watchdog"):
+        execute_trusted_joint_target(executor, watchdog, cfg, target)
+    executor.motion_guard = original
+
+
+def test_target_execution_failure_uses_existing_terminal_stop_fence(supervised, monkeypatch):
+    executor, watchdog = supervised
+    arm = executor._session
+    target, cfg = target_and_policy(arm)
+
+    def fail_on_play(*_args, **_kwargs):
+        raise RuntimeError("injected target execution failure")
+
+    monkeypatch.setattr(arm, "play_trajectory", fail_on_play)
+    with pytest.raises(ChoreographyExecutionError, match="injected target execution"):
+        execute_trusted_joint_target(executor, watchdog, cfg, target)
+    assert arm.backend.stop_count >= 1
+    assert watchdog.status["state"] == "stopped"
+    with pytest.raises(PermissionError):
+        execute_trusted_joint_target(executor, watchdog, cfg, target)
 
 
 def test_choreography_must_be_exactly_pinned_and_start_fresh(supervised):
@@ -169,6 +302,22 @@ def test_no_watchdog_or_rate_override_or_unqualified_physical(supervised):
     executor.simulation_actions = False
     with pytest.raises(PermissionError, match="not operator-qualified"):
         execute_trusted_choreography(executor, watchdog, cfg, segment)
+
+
+def test_attended_physical_route_requires_existing_human_lease(supervised):
+    executor, watchdog = supervised
+    arm = executor._session
+    segment = author(arm)
+    cfg = replace(policy(arm, segment), allow_physical_trial=True)
+    # Reclassify this mock-backed session as the physical authority path. The
+    # absent human lease must reject before preflight, torque, or SDK motion.
+    executor.simulation_actions = False
+    executor.physical_actions = True
+    before = len(arm.backend.command_history)
+    with pytest.raises(PermissionError, match="authority"):
+        execute_trusted_choreography(executor, watchdog, cfg, segment)
+    assert len(arm.backend.command_history) == before
+    assert not arm.get_state().torque_enabled
 
 
 def test_preflight_rejects_wrong_calibration_or_excess_duration(supervised):

@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
 from typing import Mapping, Sequence
 
 from soarm101_motion.broker_sdk import SDKAgentExecutor
@@ -47,6 +48,67 @@ from soarm101_motion.constants import (
 
 
 DEFAULT_BROKER_HOST = "127.0.0.1"
+
+
+def load_trusted_choreography_catalog(path: Path):
+    """Load the typed immutable trusted choreography catalog used by broker entry points."""
+    if path.stat().st_size > 262144:
+        raise ValueError("trusted choreography catalog exceeds 256 KiB")
+    from soarm101_motion.choreography import ChoreographyPolicy, JointChoreography, JointFrame
+    catalog_doc = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(catalog_doc, dict) or not {"policy", "programs"} <= set(catalog_doc)
+            or set(catalog_doc) - {"policy", "programs", "startup_target", "targets"}):
+        raise ValueError("trusted choreography catalog requires policy and programs only")
+    policy_doc = catalog_doc["policy"]
+    if not isinstance(policy_doc, dict) or set(policy_doc) - {
+        "robot_id", "calibration_id", "allowed_revisions", "max_duration_s",
+        "max_samples", "max_start_error_rad", "max_speed_deg_s",
+        "max_acceleration_deg_s2", "allow_physical_trial", "target_timing",
+    }:
+        raise ValueError("invalid trusted choreography policy fields")
+    policy_doc = dict(policy_doc)
+    policy_doc["allowed_revisions"] = tuple(policy_doc.get("allowed_revisions", ()))
+    policy = ChoreographyPolicy(**policy_doc)
+    if not isinstance(catalog_doc["programs"], list):
+        raise ValueError("trusted choreography programs must be a list")
+    programs = {}
+    for item in catalog_doc["programs"]:
+        if not isinstance(item, dict) or set(item) != {"name", "robot_id", "calibration_id", "revision", "frames"}:
+            raise ValueError("invalid choreography program fields")
+        if not isinstance(item["frames"], list):
+            raise ValueError("choreography frames must be a list")
+        frames = tuple(JointFrame(frame["at_s"], tuple(frame["joints_rad"])) for frame in item["frames"] if isinstance(frame, dict) and set(frame) == {"at_s", "joints_rad"})
+        if len(frames) != len(item["frames"]):
+            raise ValueError("invalid choreography frame fields")
+        program = JointChoreography(item["name"], item["robot_id"], item["calibration_id"], frames, item["revision"])
+        if program.name in programs:
+            raise ValueError("duplicate trusted choreography name")
+        programs[program.name] = program
+    if "startup_target" in catalog_doc:
+        from soarm101_motion.choreography import JointTarget
+        item = catalog_doc["startup_target"]
+        if not isinstance(item, dict) or set(item) != {"name", "robot_id", "calibration_id", "revision", "joints_rad"}:
+            raise ValueError("invalid trusted startup target fields")
+        target = JointTarget(item["name"], item["robot_id"], item["calibration_id"], tuple(item["joints_rad"]), item["revision"])
+        if (target.name != "wake_to_neutral" or target.name in programs
+                or target.robot_id != policy.robot_id or target.calibration_id != policy.calibration_id):
+            raise ValueError("startup target identity mismatch")
+        programs[target.name] = target
+    targets = catalog_doc.get("targets", [])
+    if not isinstance(targets, list):
+        raise ValueError("trusted targets must be a list")
+    for item in targets:
+        from soarm101_motion.choreography import JointTarget
+        if not isinstance(item, dict) or set(item) != {"name", "robot_id", "calibration_id", "revision", "joints_rad"}:
+            raise ValueError("invalid trusted target fields")
+        target = JointTarget(item["name"], item["robot_id"], item["calibration_id"], tuple(item["joints_rad"]), item["revision"])
+        if (target.name in programs or target.robot_id != policy.robot_id
+                or target.calibration_id != policy.calibration_id):
+            raise ValueError("trusted target duplicate or identity mismatch")
+        programs[target.name] = target
+    if set(policy.allowed_revisions) != {program.revision for program in programs.values()}:
+        raise ValueError("trusted choreography catalog revisions must exactly match policy pins")
+    return policy, programs
 DEFAULT_BROKER_PORT = 8765
 
 # Trusted-host-only physical STOP qualifications. These are not public broker
@@ -307,6 +369,9 @@ class RobotBrokerService:
         watchdog_timeout_s: float | None = None,
         catalog_paths: tuple[Path, Path, Path] | None = None,
         replay_policy: ReplayPolicy | None = None,
+        trusted_host_token: str | None = None,
+        choreography_policy: object | None = None,
+        choreography_catalog: Mapping[str, object] | None = None,
     ) -> None:
         if allow_simulated_sdk_posts and not (
             isinstance(executor, SDKAgentExecutor) and executor.simulation
@@ -330,7 +395,8 @@ class RobotBrokerService:
                 raise ValueError("physical SDK actions require a trusted supervisor watchdog")
         if watchdog_timeout_s is not None and not (
             isinstance(executor, SDKAgentExecutor)
-            and (allow_simulated_sdk_posts or allow_physical_sdk_actions)
+            and (allow_simulated_sdk_posts or allow_physical_sdk_actions
+                 or executor.operator_choreography_only)
         ):
             raise ValueError("watchdog requires a persistent SDK action broker")
         physical_short_stop_trial = False
@@ -427,6 +493,53 @@ class RobotBrokerService:
         self._sdk_epoch_lock = threading.Lock()
         self._event_lock = threading.Lock()
         self.watchdog: BrokerWatchdog | None = None
+        # Private, separately authenticated host interface. This catalog is
+        # copied once at service construction and never derived from requests.
+        self.trusted_host_token = trusted_host_token
+        self._choreography_policy = choreography_policy
+        self._choreography_catalog = MappingProxyType(dict(choreography_catalog or {}))
+        if trusted_host_token is not None:
+            from soarm101_motion.choreography import ChoreographyPolicy, JointChoreography
+            trusted_executor_mode = (
+                isinstance(executor, SDKAgentExecutor)
+                and watchdog_timeout_s is not None
+                and (
+                    (allow_simulated_sdk_posts and executor.simulation
+                     and executor.simulation_actions)
+                    or (allow_physical_sdk_actions and executor.physical_actions
+                        and not executor.simulation)
+                    or (getattr(executor, "operator_choreography_only", False)
+                        and executor.physical_actions and not executor.simulation)
+                )
+            )
+            if (not trusted_host_token or trusted_host_token == token
+                    or not trusted_executor_mode):
+                raise ValueError(
+                    "trusted choreography requires a distinct token and a supervised "
+                    "SDK simulation or explicitly provisioned physical-actions executor"
+                )
+            if not isinstance(choreography_policy, ChoreographyPolicy) or not self._choreography_catalog:
+                raise ValueError("trusted choreography interface requires an immutable policy and catalog")
+            if (isinstance(executor, SDKAgentExecutor) and executor.physical_actions
+                    and not choreography_policy.allow_physical_trial):
+                raise ValueError("physical trusted choreography requires explicit policy allow_physical_trial")
+            if (isinstance(executor, SDKAgentExecutor) and executor.simulation
+                    and not executor.simulation_actions):
+                raise ValueError("trusted simulation choreography requires supervised SDK simulation actions")
+            for name, program in self._choreography_catalog.items():
+                if isinstance(program, JointChoreography):
+                    if name != program.name:
+                        raise ValueError("trusted catalog keys must exactly match choreography names")
+                    choreography_policy.require(program)
+                else:
+                    from soarm101_motion.choreography import JointTarget
+                    if (not isinstance(program, JointTarget)
+                            or program.name != name or program.robot_id != choreography_policy.robot_id
+                            or program.calibration_id != choreography_policy.calibration_id
+                            or program.revision not in choreography_policy.allowed_revisions):
+                        raise ValueError("invalid pinned startup target")
+        elif choreography_policy is not None or choreography_catalog:
+            raise ValueError("choreography policy/catalog require trusted-host authentication")
         if watchdog_timeout_s is not None:
             assert isinstance(self.executor, SDKAgentExecutor)
             self.watchdog = BrokerWatchdog(
@@ -457,7 +570,8 @@ class RobotBrokerService:
                 result=result, error=None if confirmed else str(response.body.get("error")),
             )
         finally:
-            self.executor._revoke_authority()
+            if not self.executor.operator_choreography_only:
+                self.executor._revoke_authority()
             self.executor._fault(error)
 
 
@@ -465,6 +579,96 @@ class RobotBrokerService:
         if authorization is None:
             return False
         return hmac.compare_digest(authorization, f"Bearer {self.token}")
+
+    def trusted_host_authorized(self, authorization: str | None) -> bool:
+        return bool(self.trusted_host_token and authorization and hmac.compare_digest(
+            authorization, f"Bearer {self.trusted_host_token}"))
+
+    def _operator_stop_available(self) -> bool:
+        return (isinstance(self.executor, SDKAgentExecutor)
+                and self.executor.operator_choreography_only
+                and self.executor.physical_actions and not self.executor.simulation
+                and self.watchdog is not None)
+
+    def dispatch_trusted_host(self, method: str, path: str,
+                              payload: Mapping[str, object]) -> BrokerResponse:
+        """Exact-name/revision trusted-host entry; never part of agent routing."""
+        if method.upper() == "GET" and path == "/v1/trusted/catalog":
+            return BrokerResponse(HTTPStatus.OK, {"ok": True, "result": {
+                "programs": [
+                    {"name": name, "revision": program.revision,
+                     "duration_s": program.frames[-1].at_s}
+                    for name, program in sorted(self._choreography_catalog.items())
+                    if hasattr(program, "frames")
+                ],
+                **({"startup_target": {"name": "wake_to_neutral", "revision": self._choreography_catalog["wake_to_neutral"].revision}}
+                   if "wake_to_neutral" in self._choreography_catalog and not hasattr(self._choreography_catalog["wake_to_neutral"], "frames") else {})
+                , "targets": [{"name": name, "revision": target.revision}
+                    for name, target in sorted(self._choreography_catalog.items()) if not hasattr(target, "frames")]
+            }})
+        if method.upper() != "POST" or path not in {
+            "/v1/trusted/choreography", "/v1/trusted/target", "/v1/trusted/stop",
+        }:
+            return BrokerResponse(HTTPStatus.NOT_FOUND, {"ok": False, "error": "unknown trusted endpoint"})
+        expected = {"request_id", "name", "revision"} if not path.endswith("stop") else {"request_id"}
+        if set(payload) != expected:
+            return BrokerResponse(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "unexpected trusted request fields"})
+        request_id = payload.get("request_id")
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request_id):
+            return BrokerResponse(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "bounded request_id required"})
+        identity = dict(payload)
+        # Share the existing bounded per-session idempotency table used by
+        # trusted replay requests, including cross-operation ID collision fencing.
+        with self._replay_lock:
+            prior = self._replay_requests.get(request_id)
+            if prior is not None:
+                if prior[0] != identity:
+                    return BrokerResponse(HTTPStatus.CONFLICT, {"ok": False, "error": "request_id reused with different request"})
+                return prior[1] or BrokerResponse(HTTPStatus.CONFLICT, {"ok": False, "error": "request is still in progress"})
+            if len(self._replay_requests) >= 1000:
+                return BrokerResponse(HTTPStatus.CONFLICT, {"ok": False, "error": "broker request id capacity exhausted; restart requires operator reconciliation"})
+            self._replay_requests[request_id] = (identity, None)
+        started = time.monotonic()
+        try:
+            if path.endswith("stop"):
+                response = self._execute(request_id=request_id, action="stop", request={}, arguments=[])
+            else:
+                name, revision = payload.get("name"), payload.get("revision")
+                if not isinstance(name, str) or not isinstance(revision, str):
+                    raise ValueError("exact choreography name and revision required")
+                program = self._choreography_catalog.get(name)
+                from soarm101_motion.choreography import JointChoreography, JointTarget
+                expected_type = JointTarget if path.endswith("target") else JointChoreography
+                if not isinstance(program, expected_type) or program.revision != revision:
+                    raise PermissionError("unknown or stale operator-pinned choreography")
+                if not isinstance(self.executor, SDKAgentExecutor) or self.watchdog is None:
+                    raise PermissionError("persistent SDK executor/watchdog unavailable")
+                with self._sdk_epoch_lock:
+                    epoch = self._sdk_stop_epoch
+                with self._operation_lock:
+                    with self._sdk_epoch_lock:
+                        if epoch != self._sdk_stop_epoch:
+                            raise PermissionError("request cancelled by a newer STOP")
+                    from soarm101_motion.choreography import execute_trusted_choreography, execute_trusted_joint_target
+                    execute = execute_trusted_joint_target if path.endswith("target") else execute_trusted_choreography
+                    result = execute(
+                        self.executor, self.watchdog, self._choreography_policy, program,
+                    )
+                    with self._sdk_epoch_lock:
+                        if epoch != self._sdk_stop_epoch:
+                            raise PermissionError("completion superseded by STOP; outcome unknown")
+                response = BrokerResponse(HTTPStatus.OK, {"ok": True, "request_id": request_id, "result": result})
+        except (PermissionError, RuntimeError, ValueError, OSError, SOARM101Error) as exc:
+            response = BrokerResponse(HTTPStatus.CONFLICT, {"ok": False, "request_id": request_id, "error": str(exc)})
+        if not path.endswith("stop"):
+            self._record(request_id=request_id,
+                action="trusted_target" if path.endswith("target") else "trusted_choreography",
+                request=identity, ok=response.body.get("ok") is True,
+                duration_s=time.monotonic() - started,
+                result=response.body.get("result"), error=response.body.get("error"))
+        with self._replay_lock:
+            self._replay_requests[request_id] = (identity, response)
+        return response
 
     @staticmethod
     def _number(payload: Mapping[str, object], key: str, default: float = 0.0) -> float:
@@ -602,7 +806,7 @@ class RobotBrokerService:
                 AgentAuthorityStore().clear()
             if isinstance(self.executor, SDKAgentExecutor) and action == "stop":
                 if not (self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
-                        or self._allow_physical_sdk_actions):
+                        or self._allow_physical_sdk_actions or self._operator_stop_available()):
                     raise PermissionError("native SDK STOP is not available in read-only preview")
                 if self.watchdog is not None:
                     self.watchdog.begin_stop()
@@ -1064,6 +1268,7 @@ class RobotBrokerService:
         if isinstance(self.executor, SDKAgentExecutor) and not (
             self._allow_simulated_sdk_posts or self._allow_physical_sdk_trial
                         or self._allow_physical_sdk_actions
+                        or (method == "POST" and path == "/v1/stop" and self._operator_stop_available())
         ):
             return BrokerResponse(
                 HTTPStatus.FORBIDDEN,
@@ -1291,18 +1496,31 @@ class _BrokerHandler(BaseHTTPRequestHandler):
         return parsed
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.path.startswith("/v1/trusted/"):
+            if not self.service.trusted_host_authorized(self.headers.get("Authorization")):
+                self._send(BrokerResponse(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "trusted-host authorization required"}))
+                return
+            self._send(self.service.dispatch_trusted_host("GET", self.path, {}))
+            return
         if self._authorized():
             self._send(self.service.dispatch("GET", self.path))
 
     def do_POST(self) -> None:  # noqa: N802
-        if not self._authorized():
+        trusted = self.path.startswith("/v1/trusted/")
+        if trusted:
+            if not self.service.trusted_host_authorized(self.headers.get("Authorization")):
+                self._send(BrokerResponse(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "trusted-host authorization required"}))
+                return
+        elif not self._authorized():
             return
         try:
             payload = self._payload()
         except (ValueError, json.JSONDecodeError) as exc:
             self._send(BrokerResponse(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)}))
             return
-        self._send(self.service.dispatch("POST", self.path, payload))
+        response = (self.service.dispatch_trusted_host("POST", self.path, payload)
+                    if trusted else self.service.dispatch("POST", self.path, payload))
+        self._send(response)
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
@@ -1313,7 +1531,7 @@ class RobotBrokerHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], service: RobotBrokerService) -> None:
         if (service._allow_physical_sdk_trial or service._allow_simulated_sdk_posts
-                or service._allow_physical_sdk_actions) and (
+                or service._allow_physical_sdk_actions or service._operator_stop_available()) and (
             address[0] != "127.0.0.1"
         ):
             raise ValueError("native SDK action broker must bind to IPv4 loopback only")
@@ -1450,6 +1668,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--catalog-sequences", type=Path, help="operator-selected sequence library file")
     parser.add_argument("--replay-policy", type=Path,
                         help="operator-pinned replay policy; supervised simulation actions only")
+    parser.add_argument("--trusted-choreography", type=Path,
+                        help="operator-pinned choreography catalog; private host route for supervised simulation or attended physical mode")
+    parser.add_argument("--trusted-host-token-env", default="SOARM101_TRUSTED_HOST_TOKEN",
+                        help="environment variable containing a token distinct from the agent token")
     envelope = parser.add_argument_group("trusted host motion envelope")
     envelope.add_argument(
         "--max-joint-speed-deg-s",
@@ -1635,6 +1857,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.replay_policy.stat().st_size > 262144:
             raise SystemExit("replay policy exceeds 256 KiB")
         replay_policy = ReplayPolicy.from_document(json.loads(args.replay_policy.read_text()))
+    choreography_policy = None
+    choreography_catalog = None
+    trusted_host_token = None
+    if args.trusted_choreography is not None:
+        if not (simulated_actions or physical_actions) or args.watchdog_timeout_s is None:
+            raise SystemExit(
+                "trusted choreography requires supervised SDK simulation actions or "
+                "explicit --sdk-physical-actions and --watchdog-timeout-s"
+            )
+        try:
+            choreography_policy, choreography_catalog = load_trusted_choreography_catalog(args.trusted_choreography)
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise SystemExit(str(exc)) from None
+        if physical_actions and not choreography_policy.allow_physical_trial:
+            raise SystemExit(
+                "physical trusted choreography requires catalog policy allow_physical_trial=true"
+            )
+        trusted_host_token = os.environ.get(args.trusted_host_token_env, "").strip()
+        if not trusted_host_token or trusted_host_token == token:
+            raise SystemExit("trusted-host token must be configured and distinct from the general broker token")
     service = RobotBrokerService(
         executor=executor,
         token=token,
@@ -1645,6 +1887,9 @@ def main(argv: list[str] | None = None) -> int:
         watchdog_timeout_s=args.watchdog_timeout_s,
         catalog_paths=catalog_paths,  # type: ignore[arg-type]
         replay_policy=replay_policy,
+        trusted_host_token=trusted_host_token,
+        choreography_policy=choreography_policy,
+        choreography_catalog=choreography_catalog,
     )
     server = RobotBrokerHTTPServer((args.host, args.port), service)
     relay_server = None

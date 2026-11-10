@@ -2337,10 +2337,16 @@ class MotionController:
         max_speed: float | Mapping[str, float] | None = None,
         max_acceleration: float | Mapping[str, float] | None = None,
         tcp: Pose | None = None,
-    ) -> None:
+    ) -> dict[str, float]:
         """Begin guarded continuous joint streaming from the current measured pose.
 
-        Streaming has its own explicit clock.  It defaults below the normal 50 Hz
+        Streaming has its own explicit clock.  Returns a copy of the measured
+        joint positions captured under the controller state lock and used as the
+        stream's initial command baseline. Callers can initialize a follower from
+        this exact guarded baseline without taking a second, potentially different
+        measurement. Existing callers may ignore the return value.
+
+        Streaming defaults below the normal 50 Hz
         trajectory command clock because hardware teleoperation currently performs
         synchronous feedback/fault/effort checks on every accepted sample.
         """
@@ -2396,6 +2402,7 @@ class MotionController:
                 reversal_grace={},
                 tcp=tcp,
             )
+            return present.copy()
 
     def stream_joint_target(
         self,

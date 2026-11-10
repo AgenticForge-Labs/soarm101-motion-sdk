@@ -38,6 +38,7 @@ from soarm101_motion.gui.teleop_rate import (
     teleop_tracking_preset,
     update_gripper_contact_latch,
 )
+from soarm101_motion.gui.manual_follower import JointTargetFollower
 from soarm101_motion.exceptions import CalibrationCancelledError, CalibrationError
 from soarm101_motion.hardware.simulation import SimulationBackend
 
@@ -62,6 +63,8 @@ class RobotWorker(QObject):
     arm_discovery_completed = Signal(object)
     measured_pose_captured = Signal(object)
     teleop_start_pose = Signal(object)
+    live_manual_ready = Signal(object)
+    live_manual_ended = Signal(object)
     joint_measurements = Signal(object)
     live_measurements = Signal(object)
     jog_queue_changed = Signal(object)
@@ -92,27 +95,27 @@ class RobotWorker(QObject):
         self._active_jog_target: Pose | None = None
         self._active_jog_command: dict[str, Any] | None = None
         self._live_gripper_with_motion = False
+        self._manual_follower: JointTargetFollower | None = None
+        self._manual_target: dict[str, float] | None = None
+        self._manual_pending_degrees: dict[str, float] | None = None
+        self._manual_target_lock = threading.Lock()
+        self._manual_last_heartbeat = 0.0
+        self._manual_start_positions: dict[str, float] | None = None
+        self._manual_moved = False
+        self._manual_hold_unconfirmed = False
+        self._manual_gripper_latch: GripperContactLatch | None = None
+        self._manual_gripper_desired = 0.0
+        self._manual_gripper_speed_raw: int | None = None
+        self._manual_gripper_enabled = False
+        self._manual_session_id = 0
+        self._manual_ended_sessions: set[int] = set()
 
     def _install_live_feedback(self, arm: SOARM101) -> None:
         """Bridge existing motion/tool measurements into GUI-only live state."""
 
         def publish_joints(joints: object) -> None:
             values = {name: float(dict(joints)[name]) for name in ARM_JOINTS}
-            pose = arm.model.forward(values, tcp=arm.active_tcp).xyz_rpy()
-            payload: dict[str, object] = {
-                "joints_deg": {
-                    name: degrees(values[name]) for name in ARM_JOINTS
-                },
-                "pose_mm_deg": (
-                    pose[0] * 1000.0,
-                    pose[1] * 1000.0,
-                    pose[2] * 1000.0,
-                    degrees(pose[3]),
-                    degrees(pose[4]),
-                    degrees(pose[5]),
-                ),
-                "tcp_xyz_rpy": arm.active_tcp.xyz_rpy(),
-            }
+            payload = self._live_measurement_payload(arm, values)
             if self._live_gripper_with_motion:
                 payload["gripper"] = float(arm.tool.get_position())
             self.live_measurements.emit(payload)
@@ -127,6 +130,19 @@ class RobotWorker(QObject):
         set_tool_feedback = getattr(primary_tool, "set_feedback_callback", None)
         if callable(set_tool_feedback):
             set_tool_feedback(publish_gripper)
+
+    @staticmethod
+    def _live_measurement_payload(arm: SOARM101, joints: object) -> dict[str, object]:
+        values = {name: float(dict(joints)[name]) for name in ARM_JOINTS}
+        pose = arm.model.forward(values, tcp=arm.active_tcp).xyz_rpy()
+        return {
+            "joints_deg": {name: degrees(values[name]) for name in ARM_JOINTS},
+            "pose_mm_deg": (
+                pose[0] * 1000.0, pose[1] * 1000.0, pose[2] * 1000.0,
+                degrees(pose[3]), degrees(pose[4]), degrees(pose[5]),
+            ),
+            "tcp_xyz_rpy": arm.active_tcp.xyz_rpy(),
+        }
 
     @staticmethod
     def _clear_live_feedback(arm: SOARM101) -> None:
@@ -147,6 +163,9 @@ class RobotWorker(QObject):
         self._record_timer.timeout.connect(self._capture_recording_sample)
         self._stream_timer = QTimer(self)
         self._stream_timer.timeout.connect(self._emit_stream_sample)
+        self._manual_timer = QTimer(self)
+        self._manual_timer.setInterval(50)
+        self._manual_timer.timeout.connect(self._manual_follower_tick)
 
     def _report_error(self, operation: str, exc: BaseException) -> None:
         details = [str(exc)]
@@ -203,7 +222,7 @@ class RobotWorker(QObject):
             self.arm_discovery_completed.emit([])
             self._report_error("find arms", exc)
         finally:
-            self.busy_changed.emit(False)
+            self.busy_changed.emit(self._manual_hold_unconfirmed)
 
     @Slot(object)
     def capture_measured_pose(self, request: object) -> None:
@@ -236,12 +255,281 @@ class RobotWorker(QObject):
         return self.arm
 
     def _require_motion_available(self) -> SOARM101:
+        if self._manual_follower is not None:
+            raise RuntimeError("Live Manual owns the arm and gripper until it is stopped")
+        if self._manual_hold_unconfirmed:
+            raise RuntimeError(
+                "Live Manual HOLD is unconfirmed; motion is latched off until an explicit STOP succeeds"
+            )
         if self._recording is not None:
             raise RuntimeError("stop trajectory recording before commanding this arm")
         arm = self._require_arm()
         if arm.motion.is_streaming:
             raise RuntimeError("stop live teleoperation before commanding this arm")
         return arm
+
+    @Slot(object)
+    def start_live_manual(self, options: object) -> None:
+        """Start the existing guarded stream from a fresh measured pose."""
+        values = dict(options)  # type: ignore[arg-type]
+        session_id = int(values.pop("session_id", self._manual_session_id + 1))
+        if session_id <= self._manual_session_id:
+            return
+        self._manual_session_id = session_id
+        stream_started = False
+        try:
+            arm = self._require_motion_available()
+            if self._handles or self._teleop is not None or self._jog_active:
+                raise RuntimeError("finish other motion before enabling Live Manual")
+            if not arm.get_state().torque_enabled:
+                raise RuntimeError("Live Manual requires the follower to be holding")
+            speed = radians(float(values["speed_deg_s"]))
+            acceleration = radians(float(values["acceleration_deg_s2"]))
+            if speed > arm.config.stream_joint_speed_limit or acceleration > arm.config.stream_joint_acceleration_limit:
+                raise ValueError("Live Manual limits exceed the configured joint-stream envelope")
+            gripper_start = float(arm.tool.get_position())
+            if not isfinite(gripper_start) or not 0.0 <= gripper_start <= 1.0:
+                raise ValueError("measured gripper position is invalid")
+            selected_multiplier = float(values.get("gripper_speed_multiplier", 1.0))
+            selected_speed = gripper_speed_raw(
+                self._gripper_default_speed_raw(arm), selected_multiplier
+            )
+            frequency = min(20.0, arm.config.command_frequency_hz)
+            start = arm.start_joint_stream(frequency_hz=frequency, max_speed=speed,
+                                           max_acceleration=acceleration)
+            stream_started = True
+            self._manual_follower = JointTargetFollower(
+                start, frequency_hz=frequency, max_speed=speed,
+                max_acceleration=acceleration,
+                max_step=arm.config.max_command_step_radians,
+            )
+            with self._manual_target_lock:
+                self._manual_target = dict(start)
+                self._manual_pending_degrees = None
+            self._manual_start_positions = dict(start)
+            self._manual_gripper_latch = GripperContactLatch(
+                last_command=gripper_start, last_actual=gripper_start
+            )
+            self._manual_gripper_desired = gripper_start
+            self._manual_gripper_speed_raw = selected_speed
+            self._manual_gripper_enabled = False
+            self._manual_moved = False
+            self._manual_timer.setInterval(max(1, round(1000.0 / frequency)))
+            self._manual_timer.start()
+            self._manual_last_heartbeat = time.monotonic()
+            self.live_manual_ready.emit({"session_id": session_id,
+                "joints_deg": {name: degrees(start[name]) for name in ARM_JOINTS},
+                "gripper": gripper_start,
+            })
+            self.busy_changed.emit(True)
+            self.log_message.emit("Live Manual enabled from the fresh measured pose.")
+        except BaseException as exc:
+            self._stop_manual_internal(hold=True)
+            if stream_started:
+                try:
+                    if self.arm is None or not self.arm.is_connected:
+                        raise RuntimeError("connected arm unavailable for startup HOLD")
+                    self.arm.stop_joint_stream(hold=True)
+                except BaseException as hold_exc:
+                    self._manual_hold_unconfirmed = True
+                    self.log_message.emit(
+                        "Live Manual HOLD is UNCONFIRMED; motion remains disabled. Press STOP to retry."
+                    )
+                    self.busy_changed.emit(True)
+                    self._report_error("Live Manual startup HOLD", hold_exc)
+            self._report_error("start Live Manual", exc)
+            self._emit_manual_ended(session_id, {}, moved=False)
+
+    def publish_live_manual_target(self, target: dict[str, float]) -> None:
+        """Thread-safe latest-value publication; slider events never queue as Qt calls."""
+        session_id = int(target.get("session_id", 0))
+        if self._manual_follower is None or session_id != self._manual_session_id:
+            return
+        values = {name: float(target[name]) for name in ARM_JOINTS if name in target}
+        if "gripper" in target and (not isfinite(float(target["gripper"]))
+                                     or not 0.0 <= float(target["gripper"]) <= 1.0):
+            raise ValueError("gripper target must be within [0, 1]")
+        with self._manual_target_lock:
+            pending = self._manual_pending_degrees or {}
+            pending.update(values)
+            if "gripper" in target:
+                pending["gripper"] = float(target["gripper"])
+            self._manual_pending_degrees = pending
+
+    @Slot()
+    def stop_live_manual(self, session_id: object = None) -> None:
+        if session_id is not None and int(session_id) != self._manual_session_id:
+            return
+        self._stop_manual_internal(hold=True)
+
+    @Slot()
+    def live_manual_heartbeat(self, payload: object = None) -> None:
+        if isinstance(payload, dict):
+            session_id = int(payload.get("session_id", -1))
+            timestamp = payload.get("timestamp")
+        else:  # compatibility for direct worker callers
+            session_id, timestamp = self._manual_session_id, payload
+        if self._manual_follower is not None and session_id == self._manual_session_id:
+            self._manual_last_heartbeat = time.monotonic() if timestamp is None else float(timestamp)
+
+    def _manual_follower_tick(self) -> None:
+        follower, arm = self._manual_follower, self.arm
+        if follower is None or arm is None:
+            return
+        try:
+            if time.monotonic() - self._manual_last_heartbeat > 2.0:
+                raise RuntimeError("Live Manual UI heartbeat timed out; requesting HOLD")
+            with self._manual_target_lock:
+                target = None if self._manual_target is None else dict(self._manual_target)
+                pending = self._manual_pending_degrees
+                self._manual_pending_degrees = None
+            if pending is not None:
+                radians_target = dict(target or {})
+                for name in ARM_JOINTS:
+                    if name in pending:
+                        radians_target[name] = radians(pending[name])
+                requested_gripper = pending.get("gripper", self._manual_gripper_desired)
+                if abs(requested_gripper - self._manual_gripper_desired) > 1e-9:
+                    self._manual_gripper_enabled = True
+                    self._manual_gripper_desired = requested_gripper
+                limits = arm.get_joint_limits()
+                for name in ARM_JOINTS:
+                    lower, upper = limits[name]
+                    if not lower <= radians_target[name] <= upper:
+                        raise ValueError(f"{name} target is outside the active calibrated range")
+                target = radians_target
+                with self._manual_target_lock:
+                    self._manual_target = dict(target)
+            if target is None:
+                return
+            sample = follower.step(target)
+            gripper_command = None
+            gripper_actual = None
+            latch = self._manual_gripper_latch
+            if latch is not None:
+                gripper_actual = float(arm.tool.get_position())
+                if not isfinite(gripper_actual) or not 0.0 <= gripper_actual <= 1.0:
+                    raise ValueError("measured gripper position is invalid")
+                if self._manual_gripper_enabled:
+                    (gripper_command, latched, newly_latched, released) = update_gripper_contact_latch(
+                        latch, self._manual_gripper_desired, gripper_actual,
+                        period_s=1.0 / follower.frequency_hz,
+                        max_speed_per_s=TELEOP_GRIPPER_SPEED_PER_S,
+                    )
+                    hook = getattr(getattr(arm, "backend", None), "set_gripper_contact_latched", None)
+                    if newly_latched and callable(hook):
+                        hook(True)
+                    if released and callable(hook):
+                        hook(False)
+                    if newly_latched:
+                        self.log_message.emit(f"Gripper contact detected at {gripper_actual:.3f}; holding safely.")
+                    elif released:
+                        self.log_message.emit("Gripper opening released contact hold.")
+            if gripper_command is None:
+                result = arm.stream_joint_target(sample)
+            else:
+                result = arm.stream_joint_target(
+                    sample, gripper=gripper_command,
+                    gripper_speed_raw=self._manual_gripper_speed_raw,
+                )
+            if not result.accepted:
+                raise RuntimeError(result.message or "SDK rejected the streamed joint sample")
+            measured = dict(result.final_positions)
+            if self._manual_start_positions is not None and any(
+                abs(float(measured[name]) - self._manual_start_positions[name]) > 1e-4
+                for name in ARM_JOINTS
+            ):
+                self._manual_moved = True
+            self.joint_measurements.emit({
+                name: degrees(float(measured[name])) for name in ARM_JOINTS
+            })
+            payload = self._live_measurement_payload(arm, measured)
+            if gripper_actual is not None:
+                payload["gripper"] = gripper_actual
+            self.live_measurements.emit(payload)
+            if follower.settled(target):
+                # Keep the stream active and holding; each timer tick continues the
+                # SDK's feedback, following-error and effort checks.
+                return
+        except BaseException as exc:
+            self._report_error("Live Manual stream", exc)
+            self._stop_manual_internal(hold=True)
+
+    def _stop_manual_internal(self, *, hold: bool) -> bool:
+        """End live input and report whether HOLD is confirmed, including prior faults."""
+        was_active = self._manual_follower is not None
+        manual_timer = getattr(self, "_manual_timer", None)
+        manual_timer.stop() if manual_timer is not None else None
+        self._manual_follower = None
+        self._manual_gripper_enabled = False
+        with self._manual_target_lock:
+            self._manual_target = None
+            self._manual_pending_degrees = None
+        arm = self.arm
+        hold_confirmed = not (was_active and hold)
+        if was_active and arm is not None and arm.is_connected:
+            try:
+                arm.stop_joint_stream(hold=hold)
+                hold_confirmed = True
+            except BaseException as exc:
+                self._manual_hold_unconfirmed = True
+                self._report_error("Live Manual HOLD", exc)
+                self.log_message.emit(
+                    "Live Manual HOLD is UNCONFIRMED; motion remains disabled. Press STOP to retry."
+                )
+        elif was_active and hold:
+            self._manual_hold_unconfirmed = True
+            self.log_message.emit(
+                "Live Manual HOLD is UNCONFIRMED while disconnected; motion remains disabled."
+            )
+        if was_active and not hold_confirmed:
+            self._manual_hold_unconfirmed = True
+        if was_active:
+            if arm is not None:
+                hook = getattr(getattr(arm, "backend", None), "set_gripper_contact_latched", None)
+                if callable(hook):
+                    try:
+                        hook(False)
+                    except BaseException as exc:
+                        self._report_error("Live Manual gripper contact cleanup", exc)
+            measured: dict[str, float] = {}
+            if hold_confirmed and arm is not None and arm.is_connected:
+                try:
+                    measured = {
+                        name: degrees(float(value))
+                        for name, value in arm.get_joint_positions().positions.items()
+                    }
+                    if self._manual_start_positions is not None and any(
+                        abs(radians(measured[name]) - self._manual_start_positions[name]) > 1e-4
+                        for name in ARM_JOINTS
+                    ):
+                        self._manual_moved = True
+                    self.live_measurements.emit(self._live_measurement_payload(
+                        arm, {name: radians(value) for name, value in measured.items()}
+                    ))
+                    ended_payload: dict[str, object] = {"joints_deg": measured, "moved": self._manual_moved}
+                    try:
+                        gripper_position = float(arm.tool.get_position())
+                        self.live_measurements.emit({"gripper": gripper_position})
+                        ended_payload["gripper"] = gripper_position
+                    except BaseException as exc:
+                        self._report_error("Live Manual post-HOLD gripper measurement", exc)
+                    self._emit_manual_ended(self._manual_session_id, ended_payload, moved=self._manual_moved)
+                except BaseException as exc:
+                    self._report_error("Live Manual post-HOLD measurement", exc)
+            self._emit_manual_ended(self._manual_session_id, {"joints_deg": measured}, moved=self._manual_moved)
+            self.busy_changed.emit(bool(self._handles) or self._manual_hold_unconfirmed)
+            if hold_confirmed:
+                self.log_message.emit("Live Manual disabled; SDK HOLD confirmed.")
+        self._manual_start_positions = None
+        self._manual_moved = False
+        return hold_confirmed and not self._manual_hold_unconfirmed
+
+    def _emit_manual_ended(self, session_id: int, payload: dict[str, object], *, moved: bool) -> None:
+        if session_id in self._manual_ended_sessions:
+            return
+        self._manual_ended_sessions.add(session_id)
+        self.live_manual_ended.emit({**payload, "session_id": session_id, "moved": moved})
     @staticmethod
     def _gripper_default_speed_raw(arm: SOARM101) -> int:
         """Resolve tool pacing independently from responsive arm servo tracking."""
@@ -413,7 +701,7 @@ class RobotWorker(QObject):
             except BaseException as exc:
                 self._reset_jog_queue()
                 self._report_error("Cartesian jog", exc)
-        busy = bool(self._handles)
+        busy = bool(self._handles) or self._manual_hold_unconfirmed
         self.busy_changed.emit(busy)
         if align_gripper is not None:
             try:
@@ -503,6 +791,7 @@ class RobotWorker(QObject):
     @Slot()
     def disconnect_robot(self) -> None:
         arm = self.arm
+        self._stop_manual_internal(hold=True)
         self.arm = None
         self._teleop_staging = None
         self._live_gripper_with_motion = False
@@ -525,7 +814,7 @@ class RobotWorker(QObject):
             except BaseException as exc:
                 self._report_error("disconnect", exc)
         self.connected_changed.emit(False)
-        self.busy_changed.emit(False)
+        self.busy_changed.emit(self._manual_hold_unconfirmed)
         self.log_message.emit("Disconnected.")
 
     @Slot()
@@ -541,6 +830,12 @@ class RobotWorker(QObject):
     @Slot()
     def enable(self) -> None:
         try:
+            if self._manual_follower is not None:
+                raise RuntimeError("Stop Live Manual before changing torque state")
+            if self._manual_hold_unconfirmed:
+                raise RuntimeError(
+                    "Live Manual HOLD is unconfirmed; press STOP and verify HOLD before enabling torque"
+                )
             arm = self._require_arm()
             arm.enable()
             adjustments = getattr(arm.backend, "last_torque_latch_adjustments", {})
@@ -568,6 +863,10 @@ class RobotWorker(QObject):
     @Slot()
     def relax(self) -> None:
         try:
+            if not self._stop_manual_internal(hold=True):
+                raise RuntimeError(
+                    "Live Manual HOLD is unconfirmed; relaxation aborted. Press STOP to retry."
+                )
             self._teleop_staging = None
             self._live_gripper_with_motion = False
             for _label, handle in self._handles:
@@ -588,17 +887,24 @@ class RobotWorker(QObject):
     @Slot()
     def stop(self) -> None:
         try:
+            self._stop_manual_internal(hold=True)
             self._teleop_staging = None
             self._live_gripper_with_motion = False
             for _label, handle in self._handles:
                 handle.cancel()
-            arm = self._require_arm()
+            arm = self.arm
+            if arm is None or not arm.is_connected:
+                raise RuntimeError("robot is not connected")
             self._teleop = None
             self.teleop_changed.emit(False)
             arm.stop()
+            state = arm.get_state()
+            if not state.connected or not state.torque_enabled:
+                raise RuntimeError("STOP returned without verified connected torque HOLD")
+            self._manual_hold_unconfirmed = False
             self._handles.clear()
             self._reset_jog_queue()
-            self.busy_changed.emit(False)
+            self.busy_changed.emit(bool(self._handles) or self._manual_hold_unconfirmed)
             self.log_message.emit(
                 "Software stop: current arm and gripper positions held; Cartesian jog queue cleared."
             )
@@ -1004,7 +1310,7 @@ class RobotWorker(QObject):
             except Exception:
                 pass
             self.teleop_changed.emit(False)
-            self.busy_changed.emit(False)
+            self.busy_changed.emit(self._manual_hold_unconfirmed)
             self._report_error("start teleoperation", exc)
 
     @Slot(object)
@@ -1040,6 +1346,8 @@ class RobotWorker(QObject):
             else:
                 target = leader
             gripper = float(values["gripper"]) if teleop["mirror_gripper"] else None
+            if self._manual_hold_unconfirmed:
+                raise RuntimeError("Live Manual HOLD is unconfirmed; teleoperation is disabled")
             arm = self._require_arm()
             command, velocity, limited = limit_joint_target(
                 target,
@@ -1271,7 +1579,7 @@ class RobotWorker(QObject):
                     contact_hook(False)
         if was_active:
             self.teleop_changed.emit(False)
-            self.busy_changed.emit(bool(self._handles))
+            self.busy_changed.emit(bool(self._handles) or self._manual_hold_unconfirmed)
             self.log_message.emit("Live teleoperation stopped.")
             record_session("teleop_stopped", worker=self._robot_id, hold=hold)
 
@@ -1467,6 +1775,8 @@ class RobotWorker(QObject):
     @Slot(object)
     def start_recording(self, options: object) -> None:
         try:
+            if self._manual_follower is not None:
+                raise RuntimeError("Stop Live Manual before recording")
             arm = self._require_arm()
             if arm.motion.is_streaming:
                 raise RuntimeError("stop live teleoperation before recording")
@@ -1767,6 +2077,12 @@ class RobotWorker(QObject):
         last_progress: object | None = None
         last_progress_log = 0.0
         try:
+            if self._manual_follower is not None:
+                raise RuntimeError("Stop Live Manual before calibration")
+            if self._manual_hold_unconfirmed:
+                raise RuntimeError(
+                    "Live Manual HOLD is unconfirmed; calibration is disabled until verified STOP"
+                )
             arm = self._require_arm()
             if self._simulation:
                 raise RuntimeError("live mechanical-stop calibration requires physical hardware")
@@ -1877,7 +2193,7 @@ class RobotWorker(QObject):
                 )
             self._report_error("calibration", exc)
         finally:
-            self.busy_changed.emit(False)
+            self.busy_changed.emit(self._manual_hold_unconfirmed)
 
     def prepare_calibration(self) -> None:
         """Reset cancellation before queuing a new sweep."""
@@ -1910,6 +2226,8 @@ class RobotWorker(QObject):
     @Slot()
     def clear_effort_trip(self) -> None:
         try:
+            if self._manual_follower is not None:
+                raise RuntimeError("Stop Live Manual before clearing an effort trip")
             arm = self._require_arm()
             arm.clear_effort_trip()
             self.log_message.emit("Cleared latched motor-effort safety trip.")
@@ -1993,6 +2311,8 @@ class RobotWorker(QObject):
                 "robot_id": self.arm.config.robot_id,
                 "calibration_id": self.arm.calibration_id,
                 "calibration_source": self.arm.calibration_source,
+                "stream_joint_speed_limit_deg_s": degrees(self.arm.config.stream_joint_speed_limit),
+                "stream_joint_acceleration_limit_deg_s2": degrees(self.arm.config.stream_joint_acceleration_limit),
                 "joint_limits_deg": {
                     name: (degrees(bounds[0]), degrees(bounds[1]))
                     for name, bounds in self.arm.get_joint_limits().items()

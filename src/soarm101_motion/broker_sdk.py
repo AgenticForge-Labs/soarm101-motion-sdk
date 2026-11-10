@@ -28,6 +28,7 @@ from soarm101_motion.agent_control import (
 )
 from soarm101_motion.arm import SOARM101
 from soarm101_motion.control import relative_target_pose
+from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.exceptions import (
     CommunicationError, HardwareFaultError, MotionTimeoutError, RobotConnectionError,
 )
@@ -91,6 +92,7 @@ class SDKAgentExecutor:
         physical_trial: bool = False,
         simulation_actions: bool = False,
         physical_actions: bool = False,
+        operator_choreography_only: bool = False,
         trace_path: str | Path | None = None,
     ) -> None:
         if physical_actions and (simulation or physical_trial or not config.port):
@@ -98,6 +100,8 @@ class SDKAgentExecutor:
         if physical_actions and (config.auto_enable_torque or config.configure_motors_on_connect
                                  or config.disable_torque_on_disconnect):
             raise ValueError("physical broker must preserve human torque/configuration ownership")
+        if operator_choreography_only and (not physical_actions or simulation or physical_trial):
+            raise ValueError("operator choreography mode requires an exclusive physical SDK executor")
         if physical_trial and (simulation or arm_factory is None or not config.port):
             raise ValueError("physical trial requires a real port and explicit SDK arm factory")
         if trace_path is not None and not physical_trial:
@@ -119,6 +123,7 @@ class SDKAgentExecutor:
         self._simulation_stop_requested = False
         self.physical_trial = physical_trial
         self.physical_actions = physical_actions
+        self.operator_choreography_only = operator_choreography_only
         self._supervised_lease: AgentAuthority | None = None
         self.motion_guard: Callable[[], None] | None = None
         self.session_id = uuid.uuid4().hex
@@ -144,8 +149,63 @@ class SDKAgentExecutor:
         # ownership from an earlier human-armed CLI process. Closing such a
         # physical session must not issue a fresh all-motor position latch.
         self._motion_action_attempted = False
+        self._startup_hold_attempted = False
+        self._startup_hold_verified = False
         self._bound_calibration_id: str | None = None
         self._session: SOARM101 | None = None
+
+    def establish_operator_startup_hold(self, watchdog) -> dict[str, object]:
+        """Trusted daemon startup only; never an agent action or rearm route.
+
+        The caller must have selected operator-only startup HOLD in its private
+        config. Use the existing SDK enable primitive, which validates calibrated
+        limits and latches measured positions before torque. No pose is replayed.
+        """
+        if not self.operator_choreography_only or not self.physical_actions or self.simulation:
+            raise PermissionError("startup HOLD requires the operator-only physical daemon")
+        with self._dispatch_lock:
+            self._require_active()
+            if self._startup_hold_attempted:
+                raise PermissionError("startup HOLD was already attempted; operator reconciliation required")
+            arm = self._session
+            if arm is None:
+                raise PermissionError("startup HOLD requires an existing identity-checked session")
+            self._assert_session_identity(arm)
+            watchdog.check()
+            initial = arm.get_state()
+            if not initial.connected or initial.faulted or initial.moving:
+                raise PermissionError("startup HOLD requires a healthy stationary connected arm")
+            baseline = dict(arm.get_joint_positions().positions)
+            if (set(baseline) != set(ARM_JOINTS)
+                    or any(not math.isfinite(value) for value in baseline.values())):
+                raise HardwareFaultError("startup HOLD requires complete finite measured joint positions")
+            self._startup_hold_attempted = True
+            enabled = not initial.torque_enabled
+            try:
+                if enabled:
+                    self._motion_action_attempted = True
+                    self._verified_physical_stop = False
+                    arm.enable()
+                max_drift_deg = 0.0
+                for delay in STOP_STABILITY_SAMPLE_DELAYS_S:
+                    time.sleep(delay)
+                    watchdog.check()
+                    self._assert_session_identity(arm)
+                    positions = dict(arm.get_joint_positions().positions)
+                    state = arm.get_state()
+                    if (set(positions) != set(baseline) or not state.connected
+                            or state.faulted or state.moving or not state.torque_enabled):
+                        raise HardwareFaultError("startup HOLD could not verify stationary torque HOLD")
+                    drift = max(abs(math.degrees(positions[joint] - baseline[joint])) for joint in baseline)
+                    max_drift_deg = max(max_drift_deg, drift)
+                    if drift > STOP_MAX_POST_LATCH_DRIFT_DEG:
+                        raise HardwareFaultError("startup HOLD encoder drift exceeds the existing HOLD bound")
+                self._startup_hold_verified = True
+                return {"holding": True, "torque_enabled_at_startup": enabled,
+                        "max_drift_deg": max_drift_deg, "session_id": self.session_id}
+            except BaseException as exc:
+                self._fault(exc)
+                raise
 
     def _require_active(self, *, stop: bool = False) -> None:
         """Never resurrect an explicitly closed or faulted hardware session."""
@@ -174,7 +234,7 @@ class SDKAgentExecutor:
                 self._fault_kind = type(exc).__name__
         if self.motion_guard is not None and isinstance(self._session, SOARM101):
             self._session.motion.inhibit_new_motion("supervised SDK session faulted")
-        if self.physical_trial or self.physical_actions:
+        if self.physical_trial or (self.physical_actions and not self.operator_choreography_only):
             self._revoke_authority()
 
     def _assert_session_identity(self, arm: SOARM101) -> None:
@@ -284,7 +344,7 @@ class SDKAgentExecutor:
             with self._lifecycle_lock:
                 self._lifecycle = "closed"
         finally:
-            if self.physical_trial or self.physical_actions:
+            if self.physical_trial or (self.physical_actions and not self.operator_choreography_only):
                 self._revoke_authority()
 
     @property
@@ -324,6 +384,10 @@ class SDKAgentExecutor:
         if self.simulation_actions:
             if self._bound_calibration_id != "simulation":
                 raise PermissionError("simulation watchdog is bound to a non-simulation identity")
+            return
+        if self.operator_choreography_only:
+            if self._bound_calibration_id != self._calibration_id(arm):
+                raise PermissionError("operator watchdog calibration identity changed")
             return
         lease = self._authority.require(
             robot_id=self.robot_id, calibration_id=self._bound_calibration_id,
@@ -376,6 +440,8 @@ class SDKAgentExecutor:
     def execute(self, action: str, request: Mapping[str, object]) -> dict[str, object]:
         """Validate and serialize ordinary SDK actions; do not block STOP."""
         self._validate(action, request)
+        if self.operator_choreography_only and action not in {"state", "capabilities", "capture", "stop"}:
+            raise PermissionError("operator choreography mode denies agent state-changing actions")
         if self.physical_actions and action not in {"state", "capabilities", "capture", "joint", "stop"}:
             raise PermissionError("experimental physical SDK mode permits bounded joint actions only")
         def run() -> dict[str, object]:
@@ -514,9 +580,12 @@ class SDKAgentExecutor:
                 # Keep the simulation permission boundary fail-closed after
                 # STOP, without minting or requiring a physical authority lease.
                 self._simulation_stop_requested = True
-            # Revocation occurs even if the physical/fake HOLD subsequently
-            # fails. A human must issue fresh motion authority after STOP.
-            self._revoke_authority()
+            # Autonomous-agent mode owns the agent lease and revokes it even
+            # when HOLD fails. Operator choreography mode has no agent lease;
+            # clearing the shared authority store there could revoke an
+            # unrelated operator/agent grant. Both modes retain STOP fencing.
+            if not self.operator_choreography_only:
+                self._revoke_authority()
             # DO NOT wait for the motion lock or silently enable torque here.
             # A new session cannot be opened by STOP during an active command.
             arm = self._session
@@ -633,7 +702,8 @@ class SDKAgentExecutor:
                 except Exception as exc:
                     error = str(exc)
             return {
-                "authority": self._authority.status() if (
+                "authority": ({"armed": False, "mode": "operator_choreography_only"}
+                    if self.operator_choreography_only else self._authority.status()) if (
                     self.physical_trial or self.physical_actions or self.simulation_actions
                 ) else {
                     "armed": False, "robot_id": None,

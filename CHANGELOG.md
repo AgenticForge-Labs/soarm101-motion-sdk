@@ -1,5 +1,65 @@
 # Changelog
 
+## Unreleased
+
+- Add an explicit operator-only `establish_hold_on_startup` daemon option.
+  It uses the existing calibrated measured-position torque latch under the
+  broker watchdog and verifies stability before readiness. Default startup
+  remains read-only; failures retain a durable no-retry fence. This is an
+  operator startup capability, not an agent arming or rearm operation.
+- Correct operator-only trusted choreography/target admission to use its bound
+  watchdog/session authority without an agent lease. Keep general agent and
+  recording replay permissions unchanged. Admit the existing independent STOP
+  route in operator-only mode and audit trusted target/program outcomes.
+
+- Add `soarm101-sim-daemon start/status/stop` for a loopback-only persistent
+  SDK simulation session. It reuses the broker executor and one-shot watchdog,
+  keeps heartbeat host-managed, and grants no physical lease or hardware access.
+  Physical local intent still requires a separately trusted SDK capability and
+  attended hardware qualification.
+
+- Guarded joint-stream startup now returns its controller-captured measured
+  baseline; Live Manual initializes its follower and ready targets from that
+  exact baseline without a separate earlier joint read.
+- 3D standard perspective changes preserve the current scale and world-space
+  orbit center; Fit range and Fit pose remain explicit refit actions.
+- Live Manual now offers synchronized gripper slider and numeric targets using
+  measured startup state, the selected speed preset, and the existing teleop
+  gripper contact latch and guarded arm stream.
+- GUI Live Manual now keeps motion fault-latched when SDK HOLD is unconfirmed,
+  retries through the normal arm STOP route, and requires an explicit verified
+  STOP before motion can resume.
+- The follower mesh now includes the attributed official moving-jaw STL, posed
+  from SDK stock-jaw calibration mapping and gripper position.
+- The full Manual 3D viewer uses topology-preserving decimated upstream meshes,
+  draws each retained face, fits conservative mesh bounds across a deterministic SDK
+  joint-range grid, and checks its visual manifest against the pinned URDF.
+- The CPU mesh viewer caches unchanged raster frames, fits sampled range bounds
+  from transformed local mesh boxes, and uses a Blender quadric-decimated LOD
+  during view drag, zoom, and rapid measured-pose updates.
+- Live Manual now publishes measured stream-result joints/TCP, refreshes targets
+  after HOLD, ignores late startup-ready signals, keeps rate controls fixed during
+  a run, and rejects competing arm/gripper actions. The follower uses discrete
+  stopping-distance shaping with finite-input checks.
+
+## Unreleased — trusted measured-start joint target
+
+- Add immutable, calibration-bound `JointTarget` assets and a trusted-host-only
+  preflight/execute operation. It plans from measured start under the existing
+  SDK dispatch lock and reuses the existing executor, watchdog, authority,
+  workspace checks, STOP/HOLD and terminal failure handling. Physical torque is
+  never enabled, the gripper is excluded, and no broker/agent route is added.
+- Add simulation coverage for target pinning, measured-start planning, no
+  gripper writes and supervision requirements. This does not qualify physical
+  clearance, settling or STOP performance.
+
+- Keep Manual motion/tool controls directly below the active joint or Cartesian panel and pack sidebar measurements at the top instead of spreading them through unused window height.
+
+- Refresh Manual joint targets from fresh measured feedback after motion ends, including recalled poses and Cartesian moves, even with target editing enabled. Block the next Manual joint command until that feedback arrives so stale wrist or other joint targets cannot be resubmitted during the refresh.
+
+- Keep Manual controls readable in smaller windows by allowing the workspace to scroll.
+- Reorganize Manual around full-width joint sliders, side-by-side motion/gripper controls and a compact pose toolbar with a save menu. Keep coordination in Teleoperation and make detailed sidebar telemetry expandable.
+
 ## Unreleased — trusted choreography (three-robot PR 3)
 
 - Add `soarm101_motion.choreography` as an operator-only,
@@ -1175,3 +1235,10 @@
 - Add separately granted, simulation-only pinned sequence execution for ordered
   saved-pose, recording, gripper, and wait steps, with request reconciliation,
   live state/rate checks, lease expiry, STOP fencing, and late-success rejection.
+## Unreleased — GUI mesh viewer and Live Manual
+
+- Added a CPU-rendered SO-101 triangle mesh viewer using the SDK's kinematic link
+  frames and packaged, attributed upstream visual assets.
+- Added configured-envelope-aware joint speed/acceleration presets and opt-in Live
+  Manual target streaming with a latest-target slot, bounded follower, heartbeat
+  timeout, and SDK HOLD lifecycle.

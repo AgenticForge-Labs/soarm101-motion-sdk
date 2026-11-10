@@ -1,5 +1,41 @@
 # Testing
 
+## Persistent local SDK simulation daemon
+
+Run the end-to-end daemon lifecycle and the existing SDK broker/watchdog
+contracts without hardware:
+
+```bash
+.venv/bin/python -m pytest --no-cov -q tests/test_local_sim_daemon.py tests/test_broker_sdk.py tests/test_broker_watchdog.py tests/test_broker_session_lifecycle.py
+```
+
+The daemon test starts a separate service process, checks readiness and the
+host watchdog, sends state and bounded joint requests through the authenticated
+client API, confirms a single persistent SDK session and no armed authority,
+then stops the process and verifies state/token cleanup. It does not validate
+physical movement, physical leases, hardware STOP, or physical daemon safety.
+
+## Trusted measured-start joint target
+
+The fixed target API is trusted-host SDK functionality, not a broker/agent
+route. Run its software-only contract tests without hardware:
+
+```bash
+python -m pytest --no-cov -q tests/test_choreography.py
+```
+
+These tests cover immutable revision admission, measured-start path validation,
+supervision, simulation execution and the absence of gripper writes. They do
+not qualify physical clearance, settling or STOP performance.
+
+Manual workspace layout and control-session regression checks (software only):
+
+```bash
+python -m pytest --no-cov -q tests/test_gui_sessions.py
+```
+
+These cover controls fitting at 1400 × 800, scrolling in shorter windows, gripper access across arm modes, expandable telemetry, and measured joint-target refresh after motion while preserving unsubmitted idle edits.
+
 ## Selectable joint trajectory profile comparison (`minimum_jerk` vs `cosine_cruise`)
 
 Streamed joint-space planning supports `--profile-mode minimum_jerk` (default quintic baseline) and `--profile-mode cosine_cruise` (half-cosine accel/decel ramps + constant-speed cruise + calibrated terminal duplicate-encoder sample coalescing), alongside offline trace analysis in `scripts/analyze_wobble_traces.py`.
@@ -2698,3 +2734,47 @@ M2 simulated CLI Sleep timing follow-up (2026-10-30):
 `scurve_paced` and `scurve_glide` are unqualified prototypes. They command the planned samples with per-joint servo speed and acceleration settings; glide also uses independently timed joints. The standard uncalibrated simulator falls back to 0/254 rather than servo pacing. Simulator tests do not reproduce stock-servo dynamics or demonstrate safe physical tracking or smoothness. The firmware assumptions and pacing require review and separate attended qualification before physical use. Default remains `minimum_jerk`.
 
 For software-only comparison, run `SOARM_SIMULATION=1 ./scripts/run_joint_profile_comparison.sh experimental 8 25`. The experimental route leaves the gripper alone and stops after a failed run. Glide Sleep requires full workspace validation instead of the historical Sleep exception; it can still be rejected by workspace checks. The default coarse modeled self-clearance is 20 mm for all workspace-checked motion, reduced from 25 mm; it is not measured physical clearance. Do not bypass a rejection. Compare against the existing modes separately; equal speed limits do not imply equal-duration trials. No physical trial is authorized by running the simulation.
+# GUI Live Manual software checks
+
+Run the software-only GUI/session and follower tests with:
+
+```bash
+.venv/bin/pytest --no-cov tests/test_gui_sessions.py tests/test_gui_model_geometry.py tests/test_gui_manual_ui.py tests/test_gui_manual_follower.py tests/test_gui_manual_worker.py tests/test_gui_mesh_renderer.py
+```
+
+These tests exercise all three rate presets through the simulated SDK stream,
+rate/acceleration/reversal shaping, and packaged mesh resources; they do not connect
+to or move physical hardware. Live Manual must remain off
+by default and its worker lifecycle must HOLD on timeout, STOP, disconnect, and
+stream error. A failed HOLD must stay latched through polls, disconnect and close;
+only an explicit STOP with verified connected torque HOLD may release the latch.
+The mesh tests compare every visual entry with the pinned URDF and cover the stock
+jaw mapping at both endpoints and SDK joint-range corners. Physical qualification
+is not covered by this checklist.
+
+The viewer tests also check conservative transformed mesh bounds against full
+geometry, scalar/vector projection equivalence, cache-key changes for pose, jaw,
+camera, viewport, palette (including blue and alpha), TCP and detail level, plus
+the moving jaw in the packaged drag LOD. For reproducible CPU-only measurements,
+run `.venv/bin/python scripts/benchmark_gui_mesh.py --size 480` and repeat with
+`--size 500`. The benchmark separately reports synchronous unchanged rendering
+and continuous drag with interactive detail. The benchmark
+uses offscreen Qt rendering and does not launch the physical GUI or access a robot.
+
+Standard view coverage checks scale and world-space pivot retention; explicit Fit
+resets zoom. Live Manual gripper control uses the same simulation-only guarded
+stream and latch paths as teleoperation. Startup and shutdown measurements should
+seed the visible gripper control without generating a command; contact and failed
+HOLD behavior remain software evidence only.
+
+To verify packaged resources outside the source checkout:
+
+```bash
+.venv/bin/python -m build --wheel --outdir /tmp/soarm101-wheel
+```
+
+Install that wheel into an isolated environment, run from `/tmp`, and import
+`soarm101_motion.gui.mesh_renderer`; check that `importlib.resources.files(
+"soarm101_motion.gui").joinpath("assets/so101/visuals.json")` exists and that
+`world_triangles(SO101KinematicModel().link_frames(HOME_JOINTS), 0.5)` returns
+mesh batches. This smoke check does not import the SDK from the checkout.

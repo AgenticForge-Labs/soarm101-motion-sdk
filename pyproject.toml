@@ -48,6 +48,8 @@ soarm101 = "soarm101_motion.cli.main:main"
 soarm101-setup = "soarm101_motion.setup_wizard:main"
 soarm101-gui = "soarm101_motion.gui.app:main"
 soarm101-broker = "soarm101_motion.broker:main"
+soarm101-sim-daemon = "soarm101_motion.local_sim_daemon:main"
+soarm101-physical-daemon = "soarm101_motion.physical_daemon:main"
 robotctl = "soarm101_motion.robotctl:main"
 
 [project.urls]
@@ -61,6 +63,7 @@ packages = ["src/soarm101_motion"]
 include = [
   "src/soarm101_motion/**/*.py",
   "src/soarm101_motion/models/*.urdf",
+  "src/soarm101_motion/gui/assets/**/*",
   "src/soarm101_motion/agent_assets/*",
 ]
 
