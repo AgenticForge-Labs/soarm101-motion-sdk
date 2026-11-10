@@ -25,7 +25,7 @@ import numpy as np
 
 from soarm101_motion.constants import ARM_JOINTS
 from soarm101_motion.hardware import SimulationBackend
-from soarm101_motion.safety import validate_workspace_path
+from soarm101_motion.safety import validate_workspace_path_from_measured_start
 from soarm101_motion.simulated_replay import (
     _require_replay_authority,
     _stop_after_failure,
@@ -322,15 +322,19 @@ def preflight_choreography(
     samples = trajectory.retime(speed_scale).resample(
         arm.config.command_frequency_hz
     ).joint_mappings()
+    # The arm is wherever it is: a pose resting just past a software limit (an
+    # arm that went limp on its stop) is a valid start, and the path may only
+    # reach as far out as that start, never further.
     arm.motion._validate_samples(
         samples,
         speed_limit=min(arm.config.max_joint_speed, radians(policy.max_speed_deg_s)),
         acceleration_limit=min(
             arm.config.max_joint_acceleration, radians(policy.max_acceleration_deg_s2)
         ),
+        limits=arm.motion._limits_for_present(actual),
     )
     if arm.config.enable_workspace_checks:
-        validate_workspace_path(
+        validate_workspace_path_from_measured_start(
             arm.model, samples, tcp=arm.active_tcp, **arm._workspace_kwargs()
         )
     duration = trajectory.duration_s / speed_scale
@@ -373,7 +377,8 @@ def preflight_joint_target(
             allow_physical_trial=policy.allow_physical_trial)
         checked = preflight_choreography(arm, baseline, baseline_policy)
         plan = arm.motion._plan_joint_motion(actual, dict(zip(ARM_JOINTS, fresh.joints_rad, strict=True)),
-            speed=radians(policy.max_speed_deg_s), acceleration=radians(policy.max_acceleration_deg_s2))
+            speed=radians(policy.max_speed_deg_s), acceleration=radians(policy.max_acceleration_deg_s2),
+            limits=arm.motion._limits_for_present(actual))
         duration = max(plan.duration_s, 1.0 / arm.config.command_frequency_hz)
         if duration + arm.config.motion_completion_timeout_s > policy.max_duration_s:
             raise PermissionError("native target plan and completion margin exceed reviewed deadline")
@@ -385,9 +390,12 @@ def preflight_joint_target(
                       "joint_target_revision": fresh.revision})
         samples = trajectory.resample(arm.config.command_frequency_hz).joint_mappings()
         arm.motion._validate_samples(samples, speed_limit=radians(policy.max_speed_deg_s),
-                                     acceleration_limit=radians(policy.max_acceleration_deg_s2))
+                                     acceleration_limit=radians(policy.max_acceleration_deg_s2),
+                                     limits=arm.motion._limits_for_present(actual))
         if arm.config.enable_workspace_checks:
-            validate_workspace_path(arm.model, samples, tcp=arm.active_tcp, **arm._workspace_kwargs())
+            validate_workspace_path_from_measured_start(
+            arm.model, samples, tcp=arm.active_tcp, **arm._workspace_kwargs()
+        )
         return ChoreographyPreflight(fresh.name, fresh.revision, fresh.robot_id, fresh.calibration_id,
             duration, len(samples), checked.start_error_rad, checked.gripper_position, trajectory)
     path = JointChoreography.author(
