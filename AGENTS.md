@@ -1,6 +1,6 @@
 # Agent instructions
 
-These instructions apply to people and coding agents developing the SO-ARM101 Motion SDK, and to agents using the approved robot interfaces. **Code development and physical robot operation are different roles.** Read the authoritative files and actual capabilities rather than old PR descriptions.
+These instructions apply to people and coding agents developing the SO-ARM Motion SDK (currently implemented for SO-ARM101), and to agents using the approved robot interfaces. **Code development and physical robot operation are different roles.** Read the authoritative files and actual capabilities rather than old PR descriptions.
 
 ## Cross-repository MCP ownership reconciliation
 
@@ -115,3 +115,8 @@ The SDK owns SO-ARM101 calibration, kinematics, motion, tools/TCP, guards, diagn
 - No new broker action, robotctl, CLI, agent MCP tool, profile grant or
   production physical qualification is part of this PR. Hardware acceptance
   follows completion of all five Conversationalist/robot PRs.
+
+
+## Product name versus supported hardware (2026-11-09)
+
+SO-ARM Motion SDK is the public project name. Existing `soarm101_motion` imports, `soarm101` CLI, `soarm101-motion-sdk` distribution/repository, broker identity, calibration, safety semantics and generated artifact identity remain unchanged by this naming update. SO-ARM101 is the sole current hardware implementation; SO-ARM102 is a prospective separate target, not supported or qualified. Do not add SO-ARM100 backward compatibility. Adding SO-102 must use explicit hardware-specific profiles, distinct calibration and robot identity, full control/limits/safety review and tests before any physical authorization. Do not treat a project branding change as hardware compatibility evidence.

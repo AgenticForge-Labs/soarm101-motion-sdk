@@ -1,16 +1,25 @@
 ![Ink illustration of an SO-ARM101 robot arm with motion paths, kinematics sketches, and a connected computer](docs/images/soarm101-header.webp)
 
-# SO-ARM101 Motion SDK
+# SO-ARM Motion SDK
 
 **Control SO-ARM101 from AI agents through a standard MCP interface with [Forge Puppeteer](https://github.com/AgenticForge-Labs/forge-puppeteer), or use this SDK directly to learn, teach, program, and automate the arm.**
 
 Puppeteer offers MCP tool calls for supported native robot capabilities and shared behaviors, actions, and emotions across open-source robots. Inspired by [Reachy Mini](https://github.com/pollen-robotics/reachy_mini) and the [Reachy Mini Conversation App](https://github.com/pollen-robotics/reachy_mini_conversation_app), it generalizes conversational robot performance across devices. Tool availability depends on the selected server, configuration and operator grants; the SO-ARM101's physical controls remain subject to this SDK's own validation and authority.
 
-The SO-ARM101 Motion SDK is a Python-first toolkit for desktop robotics. It brings together deterministic motion control, calibration, teaching and replay, a command-line interface, a PySide6 desktop GUI, local USB cameras, simulation, and constrained interfaces for higher-level applications.
+SO-ARM Motion SDK is a Python-first toolkit for desktop robotics. Its current implemented and tested robot target is SO-ARM101. It brings together deterministic motion control, calibration, teaching and replay, a command-line interface, a PySide6 desktop GUI, local USB cameras, simulation, and constrained interfaces for higher-level applications.
 
 **Connect → calibrate → move → teach → program → automate.**
 
-![SO-ARM101 Motion SDK Setup tab showing arm connections and mechanical-stop calibration](docs/Screenshot%20From%202026-09-24%2017-34-28.png)
+## Supported hardware and future direction
+
+- **SO-ARM101:** current supported hardware profile and validated software target, subject to the existing operator-led hardware qualification limits.
+- **SO-ARM102:** a potential future hardware profile, **not implemented or validated**. Support must begin with a separate hardware/servo, calibration, kinematics, gripper, limits, workspace, STOP/HOLD and regression-test assessment before enabling physical operation.
+- **SO-ARM100:** intentionally **not a compatibility target**. No SO-100 support is promised or required.
+
+The project name is model-neutral, but its current Python distribution (`soarm101-motion-sdk`), import module (`soarm101_motion`), CLI (`soarm101`) and GitHub repository slug remain unchanged in this naming-only transition. Existing installs, references, SDK contracts and robot safety gates must continue to work. A future hardware-family refactor should use explicit model profiles rather than silently treating SO-102 as SO-101.
+
+
+![SO-ARM Motion SDK SO-101 Setup tab showing arm connections and mechanical-stop calibration](docs/Screenshot%20From%202026-09-24%2017-34-28.png)
 
 > **Hardware safety:** This is experimental software for an educational/hobby arm, not a safety-rated industrial controller. Never rely on software STOP/HOLD as an emergency stop. Keep a physical power cutoff within reach, start without a payload, and supervise initial motion. Read [Safety](docs/safety.md) and the [physical-run procedure](docs/physical-run.md) before moving hardware.
 
